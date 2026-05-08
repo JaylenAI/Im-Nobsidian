@@ -1,8 +1,15 @@
 import { Plugin, Notice } from "obsidian";
-import { StateDB, NotionClient, SyncOrchestrator, DEFAULT_CONFIG } from "@obsinotion/core";
-import type { Config } from "@obsinotion/core";
+import {
+  StateDB,
+  NotionClient,
+  SyncOrchestrator,
+  ConflictResolver,
+  DEFAULT_CONFIG,
+} from "@obsinotion/core";
+import type { Config, Conflict, ResolutionChoice } from "@obsinotion/core";
 import { ObsiNotionSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
+import { ConflictModal } from "./conflict-modal.js";
 
 interface ObsiNotionSettings {
   token: string;
@@ -57,6 +64,12 @@ export default class ObsiNotionPlugin extends Plugin {
       id: "obsinotion-status",
       name: "동기화 상태 확인",
       callback: () => this.showStatus(),
+    });
+
+    this.addCommand({
+      id: "obsinotion-resolve",
+      name: "충돌 해결",
+      callback: () => this.resolveConflicts(),
     });
 
     this.statusBarEl = this.addStatusBarItem();
@@ -268,6 +281,59 @@ export default class ObsiNotionPlugin extends Plugin {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`상태 확인 실패: ${msg}`);
     }
+  }
+
+  private async resolveConflicts(): Promise<void> {
+    if (!this.orchestrator || !this.stateDb) {
+      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    const conflictRecords = this.stateDb.getByStatus("conflict");
+    if (conflictRecords.length === 0) {
+      new Notice("ObsiNotion: 충돌이 없습니다.");
+      return;
+    }
+
+    try {
+      const pullResult = await this.orchestrator.pull();
+
+      if (pullResult.conflicts.length === 0) {
+        new Notice("ObsiNotion: 해결할 충돌이 없습니다.");
+        this.updateStatusBar("ready");
+        return;
+      }
+
+      const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+      const resolver = new ConflictResolver(this.stateDb, vaultAdapter);
+
+      for (const conflict of pullResult.conflicts) {
+        await this.showConflictModal(conflict, resolver);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`충돌 해결 실패: ${msg}`);
+    }
+  }
+
+  private showConflictModal(conflict: Conflict, resolver: ConflictResolver): Promise<void> {
+    return new Promise((resolve) => {
+      const modal = new ConflictModal(this.app, conflict, async (choice: ResolutionChoice) => {
+        const result = await resolver.resolve(conflict, choice);
+
+        if (result.success) {
+          new Notice(`충돌 해결: ${result.path} → ${choice}`);
+        } else if (result.mergeHadConflicts) {
+          new Notice(`자동 병합 완료 (수동 확인 필요): ${result.path}`, 5000);
+        }
+
+        const remaining = this.stateDb?.getByStatus("conflict") ?? [];
+        this.updateStatusBar(remaining.length > 0 ? "conflict" : "ready");
+
+        resolve();
+      });
+      modal.open();
+    });
   }
 
   private updateStatusBar(state: "ready" | "syncing" | "error" | "conflict"): void {

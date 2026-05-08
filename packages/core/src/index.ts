@@ -66,8 +66,13 @@ export {
 } from "./converter/index.js";
 
 // Conflict
-export { threeWayMerge } from "./conflict/index.js";
-export type { MergeResult, MergeConflictRegion } from "./conflict/index.js";
+export { threeWayMerge, ConflictResolver } from "./conflict/index.js";
+export type {
+  MergeResult,
+  MergeConflictRegion,
+  ResolutionChoice,
+  ResolutionResult,
+} from "./conflict/index.js";
 
 // Structure
 export { TreeMapper } from "./structure/index.js";
