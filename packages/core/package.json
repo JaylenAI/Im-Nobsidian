@@ -1,0 +1,46 @@
+{
+  "name": "@obsinotion/core",
+  "version": "0.0.1",
+  "description": "Core sync engine for Obsidian ↔ Notion bidirectional synchronization",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsup --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "clean": "rm -rf dist *.tsbuildinfo"
+  },
+  "dependencies": {
+    "@notionhq/client": "^2.2.0",
+    "@tryfabric/martian": "^1.2.0",
+    "async-sema": "^3.1.0",
+    "better-sqlite3": "^11.0.0",
+    "chokidar": "^4.0.0",
+    "gray-matter": "^4.0.0",
+    "notion-to-md": "^3.1.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.6.0"
+  },
+  "keywords": [
+    "obsidian",
+    "notion",
+    "sync",
+    "markdown",
+    "bidirectional"
+  ],
+  "license": "MIT"
+}

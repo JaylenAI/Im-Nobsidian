@@ -1,0 +1,10 @@
+{
+  "id": "obsinotion",
+  "name": "ObsiNotion Sync",
+  "version": "0.0.1",
+  "minAppVersion": "1.4.0",
+  "description": "Bidirectional sync between Obsidian and Notion",
+  "author": "hanseungheon",
+  "isDesktopOnly": true,
+  "fundingUrl": ""
+}

@@ -1,0 +1,75 @@
+name: Bug Report
+description: 버그를 발견하셨나요? 알려주세요.
+title: "[Bug] "
+labels: ["bug"]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: 버그 설명
+      description: 어떤 문제가 발생했나요?
+      placeholder: 동기화 실행 시 특정 파일이 누락됩니다...
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 재현 단계
+      description: 버그를 재현하는 방법을 단계별로 알려주세요.
+      value: |
+        1.
+        2.
+        3.
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대 동작
+      description: 어떻게 동작해야 하나요?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 동작
+      description: 실제로 어떻게 동작했나요?
+    validations:
+      required: true
+
+  - type: dropdown
+    id: package
+    attributes:
+      label: 해당 패키지
+      options:
+        - "@obsinotion/core"
+        - "obsinotion (CLI)"
+        - "Obsidian Plugin"
+        - "모르겠음"
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 버전
+      placeholder: "0.1.0"
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: 운영체제
+      options:
+        - macOS
+        - Windows
+        - Linux
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 로그/에러 메시지
+      description: 관련 에러 메시지나 로그가 있다면 첨부해주세요.
+      render: shell

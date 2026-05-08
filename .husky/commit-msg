@@ -1,0 +1,22 @@
+#!/bin/sh
+
+commit_msg=$(cat "$1")
+
+# 커밋 메시지 prefix 검증 (한국어 본문 허용)
+pattern="^(feat|fix|hotfix|refactor|docs|chore|test|perf|ci)(\(.+\))?: .+"
+
+if ! echo "$commit_msg" | head -1 | grep -qE "$pattern"; then
+  echo ""
+  echo "ERROR: 커밋 메시지 형식이 올바르지 않습니다."
+  echo ""
+  echo "올바른 형식:"
+  echo "  <prefix>: <한국어 설명>"
+  echo ""
+  echo "허용 prefix: feat, fix, hotfix, refactor, docs, chore, test, perf, ci"
+  echo ""
+  echo "예시:"
+  echo "  feat: 사용자 로그인 시 JWT 토큰 발급 추가"
+  echo "  fix: 동기화 시 이미지 누락 버그 수정"
+  echo ""
+  exit 1
+fi

@@ -1,0 +1,48 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Build output
+dist/
+*.tsbuildinfo
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test
+coverage/
+.vitest/
+
+# Obsidian plugin build
+packages/obsidian-plugin/main.js
+packages/obsidian-plugin/main.js.map
+
+# SQLite
+*.db
+*.db-journal
+*.db-wal
+
+# Logs
+*.log
+npm-debug.log*
+
+# Changeset
+.changeset/*.md
+!.changeset/config.json
+
+# Misc
+*.tgz
+.cache/

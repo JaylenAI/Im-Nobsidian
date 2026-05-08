@@ -1,0 +1,36 @@
+name: Feature Request
+description: 새로운 기능을 제안해주세요.
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: 해결하고 싶은 문제
+      description: 어떤 상황에서 불편함을 느끼셨나요?
+      placeholder: 현재 동기화 시 이미지가 포함되지 않아서...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: 제안하는 해결책
+      description: 어떤 기능이 추가되면 좋을까요?
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 대안
+      description: 다른 해결 방법을 고려해보셨나요?
+
+  - type: dropdown
+    id: priority
+    attributes:
+      label: 우선순위 (개인 의견)
+      options:
+        - "높음 - 핵심 기능"
+        - "중간 - 있으면 좋음"
+        - "낮음 - 나중에"
