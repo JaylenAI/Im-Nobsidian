@@ -1,42 +1,46 @@
 # 경쟁 도구 분석
 
 > 작성일: 2026-05-08
-> 상태: draft
+> 상태: complete
 
 ## 분석 대상
 
-| # | 도구 | 방향 | 상태 | Stars |
-|---|------|------|------|-------|
-| 1 | Nobsidion (quanphan2906) | Obsidian → Notion | 방치 (2024-05) | 102 |
-| 2 | N2O (n2osync) | 양방향 | 활발, 소스비공개 | 4 |
-| 3 | Python Script (koshirok096) | Obsidian → Notion | 학습 프로젝트 | - |
-| 4 | obsidian-to-notion (EasyChris) | Obsidian → Notion | 저활동 | 542 |
-| 5 | Notion-to-Obsidian-Converter | Notion → Obsidian | 성숙 | ~1000 |
-| 6 | Share to NotionNext (jxpeng98) | Obsidian → Notion | 활발 | - |
+| #   | 도구                           | 방향              | 상태             | Stars |
+| --- | ------------------------------ | ----------------- | ---------------- | ----- |
+| 1   | Nobsidion (quanphan2906)       | Obsidian → Notion | 방치 (2024-05)   | 102   |
+| 2   | N2O (n2osync)                  | 양방향            | 활발, 소스비공개 | 4     |
+| 3   | Python Script (koshirok096)    | Obsidian → Notion | 학습 프로젝트    | -     |
+| 4   | obsidian-to-notion (EasyChris) | Obsidian → Notion | 저활동           | 542   |
+| 5   | Notion-to-Obsidian-Converter   | Notion → Obsidian | 성숙             | ~1000 |
+| 6   | Share to NotionNext (jxpeng98) | Obsidian → Notion | 활발             | -     |
 
 ---
 
 ## 1. Nobsidion (quanphan2906)
 
 ### 개요
+
 - GitHub: https://github.com/quanphan2906/nobsidion
 - 라이선스: GPL-3.0
 - 마지막 커밋: 2024-05 (1년+ 방치)
 - 소스 파일: ~10개 TypeScript 파일
 
 ### 아키텍처
+
 ```
 main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 호출)
                                             → @tryfabric/martian (변환)
 ```
 
 ### 핵심 구현
+
 - `@tryfabric/martian`의 `markdownToBlocks()`에 전체 변환 위임
 - 프론트매터에 `notionPageId` 저장 → 재업로드 시 기존 블록 삭제 후 재생성
 - 위키링크: 정규식 추출 → 하이퍼링크로 변환 (Notion 멘션 아님)
 - Notion API 직접 호출 (`requestUrl`, SDK 미사용)
 
 ### 심각한 문제점
+
 1. **Rate limiting 없음** → 대량 업로드 시 API 오류
 2. **100블록 제한 무시** → 큰 문서 무시됨
 3. **페이지네이션 미처리** → 블록 삭제 불완전
@@ -47,6 +51,7 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 8. **console.log 남김**, 테스트 1개뿐
 
 ### 참고할 점
+
 - `@tryfabric/martian` 활용 패턴 → 우리도 채택
 - Obsidian Plugin 뼈대 구조 (main.ts, settingTab.ts)
 - 위키링크 정규식: `/\[\[([^\]]+)\]\]/g`
@@ -57,6 +62,7 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 ## 2. N2O (n2osync)
 
 ### 개요
+
 - GitHub: https://github.com/n2osync/n2o
 - 라이선스: MIT (모순: 소스 비공개)
 - 생성일: 2026-04-08 (약 1개월)
@@ -64,6 +70,7 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 - **소스 코드 없음** — 컴파일된 main.js만 배포
 
 ### 주장하는 기능
+
 - 양방향 동기화 (pull 무료, push 유료 $8/월)
 - 27+ 블록 타입, 21 속성 타입
 - 3-way merge 충돌 해결
@@ -72,18 +79,21 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 - 증분 동기화 (변경분만)
 
 ### 기술적 단서 (소스 없이 추론)
+
 - `sql-wasm.wasm` 포함 → SQLite WASM으로 상태 관리
 - `isDesktopOnly: true` → 데스크톱 전용
 - "Quick Connect" 인증 → 비공식 세션 API 추정 (공식 토큰 아님)
 - 24일간 18릴리스 → 불안정 시사
 
 ### 참고할 점
+
 - 3-way merge 충돌 해결 전략 → 우리도 채택
 - SQLite 상태 관리 컨셉 → 동일 (better-sqlite3 네이티브)
 - Relations → 위키링크 변환 아이디어
 - Freemium 모델은 우리에게 불필요 (전체 오픈소스)
 
 ### 차별화 포인트
+
 - 우리: 100% 오픈소스, 공식 API만 사용, 무료
 - N2O: 소스 비공개, 비공식 API 추정, 유료
 
@@ -92,11 +102,13 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 ## 3. Python Script (koshirok096, DEV Community 3부작)
 
 ### 개요
+
 - 플랫폼: DEV Community 블로그 (학습 프로젝트)
 - 방향: 단방향 (Obsidian → Notion), 수동 배치
 - 시리즈: Part 1 (추가), Part 2 (태그 라우팅), Part 3 (Relation 연결)
 
 ### 핵심 구현
+
 ```python
 # Part 1: 기존 페이지에 toggle 블록으로 추가
 append_toggle_to_page(page_id, uid, body[:2000])
@@ -110,11 +122,13 @@ relation_props = {DAILY_RELATION_PROP: {"relation": [{"id": daily_page_id}]}}
 ```
 
 ### 치명적 한계
+
 - **마크다운 변환 없음** — raw 텍스트를 단일 paragraph에 2000자 잘라서 넣음
 - **프론트매터 포함된 채로 전송** — YAML도 본문에 들어감
 - 에러 재시도 없음, 중복 방지 없음, 파일명 YYYYMMDD 강제
 
 ### 참고할 점
+
 - Notion API 인증 헤더 형식 확인
 - Database query by title filter 패턴
 - **Relation property JSON 구조**: `{"relation": [{"id": page_id}]}`
@@ -126,24 +140,28 @@ relation_props = {DAILY_RELATION_PROP: {"relation": [{"id": daily_page_id}]}}
 ## 4. 기타 주요 도구 (간략)
 
 ### obsidian-to-notion (EasyChris, ★542)
+
 - 가장 많은 Star, Obsidian 플러그인
 - 단방향 (Obsidian → Notion)
 - 커스텀 배너, 모바일 지원, 태그 변환
 - **한계**: 2단계 이상 중첩 불가 (Notion API 제약)
 
 ### Notion-to-Obsidian-Converter (connertennery, ★~1000)
+
 - 가장 인기 있는 변환기
 - Notion 내보내기 ZIP → Obsidian 볼트
 - UUID 제거, 링크 변환, CSV DB 변환
 - **한계**: 오프라인 변환만, API 미사용, 실시간 불가
 
 ### @tryfabric/martian (라이브러리)
+
 - Markdown → Notion 블록 변환 라이브러리
 - GFM alerts → Notion callouts 자동 변환
 - 2000자 자동 분할, rich text 처리
 - **우리 프로젝트의 핵심 의존성**
 
 ### notion-to-md (souvikinator)
+
 - Notion 블록 → Markdown 변환 라이브러리
 - v3: 플러그인 시스템, 커스텀 렌더러
 - 페이지네이션 처리 (100블록/페이지)
@@ -163,5 +181,6 @@ relation_props = {DAILY_RELATION_PROP: {"relation": [{"id": daily_page_id}]}}
 ```
 
 **ObsiNotion이 채울 빈자리:**
+
 - 양방향 + 오픈소스 + 무료 + 공식 API + 2026 최신 기능 활용
 - 기존 어떤 도구도 이 조합을 제공하지 않음
