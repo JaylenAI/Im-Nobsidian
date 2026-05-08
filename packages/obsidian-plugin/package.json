@@ -20,5 +20,11 @@
     "obsidian": "^1.12.3",
     "typescript": "^5.6.0"
   },
+  "author": "hanseungheon",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer",
+    "directory": "packages/obsidian-plugin"
+  },
   "license": "MIT"
 }
