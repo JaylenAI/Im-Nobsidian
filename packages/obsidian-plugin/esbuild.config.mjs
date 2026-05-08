@@ -3,6 +3,8 @@ import builtins from "builtin-modules";
 
 const prod = process.argv[2] === "production";
 
+const nodeBuiltinsWithPrefix = builtins.map((m) => `node:${m}`);
+
 esbuild
   .build({
     entryPoints: ["src/main.ts"],
@@ -22,6 +24,8 @@ esbuild
       "@lezer/highlight",
       "@lezer/lr",
       ...builtins,
+      ...nodeBuiltinsWithPrefix,
+      "better-sqlite3",
     ],
     format: "cjs",
     target: "es2022",
@@ -30,5 +34,7 @@ esbuild
     treeShaking: true,
     outfile: "main.js",
     minify: prod,
+    platform: "node",
+    mainFields: ["module", "main"],
   })
   .catch(() => process.exit(1));
