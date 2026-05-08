@@ -1,0 +1,28 @@
+/* ObsiNotion Plugin Styles */
+
+.obsinotion-conflict-banner {
+  padding: 8px 12px;
+  margin: 4px 0;
+  border-left: 3px solid var(--text-warning);
+  background-color: var(--background-modifier-warning);
+  border-radius: 4px;
+  font-size: var(--font-ui-small);
+}
+
+.obsinotion-sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.obsinotion-sync-indicator--syncing {
+  color: var(--text-accent);
+}
+
+.obsinotion-sync-indicator--error {
+  color: var(--text-error);
+}
+
+.obsinotion-sync-indicator--conflict {
+  color: var(--text-warning);
+}

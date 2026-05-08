@@ -1,5 +1,6 @@
 import esbuild from "esbuild";
 import builtins from "builtin-modules";
+import { copyFileSync } from "node:fs";
 
 const prod = process.argv[2] === "production";
 
@@ -36,5 +37,8 @@ esbuild
     minify: prod,
     platform: "node",
     mainFields: ["module", "main"],
+  })
+  .then(() => {
+    copyFileSync("src/styles/main.css", "styles.css");
   })
   .catch(() => process.exit(1));

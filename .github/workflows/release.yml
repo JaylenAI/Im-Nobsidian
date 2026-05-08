@@ -50,7 +50,7 @@ jobs:
 
       - name: Package plugin
         working-directory: packages/obsidian-plugin
-        run: zip -j obsinotion-plugin.zip main.js manifest.json src/styles/main.css
+        run: zip -j obsinotion-plugin.zip main.js manifest.json styles.css
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2

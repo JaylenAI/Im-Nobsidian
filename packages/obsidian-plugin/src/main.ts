@@ -91,8 +91,7 @@ export default class ObsiNotionPlugin extends Plugin {
     try {
       this.stateDb?.close();
 
-      const basePath = this.app.vault.configDir;
-      const dbPath = `${basePath}/plugins/obsidian-obsinotion/sync.db`;
+      const dbPath = `${this.app.vault.adapter.getBasePath()}/.obsinotion/sync.db`;
       this.stateDb = StateDB.open(dbPath);
 
       const client = new NotionClient({

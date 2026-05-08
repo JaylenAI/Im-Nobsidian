@@ -77,7 +77,7 @@ describe("Roundtrip 테스트", () => {
     expect(pushResult.content).toContain("- [x] Completed task");
     expect(pushResult.content).toContain("- [ ] Pending task");
     expect(pushResult.content).toContain("**bold**");
-    expect(pushResult.content).toContain("*italic*");
+    expect(pushResult.content).toContain("_italic_");
     expect(pushResult.content).toContain("`inline code`");
     expect(pushResult.content).toContain("```typescript");
     expect(pushResult.content).toContain("> This is a blockquote");
