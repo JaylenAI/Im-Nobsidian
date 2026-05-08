@@ -85,7 +85,8 @@ export type {
 } from "./structure/index.js";
 
 // Watcher
-export { FileWatcher } from "./watcher/index.js";
+export { FileWatcher, WatchSyncService } from "./watcher/index.js";
+export type { WatchSyncOptions } from "./watcher/index.js";
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";

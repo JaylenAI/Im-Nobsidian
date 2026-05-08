@@ -37,6 +37,8 @@ export default class ObsiNotionPlugin extends Plugin {
   private stateDb: StateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private vaultEventSyncing = false;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -82,10 +84,13 @@ export default class ObsiNotionPlugin extends Plugin {
     if (this.settings.autoSync) {
       this.startAutoSync();
     }
+
+    this.registerVaultEvents();
   }
 
   onunload(): void {
     this.stopAutoSync();
+    this.clearVaultDebounce();
     this.stateDb?.close();
   }
 
@@ -155,6 +160,62 @@ export default class ObsiNotionPlugin extends Plugin {
     if (this.autoSyncTimer) {
       clearInterval(this.autoSyncTimer);
       this.autoSyncTimer = null;
+    }
+  }
+
+  private registerVaultEvents(): void {
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+  }
+
+  private scheduleVaultSync(): void {
+    if (!this.settings.autoSync || !this.orchestrator) return;
+
+    this.clearVaultDebounce();
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      void this.executeVaultSync();
+    }, 2000);
+  }
+
+  private clearVaultDebounce(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+  }
+
+  private async executeVaultSync(): Promise<void> {
+    if (!this.orchestrator || this.vaultEventSyncing) return;
+
+    this.vaultEventSyncing = true;
+    this.updateStatusBar("syncing");
+
+    try {
+      const result = await this.orchestrator.sync();
+      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+    } catch {
+      this.updateStatusBar("error");
+    } finally {
+      this.vaultEventSyncing = false;
     }
   }
 

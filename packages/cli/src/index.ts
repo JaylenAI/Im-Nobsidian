@@ -7,6 +7,7 @@ import { syncCommand } from "./commands/sync.js";
 import { statusCommand } from "./commands/status.js";
 import { diffCommand } from "./commands/diff.js";
 import { resolveCommand } from "./commands/resolve.js";
+import { watchCommand } from "./commands/watch.js";
 
 const program = new Command();
 
@@ -19,5 +20,6 @@ program.addCommand(syncCommand);
 program.addCommand(statusCommand);
 program.addCommand(diffCommand);
 program.addCommand(resolveCommand);
+program.addCommand(watchCommand);
 
 program.parse();
