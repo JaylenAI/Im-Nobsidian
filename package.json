@@ -7,7 +7,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/hanseungheon/obsinotion"
+    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer"
   },
   "engines": {
     "node": ">=20.0.0",

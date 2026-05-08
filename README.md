@@ -16,18 +16,18 @@ Obsidian 볼트와 Notion 워크스페이스를 양방향으로 동기화합니�
 
 ## 패키지
 
-| 패키지 | 설명 | npm |
-|--------|------|-----|
-| `@obsinotion/core` | 동기화 엔진 (변환 + 상태 관리) | - |
-| `obsinotion` | CLI 도구 | - |
-| `obsidian-obsinotion` | Obsidian 커뮤니티 플러그인 | - |
+| 패키지                | 설명                           | npm |
+| --------------------- | ------------------------------ | --- |
+| `@obsinotion/core`    | 동기화 엔진 (변환 + 상태 관리) | -   |
+| `obsinotion`          | CLI 도구                       | -   |
+| `obsidian-obsinotion` | Obsidian 커뮤니티 플러그인     | -   |
 
 ## 빠른 시작
 
-> 아직 개발 중입니다. 첫 릴리스 전까지는 사용할 수 없습니다.
+### CLI
 
 ```bash
-# CLI 설치
+# 초기화 (Notion 토큰 + 루트 페이지 설정)
 npx obsinotion init
 
 # 동기화 상태 확인
@@ -35,11 +35,37 @@ npx obsinotion status
 
 # 양방향 동기화
 npx obsinotion sync
+
+# Obsidian → Notion
+npx obsinotion push
+
+# Notion → Obsidian
+npx obsinotion pull
+
+# 파일 변경 감시 + 자동 동기화
+npx obsinotion watch
+
+# 충돌 해결
+npx obsinotion resolve
 ```
+
+### Obsidian 플러그인
+
+1. Obsidian 설정 → 커뮤니티 플러그인 → **ObsiNotion Sync** 검색
+2. 설치 후 설정에서 Notion Integration Token과 루트 페이지 ID 입력
+3. 명령 팔레트(Ctrl/Cmd+P)에서 `ObsiNotion: Sync` 실행
+
+### Notion Integration 토큰 발급
+
+1. [Notion Integrations](https://www.notion.so/my-integrations) 접속
+2. "새 통합 만들기" → 이름 입력 → 제출
+3. "Internal Integration Secret" 복사 (`ntn_` 으로 시작)
+4. 동기화할 Notion 페이지에서 ··· → 연결 → 생성한 통합 추가
 
 ## 개발 환경
 
 ### 요구 사항
+
 - Node.js 20+
 - pnpm 9+
 

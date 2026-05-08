@@ -58,4 +58,5 @@ jobs:
           files: |
             packages/obsidian-plugin/obsinotion-plugin.zip
             packages/obsidian-plugin/manifest.json
+            packages/obsidian-plugin/versions.json
           generate_release_notes: true

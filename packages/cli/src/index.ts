@@ -11,7 +11,7 @@ import { watchCommand } from "./commands/watch.js";
 
 const program = new Command();
 
-program.name("obsinotion").description("Obsidian ↔ Notion 양방향 동기화 CLI").version("0.0.1");
+program.name("obsinotion").description("Obsidian ↔ Notion 양방향 동기화 CLI").version("0.1.0");
 
 program.addCommand(initCommand);
 program.addCommand(pushCommand);
