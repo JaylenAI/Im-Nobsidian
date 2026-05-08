@@ -8,11 +8,13 @@ import type {
   StatusResult,
   RemoteChange,
   Conflict,
+  FailedOperation,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
 import type { StateDB } from "../state/state-db.js";
 import type { NotionClient } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
+import { Sema } from "async-sema";
 import { ChangeDetector } from "./change-detector.js";
 import { ConversionPipeline } from "../converter/pipeline.js";
 import { FrontmatterExtractor } from "../converter/pre-processors/frontmatter.js";
@@ -75,31 +77,34 @@ export class SyncOrchestrator {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
     }
 
+    if (options?.dryRun) {
+      return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
+    }
+
+    this.stateDb.setMeta("push_in_progress", "true");
+
+    const sema = new Sema(this.config.advanced.concurrency);
     let created = 0;
     let updated = 0;
     let deleted = 0;
-    const failed: PushResult["failed"] = [];
+    const failed: FailedOperation[] = [];
 
-    for (const change of filtered) {
+    const tasks = filtered.map((change) => async () => {
+      await sema.acquire();
       try {
-        if (options?.dryRun) continue;
-
         switch (change.type) {
           case "created":
             await this.pushCreate(change.path);
             created++;
             break;
           case "modified":
+          case "moved":
             await this.pushUpdate(change.path);
             updated++;
             break;
           case "deleted":
             await this.pushDelete(change.path);
             deleted++;
-            break;
-          case "moved":
-            await this.pushUpdate(change.path);
-            updated++;
             break;
         }
       } catch (error) {
@@ -109,11 +114,16 @@ export class SyncOrchestrator {
             change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        sema.release();
       }
-    }
+    });
+
+    await Promise.all(tasks.map((t) => t()));
 
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
+    this.stateDb.setMeta("push_in_progress", "");
 
     return { created, updated, deleted, failed, duration: Date.now() - startTime };
   }
@@ -125,7 +135,7 @@ export class SyncOrchestrator {
     let deleted = 0;
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
-    const failed: PullResult["failed"] = [];
+    const failed: FailedOperation[] = [];
 
     const remoteChanges = await this.detectRemoteChanges();
 
@@ -136,10 +146,25 @@ export class SyncOrchestrator {
         })
       : remoteChanges;
 
-    for (const change of filtered) {
-      try {
-        if (options?.dryRun) continue;
+    if (options?.dryRun || filtered.length === 0) {
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: Date.now() - startTime,
+      };
+    }
 
+    this.stateDb.setMeta("pull_in_progress", "true");
+
+    const sema = new Sema(this.config.advanced.concurrency);
+
+    const tasks = filtered.map((change) => async () => {
+      await sema.acquire();
+      try {
         switch (change.type) {
           case "created": {
             const path = await this.pullCreate(change.pageId);
@@ -173,11 +198,16 @@ export class SyncOrchestrator {
             change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
           error: error instanceof Error ? error.message : String(error),
         });
+      } finally {
+        sema.release();
       }
-    }
+    });
+
+    await Promise.all(tasks.map((t) => t()));
 
     this.stateDb.setMeta("last_pull_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
+    this.stateDb.setMeta("pull_in_progress", "");
 
     return {
       created,
@@ -283,9 +313,7 @@ export class SyncOrchestrator {
     const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
 
     const existingBlocks = await this.notionClient.fetchAllChildren(record.notionPageId);
-    for (const block of existingBlocks) {
-      await this.notionClient.deleteBlock(block.id);
-    }
+    await Promise.all(existingBlocks.map((block) => this.notionClient.deleteBlock(block.id)));
 
     if (blocks.length > 0) {
       await this.notionClient.appendChildren(record.notionPageId, blocks);

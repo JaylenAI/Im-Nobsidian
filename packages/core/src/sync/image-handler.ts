@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { Sema } from "async-sema";
 import type { VaultFS } from "./vault-fs.js";
 
 export interface ImageDownloadResult {
@@ -58,25 +59,38 @@ export class ImageHandler {
     markdown: string,
     pageTitle: string,
   ): Promise<{ content: string; downloads: ImageDownloadResult[] }> {
-    const downloads: ImageDownloadResult[] = [];
     const imageRegex = /!\[([^\]]*)\]\((https?:\/\/[^)]+)\)/g;
+    const matches = [...markdown.matchAll(imageRegex)];
+    const notionMatches = matches.filter((m) => m[2] && this.isNotionImageUrl(m[2]));
+
+    if (notionMatches.length === 0) {
+      return { content: markdown, downloads: [] };
+    }
+
+    const sema = new Sema(3);
+    const results = await Promise.allSettled(
+      notionMatches.map(async (match) => {
+        await sema.acquire();
+        try {
+          return {
+            match,
+            download: await this.downloadImage(match[2]!, pageTitle),
+          };
+        } finally {
+          sema.release();
+        }
+      }),
+    );
+
+    const downloads: ImageDownloadResult[] = [];
     let result = markdown;
 
-    const matches = [...markdown.matchAll(imageRegex)];
-
-    for (const match of matches) {
-      const [fullMatch, alt, url] = match;
-      if (!url || !this.isNotionImageUrl(url)) continue;
-
-      try {
-        const download = await this.downloadImage(url, pageTitle);
-        downloads.push(download);
-
-        const obsidianEmbed = `![[${download.localPath}${alt ? `|${alt}` : ""}]]`;
-        result = result.replace(fullMatch!, obsidianEmbed);
-      } catch {
-        // 다운로드 실패 시 원본 URL 유지
-      }
+    for (const settled of results) {
+      if (settled.status !== "fulfilled") continue;
+      const { match, download } = settled.value;
+      downloads.push(download);
+      const obsidianEmbed = `![[${download.localPath}${match[1] ? `|${match[1]}` : ""}]]`;
+      result = result.replace(match[0]!, obsidianEmbed);
     }
 
     return { content: result, downloads };

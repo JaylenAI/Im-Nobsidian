@@ -146,31 +146,31 @@ export class NotionClient {
   }
 
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
-    const pages: PageObjectResponse[] = [];
     const blocks = await this.fetchAllChildren(parentId);
+    const childPageBlocks = blocks.filter((b) => b.type === "child_page");
 
-    for (const block of blocks) {
-      if (block.type === "child_page") {
-        const page = await this.getPage(block.id);
-        pages.push(page);
-      }
-    }
+    if (childPageBlocks.length === 0) return [];
 
+    const pages = await Promise.all(childPageBlocks.map((b) => this.getPage(b.id)));
     return pages;
   }
 
   async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
-    const queue: string[] = [parentId];
+    let currentLevel: string[] = [parentId];
 
-    while (queue.length > 0) {
-      const currentId = queue.shift()!;
-      const children = await this.getChildPages(currentId);
+    while (currentLevel.length > 0) {
+      const childArrays = await Promise.all(currentLevel.map((id) => this.getChildPages(id)));
+      const nextLevel: string[] = [];
 
-      for (const child of children) {
-        all.push(child);
-        queue.push(child.id);
+      for (const children of childArrays) {
+        for (const child of children) {
+          all.push(child);
+          nextLevel.push(child.id);
+        }
       }
+
+      currentLevel = nextLevel;
     }
 
     return all;

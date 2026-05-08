@@ -17,17 +17,24 @@ export class ChangeDetector {
 
     for (const file of currentFiles) {
       existingPaths.add(file.path);
-      const currentHash = computeHash(file.content);
       const record = this.stateDb.getByPath(file.path);
 
       if (!record) {
         changes.push({
           path: file.path,
           type: "created",
-          currentHash,
+          currentHash: computeHash(file.content),
           previousHash: null,
         });
-      } else if (record.contentHash !== currentHash) {
+        continue;
+      }
+
+      if (record.localLastModified && file.mtime === record.localLastModified) {
+        continue;
+      }
+
+      const currentHash = computeHash(file.content);
+      if (record.contentHash !== currentHash) {
         changes.push({
           path: file.path,
           type: "modified",
