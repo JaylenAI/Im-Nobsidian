@@ -24,12 +24,14 @@ import { MathNormalizer } from "../converter/pre-processors/math.js";
 import { EmbedResolver } from "../converter/pre-processors/embed.js";
 import { PreserveMarkerCollector } from "../converter/pre-processors/preserve-marker.js";
 import { UnsupportedBlockStripper } from "../converter/pre-processors/unsupported-block-stripper.js";
+import { PropertiesTableInjector } from "../converter/pre-processors/properties-table.js";
 import { MentionToWikilink } from "../converter/post-processors/mention-to-wikilink.js";
 import { PreserveMarkerInjector } from "../converter/post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "../converter/post-processors/callout-restorer.js";
 import { ColorAnnotator } from "../converter/post-processors/color-annotator.js";
 import { FrontmatterGenerator } from "../converter/post-processors/frontmatter-generator.js";
 import { LocalImageRestorer } from "../converter/post-processors/local-image-restorer.js";
+import { PropertiesTableRestorer } from "../converter/post-processors/properties-table-restorer.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { computeHash } from "../utils/hash.js";
@@ -56,12 +58,14 @@ export class SyncOrchestrator {
 
     this.pipeline.registerPreProcessor(new UnsupportedBlockStripper());
     this.pipeline.registerPreProcessor(new FrontmatterExtractor());
+    this.pipeline.registerPreProcessor(new PropertiesTableInjector());
     this.pipeline.registerPreProcessor(new WikilinkResolver());
     this.pipeline.registerPreProcessor(new CalloutTransformer());
     this.pipeline.registerPreProcessor(new MathNormalizer());
     this.pipeline.registerPreProcessor(new EmbedResolver());
     this.pipeline.registerPreProcessor(new PreserveMarkerCollector());
 
+    this.pipeline.registerPostProcessor(new PropertiesTableRestorer());
     this.pipeline.registerPostProcessor(new LocalImageRestorer());
     this.pipeline.registerPostProcessor(new PreserveMarkerInjector());
     this.pipeline.registerPostProcessor(new MentionToWikilink());
@@ -93,6 +97,23 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("push_in_progress", "true");
+
+    const folderPaths = new Set<string>();
+    for (const change of filtered) {
+      const parts = change.path.split("/");
+      if (parts.length > 1) {
+        for (let i = 1; i < parts.length; i++) {
+          folderPaths.add(parts.slice(0, i).join("/"));
+        }
+      }
+    }
+
+    const sortedFolders = [...folderPaths].sort(
+      (a, b) => a.split("/").length - b.split("/").length,
+    );
+    for (const folderPath of sortedFolders) {
+      await this.ensureFolderPage(folderPath);
+    }
 
     const sema = new Sema(this.config.advanced.concurrency);
     let created = 0;
@@ -603,29 +624,48 @@ export class SyncOrchestrator {
     return record.obsidianPath;
   }
 
+  private async ensureFolderPage(folderPath: string): Promise<void> {
+    const existing = this.stateDb.getByPath(folderPath);
+    if (existing?.notionPageId) return;
+
+    const parts = folderPath.split("/");
+    const folderName = parts[parts.length - 1]!;
+
+    let parentId = this.config.notion.rootPageId;
+    if (parts.length > 1) {
+      const parentPath = parts.slice(0, -1).join("/");
+      const parentRecord = this.stateDb.getByPath(parentPath);
+      if (parentRecord?.notionPageId) {
+        parentId = parentRecord.notionPageId;
+      }
+    }
+
+    const folderPage = await this.notionClient.createPage({
+      parentId,
+      parentType: "page",
+      title: folderName,
+    });
+
+    this.stateDb.upsert({
+      obsidianPath: folderPath,
+      notionPageId: folderPage.id,
+      notionParentId: parentId,
+      contentHash: "",
+      notionLastEdited: folderPage.last_edited_time,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: "folder-note",
+      status: "synced",
+    });
+  }
+
   private async resolveNotionParent(filePath: string): Promise<string> {
     const parts = filePath.split("/");
     if (parts.length <= 1) return this.config.notion.rootPageId;
 
-    const folderParts = parts.slice(0, -1);
-
-    for (let i = folderParts.length; i > 0; i--) {
-      const folderPath = folderParts.slice(0, i).join("/");
-      const folderName = folderParts[i - 1]!;
-
-      const folderNotePath = `${folderPath}/${folderName}.md`;
-      const folderRecord = this.stateDb.getByPath(folderNotePath);
-      if (folderRecord?.notionPageId) return folderRecord.notionPageId;
-
-      const records = this.stateDb.getAll();
-      const parentRecord = records.find(
-        (r) =>
-          r.notionPageId &&
-          r.obsidianPath.startsWith(folderPath + "/") &&
-          r.fileType === "folder-note",
-      );
-      if (parentRecord?.notionPageId) return parentRecord.notionPageId;
-    }
+    const folderPath = parts.slice(0, -1).join("/");
+    const folderRecord = this.stateDb.getByPath(folderPath);
+    if (folderRecord?.notionPageId) return folderRecord.notionPageId;
 
     return this.config.notion.rootPageId;
   }

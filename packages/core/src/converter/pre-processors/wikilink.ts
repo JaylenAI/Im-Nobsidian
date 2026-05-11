@@ -11,7 +11,7 @@ export class WikilinkResolver implements Processor {
       WIKILINK_REGEX,
       (_match, target: string, display?: string) => {
         const label = display ?? target;
-        return `[${label}](${encodeWikilinkTarget(target)})`;
+        return `**${label}**`;
       },
     );
 
@@ -20,8 +20,4 @@ export class WikilinkResolver implements Processor {
       metadata: input.metadata,
     };
   }
-}
-
-function encodeWikilinkTarget(target: string): string {
-  return target.replace(/ /g, "%20");
 }

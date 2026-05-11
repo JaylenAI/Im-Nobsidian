@@ -66,6 +66,8 @@ export {
   PreserveMarkerInjector,
   LocalImageRestorer,
   UnsupportedBlockStripper,
+  PropertiesTableInjector,
+  PropertiesTableRestorer,
 } from "./converter/index.js";
 
 // Conflict
