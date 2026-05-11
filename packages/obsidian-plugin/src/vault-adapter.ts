@@ -33,13 +33,19 @@ export class ObsidianVaultAdapter implements VaultFS {
     const existing = this.vault.getAbstractFileByPath(normalized);
 
     if (existing && existing instanceof TFile) {
-      await this.vault.modifyBinary(existing, data);
+      await this.vault.modifyBinary(
+        existing,
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+      );
     } else {
       const dir = normalized.substring(0, normalized.lastIndexOf("/"));
       if (dir) {
         await this.ensureFolder(dir);
       }
-      await this.vault.createBinary(normalized, data);
+      await this.vault.createBinary(
+        normalized,
+        data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer,
+      );
     }
   }
 

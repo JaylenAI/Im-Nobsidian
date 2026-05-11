@@ -109,7 +109,7 @@ export default class ObsiNotionPlugin extends Plugin {
     try {
       this.stateDb?.close();
 
-      const dbPath = `${this.app.vault.adapter.getBasePath()}/.obsinotion/sync.db`;
+      const dbPath = `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/.obsinotion/sync.db`;
       this.stateDb = StateDB.open(dbPath);
 
       const client = new NotionClient({
@@ -125,6 +125,7 @@ export default class ObsiNotionPlugin extends Plugin {
         notion: {
           token: this.settings.token,
           rootPageId: this.settings.rootPageId,
+          parentMode: "page" as const,
         },
         sync: {
           ...DEFAULT_CONFIG.sync,

@@ -3,7 +3,6 @@ import type { App } from "obsidian";
 import type { Conflict, ResolutionChoice } from "@obsinotion/core";
 
 export class ConflictModal extends Modal {
-  private result: ResolutionChoice | null = null;
   private readonly onResolve: (choice: ResolutionChoice) => void;
 
   constructor(
@@ -64,7 +63,6 @@ export class ConflictModal extends Modal {
   }
 
   private selectChoice(choice: ResolutionChoice): void {
-    this.result = choice;
     this.close();
     this.onResolve(choice);
   }
