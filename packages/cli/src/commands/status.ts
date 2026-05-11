@@ -20,7 +20,7 @@ export const statusCommand = new Command("status")
         token: config.notion.token,
         concurrency: config.advanced.concurrency,
       });
-      const vaultFs = new NodeVaultFS(cwd);
+      const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const status = await orchestrator.status();
@@ -43,10 +43,10 @@ export const statusCommand = new Command("status")
         }
       }
 
-      if (status.conflicts.length > 0) {
-        console.log(`\n충돌 (${status.conflicts.length}건):`);
-        for (const conflict of status.conflicts) {
-          console.log(`  ⚠ ${conflict.localChange.path}`);
+      if (status.conflictRecords.length > 0) {
+        console.log(`\n충돌 (${status.conflictRecords.length}건):`);
+        for (const record of status.conflictRecords) {
+          console.log(`  ⚠ ${record.obsidianPath}`);
         }
       }
     } finally {

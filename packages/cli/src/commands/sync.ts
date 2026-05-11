@@ -23,7 +23,7 @@ export const syncCommand = new Command("sync")
         concurrency: config.advanced.concurrency,
         timeoutMs: config.advanced.timeoutMs,
       });
-      const vaultFs = new NodeVaultFS(cwd);
+      const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const spinner = ora("동기화 중...").start();

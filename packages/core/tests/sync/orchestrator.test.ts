@@ -30,6 +30,8 @@ function createMockStateDb() {
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
+    storePreserveMarkers: vi.fn(),
+    getPreserveMarkers: vi.fn().mockReturnValue([]),
     transaction: vi.fn().mockImplementation((fn: () => unknown) => fn()),
     close: vi.fn(),
   };

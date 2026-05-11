@@ -57,6 +57,7 @@ export class ConversionPipeline {
       content: input.content,
       properties: (input.metadata.properties as Record<string, unknown>) ?? {},
       images: input.metadata.images ?? [],
+      preserveMarkers: input.metadata.preserveMarkers ?? [],
     };
   }
 

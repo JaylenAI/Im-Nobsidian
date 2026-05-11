@@ -12,10 +12,15 @@ export class EmbedResolver implements Processor {
 
   process(input: ProcessorInput): ProcessorOutput {
     const images: ImageReference[] = input.metadata.images ? [...input.metadata.images] : [];
+    const isPush = input.context.direction === "push";
 
     let content = input.content.replace(OBSIDIAN_EMBED_REGEX, (_match, target: string) => {
       if (isImageFile(target)) {
         images.push({ url: target, localPath: target, isExternal: false });
+        if (isPush && !isExternalUrl(target)) {
+          const fileName = target.split("/").pop() ?? target;
+          return `> 📎 ${fileName} (로컬 이미지 — Notion API 제한으로 업로드 불가)\n> %% obsinotion:local-image:${target} %%`;
+        }
         return `![${target}](${encodeURI(target)})`;
       }
       return `[${target}](${encodeURI(target)})`;

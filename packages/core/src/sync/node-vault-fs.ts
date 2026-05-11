@@ -1,10 +1,38 @@
 import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import type { VaultFS } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 
+export interface PathFilterConfig {
+  readonly include?: string[];
+  readonly exclude?: string[];
+}
+
 export class NodeVaultFS implements VaultFS {
-  constructor(private readonly rootPath: string) {}
+  private readonly excludePatterns: string[];
+
+  constructor(
+    private readonly rootPath: string,
+    pathConfig?: PathFilterConfig,
+  ) {
+    const configExclude = pathConfig?.exclude ?? [];
+    const ignorePatterns = this.loadObsinotionIgnore();
+    this.excludePatterns = [...configExclude, ...ignorePatterns];
+  }
+
+  private loadObsinotionIgnore(): string[] {
+    try {
+      const ignorePath = join(this.rootPath, ".obsinotionignore");
+      const content = readFileSync(ignorePath, "utf-8");
+      return content
+        .split("\n")
+        .map((line: string) => line.trim())
+        .filter((line: string) => line && !line.startsWith("#"));
+    } catch {
+      return [];
+    }
+  }
 
   async readFile(path: string): Promise<string> {
     const fullPath = join(this.rootPath, path);
@@ -54,6 +82,24 @@ export class NodeVaultFS implements VaultFS {
     return files;
   }
 
+  private isExcluded(relativePath: string): boolean {
+    for (const pattern of this.excludePatterns) {
+      if (pattern.endsWith("/**")) {
+        const dir = pattern.slice(0, -3);
+        if (relativePath.startsWith(dir + "/") || relativePath === dir) return true;
+      } else if (pattern.startsWith("*.")) {
+        const ext = pattern.slice(1);
+        if (relativePath.endsWith(ext)) return true;
+      } else if (pattern.includes("*")) {
+        const regex = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, "[^/]*") + "$");
+        if (regex.test(relativePath)) return true;
+      } else {
+        if (relativePath === pattern || relativePath.startsWith(pattern + "/")) return true;
+      }
+    }
+    return false;
+  }
+
   private async walkDir(dir: string, result: FileInfo[]): Promise<void> {
     const entries = await readdir(dir, { withFileTypes: true });
 
@@ -62,12 +108,15 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.name.startsWith(".")) continue;
 
+      const relativePath = relative(this.rootPath, fullPath);
+
+      if (this.isExcluded(relativePath)) continue;
+
       if (entry.isDirectory()) {
         await this.walkDir(fullPath, result);
       } else if (entry.isFile() && entry.name.endsWith(".md")) {
         const content = await readFile(fullPath, "utf-8");
         const fileStat = await stat(fullPath);
-        const relativePath = relative(this.rootPath, fullPath);
 
         result.push({
           path: relativePath,
