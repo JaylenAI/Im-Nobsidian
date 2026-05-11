@@ -8,9 +8,11 @@ import { MathNormalizer } from "../../src/converter/pre-processors/math.js";
 import { EmbedResolver } from "../../src/converter/pre-processors/embed.js";
 import { CalloutTransformer } from "../../src/converter/pre-processors/callout.js";
 import { UnsupportedBlockStripper } from "../../src/converter/pre-processors/unsupported-block-stripper.js";
+import { PropertiesTableInjector } from "../../src/converter/pre-processors/properties-table.js";
 import { MentionToWikilink } from "../../src/converter/post-processors/mention-to-wikilink.js";
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import { CalloutRestorer } from "../../src/converter/post-processors/callout-restorer.js";
+import { PropertiesTableRestorer } from "../../src/converter/post-processors/properties-table-restorer.js";
 import type { ConversionContext } from "../../src/types/convert.js";
 
 const FIXTURES_DIR = join(import.meta.dirname, "../fixtures/obsidian");
@@ -42,19 +44,23 @@ describe("Roundtrip 테스트", () => {
     pipeline = new ConversionPipeline();
     pipeline.registerPreProcessor(new UnsupportedBlockStripper());
     pipeline.registerPreProcessor(new FrontmatterExtractor());
+    pipeline.registerPreProcessor(new PropertiesTableInjector());
     pipeline.registerPreProcessor(new EmbedResolver());
     pipeline.registerPreProcessor(new CalloutTransformer());
     pipeline.registerPreProcessor(new MathNormalizer());
+    pipeline.registerPostProcessor(new PropertiesTableRestorer());
     pipeline.registerPostProcessor(new CalloutRestorer());
     pipeline.registerPostProcessor(new FrontmatterGenerator());
   });
 
-  it("frontmatter 라운드트립: 추출 → 재생성", async () => {
+  it("frontmatter 라운드트립: 추출 → 속성 테이블 → 재생성", async () => {
     const input = `---\ntitle: Test\nstatus: active\n---\n\n# Hello World`;
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.properties).toEqual({ title: "Test", status: "active" });
-    expect(pushResult.content).not.toContain("---");
+    expect(pushResult.content).toContain("| Property | Value |");
+    expect(pushResult.content).toContain("| status | active |");
+    expect(pushResult.content).toContain("# Hello World");
 
     const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
       properties: pushResult.properties,
@@ -104,7 +110,7 @@ describe("Roundtrip 테스트", () => {
 
     const input = "See [[Project Plan]] for details";
     const pushResult = wikiPipeline.convertToNotion(input, pushContext);
-    expect(pushResult.content).toContain("[Project Plan]");
+    expect(pushResult.content).toContain("**Project Plan**");
     expect(pushResult.content).not.toContain("[[");
   });
 

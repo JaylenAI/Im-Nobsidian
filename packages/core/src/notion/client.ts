@@ -46,13 +46,18 @@ export class NotionClient {
         ? { database_id: params.parentId }
         : { page_id: params.parentId };
 
+    const properties =
+      params.parentType === "page"
+        ? { title: { title: [{ text: { content: params.title } }] } }
+        : ((params.properties as never) ?? {
+            title: { title: [{ text: { content: params.title } }] },
+          });
+
     return this.withRateLimit(
       () =>
         this.client.pages.create({
           parent,
-          properties: (params.properties as never) ?? {
-            title: { title: [{ text: { content: params.title } }] },
-          },
+          properties: properties as never,
           children: params.children as never,
         }) as Promise<PageObjectResponse>,
     );
