@@ -7,3 +7,4 @@ export type {
   RichTextItem,
   RichTextSegment,
 } from "./block-builder.js";
+export { PropertyMapper } from "./property-mapper.js";

@@ -76,6 +76,38 @@ export class NotionClient {
     );
   }
 
+  async getDatabaseSchema(
+    databaseId: string,
+  ): Promise<Record<string, { id: string; type: string }>> {
+    const db = await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    );
+    const properties = (db as { properties: Record<string, { id: string; type: string }> })
+      .properties;
+    const schema: Record<string, { id: string; type: string }> = {};
+    for (const [name, prop] of Object.entries(properties)) {
+      schema[name] = { id: prop.id, type: prop.type };
+    }
+    return schema;
+  }
+
+  async queryDatabase(
+    databaseId: string,
+    options?: { startCursor?: string; pageSize?: number },
+  ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    const response = await this.withRateLimit(() =>
+      this.client.databases.query({
+        database_id: databaseId,
+        start_cursor: options?.startCursor,
+        page_size: options?.pageSize ?? 100,
+      }),
+    );
+    return {
+      results: response.results as PageObjectResponse[],
+      nextCursor: response.next_cursor,
+    };
+  }
+
   async archivePage(pageId: string): Promise<void> {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }

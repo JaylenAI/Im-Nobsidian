@@ -6,6 +6,8 @@ export const ConfigSchema = z.object({
     token: z.string().startsWith("ntn_"),
     rootPageId: z.string(),
     workspaceId: z.string().optional(),
+    parentMode: z.enum(["page", "database"]).default("page"),
+    databaseId: z.string().optional(),
   }),
   sync: z.object({
     direction: z.enum(["push", "pull", "both"]).default("both"),
@@ -42,6 +44,7 @@ export const DEFAULT_CONFIG: Config = {
   notion: {
     token: "",
     rootPageId: "",
+    parentMode: "page",
   },
   sync: {
     direction: "both",

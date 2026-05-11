@@ -41,7 +41,7 @@ export { StateDB } from "./state/index.js";
 export type { UpsertSyncRecord } from "./state/index.js";
 
 // Notion
-export { NotionClient, NotionBlockBuilder } from "./notion/index.js";
+export { NotionClient, NotionBlockBuilder, PropertyMapper } from "./notion/index.js";
 export type {
   NotionClientOptions,
   NotionBlock,

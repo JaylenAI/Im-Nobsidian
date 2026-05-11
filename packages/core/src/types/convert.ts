@@ -22,6 +22,7 @@ export interface ConversionContext {
   readonly direction: "push" | "pull";
   readonly path: ConversionPath;
   readonly filePath: string;
+  readonly parentMode?: "page" | "database";
 }
 
 export interface Processor {

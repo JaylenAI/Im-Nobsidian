@@ -9,6 +9,10 @@ export class PropertiesTableInjector implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
+    if (input.context.parentMode === "database") {
+      return { content: input.content, metadata: input.metadata };
+    }
+
     const properties = input.metadata.properties as Record<string, unknown> | undefined;
     if (!properties || Object.keys(properties).length === 0) {
       return { content: input.content, metadata: input.metadata };
