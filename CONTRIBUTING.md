@@ -1,15 +1,15 @@
 # Contributing to ObsiNotion
 
-기여를 환영합니다! 이 문서에서는 기여 방법을 안내합니다.
+We welcome contributions! / 기여를 환영합니다!
 
-## 개발 환경 설정
+## Getting Started / 개발 환경 설정
 
-### 요구 사항
+### Requirements / 요구 사항
 
 - Node.js 20+
 - pnpm 9+
 
-### 설치
+### Setup / 설치
 
 ```bash
 git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
@@ -18,52 +18,63 @@ pnpm install
 pnpm build
 ```
 
-### 테스트 실행
+### Running Tests / 테스트 실행
 
 ```bash
-# 단위 테스트
+# Unit tests / 단위 테스트
 pnpm test
 
-# 커버리지 포함
+# With coverage / 커버리지 포함
 pnpm test:coverage
 
-# E2E 테스트 (Notion 토큰 필요)
+# Type check / 타입 체크
+pnpm typecheck
+
+# Lint
+pnpm lint
+
+# E2E tests (requires Notion token / Notion 토큰 필요)
 NOTION_TOKEN=ntn_xxx NOTION_ROOT_PAGE_ID=xxx pnpm test
 ```
 
-## 브랜치 전략
+## Branch Strategy / 브랜치 전략
 
-- `main` — 안정 릴리스 전용
-- `dev` — 개발 통합 브랜치
-- `feature/*` — 새 기능 (dev에서 분기 → dev로 머지)
-- `fix/*` — 버그 수정
+- `main` — Stable releases only / 안정 릴리스 전용
+- `dev` — Development integration / 개발 통합 브랜치
+- `feature/*` — New features (branch from dev → merge to dev)
+- `fix/*` — Bug fixes
 
-## 커밋 메시지
+## Commit Messages / 커밋 메시지
 
-한국어로 작성합니다.
+Korean or English. / 한국어 또는 영어로 작성합니다.
 
 ```
-<type>: <제목>
+<type>: <subject>
 
-<본문>
+<body>
 ```
 
-타입: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
+Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 
-## Pull Request
+## Pull Requests
 
-1. `dev` 브랜치에서 feature 브랜치 생성
-2. 변경 사항 구현 + 테스트 작성
-3. `pnpm test && pnpm build && pnpm lint` 통과 확인
-4. PR 제출 (dev 브랜치로)
+1. Create a feature branch from `dev` / `dev`에서 feature 브랜치 생성
+2. Implement changes + write tests / 변경 사항 구현 + 테스트 작성
+3. Ensure all checks pass / 모든 체크 통과 확인:
+   ```bash
+   pnpm test && pnpm build && pnpm lint && pnpm typecheck
+   ```
+4. Submit PR targeting `dev` / `dev` 브랜치로 PR 제출
 
-## 프로젝트 구조
+## Project Structure / 프로젝트 구조
 
 ```
 packages/
-├── core/              # @obsinotion/core — 동기화 엔진
-├── cli/               # obsinotion — CLI 도구
-└── obsidian-plugin/   # Obsidian 커뮤니티 플러그인
+├── core/              # @obsinotion/core — sync engine / 동기화 엔진
+├── cli/               # obsinotion — CLI tool / CLI 도구
+└── obsidian-plugin/   # Obsidian community plugin / 커뮤니티 플러그인
 ```
 
-자세한 개발 가이드는 [docs/05-guides/CONTRIBUTING.md](docs/05-guides/CONTRIBUTING.md)를 참고하세요.
+## Code of Conduct
+
+Please read our [Code of Conduct](CODE_OF_CONDUCT.md) before contributing.
