@@ -3,6 +3,7 @@ import { MathNormalizer } from "../../src/converter/pre-processors/math.js";
 import { EmbedResolver } from "../../src/converter/pre-processors/embed.js";
 import { InlineDBParser } from "../../src/converter/pre-processors/inline-db.js";
 import { PreserveMarkerCollector } from "../../src/converter/pre-processors/preserve-marker.js";
+import { HtmlAnnotationStripper } from "../../src/converter/pre-processors/html-annotation.js";
 import { ColorAnnotator } from "../../src/converter/post-processors/color-annotator.js";
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import type { ConversionContext } from "../../src/types/convert.js";
@@ -176,5 +177,64 @@ describe("FrontmatterGenerator", () => {
       context: pullContext,
     });
     expect(result.content).toBe("# Hello");
+  });
+});
+
+describe("HtmlAnnotationStripper", () => {
+  const processor = new HtmlAnnotationStripper();
+
+  it("Push 시 <u> 태그를 제거", () => {
+    const result = processor.process({
+      content: "This is <u>underlined</u> text",
+      metadata: {},
+      context: pushContext,
+    });
+    expect(result.content).toBe("This is underlined text");
+  });
+
+  it("Push 시 color span을 제거", () => {
+    const result = processor.process({
+      content: 'This is <span class="notion-red">red</span> text',
+      metadata: {},
+      context: pushContext,
+    });
+    expect(result.content).toBe("This is red text");
+  });
+
+  it("Push 시 background color span을 제거", () => {
+    const result = processor.process({
+      content: 'This is <span class="notion-yellow-bg">highlighted</span> text',
+      metadata: {},
+      context: pushContext,
+    });
+    expect(result.content).toBe("This is highlighted text");
+  });
+
+  it("Push 시 obsinotion color 마커를 제거", () => {
+    const result = processor.process({
+      content: "This is %% obsinotion:color:red %%colored%% obsinotion:end %% text",
+      metadata: {},
+      context: pushContext,
+    });
+    expect(result.content).toBe("This is colored text");
+  });
+
+  it("Pull 방향에서는 동작하지 않음", () => {
+    const result = processor.process({
+      content: "This is <u>underlined</u> text",
+      metadata: {},
+      context: pullContext,
+    });
+    expect(result.content).toBe("This is <u>underlined</u> text");
+  });
+
+  it("여러 태그 동시 처리", () => {
+    const result = processor.process({
+      content:
+        '<u>bold</u> and <span class="notion-blue">blue</span> and %% obsinotion:color:green %%green%% obsinotion:end %%',
+      metadata: {},
+      context: pushContext,
+    });
+    expect(result.content).toBe("bold and blue and green");
   });
 });
