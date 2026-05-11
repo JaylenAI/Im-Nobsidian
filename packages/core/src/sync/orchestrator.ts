@@ -35,6 +35,7 @@ import { LocalImageRestorer } from "../converter/post-processors/local-image-res
 import { PropertiesTableRestorer } from "../converter/post-processors/properties-table-restorer.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
+import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual } from "../utils/id.js";
@@ -45,6 +46,8 @@ export class SyncOrchestrator {
   private readonly pipeline: ConversionPipeline;
   private readonly blockConverter: BlockConverter;
   private readonly imageHandler: ImageHandler;
+  private readonly propertyMapper: PropertyMapper;
+  private dbSchemaLoaded = false;
 
   constructor(
     private readonly config: Config,
@@ -56,6 +59,7 @@ export class SyncOrchestrator {
     this.pipeline = new ConversionPipeline();
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments);
+    this.propertyMapper = new PropertyMapper();
 
     this.pipeline.registerPreProcessor(new HtmlAnnotationStripper());
     this.pipeline.registerPreProcessor(new UnsupportedBlockStripper());
@@ -295,6 +299,17 @@ export class SyncOrchestrator {
     };
   }
 
+  private get isDatabaseMode(): boolean {
+    return this.config.notion.parentMode === "database" && !!this.config.notion.databaseId;
+  }
+
+  private async ensureDbSchema(): Promise<void> {
+    if (this.dbSchemaLoaded || !this.isDatabaseMode) return;
+    const schema = await this.notionClient.getDatabaseSchema(this.config.notion.databaseId!);
+    this.propertyMapper.loadSchema(schema);
+    this.dbSchemaLoaded = true;
+  }
+
   private async pushCreate(path: string): Promise<void> {
     const content = await this.vaultFs.readFile(path);
     const title = extractTitle(path);
@@ -311,15 +326,30 @@ export class SyncOrchestrator {
       direction: "push",
       path: selectedPath,
       filePath: path,
+      parentMode: this.config.notion.parentMode,
     });
 
     const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
 
+    let effectiveParentId = parentId;
+    let effectiveParentType: "page" | "database" = "page";
+    let effectiveProperties = conversionResult.properties;
+
+    if (this.isDatabaseMode) {
+      await this.ensureDbSchema();
+      effectiveParentId = this.config.notion.databaseId!;
+      effectiveParentType = "database";
+      effectiveProperties = this.propertyMapper.toNotionProperties(
+        conversionResult.properties,
+        title,
+      );
+    }
+
     const page = await this.notionClient.createPage({
-      parentId,
-      parentType: "page",
+      parentId: effectiveParentId,
+      parentType: effectiveParentType,
       title,
-      properties: conversionResult.properties,
+      properties: effectiveProperties,
     });
 
     if (blocks.length > 0) {
@@ -369,6 +399,7 @@ export class SyncOrchestrator {
       direction: "push",
       path: updatePath,
       filePath: path,
+      parentMode: this.config.notion.parentMode,
     });
 
     const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
@@ -383,11 +414,15 @@ export class SyncOrchestrator {
       await this.notionClient.deleteBlock(block.id);
     }
 
-    if (conversionResult.properties && Object.keys(conversionResult.properties).length > 0) {
-      await this.notionClient.updatePageProperties(
-        record.notionPageId,
-        conversionResult.properties,
-      );
+    let propsToUpdate = conversionResult.properties;
+    if (this.isDatabaseMode && propsToUpdate && Object.keys(propsToUpdate).length > 0) {
+      await this.ensureDbSchema();
+      const title = extractTitle(path);
+      propsToUpdate = this.propertyMapper.toNotionProperties(propsToUpdate, title);
+    }
+
+    if (propsToUpdate && Object.keys(propsToUpdate).length > 0) {
+      await this.notionClient.updatePageProperties(record.notionPageId, propsToUpdate);
     }
 
     const hash = computeHash(content);
@@ -417,9 +452,23 @@ export class SyncOrchestrator {
       syncedRecords.filter((r) => r.notionPageId).map((r) => r.notionPageId!),
     );
 
-    const remotePages = await this.notionClient.getChildPagesRecursive(
-      this.config.notion.rootPageId,
-    );
+    let remotePages: Array<{ id: string; last_edited_time: string }>;
+    if (this.isDatabaseMode) {
+      const allPages: Array<{ id: string; last_edited_time: string }> = [];
+      let cursor: string | undefined;
+      do {
+        const result = await this.notionClient.queryDatabase(this.config.notion.databaseId!, {
+          startCursor: cursor,
+        });
+        allPages.push(
+          ...result.results.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time })),
+        );
+        cursor = result.nextCursor ?? undefined;
+      } while (cursor);
+      remotePages = allPages;
+    } else {
+      remotePages = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId);
+    }
 
     for (const page of remotePages) {
       const record = this.stateDb.getByNotionId(page.id);
@@ -491,7 +540,15 @@ export class SyncOrchestrator {
       fileType = "file";
     }
 
-    const properties = this.notionClient.extractProperties(page);
+    let properties: Record<string, unknown>;
+    if (this.isDatabaseMode) {
+      await this.ensureDbSchema();
+      properties = this.propertyMapper.fromNotionProperties(
+        (page as unknown as { properties: Record<string, unknown> }).properties,
+      );
+    } else {
+      properties = this.notionClient.extractProperties(page);
+    }
 
     let processedMarkdown = markdown;
     if (this.config.conversion.imageDownload === "immediate") {
@@ -505,6 +562,7 @@ export class SyncOrchestrator {
         direction: "pull",
         path: "markdown-api",
         filePath,
+        parentMode: this.config.notion.parentMode,
       },
       { properties },
     );
@@ -543,7 +601,16 @@ export class SyncOrchestrator {
 
     const page = await this.notionClient.getPage(change.pageId);
     let markdown = await this.blockConverter.notionBlocksToMarkdown(change.pageId);
-    const properties = this.notionClient.extractProperties(page);
+
+    let properties: Record<string, unknown>;
+    if (this.isDatabaseMode) {
+      await this.ensureDbSchema();
+      properties = this.propertyMapper.fromNotionProperties(
+        (page as unknown as { properties: Record<string, unknown> }).properties,
+      );
+    } else {
+      properties = this.notionClient.extractProperties(page);
+    }
 
     if (this.config.conversion.imageDownload === "immediate") {
       const title = this.notionClient.extractTitle(page);
@@ -558,6 +625,7 @@ export class SyncOrchestrator {
         direction: "pull",
         path: "markdown-api",
         filePath: record.obsidianPath,
+        parentMode: this.config.notion.parentMode,
       },
       { properties, preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined },
     );
