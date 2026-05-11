@@ -34,6 +34,7 @@ export interface ConversionResult {
   readonly content: string;
   readonly properties: Record<string, unknown>;
   readonly images: ImageReference[];
+  readonly preserveMarkers: PreserveMarker[];
 }
 
 export interface PreserveMarker {

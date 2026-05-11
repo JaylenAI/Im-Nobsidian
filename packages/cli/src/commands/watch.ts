@@ -40,7 +40,7 @@ export const watchCommand = new Command("watch")
       concurrency: config.advanced.concurrency,
       timeoutMs: config.advanced.timeoutMs,
     });
-    const vaultFs = new NodeVaultFS(cwd);
+    const vaultFs = new NodeVaultFS(cwd, config.paths);
     const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
     const debounceMs = parseInt(options.debounce, 10);

@@ -53,13 +53,14 @@ describe("MathNormalizer", () => {
 describe("EmbedResolver", () => {
   const processor = new EmbedResolver();
 
-  it("![[image.png]] → ![image.png](image.png)", () => {
+  it("![[image.png]] → push 시 플레이스홀더 생성", () => {
     const result = processor.process({
       content: "Image: ![[photo.png]]",
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toContain("![photo.png](photo.png)");
+    expect(result.content).toContain("📎 photo.png");
+    expect(result.content).toContain("%% obsinotion:local-image:photo.png %%");
     expect(result.metadata.images).toHaveLength(1);
     expect(result.metadata.images![0]!.isExternal).toBe(false);
   });

@@ -98,6 +98,7 @@ export interface StatusResult {
   readonly localChanges: LocalChange[];
   readonly remoteChanges: RemoteChange[];
   readonly conflicts: Conflict[];
+  readonly conflictRecords: SyncRecord[];
   readonly pendingOperations: number;
   readonly lastSyncAt: string | null;
 }

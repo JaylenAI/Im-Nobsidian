@@ -5,3 +5,4 @@ export { ImageHandler } from "./image-handler.js";
 export type { VaultFS } from "./vault-fs.js";
 export type { FileInfo } from "./change-detector.js";
 export type { ImageDownloadResult } from "./image-handler.js";
+export type { PathFilterConfig } from "./node-vault-fs.js";

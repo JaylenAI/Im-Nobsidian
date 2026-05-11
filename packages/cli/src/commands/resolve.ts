@@ -25,7 +25,7 @@ export const resolveCommand = new Command("resolve")
         concurrency: 3,
         timeoutMs: 30000,
       });
-      const vaultFs = new NodeVaultFS(cwd);
+      const vaultFs = new NodeVaultFS(cwd, config.paths);
 
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
       const resolver = new ConflictResolver(stateDb, vaultFs);

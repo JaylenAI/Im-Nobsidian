@@ -16,3 +16,4 @@ export { CalloutRestorer } from "./post-processors/callout-restorer.js";
 export { ColorAnnotator } from "./post-processors/color-annotator.js";
 export { FrontmatterGenerator } from "./post-processors/frontmatter-generator.js";
 export { PreserveMarkerInjector } from "./post-processors/preserve-marker-injector.js";
+export { LocalImageRestorer } from "./post-processors/local-image-restorer.js";

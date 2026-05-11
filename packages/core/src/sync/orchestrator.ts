@@ -22,10 +22,13 @@ import { WikilinkResolver } from "../converter/pre-processors/wikilink.js";
 import { CalloutTransformer } from "../converter/pre-processors/callout.js";
 import { MathNormalizer } from "../converter/pre-processors/math.js";
 import { EmbedResolver } from "../converter/pre-processors/embed.js";
+import { PreserveMarkerCollector } from "../converter/pre-processors/preserve-marker.js";
 import { MentionToWikilink } from "../converter/post-processors/mention-to-wikilink.js";
+import { PreserveMarkerInjector } from "../converter/post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "../converter/post-processors/callout-restorer.js";
 import { ColorAnnotator } from "../converter/post-processors/color-annotator.js";
 import { FrontmatterGenerator } from "../converter/post-processors/frontmatter-generator.js";
+import { LocalImageRestorer } from "../converter/post-processors/local-image-restorer.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { computeHash } from "../utils/hash.js";
@@ -55,7 +58,10 @@ export class SyncOrchestrator {
     this.pipeline.registerPreProcessor(new CalloutTransformer());
     this.pipeline.registerPreProcessor(new MathNormalizer());
     this.pipeline.registerPreProcessor(new EmbedResolver());
+    this.pipeline.registerPreProcessor(new PreserveMarkerCollector());
 
+    this.pipeline.registerPostProcessor(new LocalImageRestorer());
+    this.pipeline.registerPostProcessor(new PreserveMarkerInjector());
     this.pipeline.registerPostProcessor(new MentionToWikilink());
     this.pipeline.registerPostProcessor(new CalloutRestorer());
     this.pipeline.registerPostProcessor(new ColorAnnotator());
@@ -258,6 +264,7 @@ export class SyncOrchestrator {
       localChanges,
       remoteChanges,
       conflicts: [],
+      conflictRecords,
       pendingOperations: conflictRecords.length,
       lastSyncAt,
     };
@@ -268,9 +275,16 @@ export class SyncOrchestrator {
     const title = extractTitle(path);
     const parentId = await this.resolveNotionParent(path);
 
+    const selectedPath = this.pipeline.selectPath(content);
+    if (selectedPath === "block-api") {
+      console.warn(
+        `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+      );
+    }
+
     const conversionResult = this.pipeline.convertToNotion(content, {
       direction: "push",
-      path: this.pipeline.selectPath(content),
+      path: selectedPath,
       filePath: path,
     });
 
@@ -309,6 +323,8 @@ export class SyncOrchestrator {
         title,
         aliases: [],
       });
+
+      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
   }
 
@@ -317,9 +333,16 @@ export class SyncOrchestrator {
     const record = this.stateDb.getByPath(path);
     if (!record?.notionPageId) return;
 
+    const updatePath = this.pipeline.selectPath(content);
+    if (updatePath === "block-api") {
+      console.warn(
+        `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+      );
+    }
+
     const conversionResult = this.pipeline.convertToNotion(content, {
       direction: "push",
-      path: this.pipeline.selectPath(content),
+      path: updatePath,
       filePath: path,
     });
 
@@ -346,6 +369,7 @@ export class SyncOrchestrator {
     this.stateDb.transaction(() => {
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
+      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
   }
 
@@ -502,6 +526,7 @@ export class SyncOrchestrator {
       markdown = imageResult.content;
     }
 
+    const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
     const remoteContent = this.pipeline.convertToMarkdown(
       markdown,
       {
@@ -509,7 +534,7 @@ export class SyncOrchestrator {
         path: "markdown-api",
         filePath: record.obsidianPath,
       },
-      { properties },
+      { properties, preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined },
     );
 
     let localContent: string;

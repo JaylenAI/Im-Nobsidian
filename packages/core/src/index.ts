@@ -46,7 +46,7 @@ export type { NotionClientOptions } from "./notion/index.js";
 
 // Sync
 export { SyncOrchestrator, ChangeDetector, NodeVaultFS, ImageHandler } from "./sync/index.js";
-export type { VaultFS, FileInfo, ImageDownloadResult } from "./sync/index.js";
+export type { VaultFS, FileInfo, ImageDownloadResult, PathFilterConfig } from "./sync/index.js";
 
 // Converter
 export {
@@ -64,6 +64,7 @@ export {
   ColorAnnotator,
   FrontmatterGenerator,
   PreserveMarkerInjector,
+  LocalImageRestorer,
 } from "./converter/index.js";
 
 // Conflict

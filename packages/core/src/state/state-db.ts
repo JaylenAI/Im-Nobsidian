@@ -1,5 +1,5 @@
 import Database from "better-sqlite3";
-import type { SyncRecord, SyncStatus, WikilinkEntry } from "../types/index.js";
+import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
 import { generateId } from "../utils/id.js";
 import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
 
@@ -200,6 +200,26 @@ export class StateDB {
     this.db
       .prepare("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)")
       .run(key, value);
+  }
+
+  // --- preserve markers ---
+
+  storePreserveMarkers(path: string, markers: PreserveMarker[]): void {
+    if (markers.length === 0) {
+      this.db.prepare("DELETE FROM sync_metadata WHERE key = ?").run(`preserve_markers:${path}`);
+      return;
+    }
+    this.setMeta(`preserve_markers:${path}`, JSON.stringify(markers));
+  }
+
+  getPreserveMarkers(path: string): PreserveMarker[] {
+    const value = this.getMeta(`preserve_markers:${path}`);
+    if (!value) return [];
+    try {
+      return JSON.parse(value) as PreserveMarker[];
+    } catch {
+      return [];
+    }
   }
 
   // --- transaction ---
