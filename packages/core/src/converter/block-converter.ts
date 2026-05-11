@@ -3,10 +3,16 @@ import { NotionToMarkdown } from "notion-to-md";
 import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { NotionBlockBuilder } from "../notion/block-builder.js";
+import type { NotionBlock } from "../notion/block-builder.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
 
 const DIVIDER_PLACEHOLDER = "​%%OBSINOTION_DIVIDER%%​";
+const TOGGLE_START = "%%obsinotion:toggle:start%%";
+const TOGGLE_END = "%%obsinotion:toggle:end%%";
+const COLUMN_LIST_START = "%%obsinotion:column-list:start%%";
+const COLUMN_SEP = "%%obsinotion:column%%";
+const COLUMN_LIST_END = "%%obsinotion:column-list:end%%";
 
 const VIDEO_URL_PATTERNS = [
   /^https?:\/\/(www\.)?youtube\.com\/watch/,
@@ -28,6 +34,10 @@ const EMBED_URL_PATTERNS = [
   /^https?:\/\/(www\.)?spotify\.com\//,
   /^https?:\/\/(www\.)?soundcloud\.com\//,
 ];
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 type RichTextItem = { plain_text: string; href?: string | null };
 
@@ -117,7 +127,7 @@ export class BlockConverter {
         .map((line: string) => (line ? `  ${line}` : ""))
         .join("\n")
         .trimEnd();
-      return `- ${title}\n${indented}`;
+      return `${TOGGLE_START}\n- ${title}\n${indented}\n${TOGGLE_END}`;
     });
   }
 
@@ -163,10 +173,10 @@ export class BlockConverter {
         const children = await n2m.pageToMarkdown(col.id);
         const childMd =
           (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
-        parts.push(childMd.trimEnd());
+        parts.push(`${COLUMN_SEP}\n${childMd.trimEnd()}`);
       }
 
-      return parts.join("\n\n---\n\n");
+      return `${COLUMN_LIST_START}\n${parts.join("\n")}\n${COLUMN_LIST_END}`;
     });
 
     this.n2m.setCustomTransformer("column", async () => "");
@@ -376,7 +386,24 @@ export class BlockConverter {
     return this.postProcessBlocks(blocks);
   }
 
+  private toggleContents: Map<number, string> = new Map();
+  private columnContents: Map<number, string[]> = new Map();
+  private toggleCounter = 0;
+  private columnCounter = 0;
+
   private preProcessMarkdown(markdown: string): string {
+    this.toggleContents.clear();
+    this.columnContents.clear();
+    this.toggleCounter = 0;
+    this.columnCounter = 0;
+
+    let processed = this.extractToggleBlocks(markdown);
+    processed = this.extractColumnBlocks(processed);
+    processed = this.replaceDividers(processed);
+    return processed;
+  }
+
+  private replaceDividers(markdown: string): string {
     const lines = markdown.split("\n");
     const result: string[] = [];
     let inCodeBlock = false;
@@ -396,10 +423,81 @@ export class BlockConverter {
     return result.join("\n");
   }
 
+  private extractToggleBlocks(markdown: string): string {
+    const startRe = new RegExp(`^${escapeRegex(TOGGLE_START)}$`, "gm");
+    const endRe = new RegExp(`^${escapeRegex(TOGGLE_END)}$`, "gm");
+    let result = markdown;
+    let match: RegExpExecArray | null;
+
+    while ((match = startRe.exec(result)) !== null) {
+      endRe.lastIndex = match.index;
+      const endMatch = endRe.exec(result);
+      if (!endMatch) break;
+
+      const content = result.slice(match.index + match[0].length + 1, endMatch.index).trimEnd();
+      const id = this.toggleCounter++;
+      this.toggleContents.set(id, content);
+
+      const placeholder = `%%OBSINOTION_TOGGLE_${id}%%`;
+      result =
+        result.slice(0, match.index) +
+        placeholder +
+        result.slice(endMatch.index + endMatch[0].length);
+
+      startRe.lastIndex = match.index + placeholder.length;
+    }
+
+    return result;
+  }
+
+  private extractColumnBlocks(markdown: string): string {
+    const startRe = new RegExp(`^${escapeRegex(COLUMN_LIST_START)}$`, "gm");
+    const endRe = new RegExp(`^${escapeRegex(COLUMN_LIST_END)}$`, "gm");
+    let result = markdown;
+    let match: RegExpExecArray | null;
+
+    while ((match = startRe.exec(result)) !== null) {
+      endRe.lastIndex = match.index;
+      const endMatch = endRe.exec(result);
+      if (!endMatch) break;
+
+      const inner = result.slice(match.index + match[0].length + 1, endMatch.index);
+      const columns = inner
+        .split(new RegExp(`^${escapeRegex(COLUMN_SEP)}$`, "m"))
+        .map((c) => c.trim())
+        .filter(Boolean);
+
+      const id = this.columnCounter++;
+      this.columnContents.set(id, columns);
+
+      const placeholder = `%%OBSINOTION_COLLIST_${id}%%`;
+      result =
+        result.slice(0, match.index) +
+        placeholder +
+        result.slice(endMatch.index + endMatch[0].length);
+
+      startRe.lastIndex = match.index + placeholder.length;
+    }
+
+    return result;
+  }
+
   private postProcessBlocks(blocks: Array<Record<string, unknown>>): unknown[] {
     const result: unknown[] = [];
 
     for (const block of blocks) {
+      const toggleConverted = this.convertTogglePlaceholder(block);
+      if (toggleConverted) {
+        result.push(toggleConverted);
+        continue;
+      }
+
+      const columnConverted = this.convertColumnPlaceholder(block);
+      if (columnConverted) {
+        result.push(columnConverted);
+        continue;
+      }
+
       const dividerConverted = this.convertDividerPlaceholder(block);
       if (dividerConverted) {
         result.push(dividerConverted);
@@ -417,6 +515,61 @@ export class BlockConverter {
     }
 
     return result;
+  }
+
+  private convertTogglePlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    const toggleMatch = text.match(/%%OBSINOTION_TOGGLE_(\d+)%%/);
+    if (!toggleMatch) return null;
+
+    const id = parseInt(toggleMatch[1]!, 10);
+    const content = this.toggleContents.get(id);
+    if (content === undefined) return null;
+
+    const titleMatch = content.match(/^- (.+)$/m);
+    const title = titleMatch?.[1] ?? "Toggle";
+
+    const childLines = content.split("\n").slice(1);
+    const childMd = childLines
+      .map((l) => (l.startsWith("  ") ? l.slice(2) : l))
+      .join("\n")
+      .trim();
+
+    const children = childMd ? (markdownToBlocks(childMd) as Array<Record<string, unknown>>) : [];
+
+    return NotionBlockBuilder.toggle(
+      NotionBlockBuilder.richText(title),
+      children.length > 0 ? (children as unknown as NotionBlock[]) : undefined,
+    );
+  }
+
+  private convertColumnPlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    const colMatch = text.match(/%%OBSINOTION_COLLIST_(\d+)%%/);
+    if (!colMatch) return null;
+
+    const id = parseInt(colMatch[1]!, 10);
+    const columns = this.columnContents.get(id);
+    if (!columns) return null;
+
+    const columnBlocks = columns.map((colMd) => {
+      const blocks = markdownToBlocks(colMd) as Array<Record<string, unknown>>;
+      return this.postProcessBlocks(blocks) as unknown as NotionBlock[];
+    });
+
+    return NotionBlockBuilder.columnList(columnBlocks);
   }
 
   private convertDividerPlaceholder(block: Record<string, unknown>): unknown | null {

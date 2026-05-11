@@ -152,6 +152,130 @@ describe("BlockConverter", () => {
     });
   });
 
+  describe("postProcessBlocks — toggle 보존 마커 변환", () => {
+    it("toggle 마커가 포함된 마크다운을 toggle 블록으로 변환", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:toggle:start%%",
+        "- Click to expand",
+        "  Hidden content here",
+        "%%obsinotion:toggle:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const toggle = blocks.find((b) => b.type === "toggle");
+      expect(toggle).toBeDefined();
+
+      const data = toggle!.toggle as { rich_text: Array<{ text: { content: string } }> };
+      expect(data.rich_text[0]!.text.content).toBe("Click to expand");
+    });
+
+    it("toggle 내 자식 콘텐츠가 블록으로 변환됨", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:toggle:start%%",
+        "- FAQ",
+        "  Answer paragraph",
+        "%%obsinotion:toggle:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const toggle = blocks.find((b) => b.type === "toggle");
+      expect(toggle).toBeDefined();
+
+      const data = toggle!.toggle as { children: unknown[] };
+      expect(data.children).toBeDefined();
+      expect(data.children.length).toBeGreaterThan(0);
+    });
+
+    it("여러 토글 블록 동시 처리", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:toggle:start%%",
+        "- Toggle 1",
+        "  Content 1",
+        "%%obsinotion:toggle:end%%",
+        "",
+        "%%obsinotion:toggle:start%%",
+        "- Toggle 2",
+        "  Content 2",
+        "%%obsinotion:toggle:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const toggles = blocks.filter((b) => b.type === "toggle");
+      expect(toggles.length).toBe(2);
+    });
+  });
+
+  describe("postProcessBlocks — column 보존 마커 변환", () => {
+    it("column 마커가 포함된 마크다운을 column_list 블록으로 변환", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:column-list:start%%",
+        "%%obsinotion:column%%",
+        "Left column text",
+        "%%obsinotion:column%%",
+        "Right column text",
+        "%%obsinotion:column-list:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const colList = blocks.find((b) => b.type === "column_list");
+      expect(colList).toBeDefined();
+
+      const data = colList!.column_list as { children: Array<{ type: string }> };
+      expect(data.children).toHaveLength(2);
+      expect(data.children[0]!.type).toBe("column");
+      expect(data.children[1]!.type).toBe("column");
+    });
+
+    it("3컬럼 변환", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:column-list:start%%",
+        "%%obsinotion:column%%",
+        "Col 1",
+        "%%obsinotion:column%%",
+        "Col 2",
+        "%%obsinotion:column%%",
+        "Col 3",
+        "%%obsinotion:column-list:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const colList = blocks.find((b) => b.type === "column_list");
+      expect(colList).toBeDefined();
+
+      const data = colList!.column_list as { children: unknown[] };
+      expect(data.children).toHaveLength(3);
+    });
+
+    it("컬럼 내 복합 콘텐츠 변환", () => {
+      const converter = new BlockConverter();
+      const md = [
+        "%%obsinotion:column-list:start%%",
+        "%%obsinotion:column%%",
+        "# Heading",
+        "",
+        "Paragraph text",
+        "%%obsinotion:column%%",
+        "- List item",
+        "%%obsinotion:column-list:end%%",
+      ].join("\n");
+
+      const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
+      const colList = blocks.find((b) => b.type === "column_list");
+      expect(colList).toBeDefined();
+
+      const data = colList!.column_list as {
+        children: Array<{ column: { children: Array<{ type: string }> } }>;
+      };
+      const firstColChildren = data.children[0]!.column.children;
+      expect(firstColChildren.length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
   describe("notionBlocksToMarkdown", () => {
     it("초기화 안 된 상태에서 호출 시 에러", async () => {
       const converter = new BlockConverter();
