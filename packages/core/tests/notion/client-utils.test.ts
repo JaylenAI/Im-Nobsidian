@@ -160,13 +160,143 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Phone).toBe("010-1234-5678");
   });
 
-  it("지원하지 않는 타입은 null 반환", () => {
+  it("status 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Status: { type: "status", status: { name: "In Progress" } },
+    });
+    expect(client.extractProperties(page).Status).toBe("In Progress");
+  });
+
+  it("status null 처리", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Status: { type: "status", status: null },
+    });
+    expect(client.extractProperties(page).Status).toBeNull();
+  });
+
+  it("created_time 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Created: { type: "created_time", created_time: "2026-01-15T09:00:00.000Z" },
+    });
+    expect(client.extractProperties(page).Created).toBe("2026-01-15T09:00:00.000Z");
+  });
+
+  it("last_edited_time 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Edited: { type: "last_edited_time", last_edited_time: "2026-05-10T12:30:00.000Z" },
+    });
+    expect(client.extractProperties(page).Edited).toBe("2026-05-10T12:30:00.000Z");
+  });
+
+  it("people 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Assignees: {
+        type: "people",
+        people: [
+          { id: "user-1", name: "Alice" },
+          { id: "user-2", name: "Bob" },
+        ],
+      },
+    });
+    expect(client.extractProperties(page).Assignees).toEqual(["Alice", "Bob"]);
+  });
+
+  it("people name 없으면 id 사용", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Assignees: {
+        type: "people",
+        people: [{ id: "user-1" }],
+      },
+    });
+    expect(client.extractProperties(page).Assignees).toEqual(["user-1"]);
+  });
+
+  it("files 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Attachments: {
+        type: "files",
+        files: [
+          { name: "doc.pdf", type: "file", file: { url: "https://s3.example.com/doc.pdf" } },
+          {
+            name: "photo.png",
+            type: "external",
+            external: { url: "https://example.com/photo.png" },
+          },
+        ],
+      },
+    });
+    const result = client.extractProperties(page).Attachments as any[];
+    expect(result).toHaveLength(2);
+    expect(result[0].name).toBe("doc.pdf");
+    expect(result[0].url).toBe("https://s3.example.com/doc.pdf");
+    expect(result[1].name).toBe("photo.png");
+    expect(result[1].url).toBe("https://example.com/photo.png");
+  });
+
+  it("formula 속성 추출 (string)", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Formula: { type: "formula", formula: { type: "string", string: "hello" } },
     });
+    expect(client.extractProperties(page).Formula).toBe("hello");
+  });
 
-    expect(client.extractProperties(page).Formula).toBeNull();
+  it("formula 속성 추출 (number)", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Formula: { type: "formula", formula: { type: "number", number: 42 } },
+    });
+    expect(client.extractProperties(page).Formula).toBe(42);
+  });
+
+  it("relation 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Related: {
+        type: "relation",
+        relation: [{ id: "page-a" }, { id: "page-b" }],
+      },
+    });
+    expect(client.extractProperties(page).Related).toEqual(["page-a", "page-b"]);
+  });
+
+  it("rollup 속성 추출 (number)", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Sum: { type: "rollup", rollup: { type: "number", number: 100 } },
+    });
+    expect(client.extractProperties(page).Sum).toBe(100);
+  });
+
+  it("unique_id 속성 추출", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      ID: { type: "unique_id", unique_id: { prefix: "TASK", number: 42 } },
+    });
+    expect(client.extractProperties(page).ID).toBe("TASK-42");
+  });
+
+  it("unique_id prefix 없으면 number만 반환", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      ID: { type: "unique_id", unique_id: { prefix: null, number: 7 } },
+    });
+    expect(client.extractProperties(page).ID).toBe("7");
+  });
+
+  it("지원하지 않는 타입은 null 반환", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Unknown: { type: "some_future_type", some_future_type: "data" },
+    });
+    expect(client.extractProperties(page).Unknown).toBeNull();
   });
 });
 

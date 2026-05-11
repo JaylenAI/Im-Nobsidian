@@ -23,6 +23,7 @@ import { CalloutTransformer } from "../converter/pre-processors/callout.js";
 import { MathNormalizer } from "../converter/pre-processors/math.js";
 import { EmbedResolver } from "../converter/pre-processors/embed.js";
 import { PreserveMarkerCollector } from "../converter/pre-processors/preserve-marker.js";
+import { UnsupportedBlockStripper } from "../converter/pre-processors/unsupported-block-stripper.js";
 import { MentionToWikilink } from "../converter/post-processors/mention-to-wikilink.js";
 import { PreserveMarkerInjector } from "../converter/post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "../converter/post-processors/callout-restorer.js";
@@ -53,6 +54,7 @@ export class SyncOrchestrator {
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments);
 
+    this.pipeline.registerPreProcessor(new UnsupportedBlockStripper());
     this.pipeline.registerPreProcessor(new FrontmatterExtractor());
     this.pipeline.registerPreProcessor(new WikilinkResolver());
     this.pipeline.registerPreProcessor(new CalloutTransformer());
