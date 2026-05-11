@@ -2,8 +2,32 @@ import { markdownToBlocks } from "@tryfabric/martian";
 import { NotionToMarkdown } from "notion-to-md";
 import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
+import { NotionBlockBuilder } from "../notion/block-builder.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
+
+const DIVIDER_PLACEHOLDER = "​%%OBSINOTION_DIVIDER%%​";
+
+const VIDEO_URL_PATTERNS = [
+  /^https?:\/\/(www\.)?youtube\.com\/watch/,
+  /^https?:\/\/youtu\.be\//,
+  /^https?:\/\/(www\.)?vimeo\.com\//,
+  /^https?:\/\/(www\.)?dailymotion\.com\//,
+  /^https?:\/\/(www\.)?loom\.com\/share\//,
+];
+
+const EMBED_URL_PATTERNS = [
+  /^https?:\/\/(www\.)?figma\.com\//,
+  /^https?:\/\/docs\.google\.com\//,
+  /^https?:\/\/drive\.google\.com\//,
+  /^https?:\/\/(www\.)?miro\.com\//,
+  /^https?:\/\/(www\.)?twitter\.com\//,
+  /^https?:\/\/(www\.)?x\.com\//,
+  /^https?:\/\/codepen\.io\//,
+  /^https?:\/\/gist\.github\.com\//,
+  /^https?:\/\/(www\.)?spotify\.com\//,
+  /^https?:\/\/(www\.)?soundcloud\.com\//,
+];
 
 type RichTextItem = { plain_text: string; href?: string | null };
 
@@ -347,19 +371,102 @@ export class BlockConverter {
   }
 
   markdownToNotionBlocks(markdown: string): unknown[] {
-    const blocks = markdownToBlocks(markdown) as Array<Record<string, unknown>>;
+    const preprocessed = this.preProcessMarkdown(markdown);
+    const blocks = markdownToBlocks(preprocessed) as Array<Record<string, unknown>>;
     return this.postProcessBlocks(blocks);
+  }
+
+  private preProcessMarkdown(markdown: string): string {
+    const lines = markdown.split("\n");
+    const result: string[] = [];
+    let inCodeBlock = false;
+
+    for (const line of lines) {
+      if (line.trimStart().startsWith("```")) {
+        inCodeBlock = !inCodeBlock;
+      }
+
+      if (!inCodeBlock && /^---\s*$/.test(line.trim())) {
+        result.push(DIVIDER_PLACEHOLDER);
+      } else {
+        result.push(line);
+      }
+    }
+
+    return result.join("\n");
   }
 
   private postProcessBlocks(blocks: Array<Record<string, unknown>>): unknown[] {
     const result: unknown[] = [];
 
     for (const block of blocks) {
-      const converted = this.convertQuoteToCallout(block);
-      result.push(converted);
+      const dividerConverted = this.convertDividerPlaceholder(block);
+      if (dividerConverted) {
+        result.push(dividerConverted);
+        continue;
+      }
+
+      const videoConverted = this.convertImageToVideoOrEmbed(block);
+      if (videoConverted) {
+        result.push(videoConverted);
+        continue;
+      }
+
+      const calloutConverted = this.convertQuoteToCallout(block);
+      result.push(calloutConverted);
     }
 
     return result;
+  }
+
+  private convertDividerPlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    if (text.includes("%%OBSINOTION_DIVIDER%%")) {
+      return NotionBlockBuilder.divider();
+    }
+    return null;
+  }
+
+  private convertImageToVideoOrEmbed(block: Record<string, unknown>): unknown | null {
+    let url = "";
+    let caption: string | undefined;
+
+    if (block.type === "image") {
+      const img = block.image as
+        | { external?: { url: string }; caption?: Array<{ text?: { content: string } }> }
+        | undefined;
+      url = img?.external?.url ?? "";
+      caption = img?.caption?.[0]?.text?.content;
+    } else if (block.type === "paragraph") {
+      const para = block.paragraph as
+        | { rich_text?: Array<{ text?: { content: string } }> }
+        | undefined;
+      const texts = para?.rich_text ?? [];
+      if (texts.length === 1) {
+        const content = texts[0]?.text?.content ?? "";
+        if (/^https?:\/\//.test(content)) {
+          url = content;
+        }
+      }
+    }
+
+    if (!url) return null;
+
+    if (VIDEO_URL_PATTERNS.some((p) => p.test(url))) {
+      return NotionBlockBuilder.video(url, caption);
+    }
+
+    if (EMBED_URL_PATTERNS.some((p) => p.test(url))) {
+      return NotionBlockBuilder.embed(url, caption);
+    }
+
+    return null;
   }
 
   private convertQuoteToCallout(block: Record<string, unknown>): unknown {
