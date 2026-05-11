@@ -65,6 +65,7 @@ export {
   FrontmatterGenerator,
   PreserveMarkerInjector,
   LocalImageRestorer,
+  UnsupportedBlockStripper,
 } from "./converter/index.js";
 
 // Conflict

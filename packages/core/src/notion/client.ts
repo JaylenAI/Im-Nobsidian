@@ -217,6 +217,48 @@ export class NotionClient {
         return prop.email;
       case "phone_number":
         return prop.phone_number;
+      case "status":
+        return (prop.status as { name: string } | null)?.name ?? null;
+      case "created_time":
+        return prop.created_time;
+      case "last_edited_time":
+        return prop.last_edited_time;
+      case "people": {
+        const people = prop.people as Array<{ name?: string; id: string }>;
+        return people.map((p) => p.name ?? p.id);
+      }
+      case "files": {
+        const files = prop.files as Array<{
+          name: string;
+          type: string;
+          file?: { url: string };
+          external?: { url: string };
+        }>;
+        return files.map((f) => ({
+          name: f.name,
+          url: f.type === "file" ? f.file?.url : f.external?.url,
+        }));
+      }
+      case "formula": {
+        const formula = prop.formula as { type: string } & Record<string, unknown>;
+        return formula[formula.type] ?? null;
+      }
+      case "relation": {
+        const relations = prop.relation as Array<{ id: string }>;
+        return relations.map((r) => r.id);
+      }
+      case "rollup": {
+        const rollup = prop.rollup as { type: string } & Record<string, unknown>;
+        if (rollup.type === "array") {
+          const arr = rollup.array as Array<{ type: string } & Record<string, unknown>>;
+          return arr.map((item) => this.extractPropertyValue(item));
+        }
+        return rollup[rollup.type] ?? null;
+      }
+      case "unique_id": {
+        const uid = prop.unique_id as { prefix?: string; number: number };
+        return uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number);
+      }
       default:
         return null;
     }

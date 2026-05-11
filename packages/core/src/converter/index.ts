@@ -9,6 +9,7 @@ export { InlineDBParser } from "./pre-processors/inline-db.js";
 export { MathNormalizer } from "./pre-processors/math.js";
 export { EmbedResolver } from "./pre-processors/embed.js";
 export { PreserveMarkerCollector } from "./pre-processors/preserve-marker.js";
+export { UnsupportedBlockStripper } from "./pre-processors/unsupported-block-stripper.js";
 
 // Post-processors (Pull: Notion → MD)
 export { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
