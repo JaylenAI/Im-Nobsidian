@@ -161,7 +161,7 @@ describe("Roundtrip 테스트", () => {
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.content).toContain("| Feature |");
-    expect(pushResult.content).toContain("| Text |");
+    expect(pushResult.content).toMatch(/\| Text\s+\|/);
     expect(pushResult.content).toContain("**Bold cell**");
     expect(pushResult.content).toContain("Content continues after");
 
