@@ -27,7 +27,12 @@ export const syncCommand = new Command("sync")
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const spinner = ora("동기화 중...").start();
-      const result = await orchestrator.sync({ dryRun: options.dryRun });
+      const result = await orchestrator.sync({
+        dryRun: options.dryRun,
+        onProgress: (current, total, _item) => {
+          spinner.text = `동기화 중... [${current}/${total}]`;
+        },
+      });
       spinner.stop();
 
       console.log(`\n✓ 동기화 완료 (${(result.duration / 1000).toFixed(1)}s)`);
@@ -40,6 +45,7 @@ export const syncCommand = new Command("sync")
 
       if (result.conflicts.length > 0) {
         console.log(`\n  ⚠ 충돌 ${result.conflicts.length}건`);
+        console.log('  "obsinotion resolve"로 충돌을 해결하세요.');
       }
     } finally {
       stateDb.close();

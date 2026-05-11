@@ -46,22 +46,27 @@ export interface Conflict {
   readonly remoteContent: string;
 }
 
+export type ProgressCallback = (current: number, total: number, path: string) => void;
+
 export interface PushOptions {
   readonly paths?: string[];
   readonly force?: boolean;
   readonly dryRun?: boolean;
+  readonly onProgress?: ProgressCallback;
 }
 
 export interface PullOptions {
   readonly paths?: string[];
   readonly force?: boolean;
   readonly dryRun?: boolean;
+  readonly onProgress?: ProgressCallback;
 }
 
 export interface SyncOptions {
   readonly paths?: string[];
   readonly force?: boolean;
   readonly dryRun?: boolean;
+  readonly onProgress?: ProgressCallback;
 }
 
 export interface PushResult {

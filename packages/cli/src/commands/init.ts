@@ -5,9 +5,43 @@ import ora from "ora";
 
 export const initCommand = new Command("init")
   .description("ObsiNotion 초기 설정")
-  .action(async () => {
+  .option("--token <token>", "Notion Integration Token")
+  .option("--root-page-id <id>", "루트 페이지 ID")
+  .option("--non-interactive", "비대화형 모드")
+  .action(async (options: { token?: string; rootPageId?: string; nonInteractive?: boolean }) => {
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
+
+    if (options.nonInteractive) {
+      if (!options.token || !options.rootPageId) {
+        console.error("비대화형 모드에서는 --token과 --root-page-id가 필수입니다.");
+        process.exitCode = 1;
+        return;
+      }
+
+      if (!options.token.startsWith("ntn_")) {
+        console.error("토큰은 ntn_으로 시작해야 합니다.");
+        process.exitCode = 1;
+        return;
+      }
+
+      const spinner = ora("Notion 연결 확인 중...").start();
+      try {
+        const client = new NotionClient({ token: options.token });
+        await client.search({ pageSize: 1, filter: { property: "object", value: "page" } });
+        spinner.succeed("Notion 연결 성공");
+
+        await configManager.init({ token: options.token, rootPageId: options.rootPageId });
+        console.log("\n✓ ObsiNotion 초기화 완료!");
+        console.log(`  설정: ${configManager.configPath}`);
+        console.log(`  DB: ${configManager.dbPath}`);
+      } catch (error) {
+        spinner.fail("Notion 연결 실패");
+        console.error(error instanceof Error ? error.message : error);
+        process.exitCode = 1;
+      }
+      return;
+    }
 
     const isInit = await configManager.isInitialized();
     if (isInit) {

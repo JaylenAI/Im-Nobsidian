@@ -1,17 +1,50 @@
 # Changelog
 
-이 프로젝트의 모든 주요 변경 사항을 기록합니다.
-[Keep a Changelog](https://keepachangelog.com/ko/1.1.0/) 형식을 따릅니다.
+All notable changes to this project will be documented in this file.
+Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
 ### Added
-- 프로젝트 초기 구조 (pnpm monorepo)
-- docs/ 문서화 구조 (7개 카테고리)
-- GitHub Actions CI/CD 파이프라인
-- Husky pre-commit + commit-msg 훅
-- Changeset 기반 버전 관리
-- ESLint + Prettier 설정
-- 프로젝트 기획서 (PROJECT_BRIEF.md)
-- 경쟁 도구 분석 (COMPETITIVE_ANALYSIS.md)
-- 용어 정의 (GLOSSARY.md)
+
+- CLI `init --non-interactive` mode for CI/script usage
+- CLI `--verbose` / `--quiet` global options
+- Progress callback in sync engine (`onProgress` in push/pull/sync options)
+- Per-file progress display in CLI push/pull/sync commands
+- English README.md (Korean version moved to README.ko.md)
+
+### Fixed
+
+- **Conflict files now excluded from push** — previously, files in conflict state were pushed during sync, overwriting remote changes
+- **pushUpdate safety** — new blocks are appended first, then old blocks deleted (previously deleted first, risking data loss on failure)
+- **StateDB transactions** — pushCreate/pushUpdate/pullCreate DB operations wrapped in transactions for atomicity
+- **Rate limit jitter** — added randomized jitter to exponential backoff to prevent thundering herd
+- **Windows path compatibility** — replaced hardcoded `/` separators with `path.dirname()` / `path.join()` in NodeVaultFS
+- **CLI shebang duplication** — removed duplicate `#!/usr/bin/env node` from source (tsup banner already adds it)
+- Orchestrator test mock: `getByStatus` now distinguishes status argument, `transaction` mock added
+
+### Changed
+
+- CURRENT_STATUS.md fully rewritten to reflect actual implementation state (was severely outdated)
+
+## [0.0.1] - 2026-05-08
+
+### Added
+
+- Project initial structure (pnpm monorepo: core, cli, obsidian-plugin)
+- Core conversion engine (ConversionPipeline, 13 pre/post processors)
+- Sync engine (SyncOrchestrator, ChangeDetector, StateDB, NotionClient)
+- Block converter integration (@tryfabric/martian + notion-to-md)
+- Image handler with deduplication
+- Tree mapper for folder structure mapping
+- File watcher (chokidar) + auto sync service
+- Three-way merge conflict resolution
+- CLI: 8 commands (init, push, pull, sync, status, diff, resolve, watch)
+- Obsidian plugin: settings, vault adapter, conflict modal, status bar
+- 191 unit tests + 11 E2E tests (real Notion API)
+- GitHub Actions CI/CD pipeline
+- Husky pre-commit + commit-msg hooks
+- Changeset-based version management
+- ESLint + Prettier configuration
+- Documentation structure (7 categories)
+- Architecture Decision Records (3 ADRs)

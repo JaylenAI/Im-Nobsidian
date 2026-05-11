@@ -1,4 +1,3 @@
-#!/usr/bin/env node
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { pushCommand } from "./commands/push.js";
@@ -11,7 +10,12 @@ import { watchCommand } from "./commands/watch.js";
 
 const program = new Command();
 
-program.name("obsinotion").description("Obsidian ↔ Notion 양방향 동기화 CLI").version("0.1.0");
+program
+  .name("obsinotion")
+  .description("Obsidian ↔ Notion 양방향 동기화 CLI")
+  .version("0.1.0")
+  .option("--verbose", "상세 로그 출력")
+  .option("--quiet", "최소 출력");
 
 program.addCommand(initCommand);
 program.addCommand(pushCommand);

@@ -69,9 +69,12 @@ export class SyncOrchestrator {
     const files = await this.vaultFs.listMarkdownFiles();
     const changes = this.changeDetector.detectLocalChanges(files);
 
+    const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
+    const nonConflict = changes.filter((c) => !conflictPaths.has(c.path));
+
     const filtered = options?.paths
-      ? changes.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
-      : changes;
+      ? nonConflict.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
+      : nonConflict;
 
     if (filtered.length === 0) {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
@@ -89,9 +92,13 @@ export class SyncOrchestrator {
     let deleted = 0;
     const failed: FailedOperation[] = [];
 
+    let completed = 0;
+    const total = filtered.length;
+
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
+        options?.onProgress?.(++completed, total, change.path);
         switch (change.type) {
           case "created":
             await this.pushCreate(change.path);
@@ -162,9 +169,13 @@ export class SyncOrchestrator {
 
     const sema = new Sema(this.config.advanced.concurrency);
 
+    let pullCompleted = 0;
+    const pullTotal = filtered.length;
+
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
+        options?.onProgress?.(++pullCompleted, pullTotal, change.pageId);
         switch (change.type) {
           case "created": {
             const path = await this.pullCreate(change.pageId);
@@ -278,24 +289,26 @@ export class SyncOrchestrator {
 
     const hash = computeHash(content);
 
-    this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: page.id,
-      notionParentId: parentId,
-      contentHash: hash,
-      notionLastEdited: page.last_edited_time,
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType: this.isFolderNote(path) ? "folder-note" : "file",
-      status: "synced",
-      baseSnapshot: Buffer.from(content, "utf-8"),
-    });
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: path,
+        notionPageId: page.id,
+        notionParentId: parentId,
+        contentHash: hash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: this.isFolderNote(path) ? "folder-note" : "file",
+        status: "synced",
+        baseSnapshot: Buffer.from(content, "utf-8"),
+      });
 
-    this.stateDb.upsertWikilink({
-      obsidianPath: path,
-      notionPageId: page.id,
-      title,
-      aliases: [],
+      this.stateDb.upsertWikilink({
+        obsidianPath: path,
+        notionPageId: page.id,
+        title,
+        aliases: [],
+      });
     });
   }
 
@@ -313,10 +326,13 @@ export class SyncOrchestrator {
     const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
 
     const existingBlocks = await this.notionClient.fetchAllChildren(record.notionPageId);
-    await Promise.all(existingBlocks.map((block) => this.notionClient.deleteBlock(block.id)));
 
     if (blocks.length > 0) {
       await this.notionClient.appendChildren(record.notionPageId, blocks);
+    }
+
+    for (const block of existingBlocks) {
+      await this.notionClient.deleteBlock(block.id);
     }
 
     if (conversionResult.properties && Object.keys(conversionResult.properties).length > 0) {
@@ -327,8 +343,10 @@ export class SyncOrchestrator {
     }
 
     const hash = computeHash(content);
-    this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
-    this.stateDb.updateStatus(record.id, "synced");
+    this.stateDb.transaction(() => {
+      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
+      this.stateDb.updateStatus(record.id, "synced");
+    });
   }
 
   private async pushDelete(path: string): Promise<void> {
@@ -445,24 +463,26 @@ export class SyncOrchestrator {
     await this.vaultFs.writeFile(filePath, finalContent);
 
     const hash = computeHash(finalContent);
-    this.stateDb.upsert({
-      obsidianPath: filePath,
-      notionPageId: pageId,
-      notionParentId: this.extractParentId(page),
-      contentHash: hash,
-      notionLastEdited: page.last_edited_time,
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType,
-      status: "synced",
-      baseSnapshot: Buffer.from(finalContent, "utf-8"),
-    });
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: filePath,
+        notionPageId: pageId,
+        notionParentId: this.extractParentId(page),
+        contentHash: hash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType,
+        status: "synced",
+        baseSnapshot: Buffer.from(finalContent, "utf-8"),
+      });
 
-    this.stateDb.upsertWikilink({
-      obsidianPath: filePath,
-      notionPageId: pageId,
-      title,
-      aliases: [],
+      this.stateDb.upsertWikilink({
+        obsidianPath: filePath,
+        notionPageId: pageId,
+        title,
+        aliases: [],
+      });
     });
 
     return filePath;

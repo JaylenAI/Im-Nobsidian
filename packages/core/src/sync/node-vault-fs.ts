@@ -1,5 +1,5 @@
 import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { join, relative, dirname } from "node:path";
 import type { VaultFS } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 
@@ -13,15 +13,13 @@ export class NodeVaultFS implements VaultFS {
 
   async writeFile(path: string, content: string): Promise<void> {
     const fullPath = join(this.rootPath, path);
-    const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-    await mkdir(dir, { recursive: true });
+    await mkdir(dirname(fullPath), { recursive: true });
     await writeFile(fullPath, content, "utf-8");
   }
 
   async writeBinary(path: string, data: Buffer): Promise<void> {
     const fullPath = join(this.rootPath, path);
-    const dir = fullPath.substring(0, fullPath.lastIndexOf("/"));
-    await mkdir(dir, { recursive: true });
+    await mkdir(dirname(fullPath), { recursive: true });
     await writeFile(fullPath, data);
   }
 
@@ -33,8 +31,7 @@ export class NodeVaultFS implements VaultFS {
   async moveFile(from: string, to: string): Promise<void> {
     const fromPath = join(this.rootPath, from);
     const toPath = join(this.rootPath, to);
-    const toDir = toPath.substring(0, toPath.lastIndexOf("/"));
-    await mkdir(toDir, { recursive: true });
+    await mkdir(dirname(toPath), { recursive: true });
     await rename(fromPath, toPath);
   }
 

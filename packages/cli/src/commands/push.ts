@@ -10,7 +10,7 @@ import ora from "ora";
 
 export const pushCommand = new Command("push")
   .description("로컬 변경사항을 Notion에 반영")
-  .option("--dry-run", "실제 반영 없이 변경사항�� 표시")
+  .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("-p, --path <paths...>", "특정 경로만 push")
   .action(async (options) => {
     const cwd = process.cwd();
@@ -31,6 +31,10 @@ export const pushCommand = new Command("push")
       const result = await orchestrator.push({
         dryRun: options.dryRun,
         paths: options.path,
+        onProgress: (current, total, path) => {
+          const name = path.split("/").pop() ?? path;
+          spinner.text = `Push 중... [${current}/${total}] ${name}`;
+        },
       });
       spinner.stop();
 

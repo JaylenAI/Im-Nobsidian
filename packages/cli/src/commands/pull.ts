@@ -31,6 +31,9 @@ export const pullCommand = new Command("pull")
       const result = await orchestrator.pull({
         dryRun: options.dryRun,
         paths: options.path,
+        onProgress: (current, total, _pageId) => {
+          spinner.text = `Pull 중... [${current}/${total}]`;
+        },
       });
       spinner.stop();
 
@@ -41,7 +44,7 @@ export const pullCommand = new Command("pull")
 
       if (result.conflicts.length > 0) {
         console.log(`  충돌: ${result.conflicts.length}`);
-        console.log('  "obsinotion status"로 충돌 상세를 확인하세요.');
+        console.log('  "obsinotion resolve"로 충돌을 해결하세요.');
       }
 
       if (result.failed.length > 0) {
