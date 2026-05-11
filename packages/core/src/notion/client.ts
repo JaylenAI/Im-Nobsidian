@@ -236,8 +236,9 @@ export class NotionClient {
       return await fn();
     } catch (error: unknown) {
       if (isRateLimited(error) && attempt < 5) {
-        const retryAfter = extractRetryAfter(error) ?? 1000 * Math.pow(2, attempt);
-        await sleep(retryAfter);
+        const baseDelay = extractRetryAfter(error) ?? 1000 * Math.pow(2, attempt);
+        const jitter = baseDelay * (0.5 + Math.random() * 0.5);
+        await sleep(jitter);
         return this.executeWithRetry(fn, attempt + 1);
       }
       throw error;

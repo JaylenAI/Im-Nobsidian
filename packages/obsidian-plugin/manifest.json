@@ -5,6 +5,7 @@
   "minAppVersion": "1.4.0",
   "description": "Bidirectional sync between Obsidian and Notion",
   "author": "hanseungheon",
+  "authorUrl": "https://github.com/JaylenAI",
   "isDesktopOnly": true,
-  "fundingUrl": ""
+  "fundingUrl": "https://github.com/JaylenAI/Obsidian_Notion_Syncer"
 }

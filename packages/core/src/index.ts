@@ -18,6 +18,7 @@ export type {
   SyncStatus,
   OperationType,
   ConflictStrategy,
+  ProgressCallback,
   ConversionPath,
   Processor,
   ProcessorInput,

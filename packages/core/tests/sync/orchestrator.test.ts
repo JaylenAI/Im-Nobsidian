@@ -30,6 +30,7 @@ function createMockStateDb() {
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
+    transaction: vi.fn().mockImplementation((fn: () => unknown) => fn()),
     close: vi.fn(),
   };
 }
@@ -159,7 +160,9 @@ describe("SyncOrchestrator", () => {
       mockStateDb.getByPath.mockImplementation((path: string) =>
         path === "deleted.md" ? deletedRecord : null,
       );
-      mockStateDb.getByStatus.mockReturnValue([deletedRecord]);
+      mockStateDb.getByStatus.mockImplementation((status: string) =>
+        status === "synced" ? [deletedRecord] : [],
+      );
 
       mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([]);
 
