@@ -41,8 +41,14 @@ export { StateDB } from "./state/index.js";
 export type { UpsertSyncRecord } from "./state/index.js";
 
 // Notion
-export { NotionClient } from "./notion/index.js";
-export type { NotionClientOptions } from "./notion/index.js";
+export { NotionClient, NotionBlockBuilder } from "./notion/index.js";
+export type {
+  NotionClientOptions,
+  NotionBlock,
+  NotionRichText,
+  RichTextItem as NotionRichTextItem,
+  RichTextSegment,
+} from "./notion/index.js";
 
 // Sync
 export { SyncOrchestrator, ChangeDetector, NodeVaultFS, ImageHandler } from "./sync/index.js";
