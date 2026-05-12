@@ -4,6 +4,9 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+overrides:
+  katex: ">=0.16.21"
+
 importers:
   .:
     devDependencies:
@@ -2152,18 +2155,19 @@ packages:
       }
     engines: { node: ">=18" }
 
-  commander@2.20.3:
-    resolution:
-      {
-        integrity: sha512-GpVkmM8vF2vQUkj2LvZmD35JxeJOLCwJ9cUkugyk2nuhbv3+mJvpLYYt+0+USMxE+oj+ey/lJEnhZw75x/OMcQ==,
-      }
-
   commander@4.1.1:
     resolution:
       {
         integrity: sha512-NOKm8xhkzAjzFx8B2v5OAHT+u5pRQc2UCa2Vq9jYL/31o2wi9mxBA7LIFs3sV5VSC49z6pEhfbMULvShKj26WA==,
       }
     engines: { node: ">= 6" }
+
+  commander@8.3.0:
+    resolution:
+      {
+        integrity: sha512-OkTL9umf+He2DZkUq8f8J9of7yL6RJKI24dVITBmNfZBmri9zYZQrKkuXiKhyfPSu8tUhnVBB1iKXevvnlR4Ww==,
+      }
+    engines: { node: ">= 12" }
 
   concat-map@0.0.1:
     resolution:
@@ -3089,10 +3093,10 @@ packages:
         integrity: sha512-m6F1R3z8jjlf2imQHS2Qez5sjKWQzbuuhuJ/FKYFRZvPE3PuHcSMVZzfsLhGVOkfd20obL5SWEBew5ShlquNxg==,
       }
 
-  katex@0.12.0:
+  katex@0.16.45:
     resolution:
       {
-        integrity: sha512-y+8btoc/CK70XqcHqjxiGWBOeIL8upbS0peTPXTvgrh21n1RiWWcIpSWM+4uXq+IAgNh9YYQWdc7LVDPDAEEAg==,
+        integrity: sha512-pQpZbdBu7wCTmQUh7ufPmLr0pFoObnGUoL/yhtwJDgmmQpbkg/0HSVti25Fu4rmd1oCR6NGWe9vqTWuWv3GcNA==,
       }
     hasBin: true
 
@@ -5712,9 +5716,9 @@ snapshots:
 
   commander@13.1.0: {}
 
-  commander@2.20.3: {}
-
   commander@4.1.1: {}
+
+  commander@8.3.0: {}
 
   concat-map@0.0.1: {}
 
@@ -6275,9 +6279,9 @@ snapshots:
     optionalDependencies:
       graceful-fs: 4.2.11
 
-  katex@0.12.0:
+  katex@0.16.45:
     dependencies:
-      commander: 2.20.3
+      commander: 8.3.0
 
   keyv@4.5.4:
     dependencies:
@@ -6478,7 +6482,7 @@ snapshots:
 
   micromark-extension-math@0.1.2:
     dependencies:
-      katex: 0.12.0
+      katex: 0.16.45
       micromark: 2.11.4
     transitivePeerDependencies:
       - supports-color

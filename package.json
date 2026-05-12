@@ -46,6 +46,11 @@
     "typescript-eslint": "^8.59.2",
     "vitest": "^2.0.0"
   },
+  "pnpm": {
+    "overrides": {
+      "katex": ">=0.16.21"
+    }
+  },
   "lint-staged": {
     "*.{ts,tsx}": [
       "eslint --fix",
