@@ -6,6 +6,8 @@ import type {
   SyncOptions,
   SyncResult,
   StatusResult,
+  SyncRecord,
+  LocalChange,
   RemoteChange,
   Conflict,
   FailedOperation,
@@ -257,14 +259,62 @@ export class SyncOrchestrator {
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
 
+    const conflicts: Conflict[] = await this.buildConflictsFromRecords(
+      conflictRecords,
+      localChanges,
+      remoteChanges,
+    );
+
     return {
       localChanges,
       remoteChanges,
-      conflicts: [],
+      conflicts,
       conflictRecords,
       pendingOperations: conflictRecords.length,
       lastSyncAt,
     };
+  }
+
+  private async buildConflictsFromRecords(
+    records: SyncRecord[],
+    localChanges: LocalChange[],
+    remoteChanges: RemoteChange[],
+  ): Promise<Conflict[]> {
+    const conflicts: Conflict[] = [];
+
+    for (const record of records) {
+      const localChange = localChanges.find((c) => c.path === record.obsidianPath) ?? {
+        path: record.obsidianPath,
+        type: "modified" as const,
+        currentHash: record.contentHash,
+        previousHash: record.contentHash,
+      };
+
+      const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
+        pageId: record.notionPageId ?? "",
+        type: "modified" as const,
+        lastEdited: record.notionLastEdited ?? "",
+        previousEdited: null,
+      };
+
+      let localContent = "";
+      try {
+        localContent = await this.vaultFs.readFile(record.obsidianPath);
+      } catch {
+        // 파일이 삭제된 경우
+      }
+
+      conflicts.push({
+        syncRecord: record,
+        localChange,
+        remoteChange,
+        baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
+        localContent,
+        remoteContent: "",
+      });
+    }
+
+    return conflicts;
   }
 
   private get isDatabaseMode(): boolean {
