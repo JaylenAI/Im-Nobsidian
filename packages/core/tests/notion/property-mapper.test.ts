@@ -195,5 +195,33 @@ describe("PropertyMapper", () => {
       });
       expect(result.assignee).toEqual(["Alice", "Bob"]);
     });
+
+    it("created_by → 이름", () => {
+      const result = mapper.fromNotionProperties({
+        creator: { type: "created_by", created_by: { id: "user1", name: "Alice" } },
+      });
+      expect(result.creator).toBe("Alice");
+    });
+
+    it("last_edited_by → 이름", () => {
+      const result = mapper.fromNotionProperties({
+        editor: { type: "last_edited_by", last_edited_by: { id: "user2", name: "Bob" } },
+      });
+      expect(result.editor).toBe("Bob");
+    });
+
+    it("created_by 이름 없으면 id 반환", () => {
+      const result = mapper.fromNotionProperties({
+        creator: { type: "created_by", created_by: { id: "user1" } },
+      });
+      expect(result.creator).toBe("user1");
+    });
+
+    it("verification → state 문자열", () => {
+      const result = mapper.fromNotionProperties({
+        verified: { type: "verification", verification: { state: "verified" } },
+      });
+      expect(result.verified).toBe("verified");
+    });
   });
 });
