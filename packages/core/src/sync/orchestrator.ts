@@ -16,27 +16,13 @@ import type { NotionClient } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { ChangeDetector } from "./change-detector.js";
-import { ConversionPipeline } from "../converter/pipeline.js";
-import { FrontmatterExtractor } from "../converter/pre-processors/frontmatter.js";
-import { WikilinkResolver } from "../converter/pre-processors/wikilink.js";
-import { CalloutTransformer } from "../converter/pre-processors/callout.js";
-import { MathNormalizer } from "../converter/pre-processors/math.js";
-import { EmbedResolver } from "../converter/pre-processors/embed.js";
-import { PreserveMarkerCollector } from "../converter/pre-processors/preserve-marker.js";
-import { UnsupportedBlockStripper } from "../converter/pre-processors/unsupported-block-stripper.js";
-import { PropertiesTableInjector } from "../converter/pre-processors/properties-table.js";
-import { HtmlAnnotationStripper } from "../converter/pre-processors/html-annotation.js";
-import { MentionToWikilink } from "../converter/post-processors/mention-to-wikilink.js";
-import { PreserveMarkerInjector } from "../converter/post-processors/preserve-marker-injector.js";
-import { CalloutRestorer } from "../converter/post-processors/callout-restorer.js";
-import { ColorAnnotator } from "../converter/post-processors/color-annotator.js";
-import { FrontmatterGenerator } from "../converter/post-processors/frontmatter-generator.js";
-import { LocalImageRestorer } from "../converter/post-processors/local-image-restorer.js";
-import { PropertiesTableRestorer } from "../converter/post-processors/properties-table-restorer.js";
+import type { ConversionPipeline } from "../converter/pipeline.js";
+import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
+import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual } from "../utils/id.js";
 import type { VaultFS } from "./vault-fs.js";
@@ -56,28 +42,10 @@ export class SyncOrchestrator {
     private readonly vaultFs: VaultFS,
   ) {
     this.changeDetector = new ChangeDetector(stateDb);
-    this.pipeline = new ConversionPipeline();
+    this.pipeline = createDefaultPipeline();
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments);
     this.propertyMapper = new PropertyMapper();
-
-    this.pipeline.registerPreProcessor(new HtmlAnnotationStripper());
-    this.pipeline.registerPreProcessor(new UnsupportedBlockStripper());
-    this.pipeline.registerPreProcessor(new FrontmatterExtractor());
-    this.pipeline.registerPreProcessor(new PropertiesTableInjector());
-    this.pipeline.registerPreProcessor(new WikilinkResolver());
-    this.pipeline.registerPreProcessor(new CalloutTransformer());
-    this.pipeline.registerPreProcessor(new MathNormalizer());
-    this.pipeline.registerPreProcessor(new EmbedResolver());
-    this.pipeline.registerPreProcessor(new PreserveMarkerCollector());
-
-    this.pipeline.registerPostProcessor(new PropertiesTableRestorer());
-    this.pipeline.registerPostProcessor(new LocalImageRestorer());
-    this.pipeline.registerPostProcessor(new PreserveMarkerInjector());
-    this.pipeline.registerPostProcessor(new MentionToWikilink());
-    this.pipeline.registerPostProcessor(new CalloutRestorer());
-    this.pipeline.registerPostProcessor(new ColorAnnotator());
-    this.pipeline.registerPostProcessor(new FrontmatterGenerator());
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
   }
@@ -317,7 +285,7 @@ export class SyncOrchestrator {
 
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
-      console.warn(
+      getLogger().warn(
         `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
       );
     }
@@ -390,7 +358,7 @@ export class SyncOrchestrator {
 
     const updatePath = this.pipeline.selectPath(content);
     if (updatePath === "block-api") {
-      console.warn(
+      getLogger().warn(
         `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
       );
     }

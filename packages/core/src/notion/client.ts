@@ -5,6 +5,7 @@ import type {
   PageObjectResponse,
   PartialBlockObjectResponse,
 } from "@notionhq/client/build/src/api-endpoints.js";
+import { PropertyMapper } from "./property-mapper.js";
 
 export interface NotionClientOptions {
   readonly token: string;
@@ -15,6 +16,7 @@ export interface NotionClientOptions {
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
+  private readonly propertyMapper = new PropertyMapper();
 
   constructor(options: NotionClientOptions) {
     this.client = new Client({
@@ -224,81 +226,7 @@ export class NotionClient {
   }
 
   extractProperties(page: PageObjectResponse): Record<string, unknown> {
-    const result: Record<string, unknown> = {};
-    for (const [key, prop] of Object.entries(page.properties)) {
-      if (key === "title") continue;
-      result[key] = this.extractPropertyValue(prop);
-    }
-    return result;
-  }
-
-  private extractPropertyValue(prop: { type: string } & Record<string, unknown>): unknown {
-    switch (prop.type) {
-      case "rich_text": {
-        const arr = prop.rich_text as Array<{ plain_text: string }>;
-        return arr.map((t) => t.plain_text).join("");
-      }
-      case "number":
-        return prop.number;
-      case "select":
-        return (prop.select as { name: string } | null)?.name ?? null;
-      case "multi_select":
-        return (prop.multi_select as Array<{ name: string }>).map((s) => s.name);
-      case "checkbox":
-        return prop.checkbox;
-      case "date":
-        return prop.date;
-      case "url":
-        return prop.url;
-      case "email":
-        return prop.email;
-      case "phone_number":
-        return prop.phone_number;
-      case "status":
-        return (prop.status as { name: string } | null)?.name ?? null;
-      case "created_time":
-        return prop.created_time;
-      case "last_edited_time":
-        return prop.last_edited_time;
-      case "people": {
-        const people = prop.people as Array<{ name?: string; id: string }>;
-        return people.map((p) => p.name ?? p.id);
-      }
-      case "files": {
-        const files = prop.files as Array<{
-          name: string;
-          type: string;
-          file?: { url: string };
-          external?: { url: string };
-        }>;
-        return files.map((f) => ({
-          name: f.name,
-          url: f.type === "file" ? f.file?.url : f.external?.url,
-        }));
-      }
-      case "formula": {
-        const formula = prop.formula as { type: string } & Record<string, unknown>;
-        return formula[formula.type] ?? null;
-      }
-      case "relation": {
-        const relations = prop.relation as Array<{ id: string }>;
-        return relations.map((r) => r.id);
-      }
-      case "rollup": {
-        const rollup = prop.rollup as { type: string } & Record<string, unknown>;
-        if (rollup.type === "array") {
-          const arr = rollup.array as Array<{ type: string } & Record<string, unknown>>;
-          return arr.map((item) => this.extractPropertyValue(item));
-        }
-        return rollup[rollup.type] ?? null;
-      }
-      case "unique_id": {
-        const uid = prop.unique_id as { prefix?: string; number: number };
-        return uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number);
-      }
-      default:
-        return null;
-    }
+    return this.propertyMapper.fromNotionProperties(page.properties as Record<string, unknown>);
   }
 
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {

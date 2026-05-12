@@ -39,5 +39,12 @@
     "sync",
     "cli"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bugs": {
+    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer/issues"
+  },
+  "homepage": "https://github.com/JaylenAI/Obsidian_Notion_Syncer#readme"
 }

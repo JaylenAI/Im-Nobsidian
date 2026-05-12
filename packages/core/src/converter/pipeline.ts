@@ -6,6 +6,7 @@ import type {
   ProcessorInput,
   ProcessorMetadata,
 } from "../types/convert.js";
+import { getLogger } from "../utils/logger.js";
 
 export class ConversionPipeline {
   private readonly preProcessors: Processor[] = [];
@@ -49,7 +50,7 @@ export class ConversionPipeline {
           context,
         };
       } catch (error) {
-        console.warn(`[${processor.name}] Pre-processor failed:`, error);
+        getLogger().warn(`[${processor.name}] Pre-processor failed:`, error);
       }
     }
 
@@ -81,7 +82,7 @@ export class ConversionPipeline {
           context,
         };
       } catch (error) {
-        console.warn(`[${processor.name}] Post-processor failed:`, error);
+        getLogger().warn(`[${processor.name}] Post-processor failed:`, error);
       }
     }
 

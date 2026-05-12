@@ -50,7 +50,7 @@ export class PropertyMapper {
       const prop = rawProp as { type: string; [k: string]: unknown };
       if (prop.type === "title") continue;
       const value = this.extractValue(prop);
-      if (value !== null && value !== undefined) {
+      if (value !== undefined) {
         result[key] = value;
       }
     }
@@ -148,10 +148,8 @@ export class PropertyMapper {
       }
       case "checkbox":
         return prop.checkbox;
-      case "date": {
-        const date = prop.date as { start: string; end?: string } | null;
-        return date?.start ?? null;
-      }
+      case "date":
+        return prop.date ?? null;
       case "url":
         return prop.url;
       case "email":
@@ -182,7 +180,7 @@ export class PropertyMapper {
         return (
           files?.map((f) => ({
             name: f.name,
-            url: f.type === "external" ? f.external?.url : f.file?.url,
+            url: f.type === "file" ? f.file?.url : f.external?.url,
           })) ?? []
         );
       }
@@ -195,10 +193,19 @@ export class PropertyMapper {
         const rel = prop.relation as Array<{ id: string }> | undefined;
         return rel?.map((r) => r.id) ?? [];
       }
+      case "rollup": {
+        const rollup = prop.rollup as { type: string; [k: string]: unknown } | undefined;
+        if (!rollup) return null;
+        if (rollup.type === "array") {
+          const arr = rollup.array as Array<{ type: string; [k: string]: unknown }>;
+          return arr.map((item) => this.extractValue(item));
+        }
+        return rollup[rollup.type] ?? null;
+      }
       case "unique_id": {
         const uid = prop.unique_id as { prefix?: string; number: number } | undefined;
         if (!uid) return null;
-        return uid.prefix ? `${uid.prefix}-${uid.number}` : uid.number;
+        return uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number);
       }
       default:
         return null;

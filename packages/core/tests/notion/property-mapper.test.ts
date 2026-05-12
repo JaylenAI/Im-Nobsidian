@@ -146,11 +146,11 @@ describe("PropertyMapper", () => {
       expect(result.done).toBe(true);
     });
 
-    it("date → 문자열", () => {
+    it("date → 객체", () => {
       const result = mapper.fromNotionProperties({
         due: { type: "date", date: { start: "2026-06-30" } },
       });
-      expect(result.due).toBe("2026-06-30");
+      expect(result.due).toEqual({ start: "2026-06-30" });
     });
 
     it("url → 문자열", () => {

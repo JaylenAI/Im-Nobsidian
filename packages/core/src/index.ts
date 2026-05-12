@@ -104,3 +104,8 @@ export type { WatchSyncOptions } from "./watcher/index.js";
 export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
+export { setLogger, getLogger } from "./utils/logger.js";
+export type { Logger } from "./utils/logger.js";
+
+// Factory
+export { createDefaultPipeline } from "./converter/pipeline-factory.js";

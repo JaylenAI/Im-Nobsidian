@@ -29,7 +29,13 @@ export class ConfigManager {
       const parsed = JSON.parse(raw);
       this.config = ConfigSchema.parse(parsed);
       return this.config;
-    } catch {
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        throw new Error(`설정 파일의 JSON 형식이 올바르지 않습니다: ${this.configPath}`);
+      }
+      if (error instanceof Error && error.name === "ZodError") {
+        throw new Error(`설정 파일 검증 실패: ${error.message}`);
+      }
       throw new Error(
         `설정 파일을 찾을 수 없습니다: ${this.configPath}\n'obsinotion init'을 먼저 실행하세요.`,
       );
