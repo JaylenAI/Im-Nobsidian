@@ -207,6 +207,15 @@ export class PropertyMapper {
         if (!uid) return null;
         return uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number);
       }
+      case "created_by":
+      case "last_edited_by": {
+        const user = prop[prop.type] as { name?: string; id: string } | undefined;
+        return user?.name ?? user?.id ?? null;
+      }
+      case "verification": {
+        const v = prop.verification as { state: string } | undefined;
+        return v?.state ?? null;
+      }
       default:
         return null;
     }
