@@ -43,6 +43,9 @@ npm-debug.log*
 .changeset/*.md
 !.changeset/config.json
 
+# Im-Nobsidian local data
+.im-nobsidian/
+
 # Misc
 *.tgz
 .cache/
