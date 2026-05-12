@@ -347,15 +347,83 @@ describe("SyncOrchestrator", () => {
       expect(result.push).toBeDefined();
       expect(result.duration).toBeGreaterThanOrEqual(0);
     });
+
+    it("sync 결과에 pull conflicts 전달", async () => {
+      const result = await orchestrator.sync();
+
+      expect(result.conflicts).toEqual([]);
+      expect(result.pull.conflicts).toEqual([]);
+    });
   });
 
   describe("status", () => {
     it("현재 상태 반환", async () => {
       const result = await orchestrator.status();
 
-      expect(result.localChanges).toBeDefined();
-      expect(result.remoteChanges).toBeDefined();
-      expect(result.conflicts).toBeDefined();
+      expect(result.localChanges).toEqual([]);
+      expect(result.remoteChanges).toEqual([]);
+      expect(result.conflicts).toEqual([]);
+      expect(result.conflictRecords).toEqual([]);
+      expect(result.pendingOperations).toBe(0);
+      expect(result.lastSyncAt).toBeNull();
+    });
+
+    it("lastSyncAt 값이 있으면 반환", async () => {
+      mockStateDb.getMeta.mockImplementation((key: string) =>
+        key === "last_sync_at" ? "2026-05-10T12:00:00.000Z" : null,
+      );
+
+      const result = await orchestrator.status();
+
+      expect(result.lastSyncAt).toBe("2026-05-10T12:00:00.000Z");
+    });
+
+    it("로컬 변경사항 감지", async () => {
+      mockVaultFs.listMarkdownFiles = vi
+        .fn()
+        .mockResolvedValue([
+          { path: "new-note.md", content: "# New", mtime: new Date().toISOString() },
+        ]);
+
+      const result = await orchestrator.status();
+
+      expect(result.localChanges).toHaveLength(1);
+      expect(result.localChanges[0]!.path).toBe("new-note.md");
+      expect(result.localChanges[0]!.type).toBe("created");
+    });
+  });
+
+  describe("push - 폴더 계층", () => {
+    it("하위 폴더 파일 push 시 폴더 페이지 생성", async () => {
+      mockVaultFs.listMarkdownFiles = vi
+        .fn()
+        .mockResolvedValue([
+          {
+            path: "projects/deep/note.md",
+            content: "# Deep Note",
+            mtime: new Date().toISOString(),
+          },
+        ]);
+
+      mockNotionClient.listChildren.mockResolvedValue({ results: [] });
+
+      const result = await orchestrator.push();
+
+      expect(result.created).toBe(1);
+      expect(mockNotionClient.createPage).toHaveBeenCalled();
+    });
+
+    it("다중 파일 동시 push", async () => {
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        { path: "a.md", content: "# A", mtime: new Date().toISOString() },
+        { path: "b.md", content: "# B", mtime: new Date().toISOString() },
+        { path: "c.md", content: "# C", mtime: new Date().toISOString() },
+      ]);
+
+      const result = await orchestrator.push();
+
+      expect(result.created).toBe(3);
+      expect(mockNotionClient.createPage).toHaveBeenCalledTimes(3);
     });
   });
 });
