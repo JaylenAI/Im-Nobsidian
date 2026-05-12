@@ -10,12 +10,14 @@ export interface PathFilterConfig {
 }
 
 export class NodeVaultFS implements VaultFS {
+  private readonly includePatterns: string[];
   private readonly excludePatterns: string[];
 
   constructor(
     private readonly rootPath: string,
     pathConfig?: PathFilterConfig,
   ) {
+    this.includePatterns = pathConfig?.include ?? [];
     const configExclude = pathConfig?.exclude ?? [];
     const ignorePatterns = this.loadImNobsidianIgnore();
     this.excludePatterns = [...configExclude, ...ignorePatterns];
@@ -82,22 +84,28 @@ export class NodeVaultFS implements VaultFS {
     return files;
   }
 
-  private isExcluded(relativePath: string): boolean {
-    for (const pattern of this.excludePatterns) {
-      if (pattern.endsWith("/**")) {
-        const dir = pattern.slice(0, -3);
-        if (relativePath.startsWith(dir + "/") || relativePath === dir) return true;
-      } else if (pattern.startsWith("*.")) {
-        const ext = pattern.slice(1);
-        if (relativePath.endsWith(ext)) return true;
-      } else if (pattern.includes("*")) {
-        const regex = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, "[^/]*") + "$");
-        if (regex.test(relativePath)) return true;
-      } else {
-        if (relativePath === pattern || relativePath.startsWith(pattern + "/")) return true;
-      }
+  private matchesPattern(relativePath: string, pattern: string): boolean {
+    if (pattern.endsWith("/**")) {
+      const dir = pattern.slice(0, -3);
+      return relativePath.startsWith(dir + "/") || relativePath === dir;
+    } else if (pattern.startsWith("*.")) {
+      const ext = pattern.slice(1);
+      return relativePath.endsWith(ext);
+    } else if (pattern.includes("*")) {
+      const regex = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, "[^/]*") + "$");
+      return regex.test(relativePath);
+    } else {
+      return relativePath === pattern || relativePath.startsWith(pattern + "/");
     }
-    return false;
+  }
+
+  private isExcluded(relativePath: string): boolean {
+    if (this.includePatterns.length > 0) {
+      const included = this.includePatterns.some((p) => this.matchesPattern(relativePath, p));
+      if (!included) return true;
+    }
+
+    return this.excludePatterns.some((p) => this.matchesPattern(relativePath, p));
   }
 
   private async walkDir(dir: string, result: FileInfo[]): Promise<void> {

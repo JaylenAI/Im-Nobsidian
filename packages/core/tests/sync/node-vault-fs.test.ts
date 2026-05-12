@@ -134,5 +134,63 @@ describe("NodeVaultFS", () => {
       expect(files[0]!.content).toBe("# Hello World");
       expect(files[0]!.mtime).toBeTruthy();
     });
+
+    it("exclude 패턴으로 파일 제외", async () => {
+      await mkdir(join(tempDir, "templates"), { recursive: true });
+      await writeFile(join(tempDir, "note.md"), "keep");
+      await writeFile(join(tempDir, "templates/tmpl.md"), "exclude");
+
+      const filtered = new NodeVaultFS(tempDir, { exclude: ["templates/**"] });
+      const files = await filtered.listMarkdownFiles();
+
+      expect(files).toHaveLength(1);
+      expect(files[0]!.path).toBe("note.md");
+    });
+
+    it("include 패턴으로 화이트리스트 필터링", async () => {
+      await mkdir(join(tempDir, "docs"), { recursive: true });
+      await mkdir(join(tempDir, "drafts"), { recursive: true });
+      await writeFile(join(tempDir, "docs/guide.md"), "included");
+      await writeFile(join(tempDir, "drafts/wip.md"), "excluded");
+      await writeFile(join(tempDir, "root.md"), "excluded");
+
+      const filtered = new NodeVaultFS(tempDir, { include: ["docs/**"] });
+      const files = await filtered.listMarkdownFiles();
+
+      expect(files).toHaveLength(1);
+      expect(files[0]!.path).toBe("docs/guide.md");
+    });
+
+    it("include + exclude 동시 사용", async () => {
+      await mkdir(join(tempDir, "notes"), { recursive: true });
+      await mkdir(join(tempDir, "notes/private"), { recursive: true });
+      await writeFile(join(tempDir, "notes/public.md"), "yes");
+      await writeFile(join(tempDir, "notes/private/secret.md"), "no");
+      await writeFile(join(tempDir, "other.md"), "no");
+
+      const filtered = new NodeVaultFS(tempDir, {
+        include: ["notes/**"],
+        exclude: ["notes/private/**"],
+      });
+      const files = await filtered.listMarkdownFiles();
+
+      expect(files).toHaveLength(1);
+      expect(files[0]!.path).toBe("notes/public.md");
+    });
+
+    it(".im-nobsidian-ignore 파일로 제외", async () => {
+      await writeFile(join(tempDir, ".im-nobsidian-ignore"), "drafts/**\n# comment\n\narchive/**");
+      await mkdir(join(tempDir, "drafts"), { recursive: true });
+      await mkdir(join(tempDir, "archive"), { recursive: true });
+      await writeFile(join(tempDir, "note.md"), "keep");
+      await writeFile(join(tempDir, "drafts/wip.md"), "skip");
+      await writeFile(join(tempDir, "archive/old.md"), "skip");
+
+      const filtered = new NodeVaultFS(tempDir);
+      const files = await filtered.listMarkdownFiles();
+
+      expect(files).toHaveLength(1);
+      expect(files[0]!.path).toBe("note.md");
+    });
   });
 });

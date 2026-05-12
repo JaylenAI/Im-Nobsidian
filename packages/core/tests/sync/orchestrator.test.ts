@@ -353,9 +353,42 @@ describe("SyncOrchestrator", () => {
     it("현재 상태 반환", async () => {
       const result = await orchestrator.status();
 
-      expect(result.localChanges).toBeDefined();
-      expect(result.remoteChanges).toBeDefined();
-      expect(result.conflicts).toBeDefined();
+      expect(result.localChanges).toEqual([]);
+      expect(result.remoteChanges).toEqual([]);
+      expect(result.conflicts).toEqual([]);
+      expect(result.conflictRecords).toEqual([]);
+      expect(result.pendingOperations).toBe(0);
+      expect(result.lastSyncAt).toBeNull();
+    });
+
+    it("충돌 레코드가 있으면 conflicts 배열에 반영", async () => {
+      const conflictRecord = {
+        id: "rec-1",
+        obsidianPath: "conflict-note.md",
+        notionPageId: "page-conflict",
+        notionParentId: "parent-1",
+        contentHash: "hash-old",
+        notionLastEdited: "2026-01-01T00:00:00.000Z",
+        localLastModified: "2026-01-01T00:00:00.000Z",
+        syncDirection: "both" as const,
+        fileType: "file" as const,
+        status: "conflict" as const,
+        baseSnapshot: Buffer.from("base content"),
+        version: 1,
+        createdAt: "2026-01-01T00:00:00.000Z",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+      };
+
+      mockStateDb.getByStatus.mockReturnValue([conflictRecord]);
+
+      const result = await orchestrator.status();
+
+      expect(result.conflicts).toHaveLength(1);
+      expect(result.conflicts[0]!.syncRecord).toBe(conflictRecord);
+      expect(result.conflicts[0]!.baseContent).toBe("base content");
+      expect(result.conflicts[0]!.localContent).toBe("# Test\n\nContent");
+      expect(result.conflictRecords).toHaveLength(1);
+      expect(result.pendingOperations).toBe(1);
     });
   });
 });
