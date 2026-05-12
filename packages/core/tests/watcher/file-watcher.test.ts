@@ -103,8 +103,8 @@ describe("FileWatcher", () => {
     expect(events.filter((e) => e.path.includes(".hidden"))).toHaveLength(0);
   });
 
-  it(".obsinotion 디렉토리 무시", async () => {
-    const obsiDir = join(tempDir, ".obsinotion");
+  it(".im-nobsidian 디렉토리 무시", async () => {
+    const obsiDir = join(tempDir, ".im-nobsidian");
     mkdirSync(obsiDir);
 
     watcher = new FileWatcher(tempDir, (event, path) => {
@@ -117,7 +117,7 @@ describe("FileWatcher", () => {
     writeFileSync(join(obsiDir, "sync.db"), "data");
     await new Promise((r) => setTimeout(r, 1000));
 
-    expect(events.filter((e) => e.path.includes(".obsinotion"))).toHaveLength(0);
+    expect(events.filter((e) => e.path.includes(".im-nobsidian"))).toHaveLength(0);
   });
 
   it("stop 후 이벤트 미감지", async () => {

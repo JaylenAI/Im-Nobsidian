@@ -6,8 +6,8 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
   WatchSyncService,
-} from "@obsinotion/core";
-import type { SyncResult } from "@obsinotion/core";
+} from "@im-nobsidian/core";
+import type { SyncResult } from "@im-nobsidian/core";
 
 function formatResult(result: SyncResult): string {
   const pull = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;

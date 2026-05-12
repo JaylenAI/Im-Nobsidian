@@ -1,11 +1,11 @@
 import type { App } from "obsidian";
 import { PluginSettingTab, Setting } from "obsidian";
-import type ObsiNotionPlugin from "./main.js";
+import type ImNobsidianPlugin from "./main.js";
 
-export class ObsiNotionSettingTab extends PluginSettingTab {
+export class ImNobsidianSettingTab extends PluginSettingTab {
   constructor(
     app: App,
-    private readonly plugin: ObsiNotionPlugin,
+    private readonly plugin: ImNobsidianPlugin,
   ) {
     super(app, plugin);
   }
@@ -13,7 +13,7 @@ export class ObsiNotionSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "ObsiNotion 설정" });
+    containerEl.createEl("h2", { text: "Im-Nobsidian 설정" });
 
     new Setting(containerEl)
       .setName("Notion Integration Token")

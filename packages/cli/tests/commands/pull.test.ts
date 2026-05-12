@@ -11,7 +11,7 @@ const mockPull = vi.fn().mockResolvedValue({
   duration: 2000,
 });
 
-vi.mock("@obsinotion/core", () => ({
+vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({

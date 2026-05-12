@@ -7,8 +7,8 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
   ConflictResolver,
-} from "@obsinotion/core";
-import type { Conflict, ResolutionChoice } from "@obsinotion/core";
+} from "@im-nobsidian/core";
+import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 
 export const resolveCommand = new Command("resolve")
   .description("충돌을 해결합니다")

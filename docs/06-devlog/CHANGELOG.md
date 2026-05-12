@@ -32,7 +32,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **PreserveMarkerInjector** — was a passthrough stub, now restores markers on pull
 - **status command conflicts** — `conflictRecords` now properly populated from StateDB
 - **Image push** — local images preserved as placeholders instead of broken links
-- **Path filtering** — `config.paths.include/exclude` now applied + `.obsinotionignore` support
+- **Path filtering** — `config.paths.include/exclude` now applied + `.im-nobsidian-ignore` support
 - **Conflict files now excluded from push** — previously pushed during sync, overwriting remote
 - **pushUpdate safety** — new blocks appended first, then old blocks deleted
 - **StateDB transactions** — push/pull DB operations wrapped in transactions for atomicity

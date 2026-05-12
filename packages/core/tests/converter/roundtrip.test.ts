@@ -119,7 +119,7 @@ describe("Roundtrip 테스트", () => {
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.content).toContain("📎 screenshot.png");
-    expect(pushResult.content).toContain("%% obsinotion:local-image:screenshot.png %%");
+    expect(pushResult.content).toContain("%% im-nobsidian:local-image:screenshot.png %%");
     expect(pushResult.content).toContain("📎 diagram.jpg");
     expect(pushResult.content).toContain("![External](https://example.com/photo.png)");
     expect(pushResult.properties).toEqual({

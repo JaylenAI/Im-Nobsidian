@@ -24,7 +24,7 @@ const { mockPull, mockStatus, mockGetByStatus, mockResolveAll, mockClose } = vi.
   mockClose: vi.fn(),
 }));
 
-vi.mock("@obsinotion/core", () => ({
+vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({

@@ -180,7 +180,7 @@ relation_props = {DAILY_RELATION_PROP: {"relation": [{"id": daily_page_id}]}}
   양방향 (소스비공개):        N2O 1개 (신생, 유료)
 ```
 
-**ObsiNotion이 채울 빈자리:**
+**Im-Nobsidian이 채울 빈자리:**
 
 - 양방향 + 오픈소스 + 무료 + 공식 API + 2026 최신 기능 활용
 - 기존 어떤 도구도 이 조합을 제공하지 않음

@@ -9,12 +9,12 @@
 
 ## 배포 대상 패키지
 
-| 패키지        | npm 이름           | 접근   |
-| ------------- | ------------------ | ------ |
-| packages/core | `@obsinotion/core` | public |
-| packages/cli  | `obsinotion`       | public |
+| 패키지        | npm 이름             | 접근   |
+| ------------- | -------------------- | ------ |
+| packages/core | `@im-nobsidian/core` | public |
+| packages/cli  | `nobsi`              | public |
 
-> `obsidian-obsinotion` (플러그인)은 npm이 아닌 Obsidian Community Plugins를 통해 배포
+> `obsidian-im-nobsidian` (플러그인)은 npm이 아닌 Obsidian Community Plugins를 통해 배포
 
 ## 수동 배포 절차
 
@@ -47,7 +47,7 @@ git push origin v0.1.0
 release.yml이 자동으로:
 
 1. 빌드
-2. npm publish (`@obsinotion/core`, `obsinotion`)
+2. npm publish (`@im-nobsidian/core`, `nobsi`)
 3. GitHub Release 생성
 
 ## 배포 전 체크리스트

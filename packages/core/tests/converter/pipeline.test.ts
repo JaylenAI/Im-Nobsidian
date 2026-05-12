@@ -58,7 +58,7 @@ title: Test
 
   it("경로 선택: 인라인 DB 포함 시 block-api", () => {
     const pipeline = new ConversionPipeline();
-    expect(pipeline.selectPath("%% obsinotion:inline-db:id=abc %%")).toBe("block-api");
+    expect(pipeline.selectPath("%% im-nobsidian:inline-db:id=abc %%")).toBe("block-api");
   });
 });
 
@@ -144,7 +144,7 @@ describe("CalloutTransformer", () => {
       context: pushContext,
     });
 
-    expect(result.content).toContain("obsinotion:callout:type=tip&foldable=open");
+    expect(result.content).toContain("im-nobsidian:callout:type=tip&foldable=open");
   });
 });
 

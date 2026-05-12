@@ -5,7 +5,7 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
-} from "@obsinotion/core";
+} from "@im-nobsidian/core";
 import ora from "ora";
 
 export const pushCommand = new Command("push")

@@ -7,8 +7,8 @@
 ## 개발 환경 세팅
 
 ```bash
-git clone https://github.com/hanseungheon/obsinotion.git
-cd obsinotion
+git clone https://github.com/hanseungheon/im-nobsidian.git
+cd im-nobsidian
 bash scripts/setup.sh
 ```
 

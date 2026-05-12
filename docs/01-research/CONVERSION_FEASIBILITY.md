@@ -7,7 +7,7 @@
 ## 설계 원칙
 
 1. **플러그인 없이도 데이터 100% 보존** -- 시각적 표현은 플러그인이 향상(progressive enhancement)
-2. **preserve marker** (`%% obsinotion:... %%`) 로 라운드트립 복원 보장
+2. **preserve marker** (`%% im-nobsidian:... %%`) 로 라운드트립 복원 보장
 3. **전처리/후처리 파이프라인**으로 모든 변환 처리
 
 ```
@@ -72,7 +72,7 @@ Notion API → [notion-to-md/커스텀] → [후처리기] → Obsidian MD
 **접이식(foldable) 처리:** Notion callout은 접기 미지원 → caption에 메타 보존
 
 ```
-caption: "obsinotion:callout-type:warning:foldable:collapsed"
+caption: "im-nobsidian:callout-type:warning:foldable:collapsed"
 ```
 
 ### B-3. 테이블
@@ -85,22 +85,22 @@ caption: "obsinotion:callout-type:warning:foldable:collapsed"
 
 **타입 매핑:**
 
-| YAML 타입     | 예시                 | Notion Property                  |
-| ------------- | -------------------- | -------------------------------- |
-| `string`      | `status: active`     | select 또는 rich_text            |
-| `string[]`    | `tags: [a, b]`       | multi_select                     |
-| `number`      | `priority: 3`        | number                           |
-| `boolean`     | `published: true`    | checkbox                         |
-| 날짜 문자열   | `date: 2026-05-08`   | date                             |
-| URL 문자열    | `url: https://...`   | url                              |
-| wikilink 배열 | `related: ["[[A]]"]` | relation                         |
-| 중첩 객체     | `meta: { a: 1 }`     | `_obsinotion_meta` (JSON 직렬화) |
+| YAML 타입     | 예시                 | Notion Property                    |
+| ------------- | -------------------- | ---------------------------------- |
+| `string`      | `status: active`     | select 또는 rich_text              |
+| `string[]`    | `tags: [a, b]`       | multi_select                       |
+| `number`      | `priority: 3`        | number                             |
+| `boolean`     | `published: true`    | checkbox                           |
+| 날짜 문자열   | `date: 2026-05-08`   | date                               |
+| URL 문자열    | `url: https://...`   | url                                |
+| wikilink 배열 | `related: ["[[A]]"]` | relation                           |
+| 중첩 객체     | `meta: { a: 1 }`     | `_im_nobsidian_meta` (JSON 직렬화) |
 
 **Notion에 매핑 불가한 복잡한 속성:**
 
 ```yaml
-# Notion 페이지의 _obsinotion_meta 속성 (rich_text)에 JSON으로 보존
-_obsinotion_meta: '{"aliases":["배포 가이드"],"custom_nested":{"a":1}}'
+# Notion 페이지의 _im_nobsidian_meta 속성 (rich_text)에 JSON으로 보존
+_im_nobsidian_meta: '{"aliases":["배포 가이드"],"custom_nested":{"a":1}}'
 ```
 
 ### B-5. 태그
@@ -150,7 +150,7 @@ interface WikilinkMapping {
 <span class="notion-blue_background">파란 배경</span>
 ```
 
-**CSS snippet (`obsinotion-colors.css`) 제공:**
+**CSS snippet (`im-nobsidian-colors.css`) 제공:**
 
 ```css
 .notion-gray {
@@ -220,7 +220,7 @@ interface WikilinkMapping {
 **Callout 기반 컬럼 (Columns 플러그인 호환):**
 
 ```markdown
-%% obsinotion:column_list:start:columns=2:widths=1,1 %%
+%% im-nobsidian:column_list:start:columns=2:widths=1,1 %%
 
 > [!col]
 >
@@ -229,7 +229,7 @@ interface WikilinkMapping {
 >
 > > [!col-md]
 > > 두 번째 컬럼 내용
-> > %% obsinotion:column_list:end %%
+> > %% im-nobsidian:column_list:end %%
 ```
 
 - MCL CSS snippet 또는 Columns 플러그인으로 시각적 렌더링
@@ -239,7 +239,7 @@ interface WikilinkMapping {
 ### B-10. Notion Toggle Heading → Obsidian
 
 ```markdown
-%% obsinotion:toggle_heading:level=2 %%
+%% im-nobsidian:toggle_heading:level=2 %%
 
 > [!toggle]- 토글 제목 (H2)
 > 접힌 내용이 여기에 표시됩니다.
@@ -254,23 +254,23 @@ interface WikilinkMapping {
 ---
 banner: "attachments/covers/page-cover.jpg"
 banner_icon: "🚀"
-obsinotion_cover:
+im_nobsidian_cover:
   type: external
   url: "https://images.unsplash.com/photo-xxx"
-obsinotion_icon:
+im_nobsidian_icon:
   type: emoji
   emoji: "🚀"
 ---
 ```
 
 - `banner` / `banner_icon`: Banner 또는 Pixel Banner 플러그인이 자동 렌더링
-- `obsinotion_cover` / `obsinotion_icon`: 원본 데이터 보존 (Notion 복원용)
+- `im_nobsidian_cover` / `im_nobsidian_icon`: 원본 데이터 보존 (Notion 복원용)
 - 커버 이미지는 `attachments/covers/` 에 다운로드
 
 ### B-12. Notion Embeds → Obsidian
 
 ```markdown
-%% obsinotion:embed:type=video:source=youtube:url=https://youtu.be/xxx %%
+%% im-nobsidian:embed:type=video:source=youtube:url=https://youtu.be/xxx %%
 
 <iframe width="560" height="315" src="https://www.youtube.com/embed/xxx" frameborder="0" allowfullscreen></iframe>
 ```
@@ -462,7 +462,7 @@ dv.el("div", html);
 
 `````
 
-CSS snippet (`obsinotion-gallery.css`) 동봉.
+CSS snippet (`im-nobsidian-gallery.css`) 동봉.
 
 #### TIMELINE View → Mermaid Gantt
 
@@ -631,7 +631,7 @@ last_synced: 2026-05-08T10:00:00Z
 
 Notion에 두 블록으로 변환:
 
-1. **코드 블록** (caption: `obsinotion:preserve:dataview`): 쿼리 원본 보존
+1. **코드 블록** (caption: `im-nobsidian:preserve:dataview`): 쿼리 원본 보존
 2. **정적 테이블** (선택): 동기화 시점의 쿼리 결과를 Notion 테이블로 렌더링
 
 ```json
@@ -640,7 +640,7 @@ Notion에 두 블록으로 변환:
   "code": {
     "language": "plain text",
     "rich_text": [{ "text": { "content": "TABLE status, due_date FROM \"Projects\"..." } }],
-    "caption": [{ "text": { "content": "obsinotion:preserve:dataview" } }]
+    "caption": [{ "text": { "content": "im-nobsidian:preserve:dataview" } }]
   }
 }
 ```
@@ -658,7 +658,7 @@ Notion에 두 블록으로 변환:
   "code": {
     "language": "javascript",
     "rich_text": [{ "text": { "content": "# <% tp.file.title %>..." } }],
-    "caption": [{ "text": { "content": "obsinotion:preserve:templater" } }]
+    "caption": [{ "text": { "content": "im-nobsidian:preserve:templater" } }]
   }
 }
 ```
@@ -695,7 +695,7 @@ Synced block API 제한: 원본 content 업데이트 불가, 양쪽 접근 권�
 ### C-4. Notion Synced Block → Obsidian
 
 ```markdown
-%% obsinotion:synced-block:abc123:source %%
+%% im-nobsidian:synced-block:abc123:source %%
 ![[_synced_blocks/abc123]]
 ```
 
@@ -711,7 +711,7 @@ Synced block API 제한: 원본 content 업데이트 불가, 양쪽 접근 권�
 %%이것은 숨겨진 메모입니다%%
 ```
 
-Notion 변환: 접힌 toggle 블록 (caption: `obsinotion:preserve:comment`)
+Notion 변환: 접힌 toggle 블록 (caption: `im-nobsidian:preserve:comment`)
 
 설정 옵션:
 
@@ -760,34 +760,34 @@ Notion 페이지/블록 댓글은 토론 스레드 → 동기화 제외 (기본)
 ### Obsidian 측 (Obsidian 주석)
 
 ```markdown
-%% obsinotion:{type}:{metadata} %%
+%% im-nobsidian:{type}:{metadata} %%
 ```
 
 예시:
 
 ```
-%% obsinotion:column_list:start:columns=2:widths=1,1 %%
-%% obsinotion:toggle_heading:level=2 %%
-%% obsinotion:synced-block:abc123:source %%
-%% obsinotion:embed:type=video:source=youtube:url=https://youtu.be/xxx %%
-%% obsinotion:table_of_contents %%
+%% im-nobsidian:column_list:start:columns=2:widths=1,1 %%
+%% im-nobsidian:toggle_heading:level=2 %%
+%% im-nobsidian:synced-block:abc123:source %%
+%% im-nobsidian:embed:type=video:source=youtube:url=https://youtu.be/xxx %%
+%% im-nobsidian:table_of_contents %%
 ```
 
 ### Notion 측 (코드 블록 caption)
 
 ```
-caption: "obsinotion:preserve:{type}:{metadata}"
+caption: "im-nobsidian:preserve:{type}:{metadata}"
 ```
 
 예시:
 
 ```
-obsinotion:preserve:dataview
-obsinotion:preserve:templater
-obsinotion:preserve:comment
-obsinotion:preserve:canvas:project-plan
-obsinotion:preserve:block-ref:note^block-id
-obsinotion:callout-type:warning:foldable:collapsed
+im-nobsidian:preserve:dataview
+im-nobsidian:preserve:templater
+im-nobsidian:preserve:comment
+im-nobsidian:preserve:canvas:project-plan
+im-nobsidian:preserve:block-ref:note^block-id
+im-nobsidian:callout-type:warning:foldable:collapsed
 ```
 
 ---
@@ -829,7 +829,7 @@ obsinotion:callout-type:warning:foldable:collapsed
 
 ## 권장 플러그인 목록 (Progressive Enhancement)
 
-ObsiNotion CSS snippet과 함께, 아래 플러그인 설치 시 시각적 경험 향상:
+Im-Nobsidian CSS snippet과 함께, 아래 플러그인 설치 시 시각적 경험 향상:
 
 | 플러그인              | 향상되는 기능            | 필수 여부 |
 | --------------------- | ------------------------ | --------- |

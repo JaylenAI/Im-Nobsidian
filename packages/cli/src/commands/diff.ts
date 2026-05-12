@@ -5,7 +5,7 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
-} from "@obsinotion/core";
+} from "@im-nobsidian/core";
 import { createTwoFilesPatch } from "diff";
 
 export const diffCommand = new Command("diff")

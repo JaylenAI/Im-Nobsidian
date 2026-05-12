@@ -31,6 +31,6 @@
 ## Security Practices
 
 - Notion API 토큰은 로컬 `.env` 파일에만 저장되며 절대 커밋되지 않습니다
-- 동기화 상태 DB는 로컬 `.obsinotion/sync.db`에 저장됩니다
+- 동기화 상태 DB는 로컬 `.im-nobsidian/sync.db`에 저장됩니다
 - 모든 API 통신은 Notion 공식 SDK를 통한 HTTPS로 이루어집니다
 - Rate limiting으로 API 남용을 방지합니다

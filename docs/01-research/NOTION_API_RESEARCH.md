@@ -35,7 +35,7 @@
 | 토큰 만료     | 만료 없음 (수동 재발급)    | access_token 만료 → refresh_token으로 갱신 |
 | 사용 시나리오 | 개인/팀 내부 도구          | 제3자 앱, 마켓플레이스                     |
 
-**ObsiNotion 전략**: Internal Integration 기본 → v2+에서 OAuth 지원
+**Im-Nobsidian 전략**: Internal Integration 기본 → v2+에서 OAuth 지원
 
 ### 1.2 Capabilities (권한/스코프)
 
@@ -66,7 +66,7 @@ Notion은 전통적인 OAuth scope 대신 **Capabilities** 모델을 사용한�
 
 > **핵심 제약**: Connection의 capability는 절대로 해당 사용자의 권한을 초과할 수 없다.
 
-**ObsiNotion에 필요한 Capabilities**: Read content, Update content, Insert content, Read comments (선택)
+**Im-Nobsidian에 필요한 Capabilities**: Read content, Update content, Insert content, Read comments (선택)
 
 ### 1.3 Internal Integration 토큰 발급 (단계별)
 
@@ -392,7 +392,7 @@ Retry-After: 1
 | 이메일 주소          | 200자            |
 | 전화번호             | 200자            |
 
-### 3.4 Rate Limit 준수 전략 (ObsiNotion)
+### 3.4 Rate Limit 준수 전략 (Im-Nobsidian)
 
 ```typescript
 // async-sema로 3 req/s 제한
@@ -521,7 +521,7 @@ API에서 `unsupported` 타입으로 반환되는 것들:
 - `button` (버튼)
 - 기타 UI 전용 요소
 
-### 5.3 ObsiNotion 매핑 우선순위
+### 5.3 Im-Nobsidian 매핑 우선순위
 
 **1순위 (필수)**: paragraph, heading_1~4, bulleted/numbered_list_item, to_do, toggle, quote, callout, code, equation, divider, image, table, table_row
 
@@ -714,7 +714,7 @@ Notion의 공개 기능 트래커에서 3년간 1위 요청 기능이었음.
 - 동기화된 페이지 업데이트 불가
 - Internal/Public integration 모두 사용 가능
 
-> **ObsiNotion 핵심**: 마크다운 API는 블록 API 대비 훨씬 단순하며, Obsidian MD ↔ Notion 변환에 유력한 후보. 단, Notion-Flavored Markdown과 표준 Markdown 차이 처리 필요.
+> **Im-Nobsidian 핵심**: 마크다운 API는 블록 API 대비 훨씬 단순하며, Obsidian MD ↔ Notion 변환에 유력한 후보. 단, Notion-Flavored Markdown과 표준 Markdown 차이 처리 필요.
 
 ### 8.7 기타 2026 신규 기능
 
@@ -995,7 +995,7 @@ async function bulkUpdatePages(
 }
 ```
 
-### 11.6 ObsiNotion 특화 전략
+### 11.6 Im-Nobsidian 특화 전략
 
 1. **마크다운 API 우선**: 블록 API 대비 요청 수 대폭 절감
    - 페이지 조회: `GET /v1/pages/{id}/markdown` 1회 vs 블록 재귀 조회 N회

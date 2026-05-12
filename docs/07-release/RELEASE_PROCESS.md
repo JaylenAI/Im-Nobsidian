@@ -64,7 +64,7 @@ git push origin main --tags
 
 ### 6. 배포 확인
 
-- [ ] `npm info @obsinotion/core` 버전 확인
-- [ ] `npm info obsinotion` 버전 확인
-- [ ] `npx obsinotion --version` 동작
+- [ ] `npm info @im-nobsidian/core` 버전 확인
+- [ ] `npm info nobsi` 버전 확인
+- [ ] `npx nobsi --version` 동작
 - [ ] GitHub Releases 페이지에 릴리스 노트 존재

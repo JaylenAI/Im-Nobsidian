@@ -5,7 +5,7 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
-} from "@obsinotion/core";
+} from "@im-nobsidian/core";
 import ora from "ora";
 
 export const syncCommand = new Command("sync")
@@ -45,7 +45,7 @@ export const syncCommand = new Command("sync")
 
       if (result.conflicts.length > 0) {
         console.log(`\n  ⚠ 충돌 ${result.conflicts.length}건`);
-        console.log('  "obsinotion resolve"로 충돌을 해결하세요.');
+        console.log('  "nobsi resolve"로 충돌을 해결하세요.');
       }
     } finally {
       stateDb.close();

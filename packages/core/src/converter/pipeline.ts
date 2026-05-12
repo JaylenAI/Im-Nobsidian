@@ -23,9 +23,9 @@ export class ConversionPipeline {
   }
 
   selectPath(content: string): ConversionPath {
-    const hasInlineDb = /%% obsinotion:inline-db/.test(content);
+    const hasInlineDb = /%% im-nobsidian:inline-db/.test(content);
     const hasColumnLayout = />\s*\[!col\]/.test(content);
-    const hasToggleHeading = /%% obsinotion:toggle-heading/.test(content);
+    const hasToggleHeading = /%% im-nobsidian:toggle-heading/.test(content);
 
     if (hasInlineDb || hasColumnLayout || hasToggleHeading) {
       return "block-api";

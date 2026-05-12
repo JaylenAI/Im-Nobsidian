@@ -5,7 +5,7 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
-} from "@obsinotion/core";
+} from "@im-nobsidian/core";
 
 export const statusCommand = new Command("status")
   .description("동기화 상태 확인")

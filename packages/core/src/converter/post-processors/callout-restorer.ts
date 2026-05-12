@@ -15,7 +15,7 @@ const EMOJI_TYPE_MAP: Record<string, string> = {
   "\u{1F4AC}": "quote",
 };
 
-const CALLOUT_PRESERVE_REGEX = /%% obsinotion:callout:type=(\w+)&foldable=(open|closed) %%/g;
+const CALLOUT_PRESERVE_REGEX = /%% im-nobsidian:callout:type=(\w+)&foldable=(open|closed) %%/g;
 
 export class CalloutRestorer implements Processor {
   readonly name = "CalloutRestorer";

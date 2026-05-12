@@ -1,7 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
-const INLINE_DB_START = /%% obsinotion:inline-db:([^\s]+) %%/g;
-const INLINE_DB_END = /%% obsinotion:end %%/g;
+const INLINE_DB_START = /%% im-nobsidian:inline-db:([^\s]+) %%/g;
+const INLINE_DB_END = /%% im-nobsidian:end %%/g;
 
 export class InlineDBParser implements Processor {
   readonly name = "InlineDBParser";

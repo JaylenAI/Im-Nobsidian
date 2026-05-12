@@ -1,6 +1,6 @@
 import type { Vault } from "obsidian";
 import { TFile, TFolder, normalizePath } from "obsidian";
-import type { VaultFS, FileInfo } from "@obsinotion/core";
+import type { VaultFS, FileInfo } from "@im-nobsidian/core";
 
 export class ObsidianVaultAdapter implements VaultFS {
   constructor(private readonly vault: Vault) {}
@@ -89,7 +89,7 @@ export class ObsidianVaultAdapter implements VaultFS {
     const result: FileInfo[] = [];
 
     for (const file of files) {
-      if (file.path.startsWith(".obsinotion/")) continue;
+      if (file.path.startsWith(".im-nobsidian/")) continue;
 
       const content = await this.vault.read(file);
       result.push({

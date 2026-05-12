@@ -1,6 +1,6 @@
-/* ObsiNotion Plugin Styles */
+/* Im-Nobsidian Plugin Styles */
 
-.obsinotion-conflict-banner {
+.im-nobsidian-conflict-banner {
   padding: 8px 12px;
   margin: 4px 0;
   border-left: 3px solid var(--text-warning);
@@ -9,45 +9,45 @@
   font-size: var(--font-ui-small);
 }
 
-.obsinotion-sync-indicator {
+.im-nobsidian-sync-indicator {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
-.obsinotion-sync-indicator--syncing {
+.im-nobsidian-sync-indicator--syncing {
   color: var(--text-accent);
 }
 
-.obsinotion-sync-indicator--error {
+.im-nobsidian-sync-indicator--error {
   color: var(--text-error);
 }
 
-.obsinotion-sync-indicator--conflict {
+.im-nobsidian-sync-indicator--conflict {
   color: var(--text-warning);
 }
 
 /* Conflict Modal */
 
-.obsinotion-conflict-modal {
+.im-nobsidian-conflict-modal {
   max-width: 700px;
 }
 
-.obsinotion-conflict-path {
+.im-nobsidian-conflict-path {
   font-family: var(--font-monospace);
   font-size: var(--font-ui-small);
   color: var(--text-muted);
   margin-bottom: 12px;
 }
 
-.obsinotion-diff-container {
+.im-nobsidian-diff-container {
   margin: 12px 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
   overflow: hidden;
 }
 
-.obsinotion-diff-header {
+.im-nobsidian-diff-header {
   padding: 8px 12px;
   background-color: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
@@ -55,15 +55,15 @@
   font-weight: 600;
 }
 
-.obsinotion-diff-label-local {
+.im-nobsidian-diff-label-local {
   color: var(--text-error);
 }
 
-.obsinotion-diff-label-remote {
+.im-nobsidian-diff-label-remote {
   color: var(--text-success);
 }
 
-.obsinotion-diff-body {
+.im-nobsidian-diff-body {
   max-height: 300px;
   overflow-y: auto;
   font-family: var(--font-monospace);
@@ -71,27 +71,27 @@
   line-height: 1.5;
 }
 
-.obsinotion-diff-line {
+.im-nobsidian-diff-line {
   padding: 1px 12px;
   white-space: pre-wrap;
   word-break: break-all;
 }
 
-.obsinotion-diff-removed {
+.im-nobsidian-diff-removed {
   background-color: rgba(255, 0, 0, 0.1);
   color: var(--text-error);
 }
 
-.obsinotion-diff-added {
+.im-nobsidian-diff-added {
   background-color: rgba(0, 255, 0, 0.1);
   color: var(--text-success);
 }
 
-.obsinotion-diff-same {
+.im-nobsidian-diff-same {
   color: var(--text-muted);
 }
 
-.obsinotion-conflict-buttons .setting-item {
+.im-nobsidian-conflict-buttons .setting-item {
   border-top: none;
   padding: 6px 0;
 }

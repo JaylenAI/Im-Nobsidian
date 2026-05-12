@@ -7,7 +7,7 @@
 
 ## 개요
 
-ObsiNotion은 동기화 상태를 로컬 SQLite 데이터베이스(`.obsinotion/sync.db`)에 영속 저장한다.
+Im-Nobsidian은 동기화 상태를 로컬 SQLite 데이터베이스(`.im-nobsidian/sync.db`)에 영속 저장한다.
 이 문서는 모든 테이블 스키마, 인덱스, 관계, 그리고 런타임 데이터 구조를 정의한다.
 
 ---
@@ -319,15 +319,15 @@ CREATE TABLE sync_metadata (
 
 **저장 항목:**
 
-| key              | 예시 value                | 설명                            |
-| ---------------- | ------------------------- | ------------------------------- |
-| `last_sync_at`   | `2026-05-08T14:30:00Z`    | 마지막 동기화 완료 시각         |
-| `last_push_at`   | `2026-05-08T14:30:00Z`    | 마지막 push 시각                |
-| `last_pull_at`   | `2026-05-08T14:25:00Z`    | 마지막 pull 시각                |
-| `root_page_id`   | `abc123...`               | Notion 루트 페이지 ID           |
-| `workspace_id`   | `def456...`               | Notion 워크스페이스 ID          |
-| `schema_version` | `1`                       | DB 스키마 버전 (마이그레이션용) |
-| `db_backup_path` | `.obsinotion/sync.db.bak` | 최근 백업 경로                  |
+| key              | 예시 value                  | 설명                            |
+| ---------------- | --------------------------- | ------------------------------- |
+| `last_sync_at`   | `2026-05-08T14:30:00Z`      | 마지막 동기화 완료 시각         |
+| `last_push_at`   | `2026-05-08T14:30:00Z`      | 마지막 push 시각                |
+| `last_pull_at`   | `2026-05-08T14:25:00Z`      | 마지막 pull 시각                |
+| `root_page_id`   | `abc123...`                 | Notion 루트 페이지 ID           |
+| `workspace_id`   | `def456...`                 | Notion 워크스페이스 ID          |
+| `schema_version` | `1`                         | DB 스키마 버전 (마이그레이션용) |
+| `db_backup_path` | `.im-nobsidian/sync.db.bak` | 최근 백업 경로                  |
 
 ---
 
@@ -566,7 +566,7 @@ function migrate(db: Database): void {
 
 ## 설정 파일 구조
 
-### `.obsinotion/config.json`
+### `.im-nobsidian/config.json`
 
 ```typescript
 import { z } from "zod";
@@ -611,7 +611,7 @@ const ConfigSchema = z.object({
 type Config = z.infer<typeof ConfigSchema>;
 ```
 
-### `.obsinotion/ignore`
+### `.im-nobsidian/ignore`
 
 ```gitignore
 # gitignore 문법 동일

@@ -1,4 +1,4 @@
-# ObsiNotion Roadmap
+# Im-Nobsidian Roadmap
 
 > Last updated: 2026-05-12
 
@@ -6,7 +6,7 @@
 
 Core engine complete. CLI 8 commands working. 341 tests, 82.7% coverage.
 Bidirectional sync with 15+ block types, database mode, conflict resolution.
-All competitors are one-way only — ObsiNotion is the only true bidirectional tool.
+All competitors are one-way only — Im-Nobsidian is the only true bidirectional tool.
 
 ---
 
@@ -49,7 +49,7 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 - [x] 색상/밑줄/멘션 보존
 - [x] 보존 마커 시스템 (라운드트립 보장)
 - [x] 3-way 머지 충돌 해결 (4가지 전략)
-- [x] .obsinotionignore 경로 필터링
+- [x] .im-nobsidian-ignore 경로 필터링
 - [x] CLI 8개 명령어 (init/push/pull/sync/status/diff/resolve/watch)
 - [x] 파일 감시 + 자동 동기화
 - [x] Rate limiting + exponential backoff + jitter
@@ -138,7 +138,7 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 | obsidian-to-notion | One-way (→Notion)      | ~550 stars, low activity   |
 | Nobsidion          | Claims bidirectional   | Small, incomplete          |
 | Obsidian Importer  | One-way (→Obsidian)    | Official, migration only   |
-| **ObsiNotion**     | **True bidirectional** | **Library + CLI + Plugin** |
+| **Im-Nobsidian**   | **True bidirectional** | **Library + CLI + Plugin** |
 
 ### Why Blue Ocean
 

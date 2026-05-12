@@ -10,7 +10,7 @@ describe("ConfigManager", () => {
   let manager: ConfigManager;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "obsinotion-config-"));
+    tempDir = await mkdtemp(join(tmpdir(), "im-nobsidian-config-"));
     manager = new ConfigManager(tempDir);
   });
 
@@ -20,9 +20,9 @@ describe("ConfigManager", () => {
 
   describe("configDir / configPath / dbPath", () => {
     it("경로 올바르게 반환", () => {
-      expect(manager.configDir).toBe(join(tempDir, ".obsinotion"));
-      expect(manager.configPath).toBe(join(tempDir, ".obsinotion/config.json"));
-      expect(manager.dbPath).toBe(join(tempDir, ".obsinotion/sync.db"));
+      expect(manager.configDir).toBe(join(tempDir, ".im-nobsidian"));
+      expect(manager.configPath).toBe(join(tempDir, ".im-nobsidian/config.json"));
+      expect(manager.dbPath).toBe(join(tempDir, ".im-nobsidian/sync.db"));
     });
   });
 
@@ -41,19 +41,19 @@ describe("ConfigManager", () => {
       expect(saved.notion.token).toBe("ntn_test_token_12345");
     });
 
-    it(".gitignore에 .obsinotion/ 추가", async () => {
+    it(".gitignore에 .im-nobsidian/ 추가", async () => {
       await manager.init({ token: "ntn_test_init", rootPageId: "root" });
 
       const gitignore = await readFile(join(tempDir, ".gitignore"), "utf-8");
-      expect(gitignore).toContain(".obsinotion/");
+      expect(gitignore).toContain(".im-nobsidian/");
     });
 
     it("기존 .gitignore에 추가 (중복 안 함)", async () => {
-      await writeFile(join(tempDir, ".gitignore"), "node_modules/\n.obsinotion/\n");
+      await writeFile(join(tempDir, ".gitignore"), "node_modules/\n.im-nobsidian/\n");
       await manager.init({ token: "ntn_test_dup", rootPageId: "root" });
 
       const gitignore = await readFile(join(tempDir, ".gitignore"), "utf-8");
-      const count = (gitignore.match(/\.obsinotion\//g) ?? []).length;
+      const count = (gitignore.match(/\.im-nobsidian\//g) ?? []).length;
       expect(count).toBe(1);
     });
   });

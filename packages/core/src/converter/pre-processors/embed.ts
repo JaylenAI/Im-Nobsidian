@@ -19,7 +19,7 @@ export class EmbedResolver implements Processor {
         images.push({ url: target, localPath: target, isExternal: false });
         if (isPush && !isExternalUrl(target)) {
           const fileName = target.split("/").pop() ?? target;
-          return `> 📎 ${fileName} (로컬 이미지 — Notion API 제한으로 업로드 불가)\n> %% obsinotion:local-image:${target} %%`;
+          return `> 📎 ${fileName} (로컬 이미지 — Notion API 제한으로 업로드 불가)\n> %% im-nobsidian:local-image:${target} %%`;
         }
         return `![${target}](${encodeURI(target)})`;
       }
@@ -28,7 +28,7 @@ export class EmbedResolver implements Processor {
 
     content = content.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
       if (isVideoUrl(url)) {
-        return `%% obsinotion:embed:type=video&url=${encodeURIComponent(url)} %%\n[${alt || "Video"}](${url})`;
+        return `%% im-nobsidian:embed:type=video&url=${encodeURIComponent(url)} %%\n[${alt || "Video"}](${url})`;
       }
       if (isExternalUrl(url)) {
         images.push({ url, isExternal: true });

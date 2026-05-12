@@ -43,7 +43,7 @@ describe.skipIf(SKIP)("Pull Engine 통합 테스트", { timeout: 60000 }, () => 
     stateDb: StateDB;
     vaultFs: NodeVaultFS;
   } {
-    const dbPath = join(tmpDir, ".obsinotion", "sync.db");
+    const dbPath = join(tmpDir, ".im-nobsidian", "sync.db");
     const vaultFs = new NodeVaultFS(tmpDir);
     const stateDb = StateDB.open(dbPath);
 
@@ -57,9 +57,9 @@ describe.skipIf(SKIP)("Pull Engine 통합 테스트", { timeout: 60000 }, () => 
   }
 
   it("새 페이지 Pull → 로컬 파일 생성", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "obsinotion-pull-"));
+    const tmpDir = await mkdtemp(join(tmpdir(), "im-nobsidian-pull-"));
     const localVaultFs = new NodeVaultFS(tmpDir);
-    await localVaultFs.ensureFolder(".obsinotion");
+    await localVaultFs.ensureFolder(".im-nobsidian");
     const { orchestrator, stateDb } = createOrchestrator(tmpDir);
 
     const page = (await rawClient.pages.create({
@@ -112,9 +112,9 @@ describe.skipIf(SKIP)("Pull Engine 통합 테스트", { timeout: 60000 }, () => 
   });
 
   it("수정된 페이지 Pull → 로컬 파일 업데이트", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "obsinotion-pull-"));
+    const tmpDir = await mkdtemp(join(tmpdir(), "im-nobsidian-pull-"));
     const localVaultFs = new NodeVaultFS(tmpDir);
-    await localVaultFs.ensureFolder(".obsinotion");
+    await localVaultFs.ensureFolder(".im-nobsidian");
     const { orchestrator, stateDb } = createOrchestrator(tmpDir);
 
     const page = (await rawClient.pages.create({
@@ -183,9 +183,9 @@ describe.skipIf(SKIP)("Pull Engine 통합 테스트", { timeout: 60000 }, () => 
   });
 
   it("로컬+원격 동시 수정 → 충돌 감지", async () => {
-    const tmpDir = await mkdtemp(join(tmpdir(), "obsinotion-pull-"));
+    const tmpDir = await mkdtemp(join(tmpdir(), "im-nobsidian-pull-"));
     const localVaultFs = new NodeVaultFS(tmpDir);
-    await localVaultFs.ensureFolder(".obsinotion");
+    await localVaultFs.ensureFolder(".im-nobsidian");
     const { orchestrator, stateDb, vaultFs } = createOrchestrator(tmpDir);
 
     const page = (await rawClient.pages.create({

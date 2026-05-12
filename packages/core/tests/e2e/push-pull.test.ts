@@ -57,7 +57,7 @@ interface SyncResult {
 ## 인용
 
 > 어디서 작성하든, 양쪽에서 동일하게.
-> — ObsiNotion
+> — Im-Nobsidian
 
 ---
 

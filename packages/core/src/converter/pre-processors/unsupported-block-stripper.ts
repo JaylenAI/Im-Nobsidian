@@ -1,6 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
-const UNSUPPORTED_CALLOUT_REGEX = /> \[!obsinotion-unsupported\][^\n]*\n(?:>[^\n]*\n)*/g;
+const UNSUPPORTED_CALLOUT_REGEX = /> \[!im-nobsidian-unsupported\][^\n]*\n(?:>[^\n]*\n)*/g;
 
 export class UnsupportedBlockStripper implements Processor {
   readonly name = "UnsupportedBlockStripper";

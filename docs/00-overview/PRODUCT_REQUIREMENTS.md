@@ -32,7 +32,7 @@
 | M-08 | 폴더 ↔ 페이지 계층     | Obsidian 폴더 구조를 Notion 페이지 계층으로 매핑                                                  | 3단계 중첩 폴더 테스트             |
 | M-09 | 충돌 감지              | 양쪽 동시 편집 시 충돌 감지                                                                       | Three-Way Merge base snapshot 기반 |
 | M-10 | 충돌 해결              | 로컬우선/원격우선/수동병합/사본 생성                                                              | 4가지 정책 모두 동작               |
-| M-11 | CLI init               | 대화형 초기 설정 (토큰, 루트 페이지, 폴더 선택)                                                   | `obsinotion init` 정상 완료        |
+| M-11 | CLI init               | 대화형 초기 설정 (토큰, 루트 페이지, 폴더 선택)                                                   | `nobsi init` 정상 완료             |
 | M-12 | CLI push/pull/sync     | 수동 동기화 명령                                                                                  | 각 명령 정상 동작                  |
 | M-13 | CLI status             | 변경된 파일 목록 표시                                                                             | git status 유사 출력               |
 | M-14 | State DB (SQLite)      | 동기화 상태 영속 저장                                                                             | 재시작 후 상태 유지                |
@@ -54,9 +54,9 @@
 | S-07 | Mermaid                 | 코드 블록 언어 보존                                                         | Notion에서 렌더링 확인           |
 | S-08 | Obsidian 플러그인 기본  | 설정 화면, Sync 버튼, 상태바                                                | 커뮤니티 플러그인 등록 가능      |
 | S-09 | 동기화 폴더 선택        | include/exclude 폴더 설정                                                   | 지정 폴더만 동기화               |
-| S-10 | .obsinotion/ignore      | gitignore 문법으로 파일/폴더 무시                                           | 패턴 매칭 정확                   |
+| S-10 | .im-nobsidian/ignore    | gitignore 문법으로 파일/폴더 무시                                           | 패턴 매칭 정확                   |
 | S-11 | 파일 이동/이름변경 감지 | rename 이벤트로 Notion 페이지 제목/위치 업데이트                            | 중복 생성 없음                   |
-| S-12 | Preserve Marker 시스템  | `%% obsinotion:... %%` 마커로 라운드트립 보존                               | 모든 C등급 기능에 적용           |
+| S-12 | Preserve Marker 시스템  | `%% im-nobsidian:... %%` 마커로 라운드트립 보존                             | 모든 C등급 기능에 적용           |
 
 ### Could Have — v0.3.0 ~ v0.5.0
 
@@ -79,7 +79,7 @@
 | C-13 | Synced Block           | transclusion ↔ synced block                                              | 읽기 전용 표시            |
 | C-14 | Dataview 보존          | 코드 블록 보존 + 정적 테이블 옵션                                        | 라운드트립 원본 유지      |
 | C-15 | Embed 변환             | iframe ↔ embed/video/bookmark 블록                                       | YouTube 테스트            |
-| C-16 | diff 명령              | `obsinotion diff` 로 파일별 변경 비교                                    | 컬러 출력                 |
+| C-16 | diff 명령              | `nobsi diff` 로 파일별 변경 비교                                         | 컬러 출력                 |
 
 ### Won't Have — v1.0 이후 또는 범위 외
 

@@ -13,7 +13,7 @@ describe("ChangeDetector", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "obsinotion-cd-"));
+    tempDir = await mkdtemp(join(tmpdir(), "im-nobsidian-cd-"));
     db = StateDB.open(join(tempDir, "test.db"));
     detector = new ChangeDetector(db);
   });

@@ -5,13 +5,13 @@ import {
   SyncOrchestrator,
   ConflictResolver,
   DEFAULT_CONFIG,
-} from "@obsinotion/core";
-import type { Config, Conflict, ResolutionChoice } from "@obsinotion/core";
-import { ObsiNotionSettingTab } from "./settings.js";
+} from "@im-nobsidian/core";
+import type { Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
 
-interface ObsiNotionSettings {
+interface ImNobsidianSettings {
   token: string;
   rootPageId: string;
   syncDirection: "push" | "pull" | "both";
@@ -21,7 +21,7 @@ interface ObsiNotionSettings {
   attachments: string;
 }
 
-const DEFAULT_SETTINGS: ObsiNotionSettings = {
+const DEFAULT_SETTINGS: ImNobsidianSettings = {
   token: "",
   rootPageId: "",
   syncDirection: "both",
@@ -31,8 +31,8 @@ const DEFAULT_SETTINGS: ObsiNotionSettings = {
   attachments: "attachments",
 };
 
-export default class ObsiNotionPlugin extends Plugin {
-  settings: ObsiNotionSettings = DEFAULT_SETTINGS;
+export default class ImNobsidianPlugin extends Plugin {
+  settings: ImNobsidianSettings = DEFAULT_SETTINGS;
   private orchestrator: SyncOrchestrator | null = null;
   private stateDb: StateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
@@ -42,34 +42,34 @@ export default class ObsiNotionPlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
-    this.addSettingTab(new ObsiNotionSettingTab(this.app, this));
+    this.addSettingTab(new ImNobsidianSettingTab(this.app, this));
 
     this.addCommand({
-      id: "obsinotion-push",
+      id: "im-nobsidian-push",
       name: "Push to Notion",
       callback: () => this.executePush(),
     });
 
     this.addCommand({
-      id: "obsinotion-pull",
+      id: "im-nobsidian-pull",
       name: "Pull from Notion",
       callback: () => this.executePull(),
     });
 
     this.addCommand({
-      id: "obsinotion-sync",
+      id: "im-nobsidian-sync",
       name: "Sync (양방향)",
       callback: () => this.executeSync(),
     });
 
     this.addCommand({
-      id: "obsinotion-status",
+      id: "im-nobsidian-status",
       name: "동기화 상태 확인",
       callback: () => this.showStatus(),
     });
 
     this.addCommand({
-      id: "obsinotion-resolve",
+      id: "im-nobsidian-resolve",
       name: "충돌 해결",
       callback: () => this.resolveConflicts(),
     });
@@ -109,7 +109,7 @@ export default class ObsiNotionPlugin extends Plugin {
     try {
       this.stateDb?.close();
 
-      const dbPath = `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/.obsinotion/sync.db`;
+      const dbPath = `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/.im-nobsidian/sync.db`;
       this.stateDb = StateDB.open(dbPath);
 
       const client = new NotionClient({
@@ -142,7 +142,7 @@ export default class ObsiNotionPlugin extends Plugin {
       this.updateStatusBar("ready");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      new Notice(`ObsiNotion 초기화 실패: ${message}`);
+      new Notice(`Im-Nobsidian 초기화 실패: ${message}`);
       this.updateStatusBar("error");
     }
   }
@@ -222,12 +222,12 @@ export default class ObsiNotionPlugin extends Plugin {
 
   private async executePush(): Promise<void> {
     if (!this.orchestrator) {
-      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
     this.updateStatusBar("syncing");
-    new Notice("ObsiNotion: Push 시작...");
+    new Notice("Im-Nobsidian: Push 시작...");
 
     try {
       const result = await this.orchestrator.push();
@@ -241,23 +241,23 @@ export default class ObsiNotionPlugin extends Plugin {
         message.push(`실패 ${result.failed.length}건`);
       }
 
-      new Notice(`ObsiNotion: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar("ready");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`ObsiNotion Push 실패: ${msg}`);
+      new Notice(`Im-Nobsidian Push 실패: ${msg}`);
       this.updateStatusBar("error");
     }
   }
 
   private async executePull(): Promise<void> {
     if (!this.orchestrator) {
-      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
     this.updateStatusBar("syncing");
-    new Notice("ObsiNotion: Pull 시작...");
+    new Notice("Im-Nobsidian: Pull 시작...");
 
     try {
       const result = await this.orchestrator.pull();
@@ -275,23 +275,23 @@ export default class ObsiNotionPlugin extends Plugin {
         message.push(`실패 ${result.failed.length}건`);
       }
 
-      new Notice(`ObsiNotion: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`ObsiNotion Pull 실패: ${msg}`);
+      new Notice(`Im-Nobsidian Pull 실패: ${msg}`);
       this.updateStatusBar("error");
     }
   }
 
   private async executeSync(): Promise<void> {
     if (!this.orchestrator) {
-      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
     this.updateStatusBar("syncing");
-    new Notice("ObsiNotion: Sync 시작...");
+    new Notice("Im-Nobsidian: Sync 시작...");
 
     try {
       const result = await this.orchestrator.sync();
@@ -305,18 +305,18 @@ export default class ObsiNotionPlugin extends Plugin {
         message.push(`충돌 ${result.conflicts.length}건`);
       }
 
-      new Notice(`ObsiNotion: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`ObsiNotion Sync 실패: ${msg}`);
+      new Notice(`Im-Nobsidian Sync 실패: ${msg}`);
       this.updateStatusBar("error");
     }
   }
 
   private async showStatus(): Promise<void> {
     if (!this.orchestrator) {
-      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
@@ -338,7 +338,7 @@ export default class ObsiNotionPlugin extends Plugin {
         lines.push(`대기 중: ${status.pendingOperations}건`);
       }
 
-      new Notice(`ObsiNotion 상태:\n${lines.join("\n")}`, 5000);
+      new Notice(`Im-Nobsidian 상태:\n${lines.join("\n")}`, 5000);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`상태 확인 실패: ${msg}`);
@@ -347,13 +347,13 @@ export default class ObsiNotionPlugin extends Plugin {
 
   private async resolveConflicts(): Promise<void> {
     if (!this.orchestrator || !this.stateDb) {
-      new Notice("ObsiNotion: 설정을 먼저 완료해주세요.");
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
     const conflictRecords = this.stateDb.getByStatus("conflict");
     if (conflictRecords.length === 0) {
-      new Notice("ObsiNotion: 충돌이 없습니다.");
+      new Notice("Im-Nobsidian: 충돌이 없습니다.");
       return;
     }
 
@@ -361,7 +361,7 @@ export default class ObsiNotionPlugin extends Plugin {
       const pullResult = await this.orchestrator.pull();
 
       if (pullResult.conflicts.length === 0) {
-        new Notice("ObsiNotion: 해결할 충돌이 없습니다.");
+        new Notice("Im-Nobsidian: 해결할 충돌이 없습니다.");
         this.updateStatusBar("ready");
         return;
       }
@@ -402,12 +402,12 @@ export default class ObsiNotionPlugin extends Plugin {
     if (!this.statusBarEl) return;
 
     const labels: Record<string, string> = {
-      ready: "ObsiNotion: Ready",
-      syncing: "ObsiNotion: Syncing...",
-      error: "ObsiNotion: Error",
-      conflict: "ObsiNotion: Conflict",
+      ready: "Im-Nobsidian: Ready",
+      syncing: "Im-Nobsidian: Syncing...",
+      error: "Im-Nobsidian: Error",
+      conflict: "Im-Nobsidian: Conflict",
     };
 
-    this.statusBarEl.setText(labels[state] ?? "ObsiNotion");
+    this.statusBarEl.setText(labels[state] ?? "Im-Nobsidian");
   }
 }

@@ -9,7 +9,7 @@
 
 ```
 Git:        로컬 파일 ←── pull/push ──→ GitHub (원격 저장소)
-ObsiNotion: Obsidian Vault ←── pull/push ──→ Notion Workspace (원격)
+Im-Nobsidian: Obsidian Vault ←── pull/push ──→ Notion Workspace (원격)
 ```
 
 ### 핵심 개념
@@ -27,12 +27,12 @@ ObsiNotion: Obsidian Vault ←── pull/push ──→ Notion Workspace (원�
 **CLI (터미널)**
 
 ```bash
-obsinotion init          # 최초 설정 (Notion 토큰, 루트 페이지 연결)
-obsinotion pull          # Notion → Obsidian
-obsinotion push          # Obsidian → Notion
-obsinotion sync          # Pull + Push 동시
-obsinotion status        # 변경된 파일 목록 (git status 같은)
-obsinotion diff README   # 파일별 변경 비교 (git diff 같은)
+nobsi init          # 최초 설정 (Notion 토큰, 루트 페이지 연결)
+nobsi pull          # Notion → Obsidian
+nobsi push          # Obsidian → Notion
+nobsi sync          # Pull + Push 동시
+nobsi status        # 변경된 파일 목록 (git status 같은)
+nobsi diff README   # 파일별 변경 비교 (git diff 같은)
 ```
 
 **Obsidian 플러그인**
@@ -57,25 +57,25 @@ obsinotion diff README   # 파일별 변경 비교 (git diff 같은)
 ```
 [1단계: 초기 설정]
 
-$ obsinotion init
+$ nobsi init
 
 ? Notion API Token: ntn_xxxxx...
   → (Notion Integration 페이지에서 토큰 발급)
-? 동기화할 Notion 루트 페이지: "ObsiNotion Sync"
+? 동기화할 Notion 루트 페이지: "Im-Nobsidian Sync"
   → (빈 Notion 페이지를 하나 만들어서 선택)
 ? Obsidian Vault 경로: /Users/minsu/Documents/MyVault
 ? 동기화 대상 폴더: 전체 / 선택
   → 선택: ["Projects", "Notes", "Daily"]
   → 제외: [".obsidian", "templates", "_archive"]
 
-✅ 설정 완료. .obsinotion/config.json 생성됨
-✅ State DB 초기화: .obsinotion/sync.db
+✅ 설정 완료. .im-nobsidian/config.json 생성됨
+✅ State DB 초기화: .im-nobsidian/sync.db
 ```
 
 ```
 [2단계: 최초 Push]
 
-$ obsinotion push
+$ nobsi push
 
 🔍 변경 감지 중...
   → 새 파일 87개 발견 (제외 폴더 빼고)
@@ -102,7 +102,7 @@ $ obsinotion push
 ```
 Obsidian Vault                    Notion
 ─────────────                     ──────
-📁 Projects/                      📄 ObsiNotion Sync (루트)
+📁 Projects/                      📄 Im-Nobsidian Sync (루트)
   📄 프로젝트A.md          →       └─ 📁 Projects
   📄 프로젝트B.md                       ├─ 📄 프로젝트A
 📁 Notes/                               ├─ 📄 프로젝트B
@@ -125,7 +125,7 @@ Obsidian Vault                    Notion
 ```markdown
 ---
 tags:
-  - project/obsinotion
+  - project/im-nobsidian
   - dev/typescript
 status: active
 priority: 1
@@ -155,7 +155,7 @@ $$E = mc^2$$
 ### Push 과정 (내부 동작)
 
 ```
-$ obsinotion push
+$ nobsi push
 
 🔍 변경 감지...
   → 새 파일: Notes/API 설계 문서.md
@@ -164,8 +164,8 @@ $ obsinotion push
 📤 변환 시작...
 
 [Step 1: 프론트매터 → Notion Properties]
-  tags: ["project/obsinotion", "dev/typescript"]
-    → multi_select: [{name: "project/obsinotion"}, {name: "dev/typescript"}]
+  tags: ["project/im-nobsidian", "dev/typescript"]
+    → multi_select: [{name: "project/im-nobsidian"}, {name: "dev/typescript"}]
   status: "active"
     → select: {name: "active"}
   priority: 1
@@ -216,7 +216,7 @@ $ obsinotion push
 📄 API 설계 문서
 ┌─────────────────────────────┐
 │ Properties:                  │
-│  Tags: project/obsinotion,   │
+│  Tags: project/im-nobsidian,   │
 │        dev/typescript        │
 │  Status: active              │
 │  Priority: 1                 │
@@ -298,7 +298,7 @@ $ obsinotion push
 ### Pull 과정 (내부 동작)
 
 ```
-$ obsinotion pull
+$ nobsi pull
 
 🔍 Notion 변경 감지 중...
   → Notion API: GET /v1/search (최근 수정된 페이지 조회)
@@ -328,7 +328,7 @@ $ obsinotion pull
 
 [Step 3: 후처리기 (Post-processor)]
   column_list (2 columns)
-    → %% obsinotion:column_list:start:columns=2:widths=1,1 %%
+    → %% im-nobsidian:column_list:start:columns=2:widths=1,1 %%
       > [!col]
       >> [!col-md]
       >> 소셜미디어
@@ -339,7 +339,7 @@ $ obsinotion pull
       >> 블로그
       >> - 기술블로그
       >> - 뉴스레터
-      %% obsinotion:column_list:end %%
+      %% im-nobsidian:column_list:end %%
 
   callout (⚠️, yellow_background)
     → > [!warning] 예산 초과 주의
@@ -390,7 +390,7 @@ notion_id: "page-uuid-marketing"
 
 MAU 10,000 달성
 
-%% obsinotion:column_list:start:columns=2:widths=1,1 %%
+%% im-nobsidian:column_list:start:columns=2:widths=1,1 %%
 
 > [!col]
 >
@@ -405,7 +405,7 @@ MAU 10,000 달성
 > >
 > > - 기술블로그
 > > - 뉴스레터
-> >   %% obsinotion:column_list:end %%
+> >   %% im-nobsidian:column_list:end %%
 
 > [!warning] 예산 초과 주의
 > Q1 대비 30% 증가 예상
@@ -439,7 +439,7 @@ MAU 10,000 달성
 ### Sync 과정
 
 ```
-$ obsinotion sync
+$ nobsi sync
 
 🔍 변경 감지...
   → 로컬 파일 해시: abc... (변경됨. base snapshot과 다름)
@@ -583,7 +583,7 @@ priority: 1 # 그대로
 ```
 
 ```
-$ obsinotion push
+$ nobsi push
 
 📤 변환...
   웹 리뉴얼.md → Properties 업데이트
@@ -600,7 +600,7 @@ $ obsinotion push
 ### 설정
 
 ```
-ObsiNotion 플러그인 설정:
+Im-Nobsidian 플러그인 설정:
   ✅ 자동 Pull: 앱 시작 시 + 매 5분마다
   ✅ 자동 Push: 파일 저장 후 10초 디바운스
   ✅ 충돌 시: 알림 표시 (수동 해결)
@@ -629,7 +629,7 @@ ObsiNotion 플러그인 설정:
 [수동 동기화]
   → 사이드바 🔄 버튼 클릭
   → Pull + Push 즉시 실행
-  → 또는 Command Palette: "ObsiNotion: Sync Now"
+  → 또는 Command Palette: "Im-Nobsidian: Sync Now"
 ```
 
 ---
@@ -747,7 +747,7 @@ flowchart TD
 ### Rate Limit 초과
 
 ```
-$ obsinotion push
+$ nobsi push
 
 📤 전송 중...
   [45/100] ⚠️ 429 Too Many Requests
@@ -759,7 +759,7 @@ $ obsinotion push
 ### 네트워크 오류
 
 ```
-$ obsinotion sync
+$ nobsi sync
 
 📥 Pull 중...
   [12/50] ❌ 네트워크 오류 (ECONNRESET)
@@ -769,13 +769,13 @@ $ obsinotion sync
   성공: 11 파일
   실패: 1 파일 (Notes/큰문서.md)
   → 다음 sync 시 자동 재시도
-  → 또는: obsinotion push Notes/큰문서.md (수동 재시도)
+  → 또는: nobsi push Notes/큰문서.md (수동 재시도)
 ```
 
 ### 파일 삭제 처리
 
 ```
-$ obsinotion sync
+$ nobsi sync
 
 🗑️ 삭제 감지:
   로컬에서 삭제됨: Notes/오래된메모.md

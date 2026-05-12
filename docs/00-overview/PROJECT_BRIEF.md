@@ -1,4 +1,4 @@
-# Project Brief — ObsiNotion
+# Project Brief — Im-Nobsidian
 
 > 작성일: 2026-05-08
 > 상태: draft
@@ -20,42 +20,46 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 
 ## 핵심 가치
 
-| # | 가치 | 설명 |
-|---|------|------|
-| 1 | **양방향** | 한쪽만이 아닌, 어디서 편집해도 동기화 |
-| 2 | **무손실** | 변환 과정에서 데이터 손실 최소화 + 라운드트립 안전 |
-| 3 | **안전** | 충돌 시 데이터 파괴 없음, conflict copy 생성 |
-| 4 | **오픈소스** | 무료, 투명, 커뮤니티 기여 가능 |
+| #   | 가치         | 설명                                               |
+| --- | ------------ | -------------------------------------------------- |
+| 1   | **양방향**   | 한쪽만이 아닌, 어디서 편집해도 동기화              |
+| 2   | **무손실**   | 변환 과정에서 데이터 손실 최소화 + 라운드트립 안전 |
+| 3   | **안전**     | 충돌 시 데이터 파괴 없음, conflict copy 생성       |
+| 4   | **오픈소스** | 무료, 투명, 커뮤니티 기여 가능                     |
 
 ## 타겟 사용자
 
 ### 페르소나 1: 지식 워커
+
 - Obsidian: 개인 메모, 학습 정리, 아이디어 연결 (그래프)
 - Notion: 팀 협업, 프로젝트 관리, 공유 문서
 - 니즈: 개인 메모 중 공유할 것만 Notion에 자동 동기화
 
 ### 페르소나 2: 콘텐츠 크리에이터
+
 - Obsidian: 초안 작성, 리서치 정리 (로컬, 빠름)
 - Notion: 발행 파이프라인, 편집자 협업
 - 니즈: Obsidian에서 쓴 글이 Notion에 올라가면 편집자가 수정 → 수정본 다시 Obsidian으로
 
 ### 페르소나 3: 개발자
+
 - Obsidian: 기술 노트, TIL, 코드 스니펫 (Git 연동)
 - Notion: 팀 위키, 온보딩 문서, 회의록
 - 니즈: 로컬 기술 노트 정리본을 팀 위키로 자동 동기화
 
 ## 차별점 (기존 도구 대비)
 
-| 기존 도구 | 한계 | ObsiNotion |
-|-----------|------|-----------|
-| obsidian-to-notion (EasyChris) | 단방향, 2단계 중첩 제한 | 양방향, 무제한 중첩 |
-| Nobsidion | 단방향, Rate limit 없음, 방치 | 양방향, Rate limit, 활발 유지 |
-| N2O | 소스 비공개, 유료 | 100% 오픈소스, 무료 |
-| Notion 내보내기 | 수동, 형식 깨짐 | 자동, 형식 보존 |
+| 기존 도구                      | 한계                          | Im-Nobsidian                  |
+| ------------------------------ | ----------------------------- | ----------------------------- |
+| obsidian-to-notion (EasyChris) | 단방향, 2단계 중첩 제한       | 양방향, 무제한 중첩           |
+| Nobsidion                      | 단방향, Rate limit 없음, 방치 | 양방향, Rate limit, 활발 유지 |
+| N2O                            | 소스 비공개, 유료             | 100% 오픈소스, 무료           |
+| Notion 내보내기                | 수동, 형식 깨짐               | 자동, 형식 보존               |
 
 ## MVP 범위 (v1.0)
 
 ### Must Have
+
 - [ ] 마크다운 ↔ Notion 블록 양방향 변환 (A+B등급 기능)
 - [ ] 파일/폴더 구조 ↔ Notion 페이지 계층 매핑
 - [ ] SHA-256 기반 변경 감지 + 델타 동기화
@@ -64,6 +68,7 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 - [ ] Obsidian 플러그인 (커맨드 팔레트 + 설정 탭)
 
 ### Should Have
+
 - [ ] [[위키링크]] ↔ Notion 페이지 멘션 양방향 변환
 - [ ] 콜아웃 ↔ Callout 블록 양방향 변환
 - [ ] 프론트매터 ↔ Notion 페이지 속성
@@ -71,12 +76,14 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 - [ ] 자동 동기화 (파일 감시 + 웹훅)
 
 ### Could Have
+
 - [ ] Notion 데이터베이스 → 폴더 + 프론트매터 파일
 - [ ] Notion Relations → [[위키링크]]
 - [ ] 대규모 볼트 최적화 (벌크 연산)
 - [ ] 크로스플랫폼 데스크톱 앱 (Tauri)
 
 ### Won't Have (v1에서 제외)
+
 - 모바일 앱
 - Dataview 쿼리 동기화
 - Notion 댓글 동기화
@@ -84,20 +91,20 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 
 ## 기술 스택
 
-| 영역 | 기술 |
-|------|------|
-| 언어 | TypeScript (strict) |
-| 런타임 | Node.js 20+ |
-| 패키지 관리 | pnpm workspaces (monorepo) |
-| 빌드 | tsup (core, cli) / esbuild (plugin) |
-| 테스트 | vitest |
-| CI/CD | GitHub Actions |
-| DB | SQLite (better-sqlite3) |
-| Notion SDK | @notionhq/client |
-| MD→Notion | @tryfabric/martian |
-| Notion→MD | notion-to-md |
-| 파일 감시 | chokidar |
-| 검증 | zod |
+| 영역        | 기술                                |
+| ----------- | ----------------------------------- |
+| 언어        | TypeScript (strict)                 |
+| 런타임      | Node.js 20+                         |
+| 패키지 관리 | pnpm workspaces (monorepo)          |
+| 빌드        | tsup (core, cli) / esbuild (plugin) |
+| 테스트      | vitest                              |
+| CI/CD       | GitHub Actions                      |
+| DB          | SQLite (better-sqlite3)             |
+| Notion SDK  | @notionhq/client                    |
+| MD→Notion   | @tryfabric/martian                  |
+| Notion→MD   | notion-to-md                        |
+| 파일 감시   | chokidar                            |
+| 검증        | zod                                 |
 
 ## 성공 지표
 

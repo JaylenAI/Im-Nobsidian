@@ -1,6 +1,6 @@
 {
-  "id": "obsinotion",
-  "name": "ObsiNotion Sync",
+  "id": "im-nobsidian",
+  "name": "Im-Nobsidian Sync",
   "version": "0.1.0",
   "minAppVersion": "1.4.0",
   "description": "Bidirectional sync between Obsidian and Notion",

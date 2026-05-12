@@ -228,7 +228,7 @@ Obsidian 콜아웃 → Notion callout block 변환.
 Notion은 foldable 개념이 없으므로, preserve marker로 메타 보존:
 
 ```
-%% obsinotion:callout:foldable=closed %%
+%% im-nobsidian:callout:foldable=closed %%
 ```
 
 ### 4. InlineDBParser
@@ -240,12 +240,12 @@ Notion은 foldable 개념이 없으므로, preserve marker로 메타 보존:
 // 조건: preserve marker로 감싸진 테이블만 인라인 DB로 인식
 
 // 마크다운 측 표현:
-// %% obsinotion:inline-db:id=abc123 %%
+// %% im-nobsidian:inline-db:id=abc123 %%
 // | Name | Status | Due |
 // |------|--------|-----|
 // | Task 1 | Done | 2026-05-01 |
 // | Task 2 | WIP | 2026-05-10 |
-// %% obsinotion:end %%
+// %% im-nobsidian:end %%
 ```
 
 ### 5. MathNormalizer
@@ -277,7 +277,7 @@ Obsidian 임베드 문법 → Notion embed/bookmark/video 블록.
 라운드트립 불가능한 정보를 preserve marker에서 수집하여 메타데이터로 분리.
 
 ```typescript
-const MARKER_REGEX = /%% obsinotion:(\w+):(.+?) %%/g;
+const MARKER_REGEX = /%% im-nobsidian:(\w+):(.+?) %%/g;
 
 // 수집된 메타데이터는 변환 결과에 첨부되어
 // Notion에 보이지 않는 형태로 저장 (마지막 블록의 caption 또는 별도 필드)
@@ -340,7 +340,7 @@ Notion 인라인 색상 → CSS 클래스 span 변환.
 // <span class="notion-red-bg">텍스트</span>
 
 // preserve marker 방식 (플러그인 미설치 환경):
-// %% obsinotion:color:red %%텍스트%% obsinotion:end %%
+// %% im-nobsidian:color:red %%텍스트%% im-nobsidian:end %%
 ```
 
 ### 4. ColumnLayoutBuilder
@@ -359,7 +359,7 @@ Notion column_list → Obsidian 컬럼 표현.
 // > > Column 2 content
 
 // preserve marker로 원본 비율 보존:
-// %% obsinotion:column:ratio=1:2:1 %%
+// %% im-nobsidian:column:ratio=1:2:1 %%
 ```
 
 ### 5. ToggleHeadingRestorer
@@ -374,7 +374,7 @@ Notion toggleable heading → Obsidian 표현 변환.
 // > Toggle content here
 
 // preserve marker:
-// %% obsinotion:toggle-heading:level=2 %%
+// %% im-nobsidian:toggle-heading:level=2 %%
 ```
 
 ### 6. InlineDBBuilder
@@ -388,11 +388,11 @@ Notion child_database → 마크다운 테이블 변환.
 // 3. 마크다운 테이블 생성 + preserve marker 감싸기
 
 // 결과:
-// %% obsinotion:inline-db:id=abc123&title=Tasks %%
+// %% im-nobsidian:inline-db:id=abc123&title=Tasks %%
 // | Name | Status | Due |
 // |------|--------|-----|
 // | Task 1 | Done | 2026-05-01 |
-// %% obsinotion:end %%
+// %% im-nobsidian:end %%
 ```
 
 ### 7. CoverIconExtractor
@@ -414,17 +414,17 @@ Notion 페이지 커버/아이콘 → frontmatter 변환.
 라운드트립 불가능 정보를 preserve marker로 삽입.
 
 ```typescript
-// 구문: %% obsinotion:{type}:{key=value&...} %%
+// 구문: %% im-nobsidian:{type}:{key=value&...} %%
 // Obsidian에서 %% ... %%는 주석 처리되어 렌더링되지 않음
 
 // 예시:
-// %% obsinotion:callout:foldable=closed %%
-// %% obsinotion:color:red_background %%
-// %% obsinotion:column:ratio=1:2 %%
-// %% obsinotion:toggle-heading:level=3 %%
-// %% obsinotion:inline-db:id=abc123&title=Tasks %%
-// %% obsinotion:synced-block:id=xyz789 %%
-// %% obsinotion:end %%
+// %% im-nobsidian:callout:foldable=closed %%
+// %% im-nobsidian:color:red_background %%
+// %% im-nobsidian:column:ratio=1:2 %%
+// %% im-nobsidian:toggle-heading:level=3 %%
+// %% im-nobsidian:inline-db:id=abc123&title=Tasks %%
+// %% im-nobsidian:synced-block:id=xyz789 %%
+// %% im-nobsidian:end %%
 ```
 
 ---
@@ -457,18 +457,18 @@ Notion 페이지 커버/아이콘 → frontmatter 변환.
 ```markdown
 <!-- Point: 바로 다음 요소에 대한 메타 -->
 
-%% obsinotion:callout:foldable=closed %%
+%% im-nobsidian:callout:foldable=closed %%
 
 > [!info]- Collapsed Section
 > This is hidden by default
 
 <!-- Range: 시작~끝 사이 콘텐츠에 적용 -->
 
-%% obsinotion:inline-db:id=abc123&title=Projects %%
+%% im-nobsidian:inline-db:id=abc123&title=Projects %%
 | Name | Status |
 |------|--------|
 | A | Done |
-%% obsinotion:end %%
+%% im-nobsidian:end %%
 ```
 
 ---

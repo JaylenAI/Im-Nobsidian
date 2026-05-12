@@ -54,11 +54,11 @@ describe("PreserveMarkerInjector", () => {
       context: pullContext,
     };
     const result = injector.process(input);
-    expect(result.content).toContain("%% obsinotion:toggle-heading:id=abc %%");
+    expect(result.content).toContain("%% im-nobsidian:toggle-heading:id=abc %%");
   });
 
   it("이미 존재하는 마커는 중복 추가 안 함", () => {
-    const marker = "%% obsinotion:toggle-heading:id=abc %%";
+    const marker = "%% im-nobsidian:toggle-heading:id=abc %%";
     const input: ProcessorInput = {
       content: `# Hello\n\n${marker}\n\nContent`,
       metadata: {
@@ -67,7 +67,7 @@ describe("PreserveMarkerInjector", () => {
       context: pullContext,
     };
     const result = injector.process(input);
-    const count = (result.content.match(/obsinotion:toggle-heading/g) || []).length;
+    const count = (result.content.match(/im-nobsidian:toggle-heading/g) || []).length;
     expect(count).toBe(1);
   });
 
@@ -83,8 +83,8 @@ describe("PreserveMarkerInjector", () => {
       context: pullContext,
     };
     const result = injector.process(input);
-    expect(result.content).toContain("%% obsinotion:toggle-heading:id=a %%");
-    expect(result.content).toContain("%% obsinotion:inline-db:db=tasks %%");
+    expect(result.content).toContain("%% im-nobsidian:toggle-heading:id=a %%");
+    expect(result.content).toContain("%% im-nobsidian:inline-db:db=tasks %%");
   });
 
   it("빈 문자열 처리", () => {

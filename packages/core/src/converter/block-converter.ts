@@ -7,12 +7,12 @@ import type { NotionBlock } from "../notion/block-builder.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
 
-const DIVIDER_PLACEHOLDER = "​%%OBSINOTION_DIVIDER%%​";
-const TOGGLE_START = "%%obsinotion:toggle:start%%";
-const TOGGLE_END = "%%obsinotion:toggle:end%%";
-const COLUMN_LIST_START = "%%obsinotion:column-list:start%%";
-const COLUMN_SEP = "%%obsinotion:column%%";
-const COLUMN_LIST_END = "%%obsinotion:column-list:end%%";
+const DIVIDER_PLACEHOLDER = "​%%IM-NOBSIDIAN_DIVIDER%%​";
+const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
+const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
+const COLUMN_LIST_START = "%%im-nobsidian:column-list:start%%";
+const COLUMN_SEP = "%%im-nobsidian:column%%";
+const COLUMN_LIST_END = "%%im-nobsidian:column-list:end%%";
 
 const VIDEO_URL_PATTERNS = [
   /^https?:\/\/(www\.)?youtube\.com\/watch/,
@@ -82,7 +82,7 @@ function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): string {
 
       const color = a?.color as string | undefined;
       if (color && color !== "default") {
-        text = `%% obsinotion:color:${color} %%${text}%% obsinotion:end %%`;
+        text = `%% im-nobsidian:color:${color} %%${text}%% im-nobsidian:end %%`;
       }
 
       return text;
@@ -125,7 +125,7 @@ export class BlockConverter {
       this.n2m.setCustomTransformer(blockType, (block) => {
         const id = block.id ?? "unknown";
         return Promise.resolve(
-          `> [!obsinotion-unsupported] Notion 전용 블록\n> type: ${blockType}, id: ${id}\n> %%obsinotion:unsupported:type=${blockType}&id=${id}%%`,
+          `> [!im-nobsidian-unsupported] Notion 전용 블록\n> type: ${blockType}, id: ${id}\n> %%im-nobsidian:unsupported:type=${blockType}&id=${id}%%`,
         );
       });
     }
@@ -321,7 +321,7 @@ export class BlockConverter {
         child_database: { title: string };
       } & BlockObjectResponse;
       const title = b.child_database?.title ?? "Database";
-      return `> [!database] ${title}\n> %%obsinotion:child-database:id=${b.id}&title=${encodeURIComponent(title)}%%`;
+      return `> [!database] ${title}\n> %%im-nobsidian:child-database:id=${b.id}&title=${encodeURIComponent(title)}%%`;
     });
   }
 
@@ -354,7 +354,7 @@ export class BlockConverter {
   private registerTocTransformer(): void {
     if (!this.n2m) return;
     this.n2m.setCustomTransformer("table_of_contents", async () => {
-      return `%%obsinotion:toc%%`;
+      return `%%im-nobsidian:toc%%`;
     });
   }
 
@@ -471,7 +471,7 @@ export class BlockConverter {
       const id = this.toggleCounter++;
       this.toggleContents.set(id, content);
 
-      const placeholder = `%%OBSINOTION_TOGGLE_${id}%%`;
+      const placeholder = `%%IM-NOBSIDIAN_TOGGLE_${id}%%`;
       result =
         result.slice(0, match.index) +
         placeholder +
@@ -503,7 +503,7 @@ export class BlockConverter {
       const id = this.columnCounter++;
       this.columnContents.set(id, columns);
 
-      const placeholder = `%%OBSINOTION_COLLIST_${id}%%`;
+      const placeholder = `%%IM-NOBSIDIAN_COLLIST_${id}%%`;
       result =
         result.slice(0, match.index) +
         placeholder +
@@ -558,7 +558,7 @@ export class BlockConverter {
       | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
-    const toggleMatch = text.match(/%%OBSINOTION_TOGGLE_(\d+)%%/);
+    const toggleMatch = text.match(/%%IM-NOBSIDIAN_TOGGLE_(\d+)%%/);
     if (!toggleMatch) return null;
 
     const id = parseInt(toggleMatch[1]!, 10);
@@ -590,7 +590,7 @@ export class BlockConverter {
       | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
-    const colMatch = text.match(/%%OBSINOTION_COLLIST_(\d+)%%/);
+    const colMatch = text.match(/%%IM-NOBSIDIAN_COLLIST_(\d+)%%/);
     if (!colMatch) return null;
 
     const id = parseInt(colMatch[1]!, 10);
@@ -613,7 +613,7 @@ export class BlockConverter {
       | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
-    if (text.includes("%%OBSINOTION_DIVIDER%%")) {
+    if (text.includes("%%IM-NOBSIDIAN_DIVIDER%%")) {
       return NotionBlockBuilder.divider();
     }
     return null;

@@ -48,7 +48,7 @@ done
 
 ```json
 {
-  "name": "obsinotion",
+  "name": "im-nobsidian",
   "version": "0.1.0",
   "dependencies": {
     "@notionhq/client": "^2.0.0"

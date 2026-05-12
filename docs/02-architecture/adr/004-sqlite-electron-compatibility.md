@@ -6,7 +6,7 @@
 
 ## 컨텍스트
 
-`@obsinotion/core`는 동기화 상태를 better-sqlite3 (네이티브 Node.js 모듈)로 관리한다.
+`@im-nobsidian/core`는 동기화 상태를 better-sqlite3 (네이티브 Node.js 모듈)로 관리한다.
 Obsidian은 Electron 기반이므로, better-sqlite3의 네이티브 바인딩이 Electron의 Node.js ABI와 맞지 않으면 로딩 실패한다.
 현재 esbuild.config.mjs에서 better-sqlite3를 external로 처리하고 있으나, 사용자가 네이티브 모듈을 수동 설치하는 건 비현실적.
 

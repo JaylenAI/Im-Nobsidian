@@ -9,7 +9,7 @@ describe("NodeVaultFS", () => {
   let vaultFs: NodeVaultFS;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "obsinotion-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "im-nobsidian-test-"));
     vaultFs = new NodeVaultFS(tempDir);
   });
 

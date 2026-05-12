@@ -10,7 +10,7 @@ const mockStatus = vi.fn().mockResolvedValue({
   lastSyncAt: null,
 });
 
-vi.mock("@obsinotion/core", () => ({
+vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({

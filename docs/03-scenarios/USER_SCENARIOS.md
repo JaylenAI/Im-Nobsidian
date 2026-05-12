@@ -29,15 +29,15 @@
 ```
 # 민수의 터미널
 
-$ npm install -g obsinotion
+$ npm install -g nobsi
 $ cd ~/Documents/MyVault
-$ obsinotion init
+$ nobsi init
 
 ? Notion API Token:
   → 안내 메시지 표시:
   "1. https://www.notion.so/my-integrations 접속
    2. 'New Integration' 클릭
-   3. 이름: ObsiNotion, 유형: Internal
+   3. 이름: Im-Nobsidian, 유형: Internal
    4. Capabilities: Read/Update/Insert content 체크
    5. 토큰 복사하여 붙여넣기"
 
@@ -69,20 +69,20 @@ $ obsinotion init
   → 선택: [3]
 
 ✅ 설정 완료!
-  설정 파일: .obsinotion/config.json
-  상태 DB: .obsinotion/sync.db
-  무시 파일: .obsinotion/ignore (수정 가능)
+  설정 파일: .im-nobsidian/config.json
+  상태 DB: .im-nobsidian/sync.db
+  무시 파일: .im-nobsidian/ignore (수정 가능)
 
 다음 단계:
-  $ obsinotion push     ← 로컬 → Notion 첫 전송
-  $ obsinotion status   ← 현재 상태 확인
+  $ nobsi push     ← 로컬 → Notion 첫 전송
+  $ nobsi status   ← 현재 상태 확인
 ```
 
 ### 시나리오 1-2: 일상 워크플로
 
 ```
 [아침 — 출근]
-$ obsinotion pull
+$ nobsi pull
 📥 Pull 완료: 3개 파일 업데이트
   → Shared/API-가이드.md (팀원이 Notion에서 수정)
   → Projects/인증모듈.md (코드리뷰 코멘트 반영)
@@ -91,19 +91,19 @@ $ obsinotion pull
 [오후 — 기술 노트 작성]
 Obsidian에서 Notes/Tech/Redis-캐싱전략.md 작성...
 
-$ obsinotion status
+$ nobsi status
 📊 상태:
   수정됨: Notes/Tech/Redis-캐싱전략.md (신규)
   수정됨: Projects/인증모듈.md (로컬 편집)
   동기화됨: 나머지 147개 파일
 
-$ obsinotion push
+$ nobsi push
 📤 Push 완료:
   생성: Notes/Tech/Redis-캐싱전략.md → Notion 페이지 생성
   수정: Projects/인증모듈.md → Notion 페이지 업데이트
 
 [퇴근 전 — 최종 동기화]
-$ obsinotion sync
+$ nobsi sync
 🔄 Sync 완료: Pull 1건, Push 0건, 충돌 0건
 ```
 
@@ -112,7 +112,7 @@ $ obsinotion sync
 ```
 [상황] 민수가 Obsidian에서, 팀원이 Notion에서 같은 파일을 편집
 
-$ obsinotion sync
+$ nobsi sync
 
 ⚠️ 충돌 발견: Shared/API-가이드.md
 
@@ -152,11 +152,11 @@ $ obsinotion sync
 
 ```
 [Obsidian 앱 열기]
-설정 → 커뮤니티 플러그인 → 찾아보기 → "ObsiNotion" 검색 → 설치 → 활성화
+설정 → 커뮤니티 플러그인 → 찾아보기 → "Im-Nobsidian" 검색 → 설치 → 활성화
 
-[ObsiNotion 설정 화면]
+[Im-Nobsidian 설정 화면]
 ┌─────────────────────────────────────────────┐
-│ ObsiNotion Sync 설정                         │
+│ Im-Nobsidian Sync 설정                         │
 ├─────────────────────────────────────────────┤
 │                                              │
 │ Notion API Token                             │
@@ -406,7 +406,7 @@ E = Latency = T_redis + T_validation ← 수식 렌더링됨!
 
 [현우가 Obsidian에서 Pull]
 
-$ obsinotion pull
+$ nobsi pull
 📥 업데이트: Notes/Architecture/인증-시스템-설계.md
 → diff 표시: ### 방안 B: Session + Redis + Redis Cluster 사용 시 해결 가능 — 비용 검토 필요
 
@@ -475,33 +475,33 @@ Obsidian에서 개인 노트에 참조:
 → Star 클릭 ⭐
 
 [2단계: 설치 — CLI 사용자]
-$ npm install -g obsinotion
-$ obsinotion --version
-obsinotion v1.0.0
+$ npm install -g nobsi
+$ nobsi --version
+im-nobsidian v1.0.0
 
 [2단계: 설치 — 플러그인 사용자]
-Obsidian → 설정 → 커뮤니티 플러그인 → "ObsiNotion" 검색 → 설치
+Obsidian → 설정 → 커뮤니티 플러그인 → "Im-Nobsidian" 검색 → 설치
 
 [3단계: Notion Integration 생성]
 
 1. notion.so/my-integrations 접속
 2. "New Integration" 클릭
-3. 이름: "ObsiNotion"
+3. 이름: "Im-Nobsidian"
 4. Capabilities: ✅ Read ✅ Update ✅ Insert
 5. 토큰 복사
 
 [4단계: Notion 페이지에 Integration 연결]
 → 동기화할 루트 페이지 열기
-→ ... 메뉴 → Connections → "ObsiNotion" 추가
+→ ... 메뉴 → Connections → "Im-Nobsidian" 추가
 (⚠️ 이 단계를 빠뜨리면 403 에러)
 
 [5단계: 초기화]
-CLI: $ obsinotion init (대화형 설정)
+CLI: $ nobsi init (대화형 설정)
 플러그인: 설정 화면에서 토큰 + 루트 페이지 선택
 
 [6단계: 첫 동기화]
-CLI: $ obsinotion push (로컬 → Notion)
-또는: $ obsinotion pull (Notion → 로컬)
+CLI: $ nobsi push (로컬 → Notion)
+또는: $ nobsi pull (Notion → 로컬)
 플러그인: 🔄 버튼 클릭
 
 [7단계: 일상 사용]
@@ -516,7 +516,7 @@ CLI: $ obsinotion push (로컬 → Notion)
 
 유저가 설정할 수 있는 동기화 행동 옵션:
 
-### .obsinotion/config.json 구조
+### .im-nobsidian/config.json 구조
 
 ```json
 {
@@ -576,10 +576,10 @@ CLI: $ obsinotion push (로컬 → Notion)
 | `sync-delete`     | 로컬 삭제 시 Notion도 archive            |
 | `ask`             | 매번 물어보기                            |
 
-### 무시 파일 (.obsinotion/ignore)
+### 무시 파일 (.im-nobsidian/ignore)
 
 ```
-# .obsinotion/ignore (gitignore 문법과 동일)
+# .im-nobsidian/ignore (gitignore 문법과 동일)
 
 # Obsidian 시스템
 .obsidian/

@@ -6,7 +6,7 @@ describe("CalloutRestorer", () => {
   const meta = { direction: "pull" as const, path: "markdown-api" as const, filePath: "test.md" };
 
   it("preserve marker에서 callout 복원 (open)", () => {
-    const input = "%% obsinotion:callout:type=warning&foldable=open %%\nContent here";
+    const input = "%% im-nobsidian:callout:type=warning&foldable=open %%\nContent here";
 
     const result = restorer.process({ content: input, metadata: meta });
 
@@ -14,7 +14,7 @@ describe("CalloutRestorer", () => {
   });
 
   it("preserve marker에서 callout 복원 (closed)", () => {
-    const input = "%% obsinotion:callout:type=tip&foldable=closed %%";
+    const input = "%% im-nobsidian:callout:type=tip&foldable=closed %%";
 
     const result = restorer.process({ content: input, metadata: meta });
 

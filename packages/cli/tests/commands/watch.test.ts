@@ -4,7 +4,7 @@ const mockStart = vi.fn();
 const mockStop = vi.fn().mockResolvedValue(undefined);
 const mockIsSyncing = vi.fn().mockReturnValue(false);
 
-vi.mock("@obsinotion/core", () => ({
+vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
@@ -45,7 +45,7 @@ describe("watch command", () => {
   });
 
   it("formatResult 유틸리티 동작 확인", async () => {
-    const { WatchSyncService } = await import("@obsinotion/core");
+    const { WatchSyncService } = await import("@im-nobsidian/core");
     expect(WatchSyncService).toBeDefined();
     expect(mockStart).toBeDefined();
   });

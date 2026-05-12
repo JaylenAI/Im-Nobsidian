@@ -1,140 +1,284 @@
-# ObsiNotion
+<p align="center">
+  <img src="assets/banner.png" alt="Im-Nobsidian" width="600" />
+</p>
 
-[![CI](https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml/badge.svg)](https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml)
-[![npm version](https://img.shields.io/npm/v/obsinotion)](https://www.npmjs.com/package/obsinotion)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Node.js](https://img.shields.io/badge/Node.js-20%2B-green)](https://nodejs.org)
+<h1 align="center">Im-Nobsidian</h1>
 
-> Obsidian ↔ Notion 양방향 동기화 도구
+<p align="center">
+  <strong>세계 최초이자 유일한 Obsidian ↔ Notion 양방향 동기화 도구.</strong>
+</p>
 
-Obsidian 볼트와 Notion 워크스페이스를 양방향으로 동기화합니다.
-마크다운과 Notion 블록 형식을 정확하게 변환하며, 데이터 손실 없는 안전한 동기화를 제공합니다.
+<p align="center">
+  <a href="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/v/im-nobsidian" alt="npm version" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-20%2B-green" alt="Node.js" /></a>
+  <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/dm/im-nobsidian" alt="npm downloads" /></a>
+</p>
 
-## 주요 기능
+<p align="center">
+  <a href="README.md">English</a> · <a href="docs/06-devlog/CHANGELOG.md">변경 이력</a> · <a href="CONTRIBUTING.md">기여 가이드</a> · <a href="SECURITY.md">보안 정책</a>
+</p>
 
-- **양방향 동기화** — Obsidian에서 편집하든 Notion에서 편집하든, 양쪽에 반영
-- **정확한 변환** — 마크다운 ↔ Notion 블록 형식을 정밀하게 변환
-- **안전한 충돌 해결** — 양쪽 동시 편집 시 데이터 파괴 없이 conflict copy 생성
-- **데이터베이스 부모 모드** — Notion 데이터베이스에 프론트매터 ↔ 속성 매핑으로 동기화
-- **폴더 구조 매핑** — Obsidian 폴더 = Notion 페이지 계층
-- **델타 동기화** — 변경된 파일만 동기화 (SHA-256 해시 기반)
-- **오픈소스** — MIT 라이선스, 무료, 투명
+---
 
-## 지원 기능
+Obsidian에서 편집하면 Notion에 반영됩니다. Notion에서 편집하면 Obsidian에 반영됩니다. 복사-붙여넣기도, 내보내기-가져오기도, 수동 동기화도 필요 없습니다. `nobsi sync` 한 번이면 양쪽이 완벽하게 동기화됩니다 — 서식, 속성, 폴더 구조 모두.
 
-| 기능                           | Push (Obsidian → Notion) | Pull (Notion → Obsidian) |
-| ------------------------------ | :----------------------: | :----------------------: |
-| 제목, 본문, 서식               |            ✅            |            ✅            |
-| 코드 블록 (언어별)             |            ✅            |            ✅            |
-| 리스트 / 체크박스              |            ✅            |            ✅            |
-| 링크 / 위키링크                |            ✅            |            ✅            |
-| 콜아웃 (접기 포함)             |            ✅            |            ✅            |
-| 수학 수식 (LaTeX)              |            ✅            |            ✅            |
-| 테이블                         |            ✅            |            ✅            |
-| 구분선                         |            ✅            |            ✅            |
-| 프론트매터 ↔ 속성 (15+ 타입)   |            ✅            |            ✅            |
-| 토글 블록                      |            ✅            |            ✅            |
-| 컬럼 레이아웃                  |            ✅            |            ✅            |
-| 색상 / 밑줄 / 멘션             |            ✅            |            ✅            |
-| 비디오 / 임베드 URL            |            ✅            |            ✅            |
-| 이미지                         |       플레이스홀더       |       ✅ 다운로드        |
-| Notion 전용 블록 (버튼, 폼 등) |            —             |       플레이스홀더       |
+모든 경쟁 도구는 단방향입니다. Im-Nobsidian은 진정한 **양방향** 동기화와 충돌 해결, 속성 매핑, 왕복 보존을 제공하는 최초이자 유일한 오픈소스 프로젝트입니다.
 
-## 패키지
+## 주요 특징
 
-| 패키지                | 설명                                     |
-| --------------------- | ---------------------------------------- |
-| `@obsinotion/core`    | 동기화 엔진 (변환 + 상태 관리)           |
-| `obsinotion`          | CLI 도구                                 |
-| `obsidian-obsinotion` | Obsidian 커뮤니티 플러그인 (v0.5.0 예정) |
+**진정한 양방향 동기화** &nbsp; 어느 쪽에서 편집하든 양쪽에 반영됩니다. "내보내고 가져오기"가 아닌, 변경 감지와 델타 업데이트 기반의 실제 양방향 동기화입니다.
 
-## 빠른 시작
+**15+ 블록 타입 보존** &nbsp; 제목, 코드 블록, 수식(LaTeX), 콜아웃, 토글, 테이블, 체크리스트, 컬럼, 구분선, 임베드 — 모두 양방향으로 정확하게 변환됩니다.
 
-### CLI
+**프론트매터 ↔ Notion 속성** &nbsp; YAML 프론트매터가 Notion 데이터베이스 속성에 직접 매핑됩니다. Select, Multi-select, Date, Number, Checkbox, URL, People, Status 등 15+ 속성 타입을 지원합니다.
+
+**충돌 해결 내장** &nbsp; 양쪽에서 같은 파일을 수정하면 Im-Nobsidian이 감지하고, 로컬 유지 / 원격 유지 / 수동 해결 중 선택할 수 있습니다. 데이터 유실은 절대 없습니다.
+
+**폴더 구조 = 페이지 계층** &nbsp; Obsidian 폴더 트리가 Notion 페이지 계층에 1:1로 매핑됩니다. `프로젝트/기획안.md` → Notion "프로젝트" 하위 "기획안" 페이지.
+
+**설정 없는 상태 관리** &nbsp; 데이터베이스 설치도, 서버 실행도 필요 없습니다. `.im-nobsidian/` 폴더의 로컬 SQLite 파일로 자동 관리되며, 유저가 만질 일은 없습니다.
+
+**라이브러리 + CLI + 플러그인** &nbsp; CLI 도구로 사용하거나, Node.js 라이브러리로 커스텀 연동을 만들거나, (곧 출시) Obsidian 커뮤니티 플러그인으로 설치할 수 있습니다.
+
+## 빠른 설치
+
+### Linux, macOS, WSL2, Termux
 
 ```bash
-# 전역 설치
-npm install -g obsinotion
-
-# 초기화 (Notion 토큰 + 루트 페이지 설정)
-npx obsinotion init
-
-# 동기화 상태 확인
-npx obsinotion status
-
-# 양방향 동기화
-npx obsinotion sync
-
-# Obsidian → Notion
-npx obsinotion push
-
-# Notion → Obsidian
-npx obsinotion pull
-
-# 파일 변경 감시 + 자동 동기화
-npx obsinotion watch
-
-# 변경사항 미리보기
-npx obsinotion diff
-
-# 충돌 해결
-npx obsinotion resolve
+curl -fsSL https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.sh | bash
 ```
 
-### Obsidian 플러그인
+### Windows (PowerShell)
 
-> v0.5.0에서 제공 예정입니다. 현재는 CLI를 사용해주세요.
+```powershell
+irm https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.ps1 | iex
+```
 
-### Notion Integration 토큰 발급
+### 직접 설치
 
-1. [Notion Integrations](https://www.notion.so/my-integrations) 접속
-2. "새 통합 만들기" → 이름 입력 → 제출
-3. "Internal Integration Secret" 복사 (`ntn_` 으로 시작)
-4. 동기화할 Notion 페이지에서 ··· → 연결 → 생성한 통합 추가
+Node.js 20+가 이미 있다면:
+
+```bash
+npm install -g im-nobsidian
+```
+
+설치 없이 바로 실행:
+
+```bash
+npx im-nobsidian sync
+```
+
+## 시작하기
+
+### 1. Notion Integration 생성
+
+1. [notion.so/my-integrations](https://www.notion.so/my-integrations) 접속
+2. **"새 통합 만들기"** 클릭 → 이름 입력 → 제출
+3. **Internal Integration Secret** 복사 (`ntn_`으로 시작)
+
+### 2. 페이지에 연결
+
+Notion에서 동기화할 페이지 열기 → 우측 상단 `···` → **연결** → 생성한 통합 추가
+
+### 3. 초기화
+
+```bash
+cd ~/your-obsidian-vault
+nobsi init
+```
+
+대화형 설정이 토큰을 묻고, 사용 가능한 페이지를 보여줍니다. 선택하면 끝입니다.
+
+### 4. 동기화
+
+```bash
+nobsi sync     # 양방향 — pull 후 push
+nobsi push     # Obsidian → Notion만
+nobsi pull     # Notion → Obsidian만
+nobsi watch    # 파일 변경 감시 + 자동 동기화
+```
+
+이제 볼트와 Notion 워크스페이스가 연결되었습니다.
+
+## CLI 명령어
+
+| 명령어              | 설명                                    |
+| ------------------- | --------------------------------------- |
+| `nobsi init`        | 대화형 설정 — Notion 토큰 + 루트 페이지 |
+| `nobsi push`        | 로컬 변경사항을 Notion에 반영           |
+| `nobsi pull`        | Notion 변경사항을 로컬에 반영           |
+| `nobsi sync`        | 양방향 동기화 (pull → push)             |
+| `nobsi status`      | 동기화 상태 + 충돌 표시                 |
+| `nobsi diff [경로]` | 로컬과 Notion 간 차이 표시              |
+| `nobsi resolve`     | 동기화 충돌 해결                        |
+| `nobsi watch`       | 파일 변경 감시 + 자동 동기화            |
+
+모든 명령어에 `--dry-run` 옵션을 추가하면 변경 없이 미리 확인할 수 있습니다.
+
+### 비대화형 모드 (CI / 스크립트)
+
+```bash
+nobsi init --token ntn_xxx --root-page-id abc123 --non-interactive
+nobsi sync --dry-run
+```
+
+## 동작 원리
+
+```
+Obsidian 볼트                          Notion 워크스페이스
+┌──────────────┐                    ┌──────────────────┐
+│  프로젝트/    │   nobsi push       │  📄 프로젝트      │
+│   기획안.md   │  ───────────────►  │    📄 기획안      │
+│   메모.md     │                    │    📄 메모        │
+│  회의록.md    │  ◄───────────────  │  📄 회의록        │
+│              │   nobsi pull       │                   │
+└──────────────┘                    └──────────────────┘
+        │                                    │
+        └──────── nobsi sync ────────────────┘
+                    (양방향)
+```
+
+### Push (Obsidian → Notion)
+
+1. 볼트의 `.md` 파일 스캔
+2. SHA-256 해시로 마지막 동기화 상태와 비교
+3. 변경된 파일 변환: 프론트매터 → 속성, 마크다운 → Notion 블록
+4. Notion API로 페이지 생성/수정 (3 req/s 제한 준수)
+
+### Pull (Notion → Obsidian)
+
+1. 루트 페이지 하위 페이지를 재귀적으로 읽기
+2. `last_edited_time`으로 변경 감지
+3. Notion 블록 → 마크다운, 속성 → 프론트매터 변환
+4. 이미지를 첨부파일 폴더에 다운로드 (중복 제거)
+
+### 충돌 해결
+
+양쪽에서 같은 파일을 수정한 경우:
+
+- `ask` — 선택 요청 (CLI 기본값)
+- `local-wins` — Obsidian 버전 유지
+- `remote-wins` — Notion 버전 유지
+- `manual` — 충돌 마커 삽입 후 수동 해결
+
+## 지원 변환 기능
+
+| 기능                                   |      Push       |    Pull     |
+| -------------------------------------- | :-------------: | :---------: |
+| 제목, 본문, 볼드/이탤릭/취소선         |       ✅        |     ✅      |
+| 코드 블록 (30+ 언어)                   |       ✅        |     ✅      |
+| 순서/비순서/체크박스 리스트            |       ✅        |     ✅      |
+| 링크 및 위키링크                       |       ✅        |     ✅      |
+| 콜아웃 / Notion 콜아웃 블록 (접기)     |       ✅        |     ✅      |
+| 수학 수식 (LaTeX, 인라인 + 블록)       |       ✅        |     ✅      |
+| 테이블                                 |       ✅        |     ✅      |
+| 구분선                                 |       ✅        |     ✅      |
+| 토글 블록                              |       ✅        |     ✅      |
+| 컬럼 레이아웃                          |       ✅        |     ✅      |
+| 색상, 밑줄, 멘션                       |       ✅        |     ✅      |
+| 비디오 / 임베드 URL                    |       ✅        |     ✅      |
+| 프론트매터 ↔ DB 속성 (15+ 타입)        |       ✅        |     ✅      |
+| 이미지                                 | 📎 플레이스홀더 | ✅ 다운로드 |
+| Notion 전용 블록 (버튼, 폼, 동기 블록) |        —        |   📌 보존   |
 
 ## 설정
 
-`.obsinotion/config.json`에 설정이 저장됩니다. 주요 옵션:
+`nobsi init` 후 설정은 `.im-nobsidian/config.json`에 저장됩니다:
 
 ```jsonc
 {
   "notion": {
-    "token": "ntn_...",
-    "rootPageId": "...",
+    "token": "ntn_...", // 통합 토큰
+    "rootPageId": "...", // 루트 페이지 또는 데이터베이스 ID
     "parentMode": "page", // "page" 또는 "database"
-    "databaseId": "...", // parentMode가 "database"일 때 필수
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual",
-    "deleteSync": false,
+    "conflictStrategy": "manual", // "ask" | "local-wins" | "remote-wins" | "manual"
   },
   "paths": {
-    "include": ["**/*"],
-    "exclude": [],
+    "include": ["**/*"], // 포함할 glob 패턴
+    "exclude": [], // 제외할 glob 패턴
+    "attachments": "attachments", // 이미지 다운로드 폴더
   },
 }
 ```
 
+`.im-nobsidian-ignore` 파일 (`.gitignore`와 동일한 문법)로 동기화 대상에서 제외할 수 있습니다.
+
+## 데이터베이스 모드
+
+페이지 트리 대신 Notion **데이터베이스**에 동기화할 수 있습니다. 각 마크다운 파일이 데이터베이스 행이 되고, 프론트매터가 데이터베이스 속성에 매핑됩니다:
+
+```yaml
+---
+status: In Progress # → Select 속성
+tags: [ai, project] # → Multi-select 속성
+priority: 1 # → Number 속성
+due: 2026-06-30 # → Date 속성
+---
+```
+
+## 패키지
+
+| 패키지                                              | 설명                                | npm                                                                                                         |
+| --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결 | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
+| [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 커뮤니티 플러그인          | v0.5.0 예정                                                                                                 |
+
+### 라이브러리로 사용하기
+
+```typescript
+import {
+  SyncOrchestrator,
+  ConfigManager,
+  StateDB,
+  NotionClient,
+  NodeVaultFS,
+} from "@im-nobsidian/core";
+
+const config = await new ConfigManager("/path/to/vault").load();
+const stateDb = StateDB.open("/path/to/vault/.im-nobsidian/sync.db");
+const client = new NotionClient({ token: config.notion.token });
+const vaultFs = new NodeVaultFS("/path/to/vault", config.paths);
+
+const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
+await orchestrator.sync({ dryRun: false });
+```
+
 ## 알려진 제한사항
 
-- **이미지 Push**: Notion API가 파일 업로드를 지원하지 않아 로컬 이미지는 플레이스홀더로 Push되고 Pull 시 복원됩니다.
-- **Notion 전용 블록**: 버튼, 폼, 동기화 블록은 읽기 전용(API 제한) — 콜아웃 플레이스홀더로 보존됩니다.
-- **Rate limit**: 3 req/s (Notion 공식 제한)
+| 제한             | 원인                                         | 대응                               |
+| ---------------- | -------------------------------------------- | ---------------------------------- |
+| 이미지 Push      | Notion API에 파일 업로드 엔드포인트 없음     | Push 시 플레이스홀더, Pull 시 복원 |
+| Notion 전용 블록 | API가 버튼/폼/동기 블록에 `unsupported` 반환 | 콜아웃 플레이스홀더로 보존         |
+| Rate limit       | Notion 공식 제한 3 req/s                     | 내장 레이트 리미터 + 지수 백오프   |
+| 위키링크 Push    | 위키링크가 볼드 텍스트로 변환됨              | v0.1.1에서 페이지 멘션 연결 예정   |
 
-## 개발 환경
+## 로드맵
 
-### 요구 사항
+```
+v0.1.0  ✅ 현재 — CLI + 라이브러리, 15+ 블록 타입, 데이터베이스 모드
+v0.1.1  → 위키링크 → Notion 페이지 멘션 연결
+v0.2.0  → martian 포크 + CVE 수정 + Myers diff
+v0.3.0  → 증분 동기화 + 블록 단위 diff
+v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM)
+v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
+```
 
-- Node.js 20+
-- pnpm 9+
+전체 계획은 [ROADMAP.md](docs/06-devlog/ROADMAP.md)를 참고하세요.
 
-### 로컬 개발
+## 개발
 
 ```bash
+git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
+cd Obsidian_Notion_Syncer
 pnpm install
 pnpm build
-pnpm test
+pnpm test          # 341개 테스트, 82.7% 커버리지
 pnpm lint
 pnpm typecheck
 ```
@@ -143,25 +287,32 @@ pnpm typecheck
 
 ```
 packages/
-├── core/              # @obsinotion/core — 핵심 동기화 엔진
-├── cli/               # obsinotion — CLI 도구
-└── obsidian-plugin/   # Obsidian 커뮤니티 플러그인
+├── core/              # @im-nobsidian/core — 동기화 엔진
+│   ├── src/
+│   │   ├── converter/     # Markdown ↔ Notion 변환 파이프라인
+│   │   ├── notion/        # Notion API 클라이언트 + 속성 매퍼
+│   │   ├── state/         # SQLite 상태 데이터베이스
+│   │   ├── sync/          # 오케스트레이터, 변경 감지, 볼트 FS
+│   │   └── utils/         # 해시, 로거, 파일명 정제
+│   └── tests/
+├── cli/               # im-nobsidian CLI (nobsi 명령어)
+└── obsidian-plugin/   # Obsidian 커뮤니티 플러그인 (개발 중)
 ```
-
-## 문서
-
-- [프로젝트 기획서](docs/00-overview/PROJECT_BRIEF.md)
-- [현재 진행 상황](docs/06-devlog/CURRENT_STATUS.md)
-- [변경 이력](docs/06-devlog/CHANGELOG.md)
 
 ## 기여
 
-기여를 환영합니다! [기여 가이드](CONTRIBUTING.md)를 참고해주세요.
+기여를 환영합니다! 개발 환경 설정, 코드 스타일, PR 프로세스는 [기여 가이드](CONTRIBUTING.md)를 참고하세요.
+
+```bash
+git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
+cd Obsidian_Notion_Syncer
+pnpm install && pnpm build && pnpm test
+```
 
 ## 보안
 
-취약점 보고는 [보안 정책](SECURITY.md)을 참고해주세요.
+취약점 보고는 [보안 정책](SECURITY.md)을 참고하세요.
 
 ## 라이선스
 
-[MIT](LICENSE)
+[MIT](LICENSE) — built by [@JaylenAI](https://github.com/JaylenAI).

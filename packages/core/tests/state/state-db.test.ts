@@ -9,7 +9,7 @@ describe("StateDB", () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "obsinotion-test-"));
+    tempDir = await mkdtemp(join(tmpdir(), "im-nobsidian-test-"));
     db = StateDB.open(join(tempDir, "test.db"));
   });
 

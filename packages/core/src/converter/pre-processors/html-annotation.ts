@@ -4,8 +4,8 @@ const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
 
 const COLOR_SPAN_REGEX = /<span class="notion-(\w+?)(?:-bg)?">([\s\S]*?)<\/span>/g;
 
-const OBSINOTION_COLOR_REGEX =
-  /%% obsinotion:color:(\w+(?:_background)?) %%([\s\S]*?)%% obsinotion:end %%/g;
+const IM_NOBSIDIAN_COLOR_REGEX =
+  /%% im-nobsidian:color:(\w+(?:_background)?) %%([\s\S]*?)%% im-nobsidian:end %%/g;
 
 export class HtmlAnnotationStripper implements Processor {
   readonly name = "HtmlAnnotationStripper";
@@ -18,7 +18,7 @@ export class HtmlAnnotationStripper implements Processor {
 
     let content = input.content;
 
-    content = content.replace(OBSINOTION_COLOR_REGEX, (_m, _color: string, text: string) => text);
+    content = content.replace(IM_NOBSIDIAN_COLOR_REGEX, (_m, _color: string, text: string) => text);
 
     content = content.replace(UNDERLINE_REGEX, (_m, text: string) => text);
 

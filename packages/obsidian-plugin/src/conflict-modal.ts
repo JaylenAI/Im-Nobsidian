@@ -1,6 +1,6 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
-import type { Conflict, ResolutionChoice } from "@obsinotion/core";
+import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 
 export class ConflictModal extends Modal {
   private readonly onResolve: (choice: ResolutionChoice) => void;
@@ -17,18 +17,18 @@ export class ConflictModal extends Modal {
   onOpen(): void {
     const { contentEl } = this;
     contentEl.empty();
-    contentEl.addClass("obsinotion-conflict-modal");
+    contentEl.addClass("im-nobsidian-conflict-modal");
 
     contentEl.createEl("h2", { text: "동기화 충돌" });
     contentEl.createEl("p", {
       text: `파일: ${this.conflict.syncRecord.obsidianPath}`,
-      cls: "obsinotion-conflict-path",
+      cls: "im-nobsidian-conflict-path",
     });
 
-    const diffContainer = contentEl.createDiv({ cls: "obsinotion-diff-container" });
+    const diffContainer = contentEl.createDiv({ cls: "im-nobsidian-diff-container" });
     this.renderDiff(diffContainer);
 
-    const buttonContainer = contentEl.createDiv({ cls: "obsinotion-conflict-buttons" });
+    const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
 
     new Setting(buttonContainer)
       .setName("로컬 유지")
@@ -71,12 +71,12 @@ export class ConflictModal extends Modal {
     const localLines = this.conflict.localContent.split("\n");
     const remoteLines = this.conflict.remoteContent.split("\n");
 
-    const header = container.createDiv({ cls: "obsinotion-diff-header" });
-    header.createSpan({ text: "로컬 (Obsidian)", cls: "obsinotion-diff-label-local" });
+    const header = container.createDiv({ cls: "im-nobsidian-diff-header" });
+    header.createSpan({ text: "로컬 (Obsidian)", cls: "im-nobsidian-diff-label-local" });
     header.createSpan({ text: " vs " });
-    header.createSpan({ text: "원격 (Notion)", cls: "obsinotion-diff-label-remote" });
+    header.createSpan({ text: "원격 (Notion)", cls: "im-nobsidian-diff-label-remote" });
 
-    const diffBody = container.createDiv({ cls: "obsinotion-diff-body" });
+    const diffBody = container.createDiv({ cls: "im-nobsidian-diff-body" });
 
     const maxLen = Math.max(localLines.length, remoteLines.length);
     for (let i = 0; i < maxLen; i++) {
@@ -84,15 +84,19 @@ export class ConflictModal extends Modal {
       const remoteLine = remoteLines[i];
 
       if (localLine === remoteLine) {
-        const line = diffBody.createDiv({ cls: "obsinotion-diff-line obsinotion-diff-same" });
+        const line = diffBody.createDiv({ cls: "im-nobsidian-diff-line im-nobsidian-diff-same" });
         line.createSpan({ text: `  ${localLine ?? ""}` });
       } else {
         if (localLine !== undefined) {
-          const line = diffBody.createDiv({ cls: "obsinotion-diff-line obsinotion-diff-removed" });
+          const line = diffBody.createDiv({
+            cls: "im-nobsidian-diff-line im-nobsidian-diff-removed",
+          });
           line.createSpan({ text: `- ${localLine}` });
         }
         if (remoteLine !== undefined) {
-          const line = diffBody.createDiv({ cls: "obsinotion-diff-line obsinotion-diff-added" });
+          const line = diffBody.createDiv({
+            cls: "im-nobsidian-diff-line im-nobsidian-diff-added",
+          });
           line.createSpan({ text: `+ ${remoteLine}` });
         }
       }

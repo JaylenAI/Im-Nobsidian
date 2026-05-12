@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
-const LOCAL_IMAGE_MARKER_REGEX = />\s*📎\s*[^\n]*\n>\s*%%\s*obsinotion:local-image:([^\s]+)\s*%%/g;
+const LOCAL_IMAGE_MARKER_REGEX =
+  />\s*📎\s*[^\n]*\n>\s*%%\s*im-nobsidian:local-image:([^\s]+)\s*%%/g;
 
 export class LocalImageRestorer implements Processor {
   readonly name = "LocalImageRestorer";

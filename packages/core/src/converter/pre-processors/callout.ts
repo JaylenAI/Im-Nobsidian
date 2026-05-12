@@ -36,7 +36,7 @@ export class CalloutTransformer implements Processor {
         const emoji = CALLOUT_EMOJI_MAP[type.toLowerCase()] ?? "\u{1F4DD}";
         const titleText = title?.trim() || type;
         const foldMeta = foldable
-          ? `\n%% obsinotion:callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"} %%`
+          ? `\n%% im-nobsidian:callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"} %%`
           : "";
 
         return `> ${emoji} **${titleText}**${foldMeta}`;

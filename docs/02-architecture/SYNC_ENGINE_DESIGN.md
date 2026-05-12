@@ -7,7 +7,7 @@
 
 ## 개요
 
-동기화 엔진은 ObsiNotion의 핵심으로, Obsidian Vault와 Notion 워크스페이스 간의 상태를 일치시킨다.
+동기화 엔진은 Im-Nobsidian의 핵심으로, Obsidian Vault와 Notion 워크스페이스 간의 상태를 일치시킨다.
 Git의 pull/push 모델을 차용하되, 실시간이 아닌 **명시적 트리거** 기반으로 동작한다.
 
 ---
@@ -586,7 +586,7 @@ interface DeletePolicy {
 **활성화 시 (deleteSync: true):**
 
 - Push 삭제: Notion 페이지 archive (영구 삭제 아님)
-- Pull 삭제: 로컬 파일을 `.obsinotion/trash/` 이동
+- Pull 삭제: 로컬 파일을 `.im-nobsidian/trash/` 이동
 - 30일 후 trash 자동 정리 (설정 가능)
 
 ---
@@ -712,10 +712,10 @@ async function recoverFromCrash(stateDb: StateDB): Promise<void> {
 sequenceDiagram
     participant User
     participant CLI as CLI / Plugin
-    participant Core as @obsinotion/core
+    participant Core as @im-nobsidian/core
     participant API as Notion API
 
-    User->>CLI: obsinotion init
+    User->>CLI: nobsi init
     CLI->>User: Notion Integration Token 입력
     User->>CLI: ntn_xxxxx
 
@@ -738,10 +738,10 @@ sequenceDiagram
     User->>CLI: 양방향 (default)
 
     CLI->>Core: initProject(config)
-    Core->>Core: .obsinotion/ 디렉토리 생성
+    Core->>Core: .im-nobsidian/ 디렉토리 생성
     Core->>Core: config.json 저장
     Core->>Core: sync.db 초기화
-    Core->>Core: .gitignore에 .obsinotion/ 추가
+    Core->>Core: .gitignore에 .im-nobsidian/ 추가
 
     CLI->>User: 첫 동기화 실행할까요?
     User->>CLI: Yes

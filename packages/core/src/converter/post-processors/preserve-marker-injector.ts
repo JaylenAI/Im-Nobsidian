@@ -38,6 +38,6 @@ export class PreserveMarkerInjector implements Processor {
     const params = Object.entries(marker.params)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join("&");
-    return `%% obsinotion:${marker.type}:${params} %%`;
+    return `%% im-nobsidian:${marker.type}:${params} %%`;
   }
 }

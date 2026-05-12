@@ -1,7 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
 const COLOR_MARKER_REGEX =
-  /%% obsinotion:color:(\w+(?:_background)?) %%([\s\S]*?)%% obsinotion:end %%/g;
+  /%% im-nobsidian:color:(\w+(?:_background)?) %%([\s\S]*?)%% im-nobsidian:end %%/g;
 
 export class ColorAnnotator implements Processor {
   readonly name = "ColorAnnotator";

@@ -17,13 +17,13 @@ export class NodeVaultFS implements VaultFS {
     pathConfig?: PathFilterConfig,
   ) {
     const configExclude = pathConfig?.exclude ?? [];
-    const ignorePatterns = this.loadObsinotionIgnore();
+    const ignorePatterns = this.loadImNobsidianIgnore();
     this.excludePatterns = [...configExclude, ...ignorePatterns];
   }
 
-  private loadObsinotionIgnore(): string[] {
+  private loadImNobsidianIgnore(): string[] {
     try {
-      const ignorePath = join(this.rootPath, ".obsinotionignore");
+      const ignorePath = join(this.rootPath, ".im-nobsidian-ignore");
       const content = readFileSync(ignorePath, "utf-8");
       return content
         .split("\n")

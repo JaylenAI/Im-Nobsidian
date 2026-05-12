@@ -1,10 +1,10 @@
 import { Command } from "commander";
-import { ConfigManager, NotionClient } from "@obsinotion/core";
+import { ConfigManager, NotionClient } from "@im-nobsidian/core";
 import { input, confirm } from "@inquirer/prompts";
 import ora from "ora";
 
 export const initCommand = new Command("init")
-  .description("ObsiNotion 초기 설정")
+  .description("Im-Nobsidian 초기 설정")
   .option("--token <token>", "Notion Integration Token")
   .option("--root-page-id <id>", "루트 페이지 ID")
   .option("--non-interactive", "비대화형 모드")
@@ -32,7 +32,7 @@ export const initCommand = new Command("init")
         spinner.succeed("Notion 연결 성공");
 
         await configManager.init({ token: options.token, rootPageId: options.rootPageId });
-        console.log("\n✓ ObsiNotion 초기화 완료!");
+        console.log("\n✓ Im-Nobsidian 초기화 완료!");
         console.log(`  설정: ${configManager.configPath}`);
         console.log(`  DB: ${configManager.dbPath}`);
       } catch (error) {
@@ -84,13 +84,13 @@ export const initCommand = new Command("init")
       });
 
       await configManager.init({ token, rootPageId });
-      console.log("\n✓ ObsiNotion 초기화 완료!");
+      console.log("\n✓ Im-Nobsidian 초기화 완료!");
       console.log(`  설정: ${configManager.configPath}`);
       console.log(`  DB: ${configManager.dbPath}`);
       console.log("\n다음 명령으로 동기화를 시작하세요:");
-      console.log("  obsinotion pull   — Notion → 로컬");
-      console.log("  obsinotion push   — 로컬 → Notion");
-      console.log("  obsinotion sync   — 양방향");
+      console.log("  nobsi pull   — Notion → 로컬");
+      console.log("  nobsi push   — 로컬 → Notion");
+      console.log("  nobsi sync   — 양방향");
     } catch (error) {
       spinner.fail("Notion 연결 실패");
       console.error(error instanceof Error ? error.message : error);

@@ -49,12 +49,12 @@ importers:
 
   packages/cli:
     dependencies:
+      "@im-nobsidian/core":
+        specifier: workspace:*
+        version: link:../core
       "@inquirer/prompts":
         specifier: ^7.0.0
         version: 7.10.1(@types/node@22.19.18)
-      "@obsinotion/core":
-        specifier: workspace:*
-        version: link:../core
       commander:
         specifier: ^12.0.0
         version: 12.1.0
@@ -114,7 +114,7 @@ importers:
 
   packages/obsidian-plugin:
     dependencies:
-      "@obsinotion/core":
+      "@im-nobsidian/core":
         specifier: workspace:*
         version: link:../core
     devDependencies:

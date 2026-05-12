@@ -1,5 +1,5 @@
 {
-  "name": "obsidian-obsinotion",
+  "name": "obsidian-im-nobsidian",
   "version": "0.1.0",
   "description": "Obsidian plugin for bidirectional Notion sync",
   "main": "main.js",
@@ -11,7 +11,7 @@
     "clean": "rm -f main.js main.js.map"
   },
   "dependencies": {
-    "@obsinotion/core": "workspace:*"
+    "@im-nobsidian/core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

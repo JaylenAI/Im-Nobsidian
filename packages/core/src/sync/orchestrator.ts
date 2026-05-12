@@ -286,7 +286,7 @@ export class SyncOrchestrator {
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
-        `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
       );
     }
 
@@ -359,7 +359,7 @@ export class SyncOrchestrator {
     const updatePath = this.pipeline.selectPath(content);
     if (updatePath === "block-api") {
       getLogger().warn(
-        `[ObsiNotion] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
       );
     }
 

@@ -89,7 +89,7 @@ this is broken
   → Properties는 빈 상태
   → 경고 로그: "YAML 파싱 실패: 프론트매터를 건너뜁니다"
   → 라운드트립: Pull 시 원본 프론트매터 문자열을 그대로 보존
-    (preserve marker: obsinotion:preserve:broken-frontmatter)
+    (preserve marker: im-nobsidian:preserve:broken-frontmatter)
 ```
 
 ### 2-2. 매우 큰 파일
@@ -170,7 +170,7 @@ Case: 20,000+ 블록 (Notion 페이지 한도 근접)
 처리:
   → HTML 블록은 Notion에 직접 표현 불가
   → 전략: HTML 블록을 코드 블록(html 언어)으로 보존
-    + preserve marker: obsinotion:preserve:html-block
+    + preserve marker: im-nobsidian:preserve:html-block
   → 라운드트립: Pull 시 HTML 블록 원본 복원
 ```
 
@@ -294,7 +294,7 @@ Case: sync.db 파일이 손상되거나 삭제됨
 처리:
   → 시작 시 DB 무결성 검사 (PRAGMA integrity_check)
   → 손상 시:
-    → 백업에서 복원 시도 (.obsinotion/sync.db.bak)
+    → 백업에서 복원 시도 (.im-nobsidian/sync.db.bak)
     → 백업도 없으면: DB 재생성
     → 경고: "동기화 상태가 초기화되었습니다.
       다음 sync는 전체 비교를 수행합니다 (시간이 걸릴 수 있음)"
@@ -423,17 +423,17 @@ Case: Notion에서 드래그로 블록 순서 변경
 ### 6-1. 토큰 노출
 
 ```
-Case: .obsinotion/config.json이 git에 커밋됨
+Case: .im-nobsidian/config.json이 git에 커밋됨
 
 예방:
-  → init 시 .gitignore에 .obsinotion/ 자동 추가
+  → init 시 .gitignore에 .im-nobsidian/ 자동 추가
   → 이미 gitignore가 있으면 항목 append
   → 경고 배너: "config.json에 API 토큰이 있습니다.
     절대 git에 커밋하지 마세요."
 
 감지:
   → push 전에 staged files 확인
-  → .obsinotion/ 포함 시 abort + 경고
+  → .im-nobsidian/ 포함 시 abort + 경고
 ```
 
 ### 6-2. Notion 토큰 만료 / 폐기

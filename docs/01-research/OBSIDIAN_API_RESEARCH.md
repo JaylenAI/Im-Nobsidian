@@ -3,7 +3,7 @@
 > 작성일: 2026-05-08
 > 최종 수정: 2026-05-08
 > 상태: active
-> 목적: ObsiNotion 양방향 동기화 플러그인 개발을 위한 Obsidian Plugin API 종합 리서치
+> 목적: Im-Nobsidian 양방향 동기화 플러그인 개발을 위한 Obsidian Plugin API 종합 리서치
 
 ---
 
@@ -16,14 +16,14 @@
 ```typescript
 import { Plugin } from "obsidian";
 
-export default class ObsiNotionPlugin extends Plugin {
-  settings: ObsiNotionSettings;
+export default class ImNobsidianPlugin extends Plugin {
+  settings: ImNobsidianSettings;
 
   async onload() {
     // 플러그인 활성화 시 호출
     // 커맨드, 이벤트, UI 등 모든 리소스 등록
     await this.loadSettings();
-    this.addSettingTab(new ObsiNotionSettingTab(this.app, this));
+    this.addSettingTab(new ImNobsidianSettingTab(this.app, this));
     this.addRibbonIcon("refresh-cw", "Sync with Notion", () => this.syncNow());
     this.registerEvent(this.app.vault.on("modify", this.onFileModified.bind(this)));
   }
@@ -49,13 +49,13 @@ export default class ObsiNotionPlugin extends Plugin {
 
 ```json
 {
-  "id": "obsinotion",
-  "name": "ObsiNotion",
+  "id": "im-nobsidian",
+  "name": "Im-Nobsidian",
   "version": "0.1.0",
   "minAppVersion": "1.5.0",
   "description": "Bidirectional sync between Obsidian and Notion",
-  "author": "ObsiNotion Team",
-  "authorUrl": "https://github.com/obsinotion",
+  "author": "Im-Nobsidian Team",
+  "authorUrl": "https://github.com/im-nobsidian",
   "fundingUrl": "",
   "isDesktopOnly": false
 }
@@ -329,7 +329,7 @@ this.registerEvent(
 
 ```typescript
 // 설정 인터페이스 정의
-interface ObsiNotionSettings {
+interface ImNobsidianSettings {
   notionApiKey: string;
   syncIntervalMinutes: number;
   autoSync: boolean;
@@ -340,7 +340,7 @@ interface ObsiNotionSettings {
 }
 
 // 기본값 정의
-const DEFAULT_SETTINGS: ObsiNotionSettings = {
+const DEFAULT_SETTINGS: ImNobsidianSettings = {
   notionApiKey: "",
   syncIntervalMinutes: 5,
   autoSync: false,
@@ -351,8 +351,8 @@ const DEFAULT_SETTINGS: ObsiNotionSettings = {
 };
 
 // 플러그인에서 사용
-export default class ObsiNotionPlugin extends Plugin {
-  settings: ObsiNotionSettings;
+export default class ImNobsidianPlugin extends Plugin {
+  settings: ImNobsidianSettings;
 
   async loadSettings() {
     // Object.assign으로 기본값과 저장된 값을 머지
@@ -377,10 +377,10 @@ export default class ObsiNotionPlugin extends Plugin {
 ```typescript
 import { App, PluginSettingTab, Setting } from "obsidian";
 
-class ObsiNotionSettingTab extends PluginSettingTab {
-  plugin: ObsiNotionPlugin;
+class ImNobsidianSettingTab extends PluginSettingTab {
+  plugin: ImNobsidianPlugin;
 
-  constructor(app: App, plugin: ObsiNotionPlugin) {
+  constructor(app: App, plugin: ImNobsidianPlugin) {
     super(app, plugin);
     this.plugin = plugin;
   }
@@ -389,7 +389,7 @@ class ObsiNotionSettingTab extends PluginSettingTab {
     const { containerEl } = this;
     containerEl.empty(); // 기존 요소 모두 제거
 
-    containerEl.createEl("h2", { text: "ObsiNotion Settings" });
+    containerEl.createEl("h2", { text: "Im-Nobsidian Settings" });
 
     // 텍스트 입력
     new Setting(containerEl)
@@ -427,7 +427,7 @@ class ObsiNotionSettingTab extends PluginSettingTab {
           .addOption("notion-to-obsidian", "Notion → Obsidian")
           .setValue(this.plugin.settings.syncDirection)
           .onChange(async (value) => {
-            this.plugin.settings.syncDirection = value as ObsiNotionSettings["syncDirection"];
+            this.plugin.settings.syncDirection = value as ImNobsidianSettings["syncDirection"];
             await this.plugin.saveSettings();
           }),
       );
@@ -481,10 +481,10 @@ Obsidian v1.11.0+에서 `SecretStorage` API가 도입되었다. OS의 보안 저
 ```typescript
 // SecretStorage 사용 (v1.11.0+)
 // 저장
-await this.app.saveLocalStorage("obsinotion-api-key", encryptedToken);
+await this.app.saveLocalStorage("im-nobsidian-api-key", encryptedToken);
 
 // 읽기
-const token = await this.app.loadLocalStorage("obsinotion-api-key");
+const token = await this.app.loadLocalStorage("im-nobsidian-api-key");
 ```
 
 **현재 상태 (2026년 기준):**
@@ -505,12 +505,12 @@ const token = await this.app.loadLocalStorage("obsinotion-api-key");
 ```typescript
 onload() {
   const statusBar = this.addStatusBarItem();
-  statusBar.setText('ObsiNotion: Ready');
-  statusBar.addClass('obsinotion-status');
+  statusBar.setText('Im-Nobsidian: Ready');
+  statusBar.addClass('im-nobsidian-status');
 
   // 동기화 진행률 표시
   this.updateStatusBar = (status: string) => {
-    statusBar.setText(`ObsiNotion: ${status}`);
+    statusBar.setText(`Im-Nobsidian: ${status}`);
   };
 }
 ```
@@ -613,7 +613,7 @@ onload() {
 ```typescript
 import { ItemView, WorkspaceLeaf } from 'obsidian';
 
-const VIEW_TYPE_SYNC_STATUS = 'obsinotion-sync-status';
+const VIEW_TYPE_SYNC_STATUS = 'im-nobsidian-sync-status';
 
 class SyncStatusView extends ItemView {
   constructor(leaf: WorkspaceLeaf) {
@@ -625,7 +625,7 @@ class SyncStatusView extends ItemView {
   }
 
   getDisplayText(): string {
-    return 'ObsiNotion Sync Status';
+    return 'Im-Nobsidian Sync Status';
   }
 
   getIcon(): string {
@@ -692,14 +692,14 @@ class SyncProgressTracker {
 
   start(totalFiles: number) {
     this.notice = new Notice(`Syncing 0/${totalFiles} files...`, 0);
-    this.statusBar.setText("ObsiNotion: Syncing...");
+    this.statusBar.setText("Im-Nobsidian: Syncing...");
   }
 
   update(current: number, total: number, fileName: string) {
     if (this.notice) {
       this.notice.setMessage(`Syncing ${current}/${total}: ${fileName}`);
     }
-    this.statusBar.setText(`ObsiNotion: ${current}/${total}`);
+    this.statusBar.setText(`Im-Nobsidian: ${current}/${total}`);
   }
 
   complete(syncedCount: number) {
@@ -707,7 +707,7 @@ class SyncProgressTracker {
       this.notice.hide();
     }
     new Notice(`Sync complete: ${syncedCount} files synced`);
-    this.statusBar.setText(`ObsiNotion: Last sync ${new Date().toLocaleTimeString()}`);
+    this.statusBar.setText(`Im-Nobsidian: Last sync ${new Date().toLocaleTimeString()}`);
   }
 
   error(message: string) {
@@ -715,7 +715,7 @@ class SyncProgressTracker {
       this.notice.hide();
     }
     new Notice(`Sync error: ${message}`, 10000);
-    this.statusBar.setText("ObsiNotion: Error");
+    this.statusBar.setText("Im-Nobsidian: Error");
   }
 }
 ```
@@ -1156,7 +1156,7 @@ async saveSyncState(state: SyncState) {
 - 대량의 동기화 메타데이터 관리에 적합하지만 모바일 호환성 문제
 - `.obsidian/plugins/<plugin-id>/` 내에 DB 파일 저장
 
-**ObsiNotion 권장:** 파일 수가 적으면 `data.json`, 수백 개 이상이면 별도 JSON 파일이나 IndexedDB 사용. SQLite는 모바일 지원이 필요하면 피할 것.
+**Im-Nobsidian 권장:** 파일 수가 적으면 `data.json`, 수백 개 이상이면 별도 JSON 파일이나 IndexedDB 사용. SQLite는 모바일 지원이 필요하면 피할 것.
 
 ---
 
@@ -1195,7 +1195,7 @@ async saveSyncState(state: SyncState) {
 - Electron API 직접 사용 시 (`safeStorage`, `dialog` 등)
 - `child_process` 사용 시
 
-**ObsiNotion 관점:** Notion API 호출은 `requestUrl()`로 하고, 파일 접근은 `vault` API로 하면 모바일에서도 동작 가능. `isDesktopOnly: false`로 설정 가능.
+**Im-Nobsidian 관점:** Notion API 호출은 `requestUrl()`로 하고, 파일 접근은 `vault` API로 하면 모바일에서도 동작 가능. `isDesktopOnly: false`로 설정 가능.
 
 ---
 
@@ -1319,14 +1319,14 @@ async saveSyncState(state: SyncState) {
 
 ### 비교표
 
-| 특성          | Remotely Save     | Obsidian Git        | LiveSync  | ObsiNotion (계획) |
-| ------------- | ----------------- | ------------------- | --------- | ----------------- |
-| 동기화 대상   | 클라우드 스토리지 | Git 리포            | CouchDB   | Notion            |
-| 실시간 동기화 | 아니오            | 아니오              | 예        | 아니오 (주기적)   |
-| 충돌 해결     | 최신 우선         | Git merge           | 자동+수동 | Frontmatter 기반  |
-| 모바일 지원   | 예                | 예 (isomorphic-git) | 예        | 예 (requestUrl)   |
-| 암호화        | 예                | 아니오              | 예        | 해당 없음         |
-| 로컬 DB       | JSON              | Git                 | PouchDB   | JSON/IndexedDB    |
+| 특성          | Remotely Save     | Obsidian Git        | LiveSync  | Im-Nobsidian (계획) |
+| ------------- | ----------------- | ------------------- | --------- | ------------------- |
+| 동기화 대상   | 클라우드 스토리지 | Git 리포            | CouchDB   | Notion              |
+| 실시간 동기화 | 아니오            | 아니오              | 예        | 아니오 (주기적)     |
+| 충돌 해결     | 최신 우선         | Git merge           | 자동+수동 | Frontmatter 기반    |
+| 모바일 지원   | 예                | 예 (isomorphic-git) | 예        | 예 (requestUrl)     |
+| 암호화        | 예                | 아니오              | 예        | 해당 없음           |
+| 로컬 DB       | JSON              | Git                 | PouchDB   | JSON/IndexedDB      |
 
 ---
 

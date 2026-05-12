@@ -27,7 +27,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm --filter @obsinotion/core --filter obsinotion publish --access public --no-git-checks --provenance
+      - run: pnpm --filter @im-nobsidian/core --filter im-nobsidian publish --access public --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

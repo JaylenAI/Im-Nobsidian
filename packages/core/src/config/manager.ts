@@ -4,7 +4,7 @@ import { ConfigSchema, DEFAULT_CONFIG } from "../types/config.js";
 import type { Config } from "../types/config.js";
 
 const CONFIG_FILE = "config.json";
-const OBSINOTION_DIR = ".obsinotion";
+const IM_NOBSIDIAN_DIR = ".im-nobsidian";
 
 export class ConfigManager {
   private config: Config | null = null;
@@ -12,7 +12,7 @@ export class ConfigManager {
   constructor(private readonly vaultRoot: string) {}
 
   get configDir(): string {
-    return join(this.vaultRoot, OBSINOTION_DIR);
+    return join(this.vaultRoot, IM_NOBSIDIAN_DIR);
   }
 
   get configPath(): string {
@@ -37,7 +37,7 @@ export class ConfigManager {
         throw new Error(`설정 파일 검증 실패: ${error.message}`);
       }
       throw new Error(
-        `설정 파일을 찾을 수 없습니다: ${this.configPath}\n'obsinotion init'을 먼저 실행하세요.`,
+        `설정 파일을 찾을 수 없습니다: ${this.configPath}\n'im-nobsidian init'을 먼저 실행하세요.`,
       );
     }
   }
@@ -73,7 +73,7 @@ export class ConfigManager {
 
   private async ensureGitignore(): Promise<void> {
     const gitignorePath = join(this.vaultRoot, ".gitignore");
-    const entry = ".obsinotion/";
+    const entry = ".im-nobsidian/";
 
     try {
       const content = await readFile(gitignorePath, "utf-8");

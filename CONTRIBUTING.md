@@ -1,4 +1,4 @@
-# Contributing to ObsiNotion
+# Contributing to Im-Nobsidian
 
 We welcome contributions! / 기여를 환영합니다!
 
@@ -70,8 +70,8 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 
 ```
 packages/
-├── core/              # @obsinotion/core — sync engine / 동기화 엔진
-├── cli/               # obsinotion — CLI tool / CLI 도구
+├── core/              # @im-nobsidian/core — sync engine / 동기화 엔진
+├── cli/               # im-nobsidian — CLI tool (nobsi command) / CLI 도구
 └── obsidian-plugin/   # Obsidian community plugin / 커뮤니티 플러그인
 ```
 

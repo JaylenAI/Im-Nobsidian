@@ -1,10 +1,11 @@
 {
-  "name": "obsinotion",
+  "name": "im-nobsidian",
   "version": "0.1.0",
   "description": "CLI tool for Obsidian ↔ Notion bidirectional sync",
   "type": "module",
   "bin": {
-    "obsinotion": "./dist/index.js"
+    "nobsi": "./dist/index.js",
+    "im-nobsidian": "./dist/index.js"
   },
   "files": [
     "dist"
@@ -18,7 +19,7 @@
   },
   "dependencies": {
     "@inquirer/prompts": "^7.0.0",
-    "@obsinotion/core": "workspace:*",
+    "@im-nobsidian/core": "workspace:*",
     "commander": "^12.0.0",
     "diff": "^9.0.0",
     "ora": "^8.0.0"

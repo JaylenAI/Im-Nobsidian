@@ -8,7 +8,7 @@
 ## 개요
 
 충돌은 마지막 동기화 이후 **양쪽 모두** 동일 파일/페이지를 수정했을 때 발생한다.
-ObsiNotion은 Git의 Three-Way Merge를 차용하여 충돌을 감지하고 해결한다.
+Im-Nobsidian은 Git의 Three-Way Merge를 차용하여 충돌을 감지하고 해결한다.
 
 ---
 
@@ -537,7 +537,7 @@ interface ConflictLog {
   readonly conflictRegions: number;
 }
 
-// 저장 위치: .obsinotion/conflict-log.jsonl (JSON Lines)
+// 저장 위치: .im-nobsidian/conflict-log.jsonl (JSON Lines)
 // 자동 정리: 30일 초과 → 삭제
 ```
 

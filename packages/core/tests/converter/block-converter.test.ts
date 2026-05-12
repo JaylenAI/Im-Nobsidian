@@ -156,10 +156,10 @@ describe("BlockConverter", () => {
     it("toggle 마커가 포함된 마크다운을 toggle 블록으로 변환", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:toggle:start%%",
+        "%%im-nobsidian:toggle:start%%",
         "- Click to expand",
         "  Hidden content here",
-        "%%obsinotion:toggle:end%%",
+        "%%im-nobsidian:toggle:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
@@ -173,10 +173,10 @@ describe("BlockConverter", () => {
     it("toggle 내 자식 콘텐츠가 블록으로 변환됨", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:toggle:start%%",
+        "%%im-nobsidian:toggle:start%%",
         "- FAQ",
         "  Answer paragraph",
-        "%%obsinotion:toggle:end%%",
+        "%%im-nobsidian:toggle:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
@@ -191,15 +191,15 @@ describe("BlockConverter", () => {
     it("여러 토글 블록 동시 처리", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:toggle:start%%",
+        "%%im-nobsidian:toggle:start%%",
         "- Toggle 1",
         "  Content 1",
-        "%%obsinotion:toggle:end%%",
+        "%%im-nobsidian:toggle:end%%",
         "",
-        "%%obsinotion:toggle:start%%",
+        "%%im-nobsidian:toggle:start%%",
         "- Toggle 2",
         "  Content 2",
-        "%%obsinotion:toggle:end%%",
+        "%%im-nobsidian:toggle:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
@@ -212,12 +212,12 @@ describe("BlockConverter", () => {
     it("column 마커가 포함된 마크다운을 column_list 블록으로 변환", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:column-list:start%%",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column-list:start%%",
+        "%%im-nobsidian:column%%",
         "Left column text",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column%%",
         "Right column text",
-        "%%obsinotion:column-list:end%%",
+        "%%im-nobsidian:column-list:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
@@ -233,14 +233,14 @@ describe("BlockConverter", () => {
     it("3컬럼 변환", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:column-list:start%%",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column-list:start%%",
+        "%%im-nobsidian:column%%",
         "Col 1",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column%%",
         "Col 2",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column%%",
         "Col 3",
-        "%%obsinotion:column-list:end%%",
+        "%%im-nobsidian:column-list:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;
@@ -254,14 +254,14 @@ describe("BlockConverter", () => {
     it("컬럼 내 복합 콘텐츠 변환", () => {
       const converter = new BlockConverter();
       const md = [
-        "%%obsinotion:column-list:start%%",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column-list:start%%",
+        "%%im-nobsidian:column%%",
         "# Heading",
         "",
         "Paragraph text",
-        "%%obsinotion:column%%",
+        "%%im-nobsidian:column%%",
         "- List item",
-        "%%obsinotion:column-list:end%%",
+        "%%im-nobsidian:column-list:end%%",
       ].join("\n");
 
       const blocks = converter.markdownToNotionBlocks(md) as Array<Record<string, unknown>>;

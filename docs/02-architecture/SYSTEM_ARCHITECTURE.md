@@ -10,11 +10,11 @@
 ```mermaid
 flowchart TD
     subgraph Client["사용 환경"]
-        CLI["obsinotion CLI<br/>(터미널)"]
+        CLI["im-nobsidian CLI<br/>(터미널)"]
         Plugin["Obsidian 플러그인<br/>(GUI)"]
     end
 
-    subgraph Core["@obsinotion/core"]
+    subgraph Core["@im-nobsidian/core"]
         direction TB
 
         subgraph Sync["동기화 엔진"]
@@ -91,7 +91,7 @@ flowchart TD
 
 ```
 packages/
-├── core/                           ← @obsinotion/core (핵심 엔진)
+├── core/                           ← @im-nobsidian/core (핵심 엔진)
 │   └── src/
 │       ├── index.ts                ← 공개 API export
 │       │
@@ -141,22 +141,22 @@ packages/
 │           ├── convert.ts          ← 변환 관련 타입
 │           └── config.ts           ← 설정 타입
 │
-├── cli/                            ← obsinotion (CLI 도구)
+├── cli/                            ← nobsi (CLI 도구)
 │   └── src/
 │       ├── index.ts                ← 진입점 (#!/usr/bin/env node)
 │       ├── commands/
-│       │   ├── init.ts             ← obsinotion init
-│       │   ├── push.ts             ← obsinotion push
-│       │   ├── pull.ts             ← obsinotion pull
-│       │   ├── sync.ts             ← obsinotion sync
-│       │   ├── status.ts           ← obsinotion status
-│       │   └── diff.ts             ← obsinotion diff
+│       │   ├── init.ts             ← nobsi init
+│       │   ├── push.ts             ← nobsi push
+│       │   ├── pull.ts             ← nobsi pull
+│       │   ├── sync.ts             ← nobsi sync
+│       │   ├── status.ts           ← nobsi status
+│       │   └── diff.ts             ← nobsi diff
 │       └── ui/
 │           ├── prompts.ts          ← inquirer 대화형 입력
 │           ├── progress.ts         ← ora 진행률 표시
 │           └── table.ts            ← cli-table3 테이블 출력
 │
-└── obsidian-plugin/                ← obsidian-obsinotion (플러그인)
+└── obsidian-plugin/                ← obsidian-im-nobsidian (플러그인)
     └── src/
         ├── main.ts                 ← Plugin 클래스
         ├── settings.ts             ← PluginSettingTab
@@ -461,7 +461,7 @@ flowchart LR
         NP1 --> NE[ERP 프로젝트]
         NE --> NA[API 설계]
         NE --> ND[DB 마이그]
-        NP1 --> NO[ObsiNotion]
+        NP1 --> NO[Im-Nobsidian]
     end
 
     subgraph Map["TreeMapper"]
@@ -478,7 +478,7 @@ flowchart LR
         OE --> OEN[ERP 프로젝트.md]
         OE --> OA[API 설계.md]
         OE --> OD[DB 마이그.md]
-        OP1 --> OO[ObsiNotion.md]
+        OP1 --> OO[Im-Nobsidian.md]
     end
 
     Notion --> Map --> Obsidian

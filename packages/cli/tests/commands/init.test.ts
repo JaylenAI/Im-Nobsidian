@@ -3,10 +3,10 @@ import { describe, it, expect, vi } from "vitest";
 const mockInit = vi.fn().mockResolvedValue(undefined);
 const mockSearch = vi.fn().mockResolvedValue({ results: [{ id: "page-1" }] });
 
-vi.mock("@obsinotion/core", () => ({
+vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
-    configPath: "/mock/.obsinotion/config.yaml",
-    dbPath: "/mock/.obsinotion/sync.db",
+    configPath: "/mock/.im-nobsidian/config.yaml",
+    dbPath: "/mock/.im-nobsidian/sync.db",
     isInitialized: vi.fn().mockResolvedValue(false),
     init: mockInit,
     load: vi.fn().mockResolvedValue({}),

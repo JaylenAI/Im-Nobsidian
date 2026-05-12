@@ -1,5 +1,5 @@
 {
-  "name": "@obsinotion/core",
+  "name": "@im-nobsidian/core",
   "version": "0.1.0",
   "description": "Core sync engine for Obsidian ↔ Notion bidirectional synchronization",
   "type": "module",

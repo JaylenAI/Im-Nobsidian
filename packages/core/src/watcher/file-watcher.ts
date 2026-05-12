@@ -17,7 +17,7 @@ export class FileWatcher {
 
   start(): void {
     this.watcher = watch(this.rootPath, {
-      ignored: [/(^|[/\\])\./, "**/node_modules/**", "**/.obsinotion/**"],
+      ignored: [/(^|[/\\])\./, "**/node_modules/**", "**/.im-nobsidian/**"],
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {

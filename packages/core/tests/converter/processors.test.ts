@@ -61,7 +61,7 @@ describe("EmbedResolver", () => {
       context: pushContext,
     });
     expect(result.content).toContain("📎 photo.png");
-    expect(result.content).toContain("%% obsinotion:local-image:photo.png %%");
+    expect(result.content).toContain("%% im-nobsidian:local-image:photo.png %%");
     expect(result.metadata.images).toHaveLength(1);
     expect(result.metadata.images![0]!.isExternal).toBe(false);
   });
@@ -82,7 +82,7 @@ describe("EmbedResolver", () => {
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toContain("obsinotion:embed:type=video");
+    expect(result.content).toContain("im-nobsidian:embed:type=video");
   });
 });
 
@@ -91,11 +91,11 @@ describe("InlineDBParser", () => {
 
   it("preserve marker로 감싼 테이블 파싱", () => {
     const input = `Before
-%% obsinotion:inline-db:id=abc123&title=Tasks %%
+%% im-nobsidian:inline-db:id=abc123&title=Tasks %%
 | Name | Status |
 |------|--------|
 | Task 1 | Done |
-%% obsinotion:end %%
+%% im-nobsidian:end %%
 After`;
 
     const result = processor.process({
@@ -115,10 +115,10 @@ describe("PreserveMarkerCollector", () => {
   const processor = new PreserveMarkerCollector();
 
   it("여러 마커 수집", () => {
-    const input = `%% obsinotion:callout:type=tip&foldable=open %%
+    const input = `%% im-nobsidian:callout:type=tip&foldable=open %%
 > [!tip] Hint
 
-%% obsinotion:color:red %%text%% obsinotion:end %%`;
+%% im-nobsidian:color:red %%text%% im-nobsidian:end %%`;
 
     const result = processor.process({
       content: input,
@@ -137,7 +137,7 @@ describe("ColorAnnotator", () => {
 
   it("color marker → span 변환", () => {
     const result = processor.process({
-      content: "%% obsinotion:color:red %%important%% obsinotion:end %%",
+      content: "%% im-nobsidian:color:red %%important%% im-nobsidian:end %%",
       metadata: {},
       context: pullContext,
     });
@@ -146,7 +146,7 @@ describe("ColorAnnotator", () => {
 
   it("background color → -bg 클래스", () => {
     const result = processor.process({
-      content: "%% obsinotion:color:yellow_background %%highlighted%% obsinotion:end %%",
+      content: "%% im-nobsidian:color:yellow_background %%highlighted%% im-nobsidian:end %%",
       metadata: {},
       context: pullContext,
     });
@@ -210,9 +210,9 @@ describe("HtmlAnnotationStripper", () => {
     expect(result.content).toBe("This is highlighted text");
   });
 
-  it("Push 시 obsinotion color 마커를 제거", () => {
+  it("Push 시 im-nobsidian color 마커를 제거", () => {
     const result = processor.process({
-      content: "This is %% obsinotion:color:red %%colored%% obsinotion:end %% text",
+      content: "This is %% im-nobsidian:color:red %%colored%% im-nobsidian:end %% text",
       metadata: {},
       context: pushContext,
     });
@@ -231,7 +231,7 @@ describe("HtmlAnnotationStripper", () => {
   it("여러 태그 동시 처리", () => {
     const result = processor.process({
       content:
-        '<u>bold</u> and <span class="notion-blue">blue</span> and %% obsinotion:color:green %%green%% obsinotion:end %%',
+        '<u>bold</u> and <span class="notion-blue">blue</span> and %% im-nobsidian:color:green %%green%% im-nobsidian:end %%',
       metadata: {},
       context: pushContext,
     });
