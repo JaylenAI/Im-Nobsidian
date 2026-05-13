@@ -60,22 +60,38 @@ export class SyncOrchestrator {
 
   async push(options?: PushOptions): Promise<PushResult> {
     const startTime = Date.now();
+
+    if (this.config.sync.direction === "pull") {
+      return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
+    }
+
+    this.cleanupInterruptedSync();
+
     const files = await this.vaultFs.listMarkdownFiles();
     const changes = this.changeDetector.detectLocalChanges(files);
 
     const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
-    const nonConflict = changes.filter((c) => !conflictPaths.has(c.path));
+    const eligible = options?.force ? changes : changes.filter((c) => !conflictPaths.has(c.path));
 
     const filtered = options?.paths
-      ? nonConflict.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
-      : nonConflict;
+      ? eligible.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
+      : eligible;
 
     if (filtered.length === 0) {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
     }
 
     if (options?.dryRun) {
-      return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
+      const dryCreated = filtered.filter((c) => c.type === "created").length;
+      const dryUpdated = filtered.filter((c) => c.type === "modified" || c.type === "moved").length;
+      const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
+      return {
+        created: dryCreated,
+        updated: dryUpdated,
+        deleted: dryDeleted,
+        failed: [],
+        duration: Date.now() - startTime,
+      };
     }
 
     this.stateDb.setMeta("push_in_progress", "true");
@@ -148,6 +164,22 @@ export class SyncOrchestrator {
 
   async pull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
+    const emptyResult: PullResult = {
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: Date.now() - startTime,
+    };
+
+    if (this.config.sync.direction === "push") {
+      return emptyResult;
+    }
+
+    this.cleanupInterruptedSync();
+
     let created = 0;
     let updated = 0;
     let deleted = 0;
@@ -164,11 +196,18 @@ export class SyncOrchestrator {
         })
       : remoteChanges;
 
-    if (options?.dryRun || filtered.length === 0) {
+    if (filtered.length === 0) {
+      return emptyResult;
+    }
+
+    if (options?.dryRun) {
+      const dryCreated = filtered.filter((c) => c.type === "created").length;
+      const dryUpdated = filtered.filter((c) => c.type === "modified").length;
+      const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
       return {
-        created: 0,
-        updated: 0,
-        deleted: 0,
+        created: dryCreated,
+        updated: dryUpdated,
+        deleted: dryDeleted,
         conflicts: [],
         writtenPaths: [],
         failed: [],
@@ -464,9 +503,10 @@ export class SyncOrchestrator {
 
     if (this.config.sync.deleteSync) {
       await this.notionClient.archivePage(record.notionPageId);
+      this.stateDb.delete(record.id);
+    } else {
+      this.stateDb.updateStatus(record.id, "pending");
     }
-
-    this.stateDb.delete(record.id);
   }
 
   private async detectRemoteChanges(): Promise<RemoteChange[]> {
@@ -552,16 +592,17 @@ export class SyncOrchestrator {
 
     if (hasChildPages && hasContent) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = `${folderPath}/${safeName}.md`;
+      filePath = await this.resolveUniqueFilePath(`${folderPath}/${safeName}.md`);
       fileType = "folder-note";
       await this.vaultFs.ensureFolder(folderPath);
     } else if (hasChildPages && !hasContent) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = `${folderPath}/${safeName}.md`;
+      filePath = await this.resolveUniqueFilePath(`${folderPath}/${safeName}.md`);
       fileType = "folder-only";
       await this.vaultFs.ensureFolder(folderPath);
     } else {
-      filePath = parentPath ? `${parentPath}/${safeName}.md` : `${safeName}.md`;
+      const basePath = parentPath ? `${parentPath}/${safeName}.md` : `${safeName}.md`;
+      filePath = await this.resolveUniqueFilePath(basePath);
       fileType = "file";
     }
 
@@ -667,22 +708,30 @@ export class SyncOrchestrator {
     const localModified = localHash !== record.contentHash;
 
     if (localModified) {
-      const conflict: Conflict = {
-        syncRecord: record,
-        localChange: {
-          path: record.obsidianPath,
-          type: "modified",
-          currentHash: localHash,
-          previousHash: record.contentHash,
-        },
-        remoteChange: change,
-        baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
-        localContent,
-        remoteContent,
-      };
+      const strategy = this.config.sync.conflictStrategy;
 
-      this.stateDb.updateStatus(record.id, "conflict");
-      return { conflict };
+      if (strategy === "remote-first") {
+        // 리모트 우선: 로컬 변경 무시, 리모트 내용으로 덮어쓰기
+      } else if (strategy === "local-first") {
+        return { path: record.obsidianPath };
+      } else {
+        const conflict: Conflict = {
+          syncRecord: record,
+          localChange: {
+            path: record.obsidianPath,
+            type: "modified",
+            currentHash: localHash,
+            previousHash: record.contentHash,
+          },
+          remoteChange: change,
+          baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
+          localContent,
+          remoteContent,
+        };
+
+        this.stateDb.updateStatus(record.id, "conflict");
+        return { conflict };
+      }
     }
 
     await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
@@ -855,9 +904,17 @@ export class SyncOrchestrator {
     if (blocks.length > 0) {
       await this.notionClient.appendChildren(pageId, blocks);
     }
-    for (const block of existingBlocks) {
-      await this.notionClient.deleteBlock(block.id);
-    }
+    const deleteSema = new Sema(this.config.advanced.concurrency);
+    await Promise.all(
+      existingBlocks.map(async (block) => {
+        await deleteSema.acquire();
+        try {
+          await this.notionClient.deleteBlock(block.id);
+        } finally {
+          deleteSema.release();
+        }
+      }),
+    );
   }
 
   private async fetchPageMarkdown(pageId: string): Promise<string> {
@@ -877,6 +934,35 @@ export class SyncOrchestrator {
     if (parent.type === "page_id") return parent.page_id ?? null;
     if (parent.type === "database_id") return parent.database_id ?? null;
     return null;
+  }
+
+  private cleanupInterruptedSync(): void {
+    const pushInProgress = this.stateDb.getMeta("push_in_progress");
+    const pullInProgress = this.stateDb.getMeta("pull_in_progress");
+
+    if (pushInProgress === "true") {
+      getLogger().warn("[Im-Nobsidian] 이전 push가 비정상 종료됨 — 플래그 정리");
+      this.stateDb.setMeta("push_in_progress", "");
+    }
+    if (pullInProgress === "true") {
+      getLogger().warn("[Im-Nobsidian] 이전 pull이 비정상 종료됨 — 플래그 정리");
+      this.stateDb.setMeta("pull_in_progress", "");
+    }
+  }
+
+  private async resolveUniqueFilePath(basePath: string): Promise<string> {
+    if (!(await this.vaultFs.exists(basePath))) return basePath;
+
+    const dir = basePath.lastIndexOf("/") >= 0 ? basePath.slice(0, basePath.lastIndexOf("/")) : "";
+    const ext = ".md";
+    const name = basePath.slice(dir ? dir.length + 1 : 0, -ext.length);
+
+    for (let i = 1; i <= 99; i++) {
+      const candidate = dir ? `${dir}/${name} (${i})${ext}` : `${name} (${i})${ext}`;
+      if (!(await this.vaultFs.exists(candidate))) return candidate;
+    }
+
+    return basePath;
   }
 }
 

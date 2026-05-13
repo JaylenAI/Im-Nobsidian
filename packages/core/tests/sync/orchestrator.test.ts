@@ -200,7 +200,7 @@ describe("SyncOrchestrator", () => {
       expect(mockNotionClient.archivePage).toHaveBeenCalledWith("page-del");
     });
 
-    it("dryRun 모드에서는 실제 작업 안 함", async () => {
+    it("dryRun 모드에서는 실제 작업 안 하고 예정 수량 반환", async () => {
       mockVaultFs.listMarkdownFiles = vi
         .fn()
         .mockResolvedValue([
@@ -209,7 +209,7 @@ describe("SyncOrchestrator", () => {
 
       const result = await orchestrator.push({ dryRun: true });
 
-      expect(result.created).toBe(0);
+      expect(result.created).toBe(1);
       expect(mockNotionClient.createPage).not.toHaveBeenCalled();
     });
 
@@ -346,14 +346,14 @@ describe("SyncOrchestrator", () => {
       expect(mockStateDb.updateStatus).toHaveBeenCalledWith(1, "conflict");
     });
 
-    it("dryRun 모드", async () => {
+    it("dryRun 모드에서 예정 수량 반환", async () => {
       mockNotionClient.getChildPagesRecursive.mockResolvedValue([
         { id: "new-page", last_edited_time: "2026-01-01T00:00:00.000Z" },
       ]);
 
       const result = await orchestrator.pull({ dryRun: true });
 
-      expect(result.created).toBe(0);
+      expect(result.created).toBe(1);
       expect(mockVaultFs.writeFile).not.toHaveBeenCalled();
     });
   });
@@ -471,6 +471,105 @@ describe("SyncOrchestrator", () => {
 
       expect(result.created).toBe(3);
       expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(3);
+    });
+  });
+
+  describe("sync.direction 설정", () => {
+    it("direction=pull이면 push가 실행되지 않음", async () => {
+      const pullOnlyConfig = {
+        ...DEFAULT_CONFIG,
+        notion: { ...DEFAULT_CONFIG.notion, token: "ntn_test", rootPageId: "root-id" },
+        sync: { ...DEFAULT_CONFIG.sync, direction: "pull" as const },
+      };
+
+      const pullOnlyOrchestrator = new SyncOrchestrator(
+        pullOnlyConfig,
+        mockStateDb as never,
+        mockNotionClient as never,
+        mockVaultFs,
+      );
+
+      mockVaultFs.listMarkdownFiles = vi
+        .fn()
+        .mockResolvedValue([{ path: "new.md", content: "# New", mtime: new Date().toISOString() }]);
+
+      const result = await pullOnlyOrchestrator.push();
+
+      expect(result.created).toBe(0);
+      expect(result.updated).toBe(0);
+      expect(result.deleted).toBe(0);
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+    });
+
+    it("direction=push이면 pull이 실행되지 않음", async () => {
+      const pushOnlyConfig = {
+        ...DEFAULT_CONFIG,
+        notion: { ...DEFAULT_CONFIG.notion, token: "ntn_test", rootPageId: "root-id" },
+        sync: { ...DEFAULT_CONFIG.sync, direction: "push" as const },
+      };
+
+      const pushOnlyOrchestrator = new SyncOrchestrator(
+        pushOnlyConfig,
+        mockStateDb as never,
+        mockNotionClient as never,
+        mockVaultFs,
+      );
+
+      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
+        { id: "new-page", last_edited_time: "2026-01-01T00:00:00.000Z" },
+      ]);
+
+      const result = await pushOnlyOrchestrator.pull();
+
+      expect(result.created).toBe(0);
+      expect(mockVaultFs.writeFile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("force 옵션", () => {
+    it("force=true이면 충돌 파일도 push", async () => {
+      mockStateDb.getByStatus.mockReturnValue([
+        { obsidianPath: "conflict.md", notionPageId: "page-c", id: "rec-c", status: "conflict" },
+      ]);
+
+      mockVaultFs.listMarkdownFiles = vi
+        .fn()
+        .mockResolvedValue([
+          { path: "conflict.md", content: "# Conflict", mtime: new Date().toISOString() },
+        ]);
+
+      const result = await orchestrator.push({ force: true });
+
+      expect(result.created).toBe(1);
+    });
+  });
+
+  describe("dryRun 실제 수량", () => {
+    it("push dryRun — created/updated/deleted 수량 반환", async () => {
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        { path: "new1.md", content: "# New1", mtime: new Date().toISOString() },
+        { path: "new2.md", content: "# New2", mtime: new Date().toISOString() },
+      ]);
+
+      const result = await orchestrator.push({ dryRun: true });
+
+      expect(result.created).toBe(2);
+      expect(result.updated).toBe(0);
+      expect(result.deleted).toBe(0);
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("in_progress 클린업", () => {
+    it("push 시작 시 이전 중단된 플래그 정리", async () => {
+      mockStateDb.getMeta.mockImplementation((key: string) => {
+        if (key === "push_in_progress") return "true";
+        return null;
+      });
+
+      await orchestrator.push();
+
+      expect(mockStateDb.setMeta).toHaveBeenCalledWith("push_in_progress", "");
     });
   });
 });
