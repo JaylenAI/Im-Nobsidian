@@ -278,7 +278,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 341개 테스트, 82.7% 커버리지
+pnpm test          # 355개 테스트
 pnpm lint
 pnpm typecheck
 ```

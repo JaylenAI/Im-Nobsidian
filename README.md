@@ -294,7 +294,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 341 tests, 82.7% coverage
+pnpm test          # 355 tests
 pnpm lint
 pnpm typecheck
 ```
