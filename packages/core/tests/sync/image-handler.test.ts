@@ -1,10 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ImageHandler } from "../../src/sync/image-handler.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
+import type { NotionClient } from "../../src/notion/client.js";
+import type { ImageReference } from "../../src/types/convert.js";
 
 function createMockVaultFs(): VaultFS {
   return {
     readFile: vi.fn(),
+    readBinary: vi.fn().mockResolvedValue(Buffer.from("fake-image-data")),
     writeFile: vi.fn(),
     writeBinary: vi.fn(),
     deleteFile: vi.fn(),
@@ -101,5 +104,114 @@ describe("ImageHandler", () => {
 
     expect(result.downloads).toHaveLength(2);
     expect(mockFs.writeBinary).toHaveBeenCalledTimes(2);
+  });
+});
+
+function createMockNotionClient(): NotionClient {
+  return {
+    uploadFile: vi.fn().mockResolvedValue("file-upload-id-123"),
+    appendChildren: vi.fn().mockResolvedValue(undefined),
+  } as unknown as NotionClient;
+}
+
+describe("ImageHandler — 업로드", () => {
+  let handler: ImageHandler;
+  let mockFs: VaultFS;
+  let mockNotion: NotionClient;
+
+  beforeEach(() => {
+    mockFs = createMockVaultFs();
+    mockNotion = createMockNotionClient();
+    handler = new ImageHandler(mockFs, "attachments", mockNotion);
+  });
+
+  it("로컬 이미지를 Notion에 업로드", async () => {
+    const result = await handler.uploadLocalImage("photo.png");
+
+    expect(result.localPath).toBe("photo.png");
+    expect(result.fileUploadId).toBe("file-upload-id-123");
+    expect(mockFs.readBinary).toHaveBeenCalledWith("photo.png");
+    expect(mockNotion.uploadFile).toHaveBeenCalledWith(expect.any(Blob), "photo.png", "image/png");
+  });
+
+  it("readBinary 실패 시 attachments 폴더에서 재시도", async () => {
+    (mockFs.readBinary as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("ENOENT"))
+      .mockResolvedValueOnce(Buffer.from("image-data"));
+
+    const result = await handler.uploadLocalImage("photo.png");
+
+    expect(result.fileUploadId).toBe("file-upload-id-123");
+    expect(mockFs.readBinary).toHaveBeenCalledWith("attachments/photo.png");
+  });
+
+  it("JPEG 확장자에 올바른 content-type 설정", async () => {
+    await handler.uploadLocalImage("img/photo.jpg");
+
+    expect(mockNotion.uploadFile).toHaveBeenCalledWith(expect.any(Blob), "photo.jpg", "image/jpeg");
+  });
+
+  it("uploadAndAppendImages — 로컬 이미지 업로드 후 블록 추가", async () => {
+    const images: ImageReference[] = [
+      { url: "photo.png", localPath: "photo.png", isExternal: false },
+      { url: "https://example.com/ext.png", isExternal: true },
+    ];
+
+    const results = await handler.uploadAndAppendImages("page-id-123", images);
+
+    expect(results).toHaveLength(1);
+    expect(results[0]!.fileUploadId).toBe("file-upload-id-123");
+    expect(mockNotion.appendChildren).toHaveBeenCalledWith("page-id-123", [
+      {
+        type: "image",
+        image: {
+          type: "file_upload",
+          file_upload: { id: "file-upload-id-123" },
+        },
+      },
+    ]);
+  });
+
+  it("uploadAndAppendImages — 외부 이미지만 있으면 업로드 안 함", async () => {
+    const images: ImageReference[] = [{ url: "https://example.com/ext.png", isExternal: true }];
+
+    const results = await handler.uploadAndAppendImages("page-id-123", images);
+
+    expect(results).toHaveLength(0);
+    expect(mockNotion.appendChildren).not.toHaveBeenCalled();
+  });
+
+  it("uploadAndAppendImages — 업로드 실패 시 graceful degradation", async () => {
+    (mockNotion.uploadFile as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new Error("Upload failed"),
+    );
+
+    const images: ImageReference[] = [
+      { url: "broken.png", localPath: "broken.png", isExternal: false },
+    ];
+
+    const results = await handler.uploadAndAppendImages("page-id-123", images);
+
+    expect(results).toHaveLength(0);
+    expect(mockNotion.appendChildren).not.toHaveBeenCalled();
+  });
+
+  it("NotionClient 없으면 uploadLocalImage 에러", async () => {
+    const handlerWithoutNotion = new ImageHandler(mockFs, "attachments");
+
+    await expect(handlerWithoutNotion.uploadLocalImage("photo.png")).rejects.toThrow(
+      "NotionClient required",
+    );
+  });
+
+  it("NotionClient 없으면 uploadAndAppendImages 빈 배열 반환", async () => {
+    const handlerWithoutNotion = new ImageHandler(mockFs, "attachments");
+    const images: ImageReference[] = [
+      { url: "photo.png", localPath: "photo.png", isExternal: false },
+    ];
+
+    const results = await handlerWithoutNotion.uploadAndAppendImages("page-id", images);
+
+    expect(results).toHaveLength(0);
   });
 });

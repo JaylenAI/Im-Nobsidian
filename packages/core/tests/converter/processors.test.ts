@@ -62,6 +62,7 @@ describe("EmbedResolver", () => {
     });
     expect(result.content).toContain("📎 photo.png");
     expect(result.content).toContain("%% im-nobsidian:local-image:photo.png %%");
+    expect(result.content).not.toContain("업로드 불가");
     expect(result.metadata.images).toHaveLength(1);
     expect(result.metadata.images![0]!.isExternal).toBe(false);
   });

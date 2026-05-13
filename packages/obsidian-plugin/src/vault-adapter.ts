@@ -13,6 +13,15 @@ export class ObsidianVaultAdapter implements VaultFS {
     return this.vault.read(file);
   }
 
+  async readBinary(path: string): Promise<Buffer> {
+    const file = this.vault.getAbstractFileByPath(normalizePath(path));
+    if (!file || !(file instanceof TFile)) {
+      throw new Error(`파일을 찾을 수 없습니다: ${path}`);
+    }
+    const arrayBuffer = await this.vault.readBinary(file);
+    return Buffer.from(arrayBuffer);
+  }
+
   async writeFile(path: string, content: string): Promise<void> {
     const normalized = normalizePath(path);
     const existing = this.vault.getAbstractFileByPath(normalized);

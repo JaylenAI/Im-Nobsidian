@@ -6,6 +6,7 @@ import type { VaultFS } from "../../src/sync/vault-fs.js";
 function createMockVaultFs(): VaultFS {
   return {
     readFile: vi.fn().mockResolvedValue(""),
+    readBinary: vi.fn().mockResolvedValue(Buffer.from("")),
     writeFile: vi.fn().mockResolvedValue(undefined),
     writeBinary: vi.fn().mockResolvedValue(undefined),
     deleteFile: vi.fn().mockResolvedValue(undefined),
