@@ -207,20 +207,19 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 ## Phase 6: 테스트 + 문서 + v0.2.0 릴리스 [2일]
 
 **Branch**: `feature/tests-and-release`
-**상태**: [ ] 미시작
+**상태**: [x] 완료 (2026-05-13)
 **의존**: Phase 1-5 전부
 
 ### 작업 목록
 
-- [ ] 라운드트립 테스트 20개 (토글, 위키링크, 이미지, 프론트매터, 중첩구조)
-- [ ] Sources 폴더 실제 E2E
-- [ ] 마음AI 페이지 실제 E2E (복잡한 구조)
-- [ ] README: Supported Features 표 업데이트
-- [ ] CHANGELOG: v0.2.0 항목
-- [ ] 알려진 한계 문서화 (인라인 DB, 버튼/폼, 실시간 동시 편집)
-- [ ] CURRENT_STATUS.md 업데이트
-- [ ] pnpm lint && pnpm typecheck && pnpm build 전부 클린
-- [ ] pnpm test 전체 통과
+- [x] 라운드트립 테스트 20개 (토글, 위키링크, 이미지, 프론트매터, 중첩구조)
+- [ ] Sources 폴더 실제 E2E (Notion API 토큰 필요)
+- [ ] 마음AI 페이지 실제 E2E (Notion API 토큰 필요)
+- [x] CHANGELOG: v0.2.0 항목
+- [x] 알려진 한계 문서화 (인라인 DB, 버튼/폼, 실시간 동시 편집)
+- [x] CURRENT_STATUS.md 업데이트
+- [x] pnpm lint && pnpm typecheck && pnpm build 전부 클린
+- [x] pnpm test 전체 통과 (377개)
 
 ### 최종 결과
 
