@@ -347,8 +347,6 @@ export class SyncOrchestrator {
       parentMode: this.config.notion.parentMode,
     });
 
-    const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
-
     let effectiveParentId = parentId;
     let effectiveParentType: "page" | "database" = "page";
     let effectiveProperties = conversionResult.properties;
@@ -363,16 +361,13 @@ export class SyncOrchestrator {
       );
     }
 
-    const page = await this.notionClient.createPage({
-      parentId: effectiveParentId,
-      parentType: effectiveParentType,
+    const page = await this.pushCreatePage(
+      effectiveParentId,
+      effectiveParentType,
       title,
-      properties: effectiveProperties,
-    });
-
-    if (blocks.length > 0) {
-      await this.notionClient.appendChildren(page.id, blocks);
-    }
+      conversionResult.content,
+      effectiveProperties,
+    );
 
     const hash = computeHash(content);
 
@@ -420,17 +415,7 @@ export class SyncOrchestrator {
       parentMode: this.config.notion.parentMode,
     });
 
-    const blocks = this.blockConverter.markdownToNotionBlocks(conversionResult.content);
-
-    const existingBlocks = await this.notionClient.fetchAllChildren(record.notionPageId);
-
-    if (blocks.length > 0) {
-      await this.notionClient.appendChildren(record.notionPageId, blocks);
-    }
-
-    for (const block of existingBlocks) {
-      await this.notionClient.deleteBlock(block.id);
-    }
+    await this.pushUpdatePage(record.notionPageId, conversionResult.content);
 
     let propsToUpdate = conversionResult.properties;
     if (this.isDatabaseMode && propsToUpdate && Object.keys(propsToUpdate).length > 0) {
@@ -443,10 +428,13 @@ export class SyncOrchestrator {
       await this.notionClient.updatePageProperties(record.notionPageId, propsToUpdate);
     }
 
+    const updatedPage = await this.notionClient.getPage(record.notionPageId);
+
     const hash = computeHash(content);
     this.stateDb.transaction(() => {
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
+      this.stateDb.setNotionLastEdited(record.id, updatedPage.last_edited_time);
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
   }
@@ -537,7 +525,7 @@ export class SyncOrchestrator {
     const allChildren = await this.notionClient.fetchAllChildren(pageId);
     const hasChildPages = allChildren.some((b) => "type" in b && b.type === "child_page");
 
-    const markdown = await this.blockConverter.notionBlocksToMarkdown(pageId);
+    const markdown = await this.fetchPageMarkdown(pageId);
     const hasContent = markdown.trim().length > 0;
 
     let filePath: string;
@@ -618,7 +606,7 @@ export class SyncOrchestrator {
     if (!record) return {};
 
     const page = await this.notionClient.getPage(change.pageId);
-    let markdown = await this.blockConverter.notionBlocksToMarkdown(change.pageId);
+    let markdown = await this.fetchPageMarkdown(change.pageId);
 
     let properties: Record<string, unknown>;
     if (this.isDatabaseMode) {
@@ -793,6 +781,73 @@ export class SyncOrchestrator {
     } catch {
       return "";
     }
+  }
+
+  private async pushCreatePage(
+    parentId: string,
+    parentType: "page" | "database",
+    title: string,
+    markdownContent: string,
+    properties?: Record<string, unknown>,
+  ): Promise<PageObjectResponse> {
+    if (this.config.conversion.preferMarkdownApi !== false) {
+      try {
+        return await this.notionClient.createPageWithMarkdown({
+          parentId,
+          parentType,
+          title,
+          markdown: markdownContent,
+          properties,
+        });
+      } catch {
+        // Markdown API 실패 시 blocks API fallback
+      }
+    }
+
+    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
+    const page = await this.notionClient.createPage({
+      parentId,
+      parentType,
+      title,
+      properties,
+    });
+    if (blocks.length > 0) {
+      await this.notionClient.appendChildren(page.id, blocks);
+    }
+    return page;
+  }
+
+  private async pushUpdatePage(pageId: string, markdownContent: string): Promise<void> {
+    if (this.config.conversion.preferMarkdownApi !== false) {
+      try {
+        await this.notionClient.replacePageMarkdown(pageId, markdownContent);
+        return;
+      } catch {
+        // Markdown API 실패 시 blocks API fallback
+      }
+    }
+
+    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
+    const existingBlocks = await this.notionClient.fetchAllChildren(pageId);
+
+    if (blocks.length > 0) {
+      await this.notionClient.appendChildren(pageId, blocks);
+    }
+    for (const block of existingBlocks) {
+      await this.notionClient.deleteBlock(block.id);
+    }
+  }
+
+  private async fetchPageMarkdown(pageId: string): Promise<string> {
+    if (this.config.conversion.preferMarkdownApi !== false) {
+      try {
+        const result = await this.notionClient.getPageMarkdown(pageId);
+        return result.markdown;
+      } catch {
+        // Markdown API 실패 시 blocks API fallback
+      }
+    }
+    return this.blockConverter.notionBlocksToMarkdown(pageId);
   }
 
   private extractParentId(page: PageObjectResponse): string | null {

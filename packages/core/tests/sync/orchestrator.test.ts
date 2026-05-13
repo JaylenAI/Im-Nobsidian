@@ -27,6 +27,7 @@ function createMockStateDb() {
     upsertWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
+    setNotionLastEdited: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
@@ -56,6 +57,19 @@ function createMockNotionClient() {
     deleteBlock: vi.fn().mockResolvedValue(undefined),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
     archivePage: vi.fn().mockResolvedValue(undefined),
+    getPageMarkdown: vi
+      .fn()
+      .mockResolvedValue({ markdown: "", truncated: false, unknown_block_ids: [] }),
+    replacePageMarkdown: vi
+      .fn()
+      .mockResolvedValue({ markdown: "", truncated: false, unknown_block_ids: [] }),
+    createPageWithMarkdown: vi.fn().mockResolvedValue({
+      id: "page-id-123",
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root-page-id" },
+      properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
+    }),
+    uploadFile: vi.fn().mockResolvedValue("file-upload-id"),
     listChildren: vi.fn().mockResolvedValue({ results: [] }),
     getChildPagesRecursive: vi.fn().mockResolvedValue([]),
     getInternalClient: vi.fn().mockReturnValue({
@@ -123,7 +137,7 @@ describe("SyncOrchestrator", () => {
       const result = await orchestrator.push();
 
       expect(result.created).toBe(1);
-      expect(mockNotionClient.createPage).toHaveBeenCalled();
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalled();
       expect(mockStateDb.upsert).toHaveBeenCalled();
       expect(mockStateDb.setMeta).toHaveBeenCalledWith("last_push_at", expect.any(String));
     });
@@ -147,7 +161,10 @@ describe("SyncOrchestrator", () => {
       const result = await orchestrator.push();
 
       expect(result.updated).toBe(1);
-      expect(mockNotionClient.fetchAllChildren).toHaveBeenCalledWith("page-123");
+      expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalledWith(
+        "page-123",
+        expect.any(String),
+      );
     });
 
     it("삭제된 파일 Notion에서 아카이브", async () => {
@@ -210,6 +227,7 @@ describe("SyncOrchestrator", () => {
       mockVaultFs.listMarkdownFiles = vi
         .fn()
         .mockResolvedValue([{ path: "bad.md", content: "# Bad", mtime: new Date().toISOString() }]);
+      mockNotionClient.createPageWithMarkdown.mockRejectedValue(new Error("API limit"));
       mockNotionClient.createPage.mockRejectedValue(new Error("API limit"));
 
       const result = await orchestrator.push();
@@ -438,7 +456,7 @@ describe("SyncOrchestrator", () => {
       const result = await orchestrator.push();
 
       expect(result.created).toBe(1);
-      expect(mockNotionClient.createPage).toHaveBeenCalled();
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalled();
     });
 
     it("다중 파일 동시 push", async () => {
@@ -451,7 +469,7 @@ describe("SyncOrchestrator", () => {
       const result = await orchestrator.push();
 
       expect(result.created).toBe(3);
-      expect(mockNotionClient.createPage).toHaveBeenCalledTimes(3);
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(3);
     });
   });
 });
