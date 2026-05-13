@@ -30,6 +30,10 @@ export class CalloutTransformer implements Processor {
   readonly order = 30;
 
   process(input: ProcessorInput): ProcessorOutput {
+    if (input.context.path === "markdown-api") {
+      return { content: input.content, metadata: input.metadata };
+    }
+
     const content = input.content.replace(
       CALLOUT_REGEX,
       (_match, type: string, foldable: string | undefined, title: string | undefined) => {

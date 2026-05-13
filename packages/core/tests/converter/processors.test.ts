@@ -66,14 +66,14 @@ describe("EmbedResolver", () => {
     expect(result.metadata.images![0]!.isExternal).toBe(false);
   });
 
-  it("![[note.md]] → 링크 (이미지가 아닌 embed)", () => {
+  it("![[note.md]] → 보존 링크 (이미지가 아닌 embed)", () => {
     const result = processor.process({
       content: "Embed: ![[other-note.md]]",
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toContain("[other-note.md]");
-    expect(result.content).not.toContain("!");
+    expect(result.content).toContain("[other-note.md](im-nobsidian://embed/other-note.md)");
+    expect(result.content).not.toContain("![[");
   });
 
   it("YouTube URL → video preserve marker", () => {

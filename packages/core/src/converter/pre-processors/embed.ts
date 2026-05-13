@@ -23,7 +23,8 @@ export class EmbedResolver implements Processor {
         }
         return `![${target}](${encodeURI(target)})`;
       }
-      return `[${target}](${encodeURI(target)})`;
+      const encoded = encodeURIComponent(target);
+      return `[${target}](im-nobsidian://embed/${encoded})`;
     });
 
     content = content.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {

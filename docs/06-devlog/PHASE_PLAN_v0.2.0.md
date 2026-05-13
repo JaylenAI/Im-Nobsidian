@@ -62,7 +62,7 @@ notion-to-md v3 의존 제거. Notion 공식 Markdown API로 Pull/Push 핵심 �
 ## Phase 2: 위키링크 ↔ 페이지 멘션 매핑 [2-3일]
 
 **Branch**: `feature/wikilink-mention-mapping`
-**상태**: [ ] 미시작
+**상태**: [x] 완료 (2026-05-13)
 **의존**: Phase 1
 
 ### 목표
@@ -71,24 +71,32 @@ notion-to-md v3 의존 제거. Notion 공식 Markdown API로 Pull/Push 핵심 �
 
 ### 작업 목록
 
-- [ ] state-db.ts: getByTitle() / getByFileName() 메서드 추가
-- [ ] wikilink.ts(전처리기): 볼드 변환 → 페이지 멘션 변환으로 교체
-  - StateDB에서 대상 페이지 ID 조회
-  - 찾으면 → Notion 페이지 멘션 생성
-  - 못 찾으면 → preserve marker로 보존
-- [ ] mention-to-wikilink.ts(후처리기): 페이지 멘션 → [[위키링크]] 복원
+- [x] state-db.ts: resolveWikilink() 메서드 활용 (title/alias/filename 조회)
+- [x] wikilink.ts(전처리기): 볼드 변환 → 페이지 멘션 변환으로 교체
+  - StateDB에서 대상 페이지 ID 조회 (WikilinkResolverFn 주입)
+  - 찾으면 → `<mention-page id="pageId">` 태그 생성
+  - 못 찾으면 → `im-nobsidian://wikilink/` 보존 링크 + preserve marker
+  - `![[embed]]` 패턴 무시 (negative lookbehind)
+- [x] mention-to-wikilink.ts(후처리기): 3가지 패턴 복원
   - notion.so URL 패턴 확장 (www 없는 경우 포함)
-  - StateDB에서 page_id → obsidianPath 조회
-- [ ] orchestrator.ts: Push 시 위키링크 대상 페이지 존재 확인
-- [ ] frontmatter.ts: YAML 내 위키링크 제거 로직 삭제 (보존)
-- [ ] embed.ts: 노트 임베드 ![[note]] 보존 처리
+  - `im-nobsidian://wikilink/` 보존 링크 → `[[target|display]]` 복원
+  - `im-nobsidian://embed/` 보존 링크 → `![[target]]` 복원
+- [x] orchestrator.ts: enhanced-md-converter 통합
+  - Pull: `notionEnhancedToObsidian()` 적용 (mention-page → [[wikilink]])
+  - Push: `obsidianToNotionEnhanced()` 적용 (callout/toggle → 노션 형식)
+  - pushCreate/pushUpdate에서 aliases 추출 및 wikilink_map 업데이트
+- [x] pipeline-factory.ts: WikilinkResolverFn 주입 구조 추가
+- [x] frontmatter.ts: YAML 내 위키링크 제거 로직 삭제 (보존)
+- [x] embed.ts: 노트 임베드 ![[note]] → `im-nobsidian://embed/` 보존 처리
+- [x] callout.ts: markdown-api 경로에서 CalloutTransformer 스킵
 
 ### 검증
 
-- [ ] [[My Note]] Push → Notion 페이지 멘션 표시 → Pull → [[My Note]] 복원
-- [ ] 존재하지 않는 [[미래노트]] → preserve marker → Pull 시 [[미래노트]] 복원
-- [ ] 프론트매터 내 [[위키링크]] 왕복 보존
-- [ ] ![[노트임베드]] 왕복 보존
+- [x] [[My Note]] Push → Notion 페이지 멘션 표시 → Pull → [[My Note]] 복원
+- [x] 존재하지 않는 [[미래노트]] → 보존 링크 → Pull 시 [[미래노트]] 복원
+- [x] 프론트매터 내 [[위키링크]] 왕복 보존
+- [x] ![[노트임베드]] 왕복 보존
+- [x] 364개 테스트 통과, typecheck 클린, build 성공
 
 ---
 

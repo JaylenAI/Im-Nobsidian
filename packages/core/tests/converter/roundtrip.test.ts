@@ -103,15 +103,41 @@ describe("Roundtrip 테스트", () => {
     });
   });
 
-  it("wikilink 라운드트립: [[link]] → markdown → [[link]]", () => {
+  it("wikilink 라운드트립: [[link]] → 보존 링크 → [[link]]", () => {
     const wikiPipeline = new ConversionPipeline();
     wikiPipeline.registerPreProcessor(new WikilinkResolver());
     wikiPipeline.registerPostProcessor(new MentionToWikilink());
 
     const input = "See [[Project Plan]] for details";
     const pushResult = wikiPipeline.convertToNotion(input, pushContext);
-    expect(pushResult.content).toContain("**Project Plan**");
+    expect(pushResult.content).toContain("im-nobsidian://wikilink/Project%20Plan");
     expect(pushResult.content).not.toContain("[[");
+
+    const pullResult = wikiPipeline.convertToMarkdown(pushResult.content, pullContext);
+    expect(pullResult).toContain("[[Project Plan]]");
+    expect(pullResult).not.toContain("im-nobsidian://");
+  });
+
+  it("wikilink 라운드트립: 리졸버로 페이지 멘션 변환 → Pull 시 복원", () => {
+    const resolver = (text: string) => {
+      if (text === "Project Plan") {
+        return {
+          obsidianPath: "project-plan.md",
+          notionPageId: "page-abc",
+          title: "Project Plan",
+          aliases: [],
+        };
+      }
+      return null;
+    };
+
+    const wikiPipeline = new ConversionPipeline();
+    wikiPipeline.registerPreProcessor(new WikilinkResolver(resolver));
+    wikiPipeline.registerPostProcessor(new MentionToWikilink());
+
+    const input = "See [[Project Plan]] for details";
+    const pushResult = wikiPipeline.convertToNotion(input, pushContext);
+    expect(pushResult.content).toContain('<mention-page id="page-abc">Project Plan</mention-page>');
   });
 
   it("image-embed-note.md 이미지 임베드 보존", async () => {

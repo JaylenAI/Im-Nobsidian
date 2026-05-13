@@ -37,7 +37,7 @@ title: Test
     const result = pipeline.convertToNotion(input, pushContext);
 
     expect(result.properties).toEqual({ title: "Test" });
-    expect(result.content).toContain("**World**");
+    expect(result.content).toContain("im-nobsidian://wikilink/World");
     expect(result.content).not.toContain("---");
   });
 
@@ -89,7 +89,7 @@ describe("FrontmatterExtractor", () => {
 });
 
 describe("WikilinkResolver", () => {
-  it("[[Page]] → **Page** 볼드 변환", () => {
+  it("리졸버 없이 [[Page]] → 보존 링크 변환", () => {
     const processor = new WikilinkResolver();
     const result = processor.process({
       content: "Link to [[My Page]] here",
@@ -97,10 +97,12 @@ describe("WikilinkResolver", () => {
       context: pushContext,
     });
 
-    expect(result.content).toBe("Link to **My Page** here");
+    expect(result.content).toBe("Link to [My Page](im-nobsidian://wikilink/My%20Page) here");
+    expect(result.metadata.preserveMarkers).toHaveLength(1);
+    expect(result.metadata.preserveMarkers![0]!.type).toBe("wikilink");
   });
 
-  it("[[Page|Display]] → **Display** 변환", () => {
+  it("[[Page|Display]] → 보존 링크 (display 텍스트 유지)", () => {
     const processor = new WikilinkResolver();
     const result = processor.process({
       content: "[[Long Name|Short]]",
@@ -108,7 +110,7 @@ describe("WikilinkResolver", () => {
       context: pushContext,
     });
 
-    expect(result.content).toBe("**Short**");
+    expect(result.content).toBe("[Short](im-nobsidian://wikilink/Long%20Name)");
   });
 
   it("여러 위키링크 동시 처리", () => {
@@ -119,12 +121,79 @@ describe("WikilinkResolver", () => {
       context: pushContext,
     });
 
-    expect(result.content).toBe("**A** and **B** and **See C**");
+    expect(result.content).toContain("[A](im-nobsidian://wikilink/A)");
+    expect(result.content).toContain("[B](im-nobsidian://wikilink/B)");
+    expect(result.content).toContain("[See C](im-nobsidian://wikilink/C)");
+    expect(result.metadata.preserveMarkers).toHaveLength(3);
+  });
+
+  it("리졸버로 페이지 멘션 변환", () => {
+    const resolver = (text: string) => {
+      if (text === "My Page") {
+        return {
+          obsidianPath: "my-page.md",
+          notionPageId: "page-id-123",
+          title: "My Page",
+          aliases: [],
+        };
+      }
+      return null;
+    };
+    const processor = new WikilinkResolver(resolver);
+    const result = processor.process({
+      content: "See [[My Page]] and [[Unknown]]",
+      metadata: {},
+      context: pushContext,
+    });
+
+    expect(result.content).toContain('<mention-page id="page-id-123">My Page</mention-page>');
+    expect(result.content).toContain("[Unknown](im-nobsidian://wikilink/Unknown)");
+    expect(result.metadata.preserveMarkers).toHaveLength(1);
+  });
+
+  it("Pull 방향에서는 변환하지 않음", () => {
+    const processor = new WikilinkResolver();
+    const result = processor.process({
+      content: "Link to [[My Page]] here",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("Link to [[My Page]] here");
+  });
+
+  it("![[embed]] 패턴은 무시 (EmbedResolver에 위임)", () => {
+    const processor = new WikilinkResolver();
+    const result = processor.process({
+      content: "See ![[note.md]] here",
+      metadata: {},
+      context: pushContext,
+    });
+
+    expect(result.content).toBe("See ![[note.md]] here");
   });
 });
 
+const blockApiPushContext: ConversionContext = {
+  direction: "push",
+  path: "block-api",
+  filePath: "test.md",
+};
+
 describe("CalloutTransformer", () => {
-  it("[!warning] → 이모지 변환", () => {
+  it("[!warning] → 이모지 변환 (block-api)", () => {
+    const processor = new CalloutTransformer();
+    const result = processor.process({
+      content: "> [!warning] Be careful\n> Content here",
+      metadata: {},
+      context: blockApiPushContext,
+    });
+
+    expect(result.content).toContain("⚠️");
+    expect(result.content).toContain("**Be careful**");
+  });
+
+  it("markdown-api 경로에서는 변환하지 않음", () => {
     const processor = new CalloutTransformer();
     const result = processor.process({
       content: "> [!warning] Be careful\n> Content here",
@@ -132,16 +201,15 @@ describe("CalloutTransformer", () => {
       context: pushContext,
     });
 
-    expect(result.content).toContain("⚠️");
-    expect(result.content).toContain("**Be careful**");
+    expect(result.content).toBe("> [!warning] Be careful\n> Content here");
   });
 
-  it("[!tip]+ foldable open → preserve marker 포함", () => {
+  it("[!tip]+ foldable open → preserve marker 포함 (block-api)", () => {
     const processor = new CalloutTransformer();
     const result = processor.process({
       content: "> [!tip]+ Hint",
       metadata: {},
-      context: pushContext,
+      context: blockApiPushContext,
     });
 
     expect(result.content).toContain("im-nobsidian:callout:type=tip&foldable=open");
@@ -169,6 +237,50 @@ describe("MentionToWikilink", () => {
     });
 
     expect(result.content).toBe("[[Note]]");
+  });
+
+  it("www 없는 notion.so URL도 처리", () => {
+    const processor = new MentionToWikilink();
+    const result = processor.process({
+      content: "See [My Page](https://notion.so/abc-def-123) here",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("See [[My Page]] here");
+  });
+
+  it("im-nobsidian://wikilink 보존 링크 → 위키링크 복원", () => {
+    const processor = new MentionToWikilink();
+    const result = processor.process({
+      content: "See [Unknown Page](im-nobsidian://wikilink/Unknown%20Page) here",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("See [[Unknown Page]] here");
+  });
+
+  it("im-nobsidian://wikilink 디스플레이 텍스트 다를 때 → [[target|display]]", () => {
+    const processor = new MentionToWikilink();
+    const result = processor.process({
+      content: "[Short](im-nobsidian://wikilink/Long%20Name)",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("[[Long Name|Short]]");
+  });
+
+  it("im-nobsidian://embed 보존 링크 → ![[embed]] 복원", () => {
+    const processor = new MentionToWikilink();
+    const result = processor.process({
+      content: "Embed: [other-note.md](im-nobsidian://embed/other-note.md)",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("Embed: ![[other-note.md]]");
   });
 });
 

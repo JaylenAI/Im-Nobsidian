@@ -28,6 +28,10 @@ import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual } from "../utils/id.js";
 import type { VaultFS } from "./vault-fs.js";
+import {
+  notionEnhancedToObsidian,
+  obsidianToNotionEnhanced,
+} from "../converter/enhanced-md-converter.js";
 
 export class SyncOrchestrator {
   private readonly changeDetector: ChangeDetector;
@@ -44,7 +48,9 @@ export class SyncOrchestrator {
     private readonly vaultFs: VaultFS,
   ) {
     this.changeDetector = new ChangeDetector(stateDb);
-    this.pipeline = createDefaultPipeline();
+    this.pipeline = createDefaultPipeline({
+      wikilinkResolver: (text) => stateDb.resolveWikilink(text),
+    });
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments);
     this.propertyMapper = new PropertyMapper();
@@ -385,11 +391,12 @@ export class SyncOrchestrator {
         baseSnapshot: Buffer.from(content, "utf-8"),
       });
 
+      const aliases = extractAliases(conversionResult.properties);
       this.stateDb.upsertWikilink({
         obsidianPath: path,
         notionPageId: page.id,
         title,
-        aliases: [],
+        aliases,
       });
 
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
@@ -431,11 +438,19 @@ export class SyncOrchestrator {
     const updatedPage = await this.notionClient.getPage(record.notionPageId);
 
     const hash = computeHash(content);
+    const title = extractTitle(path);
+    const aliases = extractAliases(conversionResult.properties);
     this.stateDb.transaction(() => {
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       this.stateDb.setNotionLastEdited(record.id, updatedPage.last_edited_time);
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
+      this.stateDb.upsertWikilink({
+        obsidianPath: path,
+        notionPageId: record.notionPageId!,
+        title,
+        aliases,
+      });
     });
   }
 
@@ -590,11 +605,12 @@ export class SyncOrchestrator {
         baseSnapshot: Buffer.from(finalContent, "utf-8"),
       });
 
+      const aliases = extractAliases(properties);
       this.stateDb.upsertWikilink({
         obsidianPath: filePath,
         notionPageId: pageId,
         title,
-        aliases: [],
+        aliases,
       });
     });
 
@@ -792,11 +808,12 @@ export class SyncOrchestrator {
   ): Promise<PageObjectResponse> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
+        const enhanced = obsidianToNotionEnhanced(markdownContent);
         return await this.notionClient.createPageWithMarkdown({
           parentId,
           parentType,
           title,
-          markdown: markdownContent,
+          markdown: enhanced,
           properties,
         });
       } catch {
@@ -820,7 +837,8 @@ export class SyncOrchestrator {
   private async pushUpdatePage(pageId: string, markdownContent: string): Promise<void> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
-        await this.notionClient.replacePageMarkdown(pageId, markdownContent);
+        const enhanced = obsidianToNotionEnhanced(markdownContent);
+        await this.notionClient.replacePageMarkdown(pageId, enhanced);
         return;
       } catch {
         // Markdown API 실패 시 blocks API fallback
@@ -842,7 +860,7 @@ export class SyncOrchestrator {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
-        return result.markdown;
+        return notionEnhancedToObsidian(result.markdown);
       } catch {
         // Markdown API 실패 시 blocks API fallback
       }
@@ -862,4 +880,16 @@ function extractTitle(filePath: string): string {
   const parts = filePath.split("/");
   const filename = parts[parts.length - 1] ?? "";
   return filename.replace(/\.md$/, "");
+}
+
+function extractAliases(properties: Record<string, unknown>): string[] {
+  const raw = properties.aliases ?? properties.alias;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((a): a is string => typeof a === "string");
+  if (typeof raw === "string")
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return [];
 }

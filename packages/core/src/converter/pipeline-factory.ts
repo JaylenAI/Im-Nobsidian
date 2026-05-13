@@ -1,6 +1,6 @@
 import { ConversionPipeline } from "./pipeline.js";
 import { FrontmatterExtractor } from "./pre-processors/frontmatter.js";
-import { WikilinkResolver } from "./pre-processors/wikilink.js";
+import { WikilinkResolver, type WikilinkResolverFn } from "./pre-processors/wikilink.js";
 import { CalloutTransformer } from "./pre-processors/callout.js";
 import { MathNormalizer } from "./pre-processors/math.js";
 import { EmbedResolver } from "./pre-processors/embed.js";
@@ -16,14 +16,18 @@ import { FrontmatterGenerator } from "./post-processors/frontmatter-generator.js
 import { LocalImageRestorer } from "./post-processors/local-image-restorer.js";
 import { PropertiesTableRestorer } from "./post-processors/properties-table-restorer.js";
 
-export function createDefaultPipeline(): ConversionPipeline {
+export interface PipelineOptions {
+  readonly wikilinkResolver?: WikilinkResolverFn;
+}
+
+export function createDefaultPipeline(options?: PipelineOptions): ConversionPipeline {
   const pipeline = new ConversionPipeline();
 
   pipeline.registerPreProcessor(new HtmlAnnotationStripper());
   pipeline.registerPreProcessor(new UnsupportedBlockStripper());
   pipeline.registerPreProcessor(new FrontmatterExtractor());
   pipeline.registerPreProcessor(new PropertiesTableInjector());
-  pipeline.registerPreProcessor(new WikilinkResolver());
+  pipeline.registerPreProcessor(new WikilinkResolver(options?.wikilinkResolver));
   pipeline.registerPreProcessor(new CalloutTransformer());
   pipeline.registerPreProcessor(new MathNormalizer());
   pipeline.registerPreProcessor(new EmbedResolver());

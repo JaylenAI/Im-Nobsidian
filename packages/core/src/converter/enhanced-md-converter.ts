@@ -57,7 +57,7 @@ function convertCallouts(content: string): string {
     const lines = body.trim().split("\n");
     const firstLine = lines[0] ?? "";
 
-    const emojiMatch = /^([\p{Emoji}‍]+)\s*(.*)/u.exec(firstLine);
+    const emojiMatch = /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
     const type = emojiMatch ? emojiToCalloutType(emojiMatch[1]!) : "note";
     const title = emojiMatch ? emojiMatch[2]! : firstLine;
     const rest = lines.slice(1).join("\n").trim();
@@ -150,13 +150,38 @@ function findMatchingEnd(content: string, startFrom: number): number {
 }
 
 function convertObsidianCallouts(content: string): string {
-  const calloutRe = /^> \[!(\w+)\]([-+])?\s*(.*)/gm;
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let i = 0;
 
-  return content.replace(calloutRe, (_match, type: string, _fold: string, title: string) => {
-    const emoji = calloutTypeToEmoji(type) ?? "💡";
-    const calloutTitle = title ? `${emoji} ${title}` : emoji;
-    return `::: callout\n${calloutTitle}`;
-  });
+  while (i < lines.length) {
+    const headerMatch = /^> \[!(\w+)\]([-+])?\s*(.*)/.exec(lines[i]!);
+    if (headerMatch) {
+      const type = headerMatch[1]!;
+      const title = headerMatch[3]!;
+      const emoji = calloutTypeToEmoji(type) ?? "💡";
+      const calloutTitle = title ? `${emoji} ${title}` : emoji;
+
+      const bodyLines: string[] = [];
+      i++;
+      while (i < lines.length && lines[i]!.startsWith("> ")) {
+        bodyLines.push(lines[i]!.slice(2));
+        i++;
+      }
+
+      result.push("::: callout");
+      result.push(calloutTitle);
+      if (bodyLines.length > 0) {
+        result.push(...bodyLines);
+      }
+      result.push(":::");
+    } else {
+      result.push(lines[i]!);
+      i++;
+    }
+  }
+
+  return result.join("\n");
 }
 
 const EMOJI_TYPE_MAP: Record<string, string> = {
