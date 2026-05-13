@@ -24,7 +24,7 @@
   "author": "hanseungheon",
   "repository": {
     "type": "git",
-    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer",
+    "url": "https://github.com/JaylenAI/Im-Nobsidian",
     "directory": "packages/obsidian-plugin"
   },
   "license": "MIT"

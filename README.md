@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/v/im-nobsidian" alt="npm version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-20%2B-green" alt="Node.js" /></a>
@@ -47,13 +47,13 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 ### Linux, macOS, WSL2, Termux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.ps1 | iex
 ```
 
 ### Manual Install
@@ -290,8 +290,8 @@ See [ROADMAP.md](docs/06-devlog/ROADMAP.md) for the full plan.
 ## Development
 
 ```bash
-git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
-cd Obsidian_Notion_Syncer
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
 pnpm install
 pnpm build
 pnpm test          # 341 tests, 82.7% coverage
@@ -320,8 +320,8 @@ packages/
 Contributions welcome! See the [Contributing Guide](CONTRIBUTING.md) for setup, code style, and PR process.
 
 ```bash
-git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
-cd Obsidian_Notion_Syncer
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
 pnpm install && pnpm build && pnpm test
 ```
 

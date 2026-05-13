@@ -12,8 +12,8 @@ We welcome contributions! / 기여를 환영합니다!
 ### Setup / 설치
 
 ```bash
-git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
-cd Obsidian_Notion_Syncer
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
 pnpm install
 pnpm build
 ```

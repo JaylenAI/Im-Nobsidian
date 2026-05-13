@@ -12,7 +12,7 @@
 
 ### 보고 방법
 
-1. GitHub의 [Security Advisories](https://github.com/JaylenAI/Obsidian_Notion_Syncer/security/advisories/new)를 통해 보고
+1. GitHub의 [Security Advisories](https://github.com/JaylenAI/Im-Nobsidian/security/advisories/new)를 통해 보고
 2. 또는 이메일: jaylenhanai@gmail.com
 
 ### 포함할 정보

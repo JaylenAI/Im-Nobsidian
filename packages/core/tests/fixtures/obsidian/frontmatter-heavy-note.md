@@ -10,7 +10,7 @@ category: documentation
 created: "2026-01-15"
 due: "2026-06-30"
 author: jaylen
-url: https://github.com/JaylenAI/Obsidian_Notion_Syncer
+url: https://github.com/JaylenAI/Im-Nobsidian
 reviewed: true
 score: 95.5
 ---

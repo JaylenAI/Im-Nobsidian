@@ -31,7 +31,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer",
+    "url": "https://github.com/JaylenAI/Im-Nobsidian",
     "directory": "packages/cli"
   },
   "keywords": [
@@ -46,7 +46,7 @@
     "node": ">=20"
   },
   "bugs": {
-    "url": "https://github.com/JaylenAI/Obsidian_Notion_Syncer/issues"
+    "url": "https://github.com/JaylenAI/Im-Nobsidian/issues"
   },
-  "homepage": "https://github.com/JaylenAI/Obsidian_Notion_Syncer#readme"
+  "homepage": "https://github.com/JaylenAI/Im-Nobsidian#readme"
 }

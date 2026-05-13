@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Obsidian_Notion_Syncer/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <a href="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/v/im-nobsidian" alt="npm version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
   <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-20%2B-green" alt="Node.js" /></a>
@@ -47,13 +47,13 @@ Obsidian에서 편집하면 Notion에 반영됩니다. Notion에서 편집하면
 ### Linux, macOS, WSL2, Termux
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.sh | bash
 ```
 
 ### Windows (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.ps1 | iex
+irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.ps1 | iex
 ```
 
 ### 직접 설치
@@ -274,8 +274,8 @@ v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ �
 ## 개발
 
 ```bash
-git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
-cd Obsidian_Notion_Syncer
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
 pnpm install
 pnpm build
 pnpm test          # 341개 테스트, 82.7% 커버리지
@@ -304,8 +304,8 @@ packages/
 기여를 환영합니다! 개발 환경 설정, 코드 스타일, PR 프로세스는 [기여 가이드](CONTRIBUTING.md)를 참고하세요.
 
 ```bash
-git clone https://github.com/JaylenAI/Obsidian_Notion_Syncer.git
-cd Obsidian_Notion_Syncer
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
 pnpm install && pnpm build && pnpm test
 ```
 
