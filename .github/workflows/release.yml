@@ -25,7 +25,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm --filter @im-nobsidian/core --filter im-nobsidian publish --access public --no-git-checks --provenance
+      - run: pnpm --filter @im-nobsidian/core publish --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - run: pnpm --filter im-nobsidian publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
