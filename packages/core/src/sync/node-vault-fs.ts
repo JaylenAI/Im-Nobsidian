@@ -85,6 +85,8 @@ export class NodeVaultFS implements VaultFS {
   }
 
   private matchesPattern(relativePath: string, pattern: string): boolean {
+    if (pattern === "**/*" || pattern === "**") return true;
+
     if (pattern.endsWith("/**")) {
       const dir = pattern.slice(0, -3);
       return relativePath.startsWith(dir + "/") || relativePath === dir;
@@ -92,8 +94,12 @@ export class NodeVaultFS implements VaultFS {
       const ext = pattern.slice(1);
       return relativePath.endsWith(ext);
     } else if (pattern.includes("*")) {
-      const regex = new RegExp("^" + pattern.replace(/\./g, "\\.").replace(/\*/g, "[^/]*") + "$");
-      return regex.test(relativePath);
+      const regexStr = pattern
+        .replace(/\./g, "\\.")
+        .replace(/\*\*/g, "{{GLOBSTAR}}")
+        .replace(/\*/g, "[^/]*")
+        .replace(/\{\{GLOBSTAR\}\}/g, ".*");
+      return new RegExp("^" + regexStr + "$").test(relativePath);
     } else {
       return relativePath === pattern || relativePath.startsWith(pattern + "/");
     }

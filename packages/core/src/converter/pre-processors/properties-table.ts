@@ -38,8 +38,11 @@ export class PropertiesTableInjector implements Processor {
 
 function formatValue(value: unknown): string {
   if (value === null || value === undefined) return "";
+  if (value instanceof Date) {
+    return value.toISOString().replace(/T00:00:00(?:\.000)?Z$/, "");
+  }
   if (Array.isArray(value)) {
-    return value.map((v) => String(v)).join(", ");
+    return value.map((v) => formatValue(v)).join(", ");
   }
   if (typeof value === "object") {
     return JSON.stringify(value);
