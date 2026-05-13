@@ -152,6 +152,16 @@ describe("Roundtrip 테스트", () => {
       title: "Image Embed Test",
       tags: ["image", "test"],
     });
+
+    const localImages = pushResult.images.filter((img) => !img.isExternal);
+    expect(localImages).toHaveLength(3);
+    expect(localImages.map((img) => img.localPath)).toEqual(
+      expect.arrayContaining(["screenshot.png", "diagram.jpg", "architecture.png"]),
+    );
+
+    const externalImages = pushResult.images.filter((img) => img.isExternal);
+    expect(externalImages).toHaveLength(1);
+    expect(externalImages[0]!.url).toBe("https://example.com/photo.png");
   });
 
   it("complex-formatting-note.md 중첩 리스트/복합 서식 보존", async () => {

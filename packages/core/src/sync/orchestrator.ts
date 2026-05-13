@@ -52,7 +52,7 @@ export class SyncOrchestrator {
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
     this.blockConverter = new BlockConverter();
-    this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments);
+    this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments, notionClient);
     this.propertyMapper = new PropertyMapper();
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
@@ -375,6 +375,8 @@ export class SyncOrchestrator {
       effectiveProperties,
     );
 
+    await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images);
+
     const hash = computeHash(content);
 
     this.stateDb.transaction(() => {
@@ -423,6 +425,8 @@ export class SyncOrchestrator {
     });
 
     await this.pushUpdatePage(record.notionPageId, conversionResult.content);
+
+    await this.imageHandler.uploadAndAppendImages(record.notionPageId, conversionResult.images);
 
     let propsToUpdate = conversionResult.properties;
     if (this.isDatabaseMode && propsToUpdate && Object.keys(propsToUpdate).length > 0) {

@@ -41,6 +41,11 @@ export class NodeVaultFS implements VaultFS {
     return readFile(fullPath, "utf-8");
   }
 
+  async readBinary(path: string): Promise<Buffer> {
+    const fullPath = join(this.rootPath, path);
+    return readFile(fullPath);
+  }
+
   async writeFile(path: string, content: string): Promise<void> {
     const fullPath = join(this.rootPath, path);
     await mkdir(dirname(fullPath), { recursive: true });
