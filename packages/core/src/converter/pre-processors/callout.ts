@@ -41,7 +41,7 @@ export class CalloutTransformer implements Processor {
         const titleText = title?.trim() || type;
         const foldMeta = foldable
           ? `\n%% im-nobsidian:callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"} %%`
-          : "";
+          : `\n%% im-nobsidian:callout:type=${type} %%`;
 
         return `> ${emoji} **${titleText}**${foldMeta}`;
       },
