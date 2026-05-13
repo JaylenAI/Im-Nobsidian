@@ -1,0 +1,413 @@
+import { Plugin, Notice } from "obsidian";
+import {
+  StateDB,
+  NotionClient,
+  SyncOrchestrator,
+  ConflictResolver,
+  DEFAULT_CONFIG,
+} from "@im-nobsidian/core";
+import type { Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { ImNobsidianSettingTab } from "./settings.js";
+import { ObsidianVaultAdapter } from "./vault-adapter.js";
+import { ConflictModal } from "./conflict-modal.js";
+
+interface ImNobsidianSettings {
+  token: string;
+  rootPageId: string;
+  syncDirection: "push" | "pull" | "both";
+  autoSync: boolean;
+  autoSyncInterval: number;
+  conflictStrategy: "local-first" | "remote-first" | "manual";
+  attachments: string;
+}
+
+const DEFAULT_SETTINGS: ImNobsidianSettings = {
+  token: "",
+  rootPageId: "",
+  syncDirection: "both",
+  autoSync: false,
+  autoSyncInterval: 300,
+  conflictStrategy: "manual",
+  attachments: "attachments",
+};
+
+export default class ImNobsidianPlugin extends Plugin {
+  settings: ImNobsidianSettings = DEFAULT_SETTINGS;
+  private orchestrator: SyncOrchestrator | null = null;
+  private stateDb: StateDB | null = null;
+  private statusBarEl: HTMLElement | null = null;
+  private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private vaultEventSyncing = false;
+
+  async onload(): Promise<void> {
+    await this.loadSettings();
+    this.addSettingTab(new ImNobsidianSettingTab(this.app, this));
+
+    this.addCommand({
+      id: "im-nobsidian-push",
+      name: "Push to Notion",
+      callback: () => this.executePush(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-pull",
+      name: "Pull from Notion",
+      callback: () => this.executePull(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-sync",
+      name: "Sync (양방향)",
+      callback: () => this.executeSync(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-status",
+      name: "동기화 상태 확인",
+      callback: () => this.showStatus(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-resolve",
+      name: "충돌 해결",
+      callback: () => this.resolveConflicts(),
+    });
+
+    this.statusBarEl = this.addStatusBarItem();
+    this.updateStatusBar("ready");
+
+    if (this.settings.token && this.settings.rootPageId) {
+      this.initOrchestrator();
+    }
+
+    if (this.settings.autoSync) {
+      this.startAutoSync();
+    }
+
+    this.registerVaultEvents();
+  }
+
+  onunload(): void {
+    this.stopAutoSync();
+    this.clearVaultDebounce();
+    this.stateDb?.close();
+  }
+
+  async loadSettings(): Promise<void> {
+    const data = await this.loadData();
+    this.settings = { ...DEFAULT_SETTINGS, ...data };
+  }
+
+  async saveSettings(): Promise<void> {
+    await this.saveData(this.settings);
+  }
+
+  initOrchestrator(): void {
+    if (!this.settings.token || !this.settings.rootPageId) return;
+
+    try {
+      this.stateDb?.close();
+
+      const dbPath = `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/.im-nobsidian/sync.db`;
+      this.stateDb = StateDB.open(dbPath);
+
+      const client = new NotionClient({
+        token: this.settings.token,
+        concurrency: 3,
+        timeoutMs: 30000,
+      });
+
+      const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+
+      const config: Config = {
+        ...DEFAULT_CONFIG,
+        notion: {
+          token: this.settings.token,
+          rootPageId: this.settings.rootPageId,
+          parentMode: "page" as const,
+        },
+        sync: {
+          ...DEFAULT_CONFIG.sync,
+          direction: this.settings.syncDirection,
+          conflictStrategy: this.settings.conflictStrategy,
+        },
+        paths: {
+          ...DEFAULT_CONFIG.paths,
+          attachments: this.settings.attachments,
+        },
+      };
+
+      this.orchestrator = new SyncOrchestrator(config, this.stateDb, client, vaultAdapter);
+      this.updateStatusBar("ready");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      new Notice(`Im-Nobsidian 초기화 실패: ${message}`);
+      this.updateStatusBar("error");
+    }
+  }
+
+  startAutoSync(): void {
+    this.stopAutoSync();
+    if (!this.settings.autoSync || !this.orchestrator) return;
+
+    this.autoSyncTimer = setInterval(
+      () => this.executeSync(),
+      this.settings.autoSyncInterval * 1000,
+    );
+  }
+
+  stopAutoSync(): void {
+    if (this.autoSyncTimer) {
+      clearInterval(this.autoSyncTimer);
+      this.autoSyncTimer = null;
+    }
+  }
+
+  private registerVaultEvents(): void {
+    this.registerEvent(
+      this.app.vault.on("modify", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("create", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+    this.registerEvent(
+      this.app.vault.on("rename", (file) => {
+        if (file.path.endsWith(".md")) this.scheduleVaultSync();
+      }),
+    );
+  }
+
+  private scheduleVaultSync(): void {
+    if (!this.settings.autoSync || !this.orchestrator) return;
+
+    this.clearVaultDebounce();
+    this.debounceTimer = setTimeout(() => {
+      this.debounceTimer = null;
+      void this.executeVaultSync();
+    }, 2000);
+  }
+
+  private clearVaultDebounce(): void {
+    if (this.debounceTimer) {
+      clearTimeout(this.debounceTimer);
+      this.debounceTimer = null;
+    }
+  }
+
+  private async executeVaultSync(): Promise<void> {
+    if (!this.orchestrator || this.vaultEventSyncing) return;
+
+    this.vaultEventSyncing = true;
+    this.updateStatusBar("syncing");
+
+    try {
+      const result = await this.orchestrator.sync();
+      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+    } catch {
+      this.updateStatusBar("error");
+    } finally {
+      this.vaultEventSyncing = false;
+    }
+  }
+
+  private async executePush(): Promise<void> {
+    if (!this.orchestrator) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    this.updateStatusBar("syncing");
+    new Notice("Im-Nobsidian: Push 시작...");
+
+    try {
+      const result = await this.orchestrator.push();
+
+      const message = [
+        `Push 완료 (${(result.duration / 1000).toFixed(1)}s)`,
+        `생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}`,
+      ];
+
+      if (result.failed.length > 0) {
+        message.push(`실패 ${result.failed.length}건`);
+      }
+
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      this.updateStatusBar("ready");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`Im-Nobsidian Push 실패: ${msg}`);
+      this.updateStatusBar("error");
+    }
+  }
+
+  private async executePull(): Promise<void> {
+    if (!this.orchestrator) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    this.updateStatusBar("syncing");
+    new Notice("Im-Nobsidian: Pull 시작...");
+
+    try {
+      const result = await this.orchestrator.pull();
+
+      const message = [
+        `Pull 완료 (${(result.duration / 1000).toFixed(1)}s)`,
+        `생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}`,
+      ];
+
+      if (result.conflicts.length > 0) {
+        message.push(`충돌 ${result.conflicts.length}건 — 수동 해결 필요`);
+      }
+
+      if (result.failed.length > 0) {
+        message.push(`실패 ${result.failed.length}건`);
+      }
+
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`Im-Nobsidian Pull 실패: ${msg}`);
+      this.updateStatusBar("error");
+    }
+  }
+
+  private async executeSync(): Promise<void> {
+    if (!this.orchestrator) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    this.updateStatusBar("syncing");
+    new Notice("Im-Nobsidian: Sync 시작...");
+
+    try {
+      const result = await this.orchestrator.sync();
+
+      const pullInfo = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
+      const pushInfo = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`;
+
+      const message = [`Sync 완료 (${(result.duration / 1000).toFixed(1)}s)`, pullInfo, pushInfo];
+
+      if (result.conflicts.length > 0) {
+        message.push(`충돌 ${result.conflicts.length}건`);
+      }
+
+      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`Im-Nobsidian Sync 실패: ${msg}`);
+      this.updateStatusBar("error");
+    }
+  }
+
+  private async showStatus(): Promise<void> {
+    if (!this.orchestrator) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    try {
+      const status = await this.orchestrator.status();
+
+      const lines = [];
+
+      if (status.lastSyncAt) {
+        lines.push(`마지막 동기화: ${new Date(status.lastSyncAt).toLocaleString()}`);
+      } else {
+        lines.push("아직 동기화된 적 없음");
+      }
+
+      lines.push(`로컬 변경: ${status.localChanges.length}건`);
+      lines.push(`원격 변경: ${status.remoteChanges.length}건`);
+
+      if (status.pendingOperations > 0) {
+        lines.push(`대기 중: ${status.pendingOperations}건`);
+      }
+
+      new Notice(`Im-Nobsidian 상태:\n${lines.join("\n")}`, 5000);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`상태 확인 실패: ${msg}`);
+    }
+  }
+
+  private async resolveConflicts(): Promise<void> {
+    if (!this.orchestrator || !this.stateDb) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    const conflictRecords = this.stateDb.getByStatus("conflict");
+    if (conflictRecords.length === 0) {
+      new Notice("Im-Nobsidian: 충돌이 없습니다.");
+      return;
+    }
+
+    try {
+      const pullResult = await this.orchestrator.pull();
+
+      if (pullResult.conflicts.length === 0) {
+        new Notice("Im-Nobsidian: 해결할 충돌이 없습니다.");
+        this.updateStatusBar("ready");
+        return;
+      }
+
+      const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+      const resolver = new ConflictResolver(this.stateDb, vaultAdapter);
+
+      for (const conflict of pullResult.conflicts) {
+        await this.showConflictModal(conflict, resolver);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`충돌 해결 실패: ${msg}`);
+    }
+  }
+
+  private showConflictModal(conflict: Conflict, resolver: ConflictResolver): Promise<void> {
+    return new Promise((resolve) => {
+      const modal = new ConflictModal(this.app, conflict, async (choice: ResolutionChoice) => {
+        const result = await resolver.resolve(conflict, choice);
+
+        if (result.success) {
+          new Notice(`충돌 해결: ${result.path} → ${choice}`);
+        } else if (result.mergeHadConflicts) {
+          new Notice(`자동 병합 완료 (수동 확인 필요): ${result.path}`, 5000);
+        }
+
+        const remaining = this.stateDb?.getByStatus("conflict") ?? [];
+        this.updateStatusBar(remaining.length > 0 ? "conflict" : "ready");
+
+        resolve();
+      });
+      modal.open();
+    });
+  }
+
+  private updateStatusBar(state: "ready" | "syncing" | "error" | "conflict"): void {
+    if (!this.statusBarEl) return;
+
+    const labels: Record<string, string> = {
+      ready: "Im-Nobsidian: Ready",
+      syncing: "Im-Nobsidian: Syncing...",
+      error: "Im-Nobsidian: Error",
+      conflict: "Im-Nobsidian: Conflict",
+    };
+
+    this.statusBarEl.setText(labels[state] ?? "Im-Nobsidian");
+  }
+}

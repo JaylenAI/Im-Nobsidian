@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-echo "=== ObsiNotion 개발 환경 세팅 ==="
+echo "=== Im-Nobsidian 개발 환경 세팅 ==="
 
 # Node.js 버전 확인
 NODE_VERSION=$(node -v | cut -d'.' -f1 | tr -d 'v')

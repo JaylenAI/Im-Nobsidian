@@ -5,7 +5,7 @@
 
 ## 맥락
 
-ObsiNotion은 3개의 배포 단위(core, cli, obsidian-plugin)로 구성된다.
+Im-Nobsidian은 3개의 배포 단위(core, cli, obsidian-plugin)로 구성된다.
 코드 공유와 일관된 개발 경험을 위해 모노레포 vs 멀티레포 결정이 필요.
 
 ## 결정

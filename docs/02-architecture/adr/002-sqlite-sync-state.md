@@ -29,5 +29,5 @@
 ## 결과
 
 - `packages/core/src/state/` 모듈에서 DB 관리
-- `.obsinotion/sync.db`로 볼트 내 저장
+- `.im-nobsidian/sync.db`로 볼트 내 저장
 - 마이그레이션 시스템 (`state/migrations/`)

@@ -1,4 +1,4 @@
-# ObsiNotion — 프로젝트 규칙
+# Im-Nobsidian — 프로젝트 규칙
 
 > 글로벌 `~/.claude/CLAUDE.md` 규칙을 상속하며, 이 파일은 프로젝트 특화 규칙만 정의.
 
@@ -12,8 +12,8 @@
 ## 패키지 의존 관계
 
 ```
-obsidian-plugin ──→ @obsinotion/core
-cli ──────────────→ @obsinotion/core
+obsidian-plugin ──→ @im-nobsidian/core
+cli ──────────────→ @im-nobsidian/core
 ```
 
 - core는 다른 패키지에 의존하지 않음 (독립적)
@@ -33,21 +33,25 @@ pnpm typecheck        # 타입 체크
 ## 개발 규칙
 
 ### 코드 구조
+
 - core 패키지의 공개 API는 `packages/core/src/index.ts`에서만 export
 - 내부 모듈 간 import는 상대 경로 사용
-- 패키지 간 import는 패키지명 사용 (`@obsinotion/core`)
+- 패키지 간 import는 패키지명 사용 (`@im-nobsidian/core`)
 
 ### Notion API
+
 - 공식 SDK (`@notionhq/client`)만 사용 — 비공식 API 절대 금지
 - Rate limit 준수: `async-sema`로 3 req/s 제한
 - 모든 API 호출은 `packages/core/src/notion/` 통해서만
 
 ### 변환 레이어
+
 - MD→Notion: `@tryfabric/martian` + 커스텀 전처리기
 - Notion→MD: `notion-to-md` + 커스텀 후처리기
 - 변환 불가 기능은 preserve marker로 보존
 
 ### 테스트
+
 - 라운드트립 테스트 최우선 (MD→Notion→MD === 원본)
 - Notion API 모킹: `tests/helpers/mock-notion.ts`
 - 픽스처: `tests/fixtures/`

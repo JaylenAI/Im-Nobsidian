@@ -1,0 +1,97 @@
+/* Im-Nobsidian Plugin Styles */
+
+.im-nobsidian-conflict-banner {
+  padding: 8px 12px;
+  margin: 4px 0;
+  border-left: 3px solid var(--text-warning);
+  background-color: var(--background-modifier-warning);
+  border-radius: 4px;
+  font-size: var(--font-ui-small);
+}
+
+.im-nobsidian-sync-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.im-nobsidian-sync-indicator--syncing {
+  color: var(--text-accent);
+}
+
+.im-nobsidian-sync-indicator--error {
+  color: var(--text-error);
+}
+
+.im-nobsidian-sync-indicator--conflict {
+  color: var(--text-warning);
+}
+
+/* Conflict Modal */
+
+.im-nobsidian-conflict-modal {
+  max-width: 700px;
+}
+
+.im-nobsidian-conflict-path {
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-small);
+  color: var(--text-muted);
+  margin-bottom: 12px;
+}
+
+.im-nobsidian-diff-container {
+  margin: 12px 0;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+.im-nobsidian-diff-header {
+  padding: 8px 12px;
+  background-color: var(--background-secondary);
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-small);
+  font-weight: 600;
+}
+
+.im-nobsidian-diff-label-local {
+  color: var(--text-error);
+}
+
+.im-nobsidian-diff-label-remote {
+  color: var(--text-success);
+}
+
+.im-nobsidian-diff-body {
+  max-height: 300px;
+  overflow-y: auto;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.5;
+}
+
+.im-nobsidian-diff-line {
+  padding: 1px 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.im-nobsidian-diff-removed {
+  background-color: rgba(255, 0, 0, 0.1);
+  color: var(--text-error);
+}
+
+.im-nobsidian-diff-added {
+  background-color: rgba(0, 255, 0, 0.1);
+  color: var(--text-success);
+}
+
+.im-nobsidian-diff-same {
+  color: var(--text-muted);
+}
+
+.im-nobsidian-conflict-buttons .setting-item {
+  border-top: none;
+  padding: 6px 0;
+}

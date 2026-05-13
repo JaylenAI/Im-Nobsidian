@@ -16,9 +16,9 @@ Obsidian과 Notion에는 서로 대응하지 않는 기능이 있다.
 ## 형식
 
 ```html
-<!-- obsinotion:preserve:{type}:{metadata} -->
+<!-- im-nobsidian:preserve:{type}:{metadata} -->
 {원본 콘텐츠}
-<!-- /obsinotion:preserve -->
+<!-- /im-nobsidian:preserve -->
 ```
 
 ## 이유

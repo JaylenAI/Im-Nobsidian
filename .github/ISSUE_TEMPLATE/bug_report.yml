@@ -45,8 +45,8 @@ body:
     attributes:
       label: 해당 패키지
       options:
-        - "@obsinotion/core"
-        - "obsinotion (CLI)"
+        - "@im-nobsidian/core"
+        - "im-nobsidian (CLI)"
         - "Obsidian Plugin"
         - "모르겠음"
     validations:

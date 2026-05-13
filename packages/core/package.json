@@ -1,7 +1,8 @@
 {
-  "name": "@obsinotion/core",
-  "version": "0.0.1",
+  "name": "@im-nobsidian/core",
+  "version": "0.1.0",
   "description": "Core sync engine for Obsidian ↔ Notion bidirectional synchronization",
+  "author": "hanseungheon",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -11,7 +12,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
@@ -35,6 +38,11 @@
     "tsup": "^8.0.0",
     "typescript": "^5.6.0"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/JaylenAI/Im-Nobsidian",
+    "directory": "packages/core"
+  },
   "keywords": [
     "obsidian",
     "notion",
@@ -42,5 +50,12 @@
     "markdown",
     "bidirectional"
   ],
-  "license": "MIT"
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "bugs": {
+    "url": "https://github.com/JaylenAI/Im-Nobsidian/issues"
+  },
+  "homepage": "https://github.com/JaylenAI/Im-Nobsidian#readme"
 }

@@ -1,0 +1,726 @@
+import { markdownToBlocks } from "@tryfabric/martian";
+import { NotionToMarkdown } from "notion-to-md";
+import type { Client } from "@notionhq/client";
+import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
+import { NotionBlockBuilder } from "../notion/block-builder.js";
+import type { NotionBlock } from "../notion/block-builder.js";
+
+const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
+
+const DIVIDER_PLACEHOLDER = "​%%IM-NOBSIDIAN_DIVIDER%%​";
+const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
+const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
+const COLUMN_LIST_START = "%%im-nobsidian:column-list:start%%";
+const COLUMN_SEP = "%%im-nobsidian:column%%";
+const COLUMN_LIST_END = "%%im-nobsidian:column-list:end%%";
+
+const VIDEO_URL_PATTERNS = [
+  /^https?:\/\/(www\.)?youtube\.com\/watch/,
+  /^https?:\/\/youtu\.be\//,
+  /^https?:\/\/(www\.)?vimeo\.com\//,
+  /^https?:\/\/(www\.)?dailymotion\.com\//,
+  /^https?:\/\/(www\.)?loom\.com\/share\//,
+];
+
+const EMBED_URL_PATTERNS = [
+  /^https?:\/\/(www\.)?figma\.com\//,
+  /^https?:\/\/docs\.google\.com\//,
+  /^https?:\/\/drive\.google\.com\//,
+  /^https?:\/\/(www\.)?miro\.com\//,
+  /^https?:\/\/(www\.)?twitter\.com\//,
+  /^https?:\/\/(www\.)?x\.com\//,
+  /^https?:\/\/codepen\.io\//,
+  /^https?:\/\/gist\.github\.com\//,
+  /^https?:\/\/(www\.)?spotify\.com\//,
+  /^https?:\/\/(www\.)?soundcloud\.com\//,
+];
+
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+type RichTextItem = { plain_text: string; href?: string | null };
+
+function richTextToPlain(richText: RichTextItem[] | undefined): string {
+  if (!richText) return "";
+  return richText.map((t) => t.plain_text).join("");
+}
+
+interface RichTextAnnotated extends RichTextItem {
+  annotations?: Record<string, unknown>;
+  type?: string;
+  equation?: { expression: string };
+  mention?: {
+    type: string;
+    page?: { id: string };
+    date?: { start: string; end?: string | null };
+    user?: { id: string; name?: string };
+    database?: { id: string };
+  };
+}
+
+function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): string {
+  if (!richText) return "";
+  return richText
+    .map((t) => {
+      if (t.type === "equation" && t.equation) {
+        return `$${t.equation.expression}$`;
+      }
+
+      if (t.type === "mention" && t.mention) {
+        return formatMention(t.mention);
+      }
+
+      let text = t.plain_text;
+      const a = t.annotations;
+      if (a?.code) text = `\`${text}\``;
+      if (a?.bold) text = `**${text}**`;
+      if (a?.italic) text = `*${text}*`;
+      if (a?.strikethrough) text = `~~${text}~~`;
+      if (a?.underline) text = `<u>${text}</u>`;
+      if (t.href) text = `[${text}](${t.href})`;
+
+      const color = a?.color as string | undefined;
+      if (color && color !== "default") {
+        text = `%% im-nobsidian:color:${color} %%${text}%% im-nobsidian:end %%`;
+      }
+
+      return text;
+    })
+    .join("");
+}
+
+function formatMention(mention: NonNullable<RichTextAnnotated["mention"]>): string {
+  switch (mention.type) {
+    case "page":
+      return mention.page ? `[[${mention.page.id}]]` : "";
+    case "date": {
+      if (!mention.date) return "";
+      const start = mention.date.start;
+      return mention.date.end ? `${start} → ${mention.date.end}` : start;
+    }
+    case "user":
+      return mention.user?.name ? `@${mention.user.name}` : "@user";
+    case "database":
+      return mention.database ? `[[${mention.database.id}]]` : "";
+    default:
+      return "";
+  }
+}
+
+export class BlockConverter {
+  private n2m: NotionToMarkdown | null = null;
+  private client: Client | null = null;
+
+  initNotionToMd(client: Client): void {
+    this.client = client;
+    this.n2m = new NotionToMarkdown({ notionClient: client });
+    this.registerCustomTransformers();
+  }
+
+  private registerCustomTransformers(): void {
+    if (!this.n2m) return;
+
+    for (const blockType of TRULY_UNSUPPORTED_BLOCK_TYPES) {
+      this.n2m.setCustomTransformer(blockType, (block) => {
+        const id = block.id ?? "unknown";
+        return Promise.resolve(
+          `> [!im-nobsidian-unsupported] Notion 전용 블록\n> type: ${blockType}, id: ${id}\n> %%im-nobsidian:unsupported:type=${blockType}&id=${id}%%`,
+        );
+      });
+    }
+
+    this.registerToggleTransformer();
+    this.registerColumnTransformer();
+    this.registerSyncedBlockTransformer();
+    this.registerBookmarkTransformer();
+    this.registerVideoTransformer();
+    this.registerAudioTransformer();
+    this.registerFileTransformer();
+    this.registerChildPageTransformer();
+    this.registerChildDatabaseTransformer();
+    this.registerLinkToPageTransformer();
+    this.registerTocTransformer();
+    this.registerBreadcrumbTransformer();
+    this.registerLinkPreviewTransformer();
+    this.registerCalloutTransformer();
+    this.registerToggleHeadingTransformers();
+  }
+
+  private registerToggleTransformer(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+    this.n2m.setCustomTransformer("toggle", async (block) => {
+      const b = block as unknown as { toggle: { rich_text: RichTextItem[] } } & BlockObjectResponse;
+      const title = richTextToMarkdown(b.toggle?.rich_text as never);
+      const children = b.has_children ? await n2m.pageToMarkdown(b.id) : [];
+      const childMd = (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
+      const indented = childMd
+        .split("\n")
+        .map((line: string) => (line ? `  ${line}` : ""))
+        .join("\n")
+        .trimEnd();
+      return `${TOGGLE_START}\n- ${title}\n${indented}\n${TOGGLE_END}`;
+    });
+  }
+
+  private registerToggleHeadingTransformers(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+
+    for (const level of [1, 2, 3] as const) {
+      const headingKey = `heading_${level}` as const;
+      this.n2m.setCustomTransformer(headingKey, async (block) => {
+        const b = block as unknown as {
+          [K in typeof headingKey]: { rich_text: RichTextItem[]; is_toggleable?: boolean };
+        } & BlockObjectResponse;
+        const headingData = b[headingKey];
+        const text = richTextToMarkdown(headingData?.rich_text as never);
+        const prefix = "#".repeat(level);
+
+        if (headingData?.is_toggleable && b.has_children) {
+          const children = await n2m.pageToMarkdown(b.id);
+          const childMd =
+            (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
+          return `${prefix} ${text}\n\n${childMd.trimEnd()}`;
+        }
+
+        return `${prefix} ${text}`;
+      });
+    }
+  }
+
+  private registerColumnTransformer(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+    const client = this.client!;
+
+    this.n2m.setCustomTransformer("column_list", async (block) => {
+      const b = block as BlockObjectResponse;
+      const response = await client.blocks.children.list({ block_id: b.id });
+      const columns = response.results as BlockObjectResponse[];
+      const parts: string[] = [];
+
+      for (let i = 0; i < columns.length; i++) {
+        const col = columns[i]!;
+        const children = await n2m.pageToMarkdown(col.id);
+        const childMd =
+          (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
+        parts.push(`${COLUMN_SEP}\n${childMd.trimEnd()}`);
+      }
+
+      return `${COLUMN_LIST_START}\n${parts.join("\n")}\n${COLUMN_LIST_END}`;
+    });
+
+    this.n2m.setCustomTransformer("column", async () => "");
+  }
+
+  private registerSyncedBlockTransformer(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+    const client = this.client!;
+
+    this.n2m.setCustomTransformer("synced_block", async (block) => {
+      const b = block as unknown as {
+        synced_block: { synced_from: { block_id: string } | null };
+      } & BlockObjectResponse;
+
+      const sourceId = b.synced_block?.synced_from?.block_id ?? b.id;
+
+      const response = await client.blocks.children.list({ block_id: sourceId });
+      const mdBlocks: unknown[] = [];
+      for (const child of response.results as BlockObjectResponse[]) {
+        const result = await n2m.blockToMarkdown(child as never);
+        if (result) mdBlocks.push(result);
+      }
+      const childMd = n2m.toMarkdownString(mdBlocks as never).parent ?? "";
+      return childMd.trimEnd();
+    });
+  }
+
+  private registerBookmarkTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("bookmark", async (block) => {
+      const b = block as unknown as {
+        bookmark: { url: string; caption?: RichTextItem[] };
+      };
+      const url = b.bookmark?.url ?? "";
+      const caption = richTextToPlain(b.bookmark?.caption);
+      if (caption) {
+        return `[${caption}](${url})`;
+      }
+      return `[${url}](${url})`;
+    });
+  }
+
+  private registerVideoTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("video", async (block) => {
+      const b = block as unknown as {
+        video: {
+          type: string;
+          external?: { url: string };
+          file?: { url: string };
+          caption?: RichTextItem[];
+        };
+      };
+      const url = b.video?.type === "external" ? b.video.external?.url : b.video?.file?.url;
+      const caption = richTextToPlain(b.video?.caption);
+      return `![${caption || "video"}](${url ?? ""})`;
+    });
+  }
+
+  private registerAudioTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("audio", async (block) => {
+      const b = block as unknown as {
+        audio: {
+          type: string;
+          external?: { url: string };
+          file?: { url: string };
+          caption?: RichTextItem[];
+        };
+      };
+      const url = b.audio?.type === "external" ? b.audio.external?.url : b.audio?.file?.url;
+      const caption = richTextToPlain(b.audio?.caption);
+      return `![${caption || "audio"}](${url ?? ""})`;
+    });
+  }
+
+  private registerFileTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("file", async (block) => {
+      const b = block as unknown as {
+        file: {
+          type: string;
+          external?: { url: string };
+          file?: { url: string };
+          caption?: RichTextItem[];
+          name?: string;
+        };
+      };
+      const url = b.file?.type === "external" ? b.file.external?.url : b.file?.file?.url;
+      const name = b.file?.name ?? richTextToPlain(b.file?.caption) ?? "file";
+      return `[${name}](${url ?? ""})`;
+    });
+  }
+
+  private registerChildPageTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("child_page", async (block) => {
+      const b = block as unknown as { child_page: { title: string } };
+      const title = b.child_page?.title ?? "Untitled";
+      return `[[${title}]]`;
+    });
+  }
+
+  private registerChildDatabaseTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("child_database", async (block) => {
+      const b = block as unknown as {
+        child_database: { title: string };
+      } & BlockObjectResponse;
+      const title = b.child_database?.title ?? "Database";
+      return `> [!database] ${title}\n> %%im-nobsidian:child-database:id=${b.id}&title=${encodeURIComponent(title)}%%`;
+    });
+  }
+
+  private registerLinkToPageTransformer(): void {
+    if (!this.n2m) return;
+    const client = this.client!;
+    this.n2m.setCustomTransformer("link_to_page", async (block) => {
+      const b = block as unknown as {
+        link_to_page: { type: string; page_id?: string; database_id?: string };
+      };
+      const pageId = b.link_to_page?.page_id ?? b.link_to_page?.database_id;
+      if (!pageId) return "";
+      try {
+        const page = await client.pages.retrieve({ page_id: pageId });
+        const p = page as {
+          properties: Record<string, { type: string; title?: Array<{ plain_text: string }> }>;
+        };
+        for (const prop of Object.values(p.properties)) {
+          if (prop.type === "title" && prop.title?.[0]?.plain_text) {
+            return `[[${prop.title[0].plain_text}]]`;
+          }
+        }
+      } catch {
+        // fallback
+      }
+      return `[[${pageId}]]`;
+    });
+  }
+
+  private registerTocTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("table_of_contents", async () => {
+      return `%%im-nobsidian:toc%%`;
+    });
+  }
+
+  private registerBreadcrumbTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("breadcrumb", async () => "");
+  }
+
+  private registerLinkPreviewTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("link_preview", async (block) => {
+      const b = block as unknown as { link_preview: { url: string } };
+      const url = b.link_preview?.url ?? "";
+      return `[${url}](${url})`;
+    });
+  }
+
+  private registerCalloutTransformer(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+    this.n2m.setCustomTransformer("callout", async (block) => {
+      const b = block as unknown as {
+        callout: { rich_text: RichTextItem[]; icon?: { type: string; emoji?: string } };
+      } & BlockObjectResponse;
+      const text = richTextToMarkdown(b.callout?.rich_text as never);
+      const emoji = b.callout?.icon?.emoji ?? "";
+
+      const children = b.has_children ? await n2m.pageToMarkdown(b.id) : [];
+      const childMd = (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
+
+      const EMOJI_TO_TYPE: Record<string, string> = {
+        "\u{1F4DD}": "note",
+        "\u{1F4CB}": "abstract",
+        "\u{2139}\u{FE0F}": "info",
+        "\u{1F4A1}": "tip",
+        "\u{2705}": "success",
+        "\u{2753}": "question",
+        "\u{26A0}\u{FE0F}": "warning",
+        "\u{274C}": "failure",
+        "\u{1F525}": "danger",
+        "\u{1F41B}": "bug",
+        "\u{1F4CC}": "example",
+        "\u{1F4AC}": "quote",
+      };
+      const calloutType = EMOJI_TO_TYPE[emoji] ?? "note";
+
+      let result = `> [!${calloutType}] ${text}`;
+      if (childMd?.trim()) {
+        const lines = childMd
+          .trim()
+          .split("\n")
+          .map((l: string) => `> ${l}`);
+        result += "\n" + lines.join("\n");
+      }
+      return result;
+    });
+  }
+
+  markdownToNotionBlocks(markdown: string): unknown[] {
+    const preprocessed = this.preProcessMarkdown(markdown);
+    const blocks = markdownToBlocks(preprocessed) as Array<Record<string, unknown>>;
+    return this.postProcessBlocks(blocks);
+  }
+
+  private toggleContents: Map<number, string> = new Map();
+  private columnContents: Map<number, string[]> = new Map();
+  private toggleCounter = 0;
+  private columnCounter = 0;
+
+  private preProcessMarkdown(markdown: string): string {
+    this.toggleContents.clear();
+    this.columnContents.clear();
+    this.toggleCounter = 0;
+    this.columnCounter = 0;
+
+    let processed = this.extractToggleBlocks(markdown);
+    processed = this.extractColumnBlocks(processed);
+    processed = this.replaceDividers(processed);
+    return processed;
+  }
+
+  private replaceDividers(markdown: string): string {
+    const lines = markdown.split("\n");
+    const result: string[] = [];
+    let inCodeBlock = false;
+
+    for (const line of lines) {
+      if (line.trimStart().startsWith("```")) {
+        inCodeBlock = !inCodeBlock;
+      }
+
+      if (!inCodeBlock && /^---\s*$/.test(line.trim())) {
+        result.push(DIVIDER_PLACEHOLDER);
+      } else {
+        result.push(line);
+      }
+    }
+
+    return result.join("\n");
+  }
+
+  private extractToggleBlocks(markdown: string): string {
+    const startRe = new RegExp(`^${escapeRegex(TOGGLE_START)}$`, "gm");
+    const endRe = new RegExp(`^${escapeRegex(TOGGLE_END)}$`, "gm");
+    let result = markdown;
+    let match: RegExpExecArray | null;
+
+    while ((match = startRe.exec(result)) !== null) {
+      endRe.lastIndex = match.index;
+      const endMatch = endRe.exec(result);
+      if (!endMatch) break;
+
+      const content = result.slice(match.index + match[0].length + 1, endMatch.index).trimEnd();
+      const id = this.toggleCounter++;
+      this.toggleContents.set(id, content);
+
+      const placeholder = `%%IM-NOBSIDIAN_TOGGLE_${id}%%`;
+      result =
+        result.slice(0, match.index) +
+        placeholder +
+        result.slice(endMatch.index + endMatch[0].length);
+
+      startRe.lastIndex = match.index + placeholder.length;
+    }
+
+    return result;
+  }
+
+  private extractColumnBlocks(markdown: string): string {
+    const startRe = new RegExp(`^${escapeRegex(COLUMN_LIST_START)}$`, "gm");
+    const endRe = new RegExp(`^${escapeRegex(COLUMN_LIST_END)}$`, "gm");
+    let result = markdown;
+    let match: RegExpExecArray | null;
+
+    while ((match = startRe.exec(result)) !== null) {
+      endRe.lastIndex = match.index;
+      const endMatch = endRe.exec(result);
+      if (!endMatch) break;
+
+      const inner = result.slice(match.index + match[0].length + 1, endMatch.index);
+      const columns = inner
+        .split(new RegExp(`^${escapeRegex(COLUMN_SEP)}$`, "m"))
+        .map((c) => c.trim())
+        .filter(Boolean);
+
+      const id = this.columnCounter++;
+      this.columnContents.set(id, columns);
+
+      const placeholder = `%%IM-NOBSIDIAN_COLLIST_${id}%%`;
+      result =
+        result.slice(0, match.index) +
+        placeholder +
+        result.slice(endMatch.index + endMatch[0].length);
+
+      startRe.lastIndex = match.index + placeholder.length;
+    }
+
+    return result;
+  }
+
+  private postProcessBlocks(blocks: Array<Record<string, unknown>>): unknown[] {
+    const result: unknown[] = [];
+
+    for (const block of blocks) {
+      const toggleConverted = this.convertTogglePlaceholder(block);
+      if (toggleConverted) {
+        result.push(toggleConverted);
+        continue;
+      }
+
+      const columnConverted = this.convertColumnPlaceholder(block);
+      if (columnConverted) {
+        result.push(columnConverted);
+        continue;
+      }
+
+      const dividerConverted = this.convertDividerPlaceholder(block);
+      if (dividerConverted) {
+        result.push(dividerConverted);
+        continue;
+      }
+
+      const videoConverted = this.convertImageToVideoOrEmbed(block);
+      if (videoConverted) {
+        result.push(videoConverted);
+        continue;
+      }
+
+      const calloutConverted = this.convertQuoteToCallout(block);
+      result.push(calloutConverted);
+    }
+
+    return result;
+  }
+
+  private convertTogglePlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    const toggleMatch = text.match(/%%IM-NOBSIDIAN_TOGGLE_(\d+)%%/);
+    if (!toggleMatch) return null;
+
+    const id = parseInt(toggleMatch[1]!, 10);
+    const content = this.toggleContents.get(id);
+    if (content === undefined) return null;
+
+    const titleMatch = content.match(/^- (.+)$/m);
+    const title = titleMatch?.[1] ?? "Toggle";
+
+    const childLines = content.split("\n").slice(1);
+    const childMd = childLines
+      .map((l) => (l.startsWith("  ") ? l.slice(2) : l))
+      .join("\n")
+      .trim();
+
+    const children = childMd ? (markdownToBlocks(childMd) as Array<Record<string, unknown>>) : [];
+
+    return NotionBlockBuilder.toggle(
+      NotionBlockBuilder.richText(title),
+      children.length > 0 ? (children as unknown as NotionBlock[]) : undefined,
+    );
+  }
+
+  private convertColumnPlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    const colMatch = text.match(/%%IM-NOBSIDIAN_COLLIST_(\d+)%%/);
+    if (!colMatch) return null;
+
+    const id = parseInt(colMatch[1]!, 10);
+    const columns = this.columnContents.get(id);
+    if (!columns) return null;
+
+    const columnBlocks = columns.map((colMd) => {
+      const blocks = markdownToBlocks(colMd) as Array<Record<string, unknown>>;
+      return this.postProcessBlocks(blocks) as unknown as NotionBlock[];
+    });
+
+    return NotionBlockBuilder.columnList(columnBlocks);
+  }
+
+  private convertDividerPlaceholder(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const text = para?.rich_text?.[0]?.text?.content ?? "";
+
+    if (text.includes("%%IM-NOBSIDIAN_DIVIDER%%")) {
+      return NotionBlockBuilder.divider();
+    }
+    return null;
+  }
+
+  private convertImageToVideoOrEmbed(block: Record<string, unknown>): unknown | null {
+    let url = "";
+    let caption: string | undefined;
+
+    if (block.type === "image") {
+      const img = block.image as
+        | { external?: { url: string }; caption?: Array<{ text?: { content: string } }> }
+        | undefined;
+      url = img?.external?.url ?? "";
+      caption = img?.caption?.[0]?.text?.content;
+    } else if (block.type === "paragraph") {
+      const para = block.paragraph as
+        | { rich_text?: Array<{ text?: { content: string } }> }
+        | undefined;
+      const texts = para?.rich_text ?? [];
+      if (texts.length === 1) {
+        const content = texts[0]?.text?.content ?? "";
+        if (/^https?:\/\//.test(content)) {
+          url = content;
+        }
+      }
+    }
+
+    if (!url) return null;
+
+    if (VIDEO_URL_PATTERNS.some((p) => p.test(url))) {
+      return NotionBlockBuilder.video(url, caption);
+    }
+
+    if (EMBED_URL_PATTERNS.some((p) => p.test(url))) {
+      return NotionBlockBuilder.embed(url, caption);
+    }
+
+    return null;
+  }
+
+  private convertQuoteToCallout(block: Record<string, unknown>): unknown {
+    if (block.type !== "quote") return block;
+
+    const quote = block.quote as
+      | {
+          rich_text: Array<{
+            type: string;
+            text?: { content: string; link?: unknown };
+            annotations?: Record<string, boolean>;
+          }>;
+          children?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    if (!quote?.rich_text?.[0]) return block;
+
+    const firstText = quote.rich_text[0]?.text?.content ?? "";
+
+    const KNOWN_CALLOUT_EMOJIS = [
+      "\u{1F4DD}",
+      "\u{1F4CB}",
+      "\u{2139}\u{FE0F}",
+      "\u{1F4A1}",
+      "\u{2705}",
+      "\u{2753}",
+      "\u{26A0}\u{FE0F}",
+      "\u{274C}",
+      "\u{1F525}",
+      "\u{1F41B}",
+      "\u{1F4CC}",
+      "\u{1F4AC}",
+    ];
+    const matchedEmoji = KNOWN_CALLOUT_EMOJIS.find((e) => firstText.startsWith(e));
+    if (!matchedEmoji) return block;
+
+    const emoji = matchedEmoji;
+    const remainingText = firstText.slice(emoji.length).replace(/^\s+/, "");
+
+    const newRichText = [...quote.rich_text];
+    if (remainingText) {
+      newRichText[0] = {
+        ...newRichText[0]!,
+        text: { content: remainingText, link: null },
+      };
+    } else {
+      newRichText.shift();
+    }
+
+    return {
+      type: "callout",
+      callout: {
+        rich_text: newRichText,
+        icon: { type: "emoji", emoji },
+        children: quote.children ?? [],
+      },
+    };
+  }
+
+  async notionBlocksToMarkdown(pageId: string): Promise<string> {
+    if (!this.n2m) {
+      throw new Error(
+        "NotionToMarkdown이 초기화되지 않았습니다. initNotionToMd()를 먼저 호출하세요.",
+      );
+    }
+
+    const mdBlocks = await this.n2m.pageToMarkdown(pageId);
+    const result = this.n2m.toMarkdownString(mdBlocks);
+    return result.parent ?? "";
+  }
+}

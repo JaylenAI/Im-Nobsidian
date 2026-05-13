@@ -1,10 +1,11 @@
 {
-  "id": "obsinotion",
-  "name": "ObsiNotion Sync",
-  "version": "0.0.1",
+  "id": "im-nobsidian",
+  "name": "Im-Nobsidian Sync",
+  "version": "0.1.0",
   "minAppVersion": "1.4.0",
   "description": "Bidirectional sync between Obsidian and Notion",
   "author": "hanseungheon",
+  "authorUrl": "https://github.com/JaylenAI",
   "isDesktopOnly": true,
-  "fundingUrl": ""
+  "fundingUrl": "https://github.com/JaylenAI/Im-Nobsidian"
 }

@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 jobs:
   publish-npm:
@@ -15,8 +16,6 @@ jobs:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
       - uses: actions/setup-node@v4
         with:
@@ -26,36 +25,11 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
-      - run: pnpm -r publish --access public --no-git-checks
+      - run: pnpm --filter @im-nobsidian/core --filter im-nobsidian publish --access public --no-git-checks --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  publish-plugin:
-    name: Publish Obsidian Plugin
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 9
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: "pnpm"
-
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter obsidian-obsinotion build
-
-      - name: Package plugin
-        working-directory: packages/obsidian-plugin
-        run: zip -j obsinotion-plugin.zip main.js manifest.json src/styles/main.css
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            packages/obsidian-plugin/obsinotion-plugin.zip
-            packages/obsidian-plugin/manifest.json
           generate_release_notes: true
