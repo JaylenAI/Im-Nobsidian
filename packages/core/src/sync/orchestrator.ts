@@ -534,8 +534,8 @@ export class SyncOrchestrator {
 
     const parentPath = await this.resolveParentPath(page);
 
-    const children = await this.notionClient.listChildren(pageId, { pageSize: 1 });
-    const hasChildPages = children.results.some((b) => "type" in b && b.type === "child_page");
+    const allChildren = await this.notionClient.fetchAllChildren(pageId);
+    const hasChildPages = allChildren.some((b) => "type" in b && b.type === "child_page");
 
     const markdown = await this.blockConverter.notionBlocksToMarkdown(pageId);
     const hasContent = markdown.trim().length > 0;

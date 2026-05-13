@@ -416,7 +416,8 @@ export class BlockConverter {
   markdownToNotionBlocks(markdown: string): unknown[] {
     const preprocessed = this.preProcessMarkdown(markdown);
     const blocks = markdownToBlocks(preprocessed) as Array<Record<string, unknown>>;
-    return this.postProcessBlocks(blocks);
+    const processed = this.postProcessBlocks(blocks);
+    return normalizeBlocksForNotion(processed as Array<Record<string, unknown>>);
   }
 
   private toggleContents: Map<number, string> = new Map();
@@ -723,4 +724,150 @@ export class BlockConverter {
     const result = this.n2m.toMarkdownString(mdBlocks);
     return result.parent ?? "";
   }
+}
+
+const NOTION_MAX_TABLE_ROWS = 100;
+const NOTION_MAX_LIST_DEPTH = 3;
+
+function normalizeBlocksForNotion(
+  blocks: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const result: Array<Record<string, unknown>> = [];
+
+  for (const block of blocks) {
+    if (block.type === "table") {
+      result.push(...normalizeTable(block));
+    } else if (isListBlock(block)) {
+      result.push(flattenListDepth(block, 0));
+    } else {
+      result.push(block);
+    }
+  }
+
+  return result;
+}
+
+function normalizeTable(block: Record<string, unknown>): Array<Record<string, unknown>> {
+  const table = block.table as
+    | {
+        table_width: number;
+        has_column_header: boolean;
+        has_row_header: boolean;
+        children: Array<Record<string, unknown>>;
+      }
+    | undefined;
+  if (!table?.children) return [block];
+
+  const rows = table.children;
+  if (rows.length === 0) return [block];
+
+  let maxCells = table.table_width;
+  for (const row of rows) {
+    const tr = row.table_row as { cells: unknown[][] } | undefined;
+    if (tr?.cells && tr.cells.length > maxCells) {
+      maxCells = tr.cells.length;
+    }
+  }
+
+  const normalizedRows = rows.map((row) => {
+    const tr = row.table_row as { cells: unknown[][] } | undefined;
+    if (!tr?.cells) return row;
+
+    const cells = [...tr.cells];
+    while (cells.length < maxCells) {
+      cells.push([{ type: "text", text: { content: "" } }]);
+    }
+    if (cells.length > maxCells) {
+      cells.length = maxCells;
+    }
+
+    return { ...row, table_row: { ...tr, cells } };
+  });
+
+  if (normalizedRows.length <= NOTION_MAX_TABLE_ROWS) {
+    return [
+      {
+        ...block,
+        table: { ...table, table_width: maxCells, children: normalizedRows },
+      },
+    ];
+  }
+
+  const tables: Array<Record<string, unknown>> = [];
+  const headerRow = table.has_column_header ? normalizedRows[0] : null;
+  const dataRows = table.has_column_header ? normalizedRows.slice(1) : normalizedRows;
+  const chunkSize = headerRow ? NOTION_MAX_TABLE_ROWS - 1 : NOTION_MAX_TABLE_ROWS;
+
+  for (let i = 0; i < dataRows.length; i += chunkSize) {
+    const chunk = dataRows.slice(i, i + chunkSize);
+    const children = headerRow ? [headerRow, ...chunk] : chunk;
+    tables.push({
+      type: "table",
+      table: {
+        table_width: maxCells,
+        has_column_header: !!headerRow,
+        has_row_header: table.has_row_header,
+        children,
+      },
+    });
+  }
+
+  return tables;
+}
+
+function isListBlock(block: Record<string, unknown>): boolean {
+  return (
+    block.type === "bulleted_list_item" ||
+    block.type === "numbered_list_item" ||
+    block.type === "to_do"
+  );
+}
+
+function flattenListDepth(block: Record<string, unknown>, depth: number): Record<string, unknown> {
+  const blockType = block.type as string;
+  const blockData = block[blockType] as
+    | { children?: Array<Record<string, unknown>>; [key: string]: unknown }
+    | undefined;
+  if (!blockData?.children || blockData.children.length === 0) return block;
+
+  if (depth >= NOTION_MAX_LIST_DEPTH - 1) {
+    const flattened = collectAllDescendants(blockData.children);
+    return {
+      ...block,
+      [blockType]: { ...blockData, children: flattened },
+    };
+  }
+
+  const normalizedChildren = blockData.children.map((child) => {
+    if (isListBlock(child)) {
+      return flattenListDepth(child, depth + 1);
+    }
+    return child;
+  });
+
+  return {
+    ...block,
+    [blockType]: { ...blockData, children: normalizedChildren },
+  };
+}
+
+function collectAllDescendants(
+  blocks: Array<Record<string, unknown>>,
+): Array<Record<string, unknown>> {
+  const result: Array<Record<string, unknown>> = [];
+  for (const block of blocks) {
+    const blockType = block.type as string;
+    const blockData = block[blockType] as
+      | { children?: Array<Record<string, unknown>>; [key: string]: unknown }
+      | undefined;
+    const children = blockData?.children;
+    const blockWithoutChildren = children
+      ? { ...block, [blockType]: { ...blockData, children: undefined } }
+      : block;
+    result.push(blockWithoutChildren);
+    if (children && children.length > 0) {
+      result.push(...collectAllDescendants(children));
+    }
+  }
+  return result;
 }
