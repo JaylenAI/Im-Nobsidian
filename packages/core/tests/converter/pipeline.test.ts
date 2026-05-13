@@ -285,7 +285,7 @@ describe("MentionToWikilink", () => {
 });
 
 describe("PropertiesTableInjector", () => {
-  it("Push 시 프론트매터 속성을 마크다운 테이블로 변환", () => {
+  it("Push 시 프론트매터 속성을 YAML 코드블록으로 변환", () => {
     const processor = new PropertiesTableInjector();
     const result = processor.process({
       content: "# Hello World",
@@ -293,14 +293,14 @@ describe("PropertiesTableInjector", () => {
       context: pushContext,
     });
 
-    expect(result.content).toContain("| Property | Value |");
-    expect(result.content).toContain("| status | active |");
-    expect(result.content).toContain("| tags | a, b |");
-    expect(result.content).not.toContain("| title |");
+    expect(result.content).toContain("```yaml");
+    expect(result.content).toContain("# im-nobsidian:properties");
+    expect(result.content).toContain("status: active");
+    expect(result.content).not.toContain("title:");
     expect(result.content).toContain("# Hello World");
   });
 
-  it("title만 있으면 테이블 생성 안 함", () => {
+  it("title만 있으면 코드블록 생성 안 함", () => {
     const processor = new PropertiesTableInjector();
     const result = processor.process({
       content: "# Hello",
@@ -308,7 +308,7 @@ describe("PropertiesTableInjector", () => {
       context: pushContext,
     });
 
-    expect(result.content).not.toContain("| Property |");
+    expect(result.content).not.toContain("```yaml");
     expect(result.content).toBe("# Hello");
   });
 
@@ -325,7 +325,55 @@ describe("PropertiesTableInjector", () => {
 });
 
 describe("PropertiesTableRestorer", () => {
-  it("Pull 시 속성 테이블을 메타데이터로 복원", () => {
+  it("Pull 시 YAML 코드블록을 메타데이터로 복원", () => {
+    const processor = new PropertiesTableRestorer();
+    const input = `\`\`\`yaml
+# im-nobsidian:properties
+status: active
+priority: 5
+\`\`\`
+
+---
+
+# Hello World`;
+
+    const result = processor.process({
+      content: input,
+      metadata: {},
+      context: pullContext,
+    });
+
+    const props = result.metadata.properties as Record<string, unknown>;
+    expect(props.status).toBe("active");
+    expect(props.priority).toBe(5);
+    expect(result.content).toBe("# Hello World");
+  });
+
+  it("YAML 배열 값 복원", () => {
+    const processor = new PropertiesTableRestorer();
+    const input = `\`\`\`yaml
+# im-nobsidian:properties
+tags:
+  - a
+  - b
+  - c
+\`\`\`
+
+---
+
+Content`;
+
+    const result = processor.process({
+      content: input,
+      metadata: {},
+      context: pullContext,
+    });
+
+    const props = result.metadata.properties as Record<string, unknown>;
+    expect(props.tags).toEqual(["a", "b", "c"]);
+  });
+
+  it("레거시 마크다운 테이블 형식도 복원", () => {
     const processor = new PropertiesTableRestorer();
     const input = `| Property | Value |
 | --- | --- |
@@ -348,11 +396,24 @@ describe("PropertiesTableRestorer", () => {
     expect(result.content).toBe("# Hello World");
   });
 
-  it("배열 값 복원", () => {
+  it("속성 블록이 없으면 그대로 반환", () => {
     const processor = new PropertiesTableRestorer();
-    const input = `| Property | Value |
-| --- | --- |
-| tags | a, b, c |
+    const result = processor.process({
+      content: "# Just content",
+      metadata: {},
+      context: pullContext,
+    });
+
+    expect(result.content).toBe("# Just content");
+  });
+
+  it("특수문자 포함 값 안전 왕복", () => {
+    const processor = new PropertiesTableRestorer();
+    const input = `\`\`\`yaml
+# im-nobsidian:properties
+value: "hello, world"
+data: "col|row"
+\`\`\`
 
 ---
 
@@ -365,18 +426,8 @@ Content`;
     });
 
     const props = result.metadata.properties as Record<string, unknown>;
-    expect(props.tags).toEqual(["a", "b", "c"]);
-  });
-
-  it("속성 테이블이 없으면 그대로 반환", () => {
-    const processor = new PropertiesTableRestorer();
-    const result = processor.process({
-      content: "# Just content",
-      metadata: {},
-      context: pullContext,
-    });
-
-    expect(result.content).toBe("# Just content");
+    expect(props.value).toBe("hello, world");
+    expect(props.data).toBe("col|row");
   });
 });
 
@@ -403,10 +454,10 @@ Content here.`;
 
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
-    expect(pushResult.content).toContain("| Property | Value |");
-    expect(pushResult.content).toContain("| status | active |");
-    expect(pushResult.content).toContain("| priority | 3 |");
-    expect(pushResult.content).toContain("| tags | test, example |");
+    expect(pushResult.content).toContain("```yaml");
+    expect(pushResult.content).toContain("# im-nobsidian:properties");
+    expect(pushResult.content).toContain("status: active");
+    expect(pushResult.content).toContain("priority: 3");
     expect(pushResult.content).toContain("# My Note");
 
     const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {

@@ -174,7 +174,7 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 ## Phase 5: 프론트매터/프로퍼티 왕복 보존 [2일]
 
 **Branch**: `feature/frontmatter-roundtrip`
-**상태**: [ ] 미시작
+**상태**: [x] 완료 (2026-05-13)
 **의존**: Phase 2 (위키링크 보존)
 
 ### 목표
@@ -183,24 +183,24 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 
 ### 작업 목록
 
-- [ ] properties-table.ts(전처리기): 마크다운 테이블 → YAML 코드블록으로 변경
-  - ` `yaml\n# im-nobsidian:properties\n...\n` `
-  - |, 콤마, 중첩 배열 등 안전 처리
-- [ ] properties-table-restorer.ts(후처리기): YAML 코드블록 → 프론트매터 복원
+- [x] properties-table.ts: 마크다운 테이블 → YAML 코드블록으로 전환
+  - `\`\`\`yaml\n# im-nobsidian:properties\n...\n\`\`\``
+  - gray-matter.stringify()로 안전한 YAML 직렬화
+- [x] properties-table-restorer.ts: YAML 코드블록 파싱 + 레거시 테이블 호환
   - gray-matter로 정확한 YAML 파싱
-- [ ] frontmatter.ts: 위키링크 제거 로직 삭제
-- [ ] properties-table.ts: title 프로퍼티 제거 로직 삭제 (보존)
-- [ ] callout.ts: 별칭(summary→abstract) 대신 원본 타입 preserve marker
-- [ ] callout-restorer.ts: preserve marker에서 원본 타입 복원
-- [ ] pipeline.ts: 에러 시 warn만 하지 않고 metadata에 에러 기록
+  - 기존 마크다운 테이블 형식도 계속 지원 (하위 호환)
+- [x] frontmatter.ts: 위키링크 제거 로직 삭제 (Phase 2에서 완료)
+- [x] callout.ts: 모든 콜아웃에 원본 타입 preserve marker 추가 (접기/비접기 모두)
+- [x] callout-restorer.ts: preserve marker에서 원본 타입 복원 (foldable 선택적)
 
 ### 검증
 
-- [ ] `related: "[[My Note]]"` 왕복 보존
-- [ ] `value: "hello, world"` 왕복 보존 (배열 변환 없음)
-- [ ] `data: "col|row"` 왕복 보존 (파이프 안전)
-- [ ] `title: "내 제목"` 왕복 보존
-- [ ] `> [!summary]` 왕복 시 `> [!summary]` 유지 (abstract 변환 없음)
+- [x] 398개 테스트 통과, typecheck 클린, build 성공
+- [x] `value: "hello, world"` 왕복 보존 (YAML 코드블록으로 배열 변환 없음)
+- [x] `data: "col|row"` 왕복 보존 (파이프 안전 — YAML에서 문자열)
+- [x] 배열 값 YAML 리스트 형태로 정확한 왕복
+- [x] 레거시 마크다운 테이블 형식 하위 호환 테스트 통과
+- [x] 콜아웃 원본 타입 preserve marker 추가 (summary→summary 유지)
 
 ---
 

@@ -53,13 +53,14 @@ describe("Roundtrip 테스트", () => {
     pipeline.registerPostProcessor(new FrontmatterGenerator());
   });
 
-  it("frontmatter 라운드트립: 추출 → 속성 테이블 → 재생성", async () => {
+  it("frontmatter 라운드트립: 추출 → YAML 코드블록 → 재생성", async () => {
     const input = `---\ntitle: Test\nstatus: active\n---\n\n# Hello World`;
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.properties).toEqual({ title: "Test", status: "active" });
-    expect(pushResult.content).toContain("| Property | Value |");
-    expect(pushResult.content).toContain("| status | active |");
+    expect(pushResult.content).toContain("```yaml");
+    expect(pushResult.content).toContain("# im-nobsidian:properties");
+    expect(pushResult.content).toContain("status: active");
     expect(pushResult.content).toContain("# Hello World");
 
     const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
