@@ -17,10 +17,14 @@
 </p>
 
 <p align="center">
-  <a href="README.ko.md">한국어</a> · <a href="docs/06-devlog/CHANGELOG.md">Changelog</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="SECURITY.md">Security</a>
+  <a href="README.ko.md">한국어</a> · <a href="docs/05-guides/GETTING_STARTED.md">Getting Started</a> · <a href="docs/06-devlog/CHANGELOG.md">Changelog</a> · <a href="CONTRIBUTING.md">Contributing</a> · <a href="SECURITY.md">Security</a>
 </p>
 
 ---
+
+<p align="center">
+  <img src="assets/demo.svg" alt="Im-Nobsidian Demo" width="700" />
+</p>
 
 Edit in Obsidian, see it in Notion. Edit in Notion, see it in Obsidian. No copy-paste, no export-import, no manual sync. Just run `nobsi sync` and both sides stay perfectly in sync — formatting, properties, folder structure, and all.
 
