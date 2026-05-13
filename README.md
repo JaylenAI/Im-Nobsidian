@@ -297,6 +297,10 @@ pnpm build
 pnpm test          # 355 tests
 pnpm lint
 pnpm typecheck
+
+# Register the nobsi command globally from local build
+cd packages/cli && npm link && cd ../..
+nobsi --version
 ```
 
 ### Project Structure
