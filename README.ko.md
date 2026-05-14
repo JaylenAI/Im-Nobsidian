@@ -251,20 +251,18 @@ await orchestrator.sync({ dryRun: false });
 
 ## 알려진 제한사항
 
-| 제한             | 원인                                         | 대응                               |
-| ---------------- | -------------------------------------------- | ---------------------------------- |
-| 이미지 Push      | Notion API에 파일 업로드 엔드포인트 없음     | Push 시 플레이스홀더, Pull 시 복원 |
-| Notion 전용 블록 | API가 버튼/폼/동기 블록에 `unsupported` 반환 | 콜아웃 플레이스홀더로 보존         |
-| Rate limit       | Notion 공식 제한 3 req/s                     | 내장 레이트 리미터 + 지수 백오프   |
-| 위키링크 Push    | 위키링크가 볼드 텍스트로 변환됨              | v0.1.1에서 페이지 멘션 연결 예정   |
+| 제한             | 원인                                                | 대응                                        |
+| ---------------- | --------------------------------------------------- | ------------------------------------------- |
+| Notion 전용 블록 | API가 버튼/폼/동기 블록에 `unsupported` 반환        | 콜아웃 플레이스홀더로 보존                  |
+| Rate limit       | Notion 공식 제한 3 req/s                            | 내장 레이트 리미터 + 지수 백오프            |
+| 빈 줄 압축       | Notion Markdown API가 공백을 정규화                 | 의미적 차이 없음 — 옵시디언에서 동일 렌더링 |
+| 첫 Push 위키링크 | 신규 페이지 간 상호 참조가 첫 동기화 시 미해결 가능 | 다음 동기화에서 자동 해결                   |
 
 ## 로드맵
 
 ```
-v0.1.0  ✅ 현재 — CLI + 라이브러리, 15+ 블록 타입, 데이터베이스 모드
-v0.1.1  → 위키링크 → Notion 페이지 멘션 연결
-v0.2.0  → martian 포크 + CVE 수정 + Myers diff
-v0.3.0  → 증분 동기화 + 블록 단위 diff
+v0.1.0  ✅ 현재 — Notion Markdown API 기반 양방향 동기화
+v0.2.0  → 증분 동기화 + 블록 단위 diff + Myers diff
 v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```
@@ -278,7 +276,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 355개 테스트
+pnpm test          # 377개 테스트
 pnpm lint
 pnpm typecheck
 ```
