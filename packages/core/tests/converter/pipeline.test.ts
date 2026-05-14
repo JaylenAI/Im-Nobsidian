@@ -296,11 +296,11 @@ describe("PropertiesTableInjector", () => {
     expect(result.content).toContain("```yaml");
     expect(result.content).toContain("# im-nobsidian:properties");
     expect(result.content).toContain("status: active");
-    expect(result.content).not.toContain("title:");
+    expect(result.content).toContain("title: Test");
     expect(result.content).toContain("# Hello World");
   });
 
-  it("title만 있으면 코드블록 생성 안 함", () => {
+  it("title만 있어도 코드블록 생성 (라운드트립 보존)", () => {
     const processor = new PropertiesTableInjector();
     const result = processor.process({
       content: "# Hello",
@@ -308,8 +308,8 @@ describe("PropertiesTableInjector", () => {
       context: pushContext,
     });
 
-    expect(result.content).not.toContain("```yaml");
-    expect(result.content).toBe("# Hello");
+    expect(result.content).toContain("```yaml");
+    expect(result.content).toContain("title: Test");
   });
 
   it("Pull 방향에서는 동작하지 않음", () => {

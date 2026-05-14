@@ -14,9 +14,15 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertToggles(result);
   result = convertCallouts(result);
   result = convertPageMentions(result);
+  result = convertPageLinks(result);
   result = convertUserMentions(result);
   result = convertDateMentions(result);
   result = removeUnknownBlocks(result);
+  result = convertNotionMath(result);
+  result = convertNotionTables(result);
+  result = convertColorSpans(result);
+  result = removeEmptyBlocks(result);
+  result = unescapePipes(result);
 
   return result;
 }
@@ -213,4 +219,94 @@ function calloutTypeToEmoji(type: string): string | undefined {
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
+const NOTION_COLOR_SPAN_RE = /<span color="([^"]+)">([\s\S]*?)<\/span>/g;
+const NOTION_EMPTY_BLOCK_RE = /^<empty-block\/>\n?/gm;
+
+function convertPageLinks(content: string): string {
+  return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
+    const cleaned = text.replace(/\*\*/g, "").trim();
+    return `[[${cleaned}]]`;
+  });
+}
+
+function convertColorSpans(content: string): string {
+  return content.replace(NOTION_COLOR_SPAN_RE, (_match, _color: string, text: string) => text);
+}
+
+function removeEmptyBlocks(content: string): string {
+  return content.replace(NOTION_EMPTY_BLOCK_RE, "\n");
+}
+
+const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;
+const NOTION_BLOCK_MATH_RE = /\$\$\n```\n([\s\S]*?)\n```\n\$\$/g;
+
+function convertNotionMath(content: string): string {
+  let result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
+    return `$$\n${eq.trim()}\n$$`;
+  });
+  result = result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`);
+  return result;
+}
+
+const NOTION_TABLE_RE = /<table[^>]*>([\s\S]*?)<\/table>/g;
+const TABLE_ROW_RE = /<tr>([\s\S]*?)<\/tr>/g;
+const TABLE_CELL_RE = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g;
+
+function convertNotionTables(content: string): string {
+  return content.replace(NOTION_TABLE_RE, (_match, tableBody: string) => {
+    const rows: string[][] = [];
+    let rowMatch: RegExpExecArray | null;
+    const rowRe = new RegExp(TABLE_ROW_RE.source, TABLE_ROW_RE.flags);
+
+    while ((rowMatch = rowRe.exec(tableBody)) !== null) {
+      const cells: string[] = [];
+      let cellMatch: RegExpExecArray | null;
+      const cellRe = new RegExp(TABLE_CELL_RE.source, TABLE_CELL_RE.flags);
+      while ((cellMatch = cellRe.exec(rowMatch[1]!)) !== null) {
+        cells.push(cellMatch[1]!.trim());
+      }
+      rows.push(cells);
+    }
+
+    if (rows.length === 0) return _match;
+
+    const colCount = Math.max(...rows.map((r) => r.length));
+    const lines: string[] = [];
+
+    for (let i = 0; i < rows.length; i++) {
+      const padded = rows[i]!;
+      while (padded.length < colCount) padded.push("");
+      lines.push(`| ${padded.join(" | ")} |`);
+      if (i === 0) {
+        lines.push(`| ${padded.map(() => "---").join(" | ")} |`);
+      }
+    }
+
+    return lines.join("\n");
+  });
+}
+
+function unescapePipes(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  let inTable = false;
+
+  for (const line of lines) {
+    if (/^\|.*\|$/.test(line.trim()) || /^\|[\s-|]+\|$/.test(line.trim())) {
+      inTable = true;
+      result.push(line);
+    } else {
+      if (inTable && line.trim() === "") {
+        inTable = false;
+      } else if (!/^\|/.test(line.trim())) {
+        inTable = false;
+      }
+      result.push(inTable ? line : line.replace(/\\\|/g, "|"));
+    }
+  }
+
+  return result.join("\n");
 }

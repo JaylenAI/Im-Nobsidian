@@ -615,6 +615,7 @@ export class SyncOrchestrator {
     } else {
       properties = this.notionClient.extractProperties(page);
     }
+    properties.title = title;
 
     let processedMarkdown = markdown;
     if (this.config.conversion.imageDownload === "immediate") {
@@ -669,6 +670,8 @@ export class SyncOrchestrator {
     const page = await this.notionClient.getPage(change.pageId);
     let markdown = await this.fetchPageMarkdown(change.pageId);
 
+    const title = this.notionClient.extractTitle(page);
+
     let properties: Record<string, unknown>;
     if (this.isDatabaseMode) {
       await this.ensureDbSchema();
@@ -678,9 +681,9 @@ export class SyncOrchestrator {
     } else {
       properties = this.notionClient.extractProperties(page);
     }
+    properties.title = title;
 
     if (this.config.conversion.imageDownload === "immediate") {
-      const title = this.notionClient.extractTitle(page);
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
       markdown = imageResult.content;
     }
