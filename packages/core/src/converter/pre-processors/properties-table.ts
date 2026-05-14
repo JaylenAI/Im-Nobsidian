@@ -21,7 +21,6 @@ export class PropertiesTableInjector implements Processor {
 
     const filteredProps: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(properties)) {
-      if (key === "title") continue;
       filteredProps[key] = value;
     }
 

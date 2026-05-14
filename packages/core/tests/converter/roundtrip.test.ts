@@ -385,7 +385,8 @@ describe("Roundtrip 테스트", () => {
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.properties).toEqual({ title: "Minimal" });
-    expect(pushResult.content.trim()).toBe("Just one line.");
+    expect(pushResult.content).toContain("title: Minimal");
+    expect(pushResult.content).toContain("Just one line.");
 
     const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
       properties: pushResult.properties,
