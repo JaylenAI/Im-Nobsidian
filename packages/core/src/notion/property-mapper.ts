@@ -160,6 +160,16 @@ export class PropertyMapper {
         return { files: filesArr };
       }
 
+      case "created_time":
+      case "last_edited_time":
+      case "created_by":
+      case "last_edited_by":
+      case "formula":
+      case "rollup":
+      case "unique_id":
+      case "verification":
+        return null;
+
       default:
         return { rich_text: [{ text: { content: String(value) } }] };
     }

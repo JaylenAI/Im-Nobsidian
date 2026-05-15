@@ -26,7 +26,10 @@ function normalizeProperties(props: Record<string, unknown>): Record<string, unk
   const result: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(props)) {
-    result[key] = normalizeValue(value);
+    const normalized = normalizeValue(value);
+    if (normalized !== undefined) {
+      result[key] = normalized;
+    }
   }
 
   return result;
@@ -35,6 +38,11 @@ function normalizeProperties(props: Record<string, unknown>): Record<string, unk
 function normalizeValue(value: unknown): unknown {
   if (typeof value === "string") {
     return normalizeDate(value);
+  }
+
+  if (Array.isArray(value)) {
+    if (value.length === 0) return undefined;
+    return value;
   }
 
   if (typeof value === "object" && value !== null && "start" in value) {
@@ -49,12 +57,11 @@ function normalizeValue(value: unknown): unknown {
   return value;
 }
 
+const MIDNIGHT_RE = /T00:00:00(?:\.\d{3})?(?:Z|[+-]\d{2}:\d{2})/;
+
 function normalizeDate(dateStr: string): string {
   if (typeof dateStr !== "string") return dateStr;
-  if (dateStr.match(/T00:00:00\.000[Z+]/)) {
-    return dateStr.split("T")[0] ?? dateStr;
-  }
-  if (dateStr.match(/T00:00:00[Z+]/)) {
+  if (MIDNIGHT_RE.test(dateStr)) {
     return dateStr.split("T")[0] ?? dateStr;
   }
   return dateStr;
