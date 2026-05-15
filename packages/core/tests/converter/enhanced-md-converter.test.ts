@@ -37,9 +37,65 @@ describe("notionEnhancedToObsidian", () => {
     expect(result).toContain("> More details here");
   });
 
-  it("<unknown> 블록 제거", () => {
+  it("<unknown> 블록 보존 마커 생성", () => {
     const input = 'Before <unknown id="xyz" type="button"/> After';
-    expect(notionEnhancedToObsidian(input)).toBe("Before  After");
+    expect(notionEnhancedToObsidian(input)).toBe(
+      "Before %%im-nobsidian:unknown:id=xyz&type=button%% After",
+    );
+  });
+
+  // 2A: 미디어 태그
+  it("<audio> → 링크 변환", () => {
+    const input = '<audio src="https://example.com/song.mp3">My Song</audio>';
+    expect(notionEnhancedToObsidian(input)).toBe("[🔊 My Song](https://example.com/song.mp3)");
+  });
+
+  it("<video> → 링크 변환", () => {
+    const input = '<video src="https://example.com/clip.mp4">My Video</video>';
+    expect(notionEnhancedToObsidian(input)).toBe("[🎬 My Video](https://example.com/clip.mp4)");
+  });
+
+  it("<pdf> → 링크 변환", () => {
+    const input = '<pdf src="https://example.com/doc.pdf">Report</pdf>';
+    expect(notionEnhancedToObsidian(input)).toBe("[📄 Report](https://example.com/doc.pdf)");
+  });
+
+  it("<file> → 링크 변환", () => {
+    const input = '<file src="https://example.com/data.zip">Archive</file>';
+    expect(notionEnhancedToObsidian(input)).toBe("[📎 Archive](https://example.com/data.zip)");
+  });
+
+  it("미디어 태그 캡션 없으면 기본값", () => {
+    const input = '<audio src="https://example.com/a.mp3"></audio>';
+    expect(notionEnhancedToObsidian(input)).toBe("[🔊 audio](https://example.com/a.mp3)");
+  });
+
+  // 2B: Tab 블록
+  it("<tab> → 콜아웃 보존", () => {
+    const input = '<tab title="First Tab">Tab content here</tab>';
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("> [!tab] First Tab");
+    expect(result).toContain("> Tab content here");
+  });
+
+  // 2C: 색상 보존
+  it("<span color> → 보존 마커", () => {
+    const input = '<span color="red">중요</span>';
+    expect(notionEnhancedToObsidian(input)).toBe("%%im-nobsidian:color:red%%중요%%/color%%");
+  });
+
+  // 2C: 밑줄 보존
+  it("<span underline> → 보존 마커", () => {
+    const input = '<span underline="true">밑줄 텍스트</span>';
+    expect(notionEnhancedToObsidian(input)).toBe(
+      "%%im-nobsidian:underline%%밑줄 텍스트%%/underline%%",
+    );
+  });
+
+  // 2D: unknown 보존 (alt 속성)
+  it("<unknown alt> 블록 보존 마커", () => {
+    const input = '<unknown id="abc" alt="bookmark"/>';
+    expect(notionEnhancedToObsidian(input)).toBe("%%im-nobsidian:unknown:id=abc&type=bookmark%%");
   });
 });
 
@@ -60,6 +116,62 @@ describe("obsidianToNotionEnhanced", () => {
     expect(result).toContain("::: callout");
     expect(result).toContain("⚠️ Be careful");
   });
+
+  // 2A: 미디어 마커 → Enhanced MD
+  it("🔊 링크 → <audio>", () => {
+    const input = "[🔊 My Song](https://example.com/song.mp3)";
+    expect(obsidianToNotionEnhanced(input)).toBe(
+      '<audio src="https://example.com/song.mp3">My Song</audio>',
+    );
+  });
+
+  it("🎬 링크 → <video>", () => {
+    const input = "[🎬 My Video](https://example.com/clip.mp4)";
+    expect(obsidianToNotionEnhanced(input)).toBe(
+      '<video src="https://example.com/clip.mp4">My Video</video>',
+    );
+  });
+
+  it("📄 링크 → <pdf>", () => {
+    const input = "[📄 Report](https://example.com/doc.pdf)";
+    expect(obsidianToNotionEnhanced(input)).toBe(
+      '<pdf src="https://example.com/doc.pdf">Report</pdf>',
+    );
+  });
+
+  it("📎 링크 → <file>", () => {
+    const input = "[📎 Archive](https://example.com/data.zip)";
+    expect(obsidianToNotionEnhanced(input)).toBe(
+      '<file src="https://example.com/data.zip">Archive</file>',
+    );
+  });
+
+  // 2B: Tab 콜아웃 → <tab>
+  it("> [!tab] → <tab>", () => {
+    const input = "> [!tab] First Tab\n> Tab content here";
+    const result = obsidianToNotionEnhanced(input);
+    expect(result).toContain('<tab title="First Tab">');
+    expect(result).toContain("Tab content here");
+    expect(result).toContain("</tab>");
+  });
+
+  // 2C: 색상 마커 → <span color>
+  it("color 마커 → <span color>", () => {
+    const input = "%%im-nobsidian:color:red%%중요%%/color%%";
+    expect(obsidianToNotionEnhanced(input)).toBe('<span color="red">중요</span>');
+  });
+
+  // 2C: 밑줄 마커 → <span underline>
+  it("underline 마커 → <span underline>", () => {
+    const input = "%%im-nobsidian:underline%%밑줄%%/underline%%";
+    expect(obsidianToNotionEnhanced(input)).toBe('<span underline="true">밑줄</span>');
+  });
+
+  // 2D: unknown 마커 → <unknown>
+  it("unknown 마커 → <unknown>", () => {
+    const input = "%%im-nobsidian:unknown:id=abc&type=bookmark%%";
+    expect(obsidianToNotionEnhanced(input)).toBe('<unknown id="abc" type="bookmark"/>');
+  });
 });
 
 describe("round-trip", () => {
@@ -75,5 +187,37 @@ describe("round-trip", () => {
     const back = notionEnhancedToObsidian(notion);
     expect(back).toContain("> [!tip] Helpful advice");
     expect(back).toContain("> Details here");
+  });
+
+  it("미디어 audio 왕복", () => {
+    const notion = '<audio src="https://example.com/song.mp3">My Song</audio>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toBe("[🔊 My Song](https://example.com/song.mp3)");
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("색상 왕복", () => {
+    const notion = '<span color="blue">파란색 텍스트</span>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toBe("%%im-nobsidian:color:blue%%파란색 텍스트%%/color%%");
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("밑줄 왕복", () => {
+    const notion = '<span underline="true">밑줄</span>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toBe("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("unknown 블록 왕복", () => {
+    const notion = '<unknown id="def" type="embed"/>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toBe("%%im-nobsidian:unknown:id=def&type=embed%%");
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
   });
 });

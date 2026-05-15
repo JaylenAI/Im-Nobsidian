@@ -3,7 +3,14 @@ const NOTION_TOGGLE_RE = /<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
 const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
 const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
-const NOTION_UNKNOWN_RE = /<unknown id="[^"]*"[^>]*\/>/g;
+const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
+
+const NOTION_AUDIO_RE = /<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
+const NOTION_VIDEO_RE = /<video src="([^"]*)">([\s\S]*?)<\/video>/g;
+const NOTION_PDF_RE = /<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
+const NOTION_FILE_RE = /<file src="([^"]*)">([\s\S]*?)<\/file>/g;
+const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
+const NOTION_UNDERLINE_RE = /<span underline="true">([\s\S]*?)<\/span>/g;
 
 const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
 const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
@@ -17,10 +24,13 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertPageLinks(result);
   result = convertUserMentions(result);
   result = convertDateMentions(result);
-  result = removeUnknownBlocks(result);
+  result = convertMediaTags(result);
+  result = convertTabBlocks(result);
+  result = preserveUnknownBlocks(result);
   result = convertNotionMath(result);
   result = convertNotionTables(result);
   result = convertColorSpans(result);
+  result = convertUnderlineSpans(result);
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
 
@@ -31,7 +41,12 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   let result = obsidian;
 
   result = convertTogglesToHtml(result);
+  result = restoreTabBlocks(result);
   result = convertObsidianCallouts(result);
+  result = restoreMediaTags(result);
+  result = restoreUnknownBlocks(result);
+  result = restoreColorSpans(result);
+  result = restoreUnderlineSpans(result);
 
   return result;
 }
@@ -98,8 +113,60 @@ function convertDateMentions(content: string): string {
   });
 }
 
-function removeUnknownBlocks(content: string): string {
-  return content.replace(NOTION_UNKNOWN_RE, "");
+// 2D: <unknown> → 보존 마커 (삭제 대신 보존)
+function preserveUnknownBlocks(content: string): string {
+  return content.replace(NOTION_UNKNOWN_RE, (_match, id: string, attrs: string) => {
+    const typeMatch = /type="([^"]*)"/.exec(attrs);
+    const altMatch = /alt="([^"]*)"/.exec(attrs);
+    const blockType = altMatch?.[1] ?? typeMatch?.[1] ?? "unknown";
+    return `%%im-nobsidian:unknown:id=${id}&type=${blockType}%%`;
+  });
+}
+
+// 2A: 미디어 태그 → Obsidian 마크다운
+function convertMediaTags(content: string): string {
+  let result = content;
+
+  result = result.replace(NOTION_AUDIO_RE, (_match, src: string, caption: string) => {
+    const cap = caption.trim();
+    return cap ? `[🔊 ${cap}](${src})` : `[🔊 audio](${src})`;
+  });
+
+  result = result.replace(NOTION_VIDEO_RE, (_match, src: string, caption: string) => {
+    const cap = caption.trim();
+    return cap ? `[🎬 ${cap}](${src})` : `[🎬 video](${src})`;
+  });
+
+  result = result.replace(NOTION_PDF_RE, (_match, src: string, caption: string) => {
+    const cap = caption.trim();
+    return cap ? `[📄 ${cap}](${src})` : `[📄 pdf](${src})`;
+  });
+
+  result = result.replace(NOTION_FILE_RE, (_match, src: string, caption: string) => {
+    const cap = caption.trim();
+    return cap ? `[📎 ${cap}](${src})` : `[📎 file](${src})`;
+  });
+
+  return result;
+}
+
+// 2B: <tab> → 보존 마커
+function convertTabBlocks(content: string): string {
+  return content.replace(NOTION_TAB_RE, (_match, title: string, body: string) => {
+    const trimmed = body.trim();
+    const indented = trimmed
+      .split("\n")
+      .map((line) => `> ${line}`)
+      .join("\n");
+    return `> [!tab] ${title}\n${indented}`;
+  });
+}
+
+// 2C: <span underline> → 보존 마커
+function convertUnderlineSpans(content: string): string {
+  return content.replace(NOTION_UNDERLINE_RE, (_match, text: string) => {
+    return `%%im-nobsidian:underline%%${text}%%/underline%%`;
+  });
 }
 
 function convertTogglesToHtml(content: string): string {
@@ -232,8 +299,12 @@ function convertPageLinks(content: string): string {
   });
 }
 
+// 2C: <span color> → 보존 마커 (색상 제거 대신 보존)
 function convertColorSpans(content: string): string {
-  return content.replace(NOTION_COLOR_SPAN_RE, (_match, _color: string, text: string) => text);
+  return content.replace(
+    NOTION_COLOR_SPAN_RE,
+    (_match, color: string, text: string) => `%%im-nobsidian:color:${color}%%${text}%%/color%%`,
+  );
 }
 
 function removeEmptyBlocks(content: string): string {
@@ -286,6 +357,72 @@ function convertNotionTables(content: string): string {
     }
 
     return lines.join("\n");
+  });
+}
+
+// ─── Push 방향: 보존 마커 → Enhanced MD 복원 ───
+
+const OBSIDIAN_MEDIA_AUDIO_RE = /\[🔊\s*([^\]]*)\]\(([^)]+)\)/g;
+const OBSIDIAN_MEDIA_VIDEO_RE = /\[🎬\s*([^\]]*)\]\(([^)]+)\)/g;
+const OBSIDIAN_MEDIA_PDF_RE = /\[📄\s*([^\]]*)\]\(([^)]+)\)/g;
+const OBSIDIAN_MEDIA_FILE_RE = /\[📎\s*([^\]]*)\]\(([^)]+)\)/g;
+
+function restoreMediaTags(content: string): string {
+  let result = content;
+
+  result = result.replace(OBSIDIAN_MEDIA_AUDIO_RE, (_match, caption: string, src: string) => {
+    return `<audio src="${src}">${caption}</audio>`;
+  });
+
+  result = result.replace(OBSIDIAN_MEDIA_VIDEO_RE, (_match, caption: string, src: string) => {
+    return `<video src="${src}">${caption}</video>`;
+  });
+
+  result = result.replace(OBSIDIAN_MEDIA_PDF_RE, (_match, caption: string, src: string) => {
+    return `<pdf src="${src}">${caption}</pdf>`;
+  });
+
+  result = result.replace(OBSIDIAN_MEDIA_FILE_RE, (_match, caption: string, src: string) => {
+    return `<file src="${src}">${caption}</file>`;
+  });
+
+  return result;
+}
+
+const OBSIDIAN_TAB_RE = /^> \[!tab\]\s*(.+)\n((?:> .*\n?)*)/gm;
+
+function restoreTabBlocks(content: string): string {
+  return content.replace(OBSIDIAN_TAB_RE, (_match, title: string, body: string) => {
+    const unquoted = body
+      .split("\n")
+      .map((line) => line.replace(/^> /, ""))
+      .join("\n")
+      .trim();
+    return `<tab title="${title}">${unquoted}</tab>`;
+  });
+}
+
+const OBSIDIAN_UNKNOWN_RE = /%%im-nobsidian:unknown:id=([^&]+)&type=([^%]+)%%/g;
+
+function restoreUnknownBlocks(content: string): string {
+  return content.replace(OBSIDIAN_UNKNOWN_RE, (_match, id: string, type: string) => {
+    return `<unknown id="${id}" type="${type}"/>`;
+  });
+}
+
+const OBSIDIAN_COLOR_RE = /%%im-nobsidian:color:([^%]+)%%([\s\S]*?)%%\/color%%/g;
+
+function restoreColorSpans(content: string): string {
+  return content.replace(OBSIDIAN_COLOR_RE, (_match, color: string, text: string) => {
+    return `<span color="${color}">${text}</span>`;
+  });
+}
+
+const OBSIDIAN_UNDERLINE_RE = /%%im-nobsidian:underline%%([\s\S]*?)%%\/underline%%/g;
+
+function restoreUnderlineSpans(content: string): string {
+  return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {
+    return `<span underline="true">${text}</span>`;
   });
 }
 
