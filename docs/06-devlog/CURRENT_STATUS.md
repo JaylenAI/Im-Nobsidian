@@ -2,10 +2,10 @@
 
 > 마지막 업데이트: 2026-05-15
 
-## v0.1.2 — N2O 수준 변환 품질 달성 (Current)
+## v0.1.2 — 변환 품질 강화 (Current)
 
 Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
-프론트매터 정규화, PDF/Embed 블록을 추가하여 N2O v0.9.95와 동등한 변환 품질을 달성했습니다.
+프론트매터 정규화, PDF/Embed 블록을 추가하여 변환 품질을 대폭 강화했습니다.
 
 ### 핵심 기능
 
@@ -111,23 +111,19 @@ Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
 | Notion 전용 블록 | 📌 읽기 전용    | API가 unsupported 반환        |
 | Rate limit       | 3 req/s         | Notion 공식 제한              |
 
-### N2O 대비 현황
+### 기능 현황 요약
 
-> 상세 비교: [ROADMAP.md](./ROADMAP.md) 참고
-
-| 영역                  | Im-Nobsidian v0.1.2 |   N2O v0.9.95   |   비고   |
-| --------------------- | :-----------------: | :-------------: | :------: |
-| Pull/Push 양방향      |      ✅ (무료)      | ✅ (Push $8/mo) | **우위** |
-| Relation Push         |         ✅          |       ✅        |   동등   |
-| 프론트매터 라운드트립 |      ✅ 정규화      |       ✅        |   동등   |
-| 이미지 Push           |      ✅ 업로드      |       ✅        |   동등   |
-| Date range            |      start+end      |       ✅        |   동등   |
-| 블록 타입             |         25+         |       27+       |   근접   |
-| 속성 Write            |         15          |       ~15       |   동등   |
-| 토글 블록 보존        |      ✅ (강점)      | ❌ callout 깨짐 | **우위** |
-| CLI                   |    ✅ 8개 (강점)    |       ❌        | **우위** |
-| 가격                  |      **무료**       |   $8/mo~$249    | **우위** |
-| 소스                  |  **MIT 오픈소스**   |     Closed      | **우위** |
+| 영역                  | 상태                          |
+| --------------------- | ----------------------------- |
+| Pull/Push 양방향      | ✅ 무료                       |
+| Relation Push         | ✅ wikilink ↔ relation 양방향 |
+| 프론트매터 라운드트립 | ✅ ISO 날짜 정규화            |
+| 이미지 Push           | ✅ File Upload API            |
+| Date range            | ✅ start + end 양방향         |
+| 블록 타입             | 25+                           |
+| 속성 Write            | 15                            |
+| 토글 블록 보존        | ✅ preserve marker            |
+| CLI                   | ✅ 8개 명령어                 |
 
 ### 다음 단계
 

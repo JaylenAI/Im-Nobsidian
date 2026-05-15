@@ -5,14 +5,13 @@
 
 ## 분석 대상
 
-| #   | 도구                           | 방향              | 상태             | Stars |
-| --- | ------------------------------ | ----------------- | ---------------- | ----- |
-| 1   | Nobsidion (quanphan2906)       | Obsidian → Notion | 방치 (2024-05)   | 102   |
-| 2   | N2O (n2osync)                  | 양방향            | 활발, 소스비공개 | 4     |
-| 3   | Python Script (koshirok096)    | Obsidian → Notion | 학습 프로젝트    | -     |
-| 4   | obsidian-to-notion (EasyChris) | Obsidian → Notion | 저활동           | 542   |
-| 5   | Notion-to-Obsidian-Converter   | Notion → Obsidian | 성숙             | ~1000 |
-| 6   | Share to NotionNext (jxpeng98) | Obsidian → Notion | 활발             | -     |
+| #   | 도구                           | 방향              | 상태           | Stars |
+| --- | ------------------------------ | ----------------- | -------------- | ----- |
+| 1   | Nobsidion (quanphan2906)       | Obsidian → Notion | 방치 (2024-05) | 102   |
+| 2   | Python Script (koshirok096)    | Obsidian → Notion | 학습 프로젝트  | -     |
+| 3   | obsidian-to-notion (EasyChris) | Obsidian → Notion | 저활동         | 542   |
+| 4   | Notion-to-Obsidian-Converter   | Notion → Obsidian | 성숙           | ~1000 |
+| 5   | Share to NotionNext (jxpeng98) | Obsidian → Notion | 활발           | -     |
 
 ---
 
@@ -59,47 +58,7 @@ main.ts → service/index.ts (오케스트레이션) → service/notion.ts (API 
 
 ---
 
-## 2. N2O (n2osync)
-
-### 개요
-
-- GitHub: https://github.com/n2osync/n2o
-- 라이선스: MIT (모순: 소스 비공개)
-- 생성일: 2026-04-08 (약 1개월)
-- 릴리스: 18개 (v0.9.5 ~ v0.9.94)
-- **소스 코드 없음** — 컴파일된 main.js만 배포
-
-### 주장하는 기능
-
-- 양방향 동기화 (pull 무료, push 유료 $8/월)
-- 27+ 블록 타입, 21 속성 타입
-- 3-way merge 충돌 해결
-- Relations → [[위키링크]] 변환
-- 이미지/파일 로컬 다운로드
-- 증분 동기화 (변경분만)
-
-### 기술적 단서 (소스 없이 추론)
-
-- `sql-wasm.wasm` 포함 → SQLite WASM으로 상태 관리
-- `isDesktopOnly: true` → 데스크톱 전용
-- "Quick Connect" 인증 → 비공식 세션 API 추정 (공식 토큰 아님)
-- 24일간 18릴리스 → 불안정 시사
-
-### 참고할 점
-
-- 3-way merge 충돌 해결 전략 → 우리도 채택
-- SQLite 상태 관리 컨셉 → 동일 (better-sqlite3 네이티브)
-- Relations → 위키링크 변환 아이디어
-- Freemium 모델은 우리에게 불필요 (전체 오픈소스)
-
-### 차별화 포인트
-
-- 우리: 100% 오픈소스, 공식 API만 사용, 무료
-- N2O: 소스 비공개, 비공식 API 추정, 유료
-
----
-
-## 3. Python Script (koshirok096, DEV Community 3부작)
+## 2. Python Script (koshirok096, DEV Community 3부작)
 
 ### 개요
 
@@ -177,7 +136,6 @@ relation_props = {DAILY_RELATION_PROP: {"relation": [{"id": daily_page_id}]}}
   단방향 (Obsidian→Notion):  포화 (EasyChris ★542, Nobsidion 등)
   단방향 (Notion→Obsidian):  성숙 (Converter ★~1000)
   양방향 (오픈소스):          빈자리 ← 여기가 우리 자리
-  양방향 (소스비공개):        N2O 1개 (신생, 유료)
 ```
 
 **Im-Nobsidian이 채울 빈자리:**
