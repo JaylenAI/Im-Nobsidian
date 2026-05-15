@@ -1,11 +1,11 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-15
+> 마지막 업데이트: 2026-05-16
 
-## v0.1.3 — Notion API 최신화 + Enhanced MD 확대 (Current)
+## v0.1.4 — 다중 데이터베이스 동기화 + 테스트 확대 (Current)
 
-Im-Nobsidian v0.1.3은 2026년 Notion 신규 API를 완전 통합하고,
-Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 끌어올렸습니다.
+Im-Nobsidian v0.1.4는 다중 Notion 데이터베이스 양방향 동기화(DatabaseSyncer)와
+Standalone 파일 동기화를 추가하고, 테스트를 486개로 확대했습니다.
 
 ### 핵심 기능
 
@@ -91,11 +91,20 @@ Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 �
 | 타임존 정규화 확대 | `T00:00:00.000+09:00` → `YYYY-MM-DD` (KST 등 오프셋 지원)  |
 | 빈 배열 제외       | `tags: []` → 프론트매터에서 자동 제외                      |
 
+### v0.1.4에서 추가된 기능
+
+| 기능                     | 상세                                                                            |
+| ------------------------ | ------------------------------------------------------------------------------- |
+| DatabaseSyncer           | 다중 Notion DB 양방향 동기화 (DB별 로컬 폴더/속성 매핑/필터)                    |
+| Standalone 파일 동기화   | 비-md 파일 업로드/다운로드                                                      |
+| pushUpdatePage 폴백 개선 | 부분 업데이트 → replacePageMarkdown → blocks API 3단계 폴백                     |
+| 테스트 확대              | 434 → 486 (compute-patches, Enhanced MD 라운드트립, DatabaseSyncer, 픽스처 3개) |
+
 ### 테스트
 
-- **단위 테스트**: 434개 통과
+- **단위 테스트**: 486개 통과
 - **E2E 테스트**: 11개 통과 (실제 Notion API)
-- **라운드트립 테스트**: 20+ (17개 픽스처)
+- **라운드트립 테스트**: 26+ (20개 픽스처)
 - **실전 동기화**: 180파일 Push + 283파일 Pull 성공
 
 ### Obsidian 플러그인
@@ -123,11 +132,13 @@ Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 �
 | 영역                  | 상태                          |
 | --------------------- | ----------------------------- |
 | Pull/Push 양방향      | ✅ 완료                       |
+| 다중 DB 동기화        | ✅ DatabaseSyncer             |
 | 부분 업데이트         | ✅ search-and-replace         |
 | 페이지 이동           | ✅ Move API                   |
 | Relation Push         | ✅ wikilink ↔ relation 양방향 |
 | 프론트매터 라운드트립 | ✅ 타임존 정규화 확대         |
 | 이미지 Push           | ✅ File Upload API            |
+| Standalone 파일       | ✅ 비-md 파일 업/다운로드     |
 | 미디어 태그           | ✅ audio/video/pdf/file       |
 | 색상/밑줄 보존        | ✅ 보존 마커                  |
 | Unknown 블록 보존     | ✅ 보존 마커                  |

@@ -3,6 +3,27 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.4] - 2026-05-16
+
+### Added
+
+- **DatabaseSyncer** — 다중 Notion 데이터베이스 양방향 동기화. `databases` 설정으로 DB별 로컬 폴더/속성 매핑/필터 지정 가능
+- **Standalone 파일 동기화** — 비-md 파일 (이미지/PDF 등) 업로드/다운로드 지원
+- **pushUpdatePage 폴백 체인 개선** — 부분 업데이트 실패 시 replacePageMarkdown → blocks API 3단계 폴백
+- 테스트 434 → 486 (52개 추가)
+  - 부분 업데이트 검증 4개 (compute-patches)
+  - Enhanced MD 라운드트립 9개 (미디어/탭/색상/중첩토글/다중색상/테이블/수학식)
+  - 픽스처 기반 라운드트립 6개 (media-embed, color-formatting, notion-only, complex-table, frontmatter-all-types, mixed-callout-toggle)
+  - DatabaseSyncer 단위 테스트 17개
+  - Orchestrator 모킹 보강 16개
+- 라운드트립 픽스처 17 → 20개 (complex-table, frontmatter-all-types, mixed-callout-toggle)
+
+### Changed
+
+- `SyncOrchestrator` — DatabaseSyncer 위임으로 push/pull 시 DB 동기화 자동 실행
+- `Config` 타입 — `databases` 배열 추가 (DatabaseSyncConfig)
+- `NotionClient` — `queryAllDatabasePages()`, `getDataSourceId()` 추가
+
 ## [0.1.3] - 2026-05-15
 
 ### Added

@@ -1,12 +1,12 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-15
+> Last updated: 2026-05-16
 
-## Current State (v0.1.3)
+## Current State (v0.1.4)
 
 True bidirectional Obsidian <-> Notion sync via CLI.
-434 tests passing, 25+ block types, 21 property read types, 15 property write types.
-Partial update (search-and-replace), Move page API, media/color/underline/unknown 보존.
+486 tests passing, 25+ block types, 21 property read types, 15 property write types.
+다중 데이터베이스 동기화(DatabaseSyncer), Standalone 파일 동기화, 부분 업데이트 3단계 폴백.
 동기화 커버리지 ~95% 달성.
 
 ---
@@ -14,7 +14,7 @@ Partial update (search-and-replace), Move page API, media/color/underline/unknow
 ## Release Timeline
 
 ```
-v0.1.3  <-- Current — Notion API 최신화 + Enhanced MD 확대
+v0.1.4  <-- Current — 다중 DB 동기화 + 테스트 확대
 v0.5.0  --> Next — Obsidian community plugin (sql.js WASM)
 v1.0.0  --> Database view sync, multi-workspace, 1000+ notes
 ```
@@ -116,6 +116,18 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 - [x] 타임존 정규화 확대 — `+09:00` 등 오프셋 포함 자정 시각 처리
 - [x] 빈 배열 속성 프론트매터 제외
 - [x] 테스트 409 → 434, 픽스처 14 → 17개
+
+---
+
+## v0.1.4 — 다중 DB 동기화 + 테스트 확대
+
+### Added
+
+- [x] DatabaseSyncer — 다중 Notion 데이터베이스 양방향 Pull/Push
+- [x] Standalone 파일 동기화 — 비-md 파일 업로드/다운로드
+- [x] pushUpdatePage 폴백 체인 개선 — 부분 업데이트 → replace → blocks API
+- [x] 테스트 434 → 486 (52개 추가)
+- [x] 라운드트립 픽스처 17 → 20개
 
 ---
 

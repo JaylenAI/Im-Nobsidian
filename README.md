@@ -38,6 +38,8 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Conflict resolution built in** &nbsp; When both sides change the same file, Im-Nobsidian detects it and shows the actual remote content for comparison. Choose: keep local, keep remote, or resolve manually. No silent data loss, ever.
 
+**Multi-database sync** &nbsp; Sync multiple Notion databases to separate local folders. Each database gets its own property mapping and filter. Database pages become individual markdown files with frontmatter properties.
+
 **Folder structure = Page hierarchy** &nbsp; Your Obsidian folder tree maps 1:1 to Notion's page hierarchy. `projects/plan.md` → Notion page "plan" under "projects."
 
 **Zero configuration sync state** &nbsp; No database to set up. No server to run. State tracking is fully automatic via a local SQLite file in `.im-nobsidian/` — you never touch it.
