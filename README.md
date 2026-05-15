@@ -30,11 +30,13 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **True bidirectional sync** &nbsp; Edit on either side — changes propagate both ways. Not "export then import," but real two-way sync with change detection and delta updates.
 
-**15+ block types preserved** &nbsp; Headings, code blocks, math (LaTeX), callouts, toggles, tables, checklists, columns, dividers, embeds — all converted accurately in both directions.
+**25+ block types preserved** &nbsp; Headings, code blocks, math (LaTeX), callouts, toggles, tables, checklists, columns, dividers, embeds, media (audio/video/pdf/file), tab blocks — all converted accurately in both directions. Colors, underlines, and Notion-only blocks are preserved via round-trip markers.
 
-**Frontmatter ↔ Notion properties** &nbsp; Your YAML frontmatter maps directly to Notion database properties. Select, multi-select, date, number, checkbox, URL, people, status — 15+ property types supported.
+**Smart partial updates** &nbsp; When changes are small, Im-Nobsidian uses search-and-replace instead of overwriting the entire page — preserving other people's edits on the same page. Large changes still use full replace.
 
-**Conflict resolution built in** &nbsp; When both sides change the same file, Im-Nobsidian detects it and lets you choose: keep local, keep remote, or resolve manually. No silent data loss, ever.
+**Frontmatter ↔ Notion properties** &nbsp; Your YAML frontmatter maps directly to Notion database properties. Select, multi-select, date, number, checkbox, URL, people, status — 21 read types, 15 write types. Read-only properties (formula, rollup, etc.) are automatically skipped.
+
+**Conflict resolution built in** &nbsp; When both sides change the same file, Im-Nobsidian detects it and shows the actual remote content for comparison. Choose: keep local, keep remote, or resolve manually. No silent data loss, ever.
 
 **Folder structure = Page hierarchy** &nbsp; Your Obsidian folder tree maps 1:1 to Notion's page hierarchy. `projects/plan.md` → Notion page "plan" under "projects."
 
@@ -177,10 +179,13 @@ When both sides change the same file:
 | Dividers                                        |       ✅       |      ✅      |
 | Toggle blocks                                   |       ✅       |      ✅      |
 | Column layouts                                  |       ✅       |      ✅      |
-| Colors, underline, mentions                     |       ✅       |      ✅      |
+| Colors and underlines                           |       ✅       | ✅ Preserved |
+| Media (audio / video / pdf / file)              |       ✅       |      ✅      |
+| Tab blocks                                      |       ✅       | ✅ Preserved |
 | Video / embed URLs                              |       ✅       |      ✅      |
-| Frontmatter ↔ database properties (15+ types)   |       ✅       |      ✅      |
+| Frontmatter ↔ database properties (21 types)    |       ✅       |      ✅      |
 | Images                                          | 📎 Placeholder | ✅ Download  |
+| Notion-only blocks (bookmark, embed, etc.)      |       ✅       | ✅ Preserved |
 | Notion-only blocks (button, form, synced block) |       —        | 📌 Preserved |
 
 ## Configuration
@@ -277,8 +282,7 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.0  ✅ Current — Bidirectional sync via Notion Markdown API
-v0.2.0  → Incremental sync + block-level diff + Myers diff
+v0.2.0  ✅ Current — Notion API modernization + Enhanced MD expansion
 v0.5.0  → Obsidian community plugin (sql.js WASM)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
@@ -292,7 +296,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 377 tests
+pnpm test          # 434 tests
 pnpm lint
 pnpm typecheck
 

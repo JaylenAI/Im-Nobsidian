@@ -2,19 +2,19 @@
 
 > Last updated: 2026-05-15
 
-## Current State (v0.1.2)
+## Current State (v0.2.0)
 
 True bidirectional Obsidian <-> Notion sync via CLI.
-409 tests passing, 25+ block types, 21 property read types, 15 property write types.
-Relation 양방향, Date range, 프론트매터 정규화, 이미지 업로드 지원.
-180 files Push/Pull 실전 테스트 완료.
+434 tests passing, 25+ block types, 21 property read types, 15 property write types.
+Partial update (search-and-replace), Move page API, media/color/underline/unknown 보존.
+동기화 커버리지 ~95% 달성.
 
 ---
 
 ## Release Timeline
 
 ```
-v0.1.2  <-- Current — 변환 품질 강화 + 속성 Write 확대
+v0.2.0  <-- Current — Notion API 최신화 + Enhanced MD 확대
 v0.5.0  --> Next — Obsidian community plugin (sql.js WASM)
 v1.0.0  --> Database view sync, multi-workspace, 1000+ notes
 ```
@@ -82,6 +82,24 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 - [x] Embed 블록 Pull 커스텀 트랜스포머
 - [x] ISO 날짜 정규화 — `T00:00:00.000Z` → `YYYY-MM-DD`
 - [x] 테스트 377 → 409
+
+---
+
+## v0.2.0 — Notion API 최신화 + Enhanced MD 확대
+
+### Added
+
+- [x] `update_content` 부분 업데이트 — search-and-replace (≤20 패치)
+- [x] Move page API — 파일 이동 시 Notion 페이지 위치 이동 (히스토리 보존)
+- [x] 충돌 시 remoteContent 실제 조회 — 빈 문자열 대신 Notion 내용 비교
+- [x] 미디어 태그 양방향 — `<audio>/<video>/<pdf>/<file>` ↔ 이모지 링크
+- [x] Tab 블록 양방향 — `<tab>` ↔ `> [!tab]` 콜아웃
+- [x] 색상/밑줄 보존 마커 — `<span color>/<underline>` → 라운드트립 유지
+- [x] Unknown 블록 보존 마커 — `<unknown>` → 삭제 대신 보존
+- [x] 읽기전용 속성 8종 스킵 — Push 시 API 에러 방지
+- [x] 타임존 정규화 확대 — `+09:00` 등 오프셋 포함 자정 시각 처리
+- [x] 빈 배열 속성 프론트매터 제외
+- [x] 테스트 409 → 434, 픽스처 14 → 17개
 
 ---
 

@@ -30,11 +30,13 @@ Obsidian에서 편집하면 Notion에 반영됩니다. Notion에서 편집하면
 
 **진정한 양방향 동기화** &nbsp; 어느 쪽에서 편집하든 양쪽에 반영됩니다. "내보내고 가져오기"가 아닌, 변경 감지와 델타 업데이트 기반의 실제 양방향 동기화입니다.
 
-**15+ 블록 타입 보존** &nbsp; 제목, 코드 블록, 수식(LaTeX), 콜아웃, 토글, 테이블, 체크리스트, 컬럼, 구분선, 임베드 — 모두 양방향으로 정확하게 변환됩니다.
+**25+ 블록 타입 보존** &nbsp; 제목, 코드 블록, 수식(LaTeX), 콜아웃, 토글, 테이블, 체크리스트, 컬럼, 구분선, 임베드, 미디어(audio/video/pdf/file), 탭 블록 — 모두 양방향으로 정확하게 변환됩니다. 색상, 밑줄, Notion 전용 블록은 보존 마커로 라운드트립이 보장됩니다.
 
-**프론트매터 ↔ Notion 속성** &nbsp; YAML 프론트매터가 Notion 데이터베이스 속성에 직접 매핑됩니다. Select, Multi-select, Date, Number, Checkbox, URL, People, Status 등 15+ 속성 타입을 지원합니다.
+**스마트 부분 업데이트** &nbsp; 변경이 적을 때는 전체 덮어쓰기 대신 search-and-replace로 부분 업데이트합니다. 같은 페이지에서 다른 사람이 편집한 내용이 보존됩니다.
 
-**충돌 해결 내장** &nbsp; 양쪽에서 같은 파일을 수정하면 Im-Nobsidian이 감지하고, 로컬 유지 / 원격 유지 / 수동 해결 중 선택할 수 있습니다. 데이터 유실은 절대 없습니다.
+**프론트매터 ↔ Notion 속성** &nbsp; YAML 프론트매터가 Notion 데이터베이스 속성에 직접 매핑됩니다. 21종 읽기 + 15종 쓰기를 지원하며, 읽기전용 속성(formula, rollup 등)은 자동으로 스킵됩니다.
+
+**충돌 해결 내장** &nbsp; 양쪽에서 같은 파일을 수정하면 Im-Nobsidian이 감지하고, 실제 원격 내용을 비교하여 보여줍니다. 로컬 유지 / 원격 유지 / 수동 해결 중 선택할 수 있습니다. 데이터 유실은 절대 없습니다.
 
 **폴더 구조 = 페이지 계층** &nbsp; Obsidian 폴더 트리가 Notion 페이지 계층에 1:1로 매핑됩니다. `프로젝트/기획안.md` → Notion "프로젝트" 하위 "기획안" 페이지.
 
@@ -177,10 +179,13 @@ Obsidian 볼트                          Notion 워크스페이스
 | 구분선                                 |       ✅        |     ✅      |
 | 토글 블록                              |       ✅        |     ✅      |
 | 컬럼 레이아웃                          |       ✅        |     ✅      |
-| 색상, 밑줄, 멘션                       |       ✅        |     ✅      |
+| 색상, 밑줄                             |       ✅        |   ✅ 보존   |
+| 미디어 (audio / video / pdf / file)    |       ✅        |     ✅      |
+| 탭 블록                                |       ✅        |   ✅ 보존   |
 | 비디오 / 임베드 URL                    |       ✅        |     ✅      |
-| 프론트매터 ↔ DB 속성 (15+ 타입)        |       ✅        |     ✅      |
+| 프론트매터 ↔ DB 속성 (21종)            |       ✅        |     ✅      |
 | 이미지                                 | 📎 플레이스홀더 | ✅ 다운로드 |
+| Notion 전용 블록 (bookmark, embed 등)  |       ✅        |   ✅ 보존   |
 | Notion 전용 블록 (버튼, 폼, 동기 블록) |        —        |   📌 보존   |
 
 ## 설정
@@ -261,8 +266,7 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.1.0  ✅ 현재 — Notion Markdown API 기반 양방향 동기화
-v0.2.0  → 증분 동기화 + 블록 단위 diff + Myers diff
+v0.2.0  ✅ 현재 — Notion API 최신화 + Enhanced MD 확대
 v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```
@@ -276,7 +280,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 377개 테스트
+pnpm test          # 434개 테스트
 pnpm lint
 pnpm typecheck
 ```

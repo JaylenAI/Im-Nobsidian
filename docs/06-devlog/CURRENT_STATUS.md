@@ -2,24 +2,26 @@
 
 > 마지막 업데이트: 2026-05-15
 
-## v0.1.2 — 변환 품질 강화 (Current)
+## v0.2.0 — Notion API 최신화 + Enhanced MD 확대 (Current)
 
-Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
-프론트매터 정규화, PDF/Embed 블록을 추가하여 변환 품질을 대폭 강화했습니다.
+Im-Nobsidian v0.2.0은 2026년 Notion 신규 API를 완전 통합하고,
+Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 끌어올렸습니다.
 
 ### 핵심 기능
 
-| 기능                     | 상태            | 비고                         |
-| ------------------------ | --------------- | ---------------------------- |
-| Push (Obsidian → Notion) | ✅ 완료         | Markdown API 기반            |
-| Pull (Notion → Obsidian) | ✅ 완료         | Enhanced Markdown 변환       |
-| Sync (양방향)            | ✅ 완료         | Pull → Push 순차 실행        |
-| 충돌 감지 + 해결         | ✅ 완료         | 4가지 전략                   |
-| 프론트매터 ↔ 속성        | ✅ 완료         | 15+ 타입, YAML 코드블록 왕복 |
-| 위키링크 ↔ 멘션          | ✅ 완료         | 페이지 멘션 양방향 매핑      |
-| 이미지 Pull              | ✅ 완료         | 자동 다운로드 + 중복 제거    |
-| 이미지 Push              | 📎 플레이스홀더 | Notion API 제한              |
-| 폴더 구조 보존           | ✅ 완료         | 1:1 페이지 계층 매핑         |
+| 기능                     | 상태            | 비고                              |
+| ------------------------ | --------------- | --------------------------------- |
+| Push (Obsidian → Notion) | ✅ 완료         | Markdown API + 부분 업데이트      |
+| Pull (Notion → Obsidian) | ✅ 완료         | Enhanced Markdown 변환            |
+| Sync (양방향)            | ✅ 완료         | Pull → Push 순차 실행             |
+| 충돌 감지 + 해결         | ✅ 완료         | 4가지 전략 + 실제 원격 내용 비교  |
+| 부분 업데이트            | ✅ 완료         | search-and-replace (≤20 패치)     |
+| 페이지 이동              | ✅ 완료         | Move API로 히스토리/코멘트 보존   |
+| 프론트매터 ↔ 속성        | ✅ 완료         | 21 읽기 + 15 쓰기 + 읽기전용 스킵 |
+| 위키링크 ↔ 멘션          | ✅ 완료         | 페이지 멘션 양방향 매핑           |
+| 이미지 Pull              | ✅ 완료         | 자동 다운로드 + 중복 제거         |
+| 이미지 Push              | 📎 플레이스홀더 | Notion API 제한                   |
+| 폴더 구조 보존           | ✅ 완료         | 1:1 페이지 계층 매핑              |
 
 ### 변환 품질
 
@@ -35,9 +37,12 @@ Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
 | 구분선                                     |       ✅        |     ✅      |
 | 토글 블록                                  |       ✅        |     ✅      |
 | 컬럼 레이아웃                              |       ✅        |     ✅      |
-| 색상/밑줄/멘션                             |       ✅        |     ✅      |
+| 색상/밑줄 보존                             |       ✅        |   ✅ 보존   |
+| 미디어 (audio/video/pdf/file)              |       ✅        |     ✅      |
+| Tab 블록                                   |       ✅        |   ✅ 보존   |
 | 비디오/임베드 URL                          |       ✅        |     ✅      |
 | 이미지                                     | 📎 플레이스홀더 | ✅ 다운로드 |
+| Notion 전용 (bookmark/embed/link preview)  |       ✅        |   ✅ 보존   |
 | Notion 전용 (버튼/폼/동기블록)             |        —        |   📌 보존   |
 
 ### CLI 명령어
@@ -71,24 +76,26 @@ Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
 | 283파일 Pull       | 283/283 성공 | 0 UNIQUE 에러, 폴더 계층 정확                                 |
 | 폴더 구조 검증     | ✅ 정확      | Admin, CVfit, ERP_NextGen/Releases, Meetings, Projects, Study |
 
-### v0.1.2에서 추가된 기능
+### v0.2.0에서 추가된 기능
 
-| 기능                 | 상세                                         |
-| -------------------- | -------------------------------------------- |
-| Relation Write       | `[[wikilink]]` → Notion relation 속성 양방향 |
-| Relation Pull 역변환 | pageId → `[[PageName]]` 자동 변환            |
-| People Write         | user ID 기반 쓰기                            |
-| Files Write          | 외부 URL 기반 쓰기                           |
-| Date range           | start + end 양방향 (end 필드 추가)           |
-| PDF 블록 Pull        | `[📄 caption](url)` 커스텀 변환              |
-| Embed 블록 Pull      | `[caption](url)` 커스텀 변환                 |
-| ISO 날짜 정규화      | `T00:00:00.000Z` → `YYYY-MM-DD`              |
+| 기능               | 상세                                                       |
+| ------------------ | ---------------------------------------------------------- |
+| 부분 업데이트      | `update_content` search-and-replace (≤20 패치)             |
+| 페이지 이동        | Move API로 위치 이동 (delete+create 대신)                  |
+| 충돌 원격 조회     | `remoteContent` 실제 Notion 내용 조회 (빈 문자열 대신)     |
+| 미디어 태그 양방향 | `<audio>/<video>/<pdf>/<file>` ↔ 이모지 링크               |
+| Tab 블록 보존      | `<tab>` ↔ `> [!tab]` 콜아웃 양방향                         |
+| 색상/밑줄 보존     | `<span color>/<underline>` → 보존 마커 (기존: 제거)        |
+| Unknown 블록 보존  | `<unknown>` → 보존 마커 (기존: 삭제)                       |
+| 읽기전용 속성 스킵 | Push 시 `created_time`/`formula`/`rollup` 등 8종 자동 스킵 |
+| 타임존 정규화 확대 | `T00:00:00.000+09:00` → `YYYY-MM-DD` (KST 등 오프셋 지원)  |
+| 빈 배열 제외       | `tags: []` → 프론트매터에서 자동 제외                      |
 
 ### 테스트
 
-- **단위 테스트**: 409개 통과
+- **단위 테스트**: 434개 통과
 - **E2E 테스트**: 11개 통과 (실제 Notion API)
-- **라운드트립 테스트**: 20개 (14개 픽스처)
+- **라운드트립 테스트**: 20+ (17개 픽스처)
 - **실전 동기화**: 180파일 Push + 283파일 Pull 성공
 
 ### Obsidian 플러그인
@@ -115,13 +122,17 @@ Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
 
 | 영역                  | 상태                          |
 | --------------------- | ----------------------------- |
-| Pull/Push 양방향      | ✅ 무료                       |
+| Pull/Push 양방향      | ✅ 완료                       |
+| 부분 업데이트         | ✅ search-and-replace         |
+| 페이지 이동           | ✅ Move API                   |
 | Relation Push         | ✅ wikilink ↔ relation 양방향 |
-| 프론트매터 라운드트립 | ✅ ISO 날짜 정규화            |
+| 프론트매터 라운드트립 | ✅ 타임존 정규화 확대         |
 | 이미지 Push           | ✅ File Upload API            |
-| Date range            | ✅ start + end 양방향         |
+| 미디어 태그           | ✅ audio/video/pdf/file       |
+| 색상/밑줄 보존        | ✅ 보존 마커                  |
+| Unknown 블록 보존     | ✅ 보존 마커                  |
 | 블록 타입             | 25+                           |
-| 속성 Write            | 15                            |
+| 속성 읽기/쓰기        | 21 읽기 + 15 쓰기             |
 | 토글 블록 보존        | ✅ preserve marker            |
 | CLI                   | ✅ 8개 명령어                 |
 

@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-05-15
+
+### Added
+
+- **Partial page update (`update_content`)** — 변경이 적을 때(≤20 패치) search-and-replace 방식 부분 업데이트. 동시 편집 시 다른 섹션 보존
+- **Move page API** — 파일 이동 시 Notion 페이지를 delete+create 대신 위치 이동. 히스토리/코멘트 보존
+- **Conflict remote content** — 충돌 시 `remoteContent: ""` 대신 실제 Notion 페이지 내용 조회
+- **Media tag conversion** — `<audio>/<video>/<pdf>/<file>` Enhanced MD 태그 ↔ 이모지 링크 양방향 변환
+- **Tab block preservation** — `<tab>` 블록 ↔ `> [!tab]` 콜아웃 양방향 변환
+- **Color/underline preservation** — `<span color>/<span underline>` → 보존 마커로 라운드트립 유지 (기존: 색상 제거)
+- **Unknown block preservation** — `<unknown>` 블록 → 보존 마커 생성 (기존: 삭제). bookmark/embed/link preview 등 Notion 전용 블록 보존
+- **Read-only property skip** — Push 시 `created_time`, `formula`, `rollup`, `unique_id` 등 8종 읽기전용 속성 자동 스킵 (API 에러 방지)
+- **Timezone normalization** — `T00:00:00.000+09:00` 등 타임존 오프셋 포함 자정 시각도 `YYYY-MM-DD`로 정규화
+- **Empty array exclusion** — 빈 배열 속성(`tags: []`) 프론트매터에서 자동 제외
+- 테스트 409 → 434 (25개 추가: 미디어/색상/밑줄/unknown/tab/속성 스킵/타임존)
+- 라운드트립 픽스처 14 → 17개 (media-embed, color-formatting, notion-only-blocks)
+
+### Changed
+
+- `<unknown>` 블록 처리: 삭제 → 보존 마커 (`%%im-nobsidian:unknown:...%%`)
+- `<span color>` 처리: 색상 제거 → 보존 마커 (`%%im-nobsidian:color:...%%`)
+- Push 시 `moved` 상태 처리: `pushUpdate()` → `pushMove()` (Move API 우선, 실패 시 fallback)
+- `normalizeDate()`: 3개 패턴 → 통합 정규식 `MIDNIGHT_RE`
+
 ## [0.1.2] - 2026-05-15
 
 ### Added
