@@ -1,6 +1,6 @@
 {
   "name": "@im-nobsidian/core",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Core sync engine for Obsidian ↔ Notion bidirectional synchronization",
   "author": "hanseungheon",
   "type": "module",
