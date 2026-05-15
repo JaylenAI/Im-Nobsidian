@@ -1011,8 +1011,13 @@ export class SyncOrchestrator {
           const baseEnhanced = obsidianToNotionEnhanced(baseSnapshot.toString("utf-8"));
           const patches = this.computePatches(baseEnhanced, enhanced);
           if (patches.length > 0 && patches.length <= 20) {
-            await this.notionClient.updatePageMarkdownPartial(pageId, patches);
-            return;
+            try {
+              await this.notionClient.updatePageMarkdownPartial(pageId, patches);
+              return;
+            } catch {
+              await this.notionClient.replacePageMarkdown(pageId, enhanced);
+              return;
+            }
           }
         }
 

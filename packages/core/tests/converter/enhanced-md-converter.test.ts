@@ -197,6 +197,27 @@ describe("round-trip", () => {
     expect(back).toBe(notion);
   });
 
+  it("미디어 video 왕복", () => {
+    const notion = '<video src="https://example.com/clip.mp4">My Clip</video>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("미디어 pdf 왕복", () => {
+    const notion = '<pdf src="https://example.com/doc.pdf">My Doc</pdf>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("미디어 file 왕복", () => {
+    const notion = '<file src="https://example.com/data.zip">Archive</file>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
   it("색상 왕복", () => {
     const notion = '<span color="blue">파란색 텍스트</span>';
     const obsidian = notionEnhancedToObsidian(notion);
@@ -219,5 +240,86 @@ describe("round-trip", () => {
     expect(obsidian).toBe("%%im-nobsidian:unknown:id=def&type=embed%%");
     const back = obsidianToNotionEnhanced(obsidian);
     expect(back).toBe(notion);
+  });
+
+  it("tab 왕복", () => {
+    const obsidian = "> [!tab] My Tab\n> Tab body content";
+    const notion = obsidianToNotionEnhanced(obsidian);
+    expect(notion).toContain('<tab title="My Tab">');
+    const back = notionEnhancedToObsidian(notion);
+    expect(back).toContain("> [!tab] My Tab");
+    expect(back).toContain("> Tab body content");
+  });
+
+  it("복합 문서 왕복 (색상 + 밑줄 + unknown + 미디어)", () => {
+    const notion = [
+      "# 복합 테스트",
+      "",
+      '<span color="red">중요</span> 텍스트와 <span underline="true">밑줄</span>',
+      "",
+      '<audio src="https://x.com/a.mp3">음악</audio>',
+      "",
+      '<unknown id="xyz" type="synced_block"/>',
+      "",
+      "일반 텍스트",
+    ].join("\n");
+
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toContain("%%im-nobsidian:color:red%%중요%%/color%%");
+    expect(obsidian).toContain("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    expect(obsidian).toContain("[🔊 음악](https://x.com/a.mp3)");
+    expect(obsidian).toContain("%%im-nobsidian:unknown:id=xyz&type=synced_block%%");
+
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toContain('<span color="red">중요</span>');
+    expect(back).toContain('<span underline="true">밑줄</span>');
+    expect(back).toContain('<audio src="https://x.com/a.mp3">음악</audio>');
+    expect(back).toContain('<unknown id="xyz" type="synced_block"/>');
+  });
+
+  it("중첩 토글 Push→Pull 외부 변환 + 내부 HTML 보존", () => {
+    const notion = [
+      "<details>",
+      "<summary>Outer</summary>",
+      "Outer content",
+      "<details>",
+      "<summary>Inner</summary>",
+      "Deep content",
+      "</details>",
+      "</details>",
+    ].join("\n");
+
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toContain("%%im-nobsidian:toggle:start%%");
+    expect(obsidian).toContain("- Outer");
+    expect(obsidian).toContain("Outer content");
+    expect(obsidian).toContain("<summary>Inner</summary>");
+    expect(obsidian).toContain("Deep content");
+    expect(obsidian).toContain("%%im-nobsidian:toggle:end%%");
+  });
+
+  it("다중 색상 왕복", () => {
+    const notion =
+      '<span color="red">빨강</span> 그리고 <span color="blue">파랑</span> 그리고 <span color="green">초록</span>';
+    const obsidian = notionEnhancedToObsidian(notion);
+    const back = obsidianToNotionEnhanced(obsidian);
+    expect(back).toBe(notion);
+  });
+
+  it("Notion 테이블 HTML → MD 테이블 변환", () => {
+    const notion =
+      "<table><tr><th>이름</th><th>나이</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toContain("| 이름 | 나이 |");
+    expect(obsidian).toContain("| --- | --- |");
+    expect(obsidian).toContain("| Alice | 30 |");
+  });
+
+  it("수학식 라운드트립", () => {
+    const notion = "Inline $`E = mc^2`$ and block:\n$$\n```\n\\sum_{i=1}^n i\n```\n$$";
+    const obsidian = notionEnhancedToObsidian(notion);
+    expect(obsidian).toContain("$E = mc^2$");
+    expect(obsidian).toContain("$$");
+    expect(obsidian).toContain("\\sum_{i=1}^n i");
   });
 });

@@ -422,7 +422,6 @@ describe("Roundtrip 테스트", () => {
       properties: pushResult.properties,
     });
 
-    const normalizedInput = normalize(input);
     const normalizedOutput = normalize(pullResult);
 
     expect(normalizedOutput).toContain("title: Simple Note");
@@ -433,5 +432,111 @@ describe("Roundtrip 테스트", () => {
     expect(normalizedOutput).toContain("```typescript");
     expect(normalizedOutput).toContain("> This is a blockquote");
     expect(normalizedOutput).toContain("[External Link](https://github.com)");
+  });
+
+  it("media-embed-note.md 미디어 임베드 보존", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "media-embed-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("[🔊 Background Music](https://example.com/music.mp3)");
+    expect(pushResult.content).toContain("[🎬 Tutorial Video](https://example.com/tutorial.mp4)");
+    expect(pushResult.content).toContain("[📄 Project Spec](https://example.com/spec.pdf)");
+    expect(pushResult.content).toContain("[📎 Data Export](https://example.com/data.csv)");
+    expect(pushResult.properties).toEqual({ title: "Media Embed Test", tags: ["media", "test"] });
+  });
+
+  it("color-formatting-note.md 색상/밑줄 보존 마커 Push→Pull", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "color-formatting-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("%%im-nobsidian:color:red%%중요한 텍스트%%/color%%");
+    expect(pushResult.content).toContain("%%im-nobsidian:underline%%밑줄 텍스트%%/underline%%");
+    expect(pushResult.content).toContain("%%im-nobsidian:color:blue%%파란색%%/color%%");
+    expect(pushResult.content).toContain("%%im-nobsidian:color:green%%녹색%%/color%%");
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    expect(pullResult).toContain("%%im-nobsidian:color:red%%중요한 텍스트%%/color%%");
+    expect(pullResult).toContain("%%im-nobsidian:underline%%밑줄 텍스트%%/underline%%");
+  });
+
+  it("notion-only-blocks-note.md unknown 블록 보존 마커 라운드트립", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "notion-only-blocks-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("%%im-nobsidian:unknown:id=abc123&type=bookmark%%");
+    expect(pushResult.content).toContain("%%im-nobsidian:unknown:id=def456&type=embed%%");
+    expect(pushResult.content).toContain("Some normal text.");
+    expect(pushResult.content).toContain("More text between blocks.");
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    expect(pullResult).toContain("%%im-nobsidian:unknown:id=abc123&type=bookmark%%");
+    expect(pullResult).toContain("%%im-nobsidian:unknown:id=def456&type=embed%%");
+  });
+
+  it("complex-table-note.md 대형 테이블 + 서식 셀 보존", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "complex-table-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("| Name | Age | City |");
+    expect(pushResult.content).toContain("| Alice | 30 | Seoul |");
+    expect(pushResult.content).toContain("| **Bold feature** |");
+    expect(pushResult.content).toContain("| `Code feature` |");
+    expect(pushResult.content).toContain("| R10C1 |");
+    expect(pushResult.content).toContain("Text after table.");
+    expect(pushResult.properties).toEqual({ title: "Complex Table Test" });
+  });
+
+  it("frontmatter-all-types.md 전체 속성 타입 라운드트립", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "frontmatter-all-types.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    const props = pushResult.properties;
+    expect(props.title).toBe("All Property Types");
+    expect(props.status).toBe("active");
+    expect(props.tags).toEqual(["metadata", "comprehensive"]);
+    expect(props.priority).toBe(7);
+    expect(props.category).toBe("documentation");
+    expect(props.author).toBe("jaylen");
+    expect(props.email).toBe("test@example.com");
+    expect(props.phone).toBe("010-1234-5678");
+    expect(props.url).toBe("https://github.com/example");
+    expect(props.reviewed).toBe(true);
+    expect(props.score).toBe(95.5);
+    expect(props.related).toEqual(["[[Project Plan]]", "[[Architecture]]"]);
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    expect(pullResult).toContain("title: All Property Types");
+    expect(pullResult).toContain("priority: 7");
+    expect(pullResult).toContain("score: 95.5");
+    expect(pullResult).toContain("reviewed: true");
+    expect(pullResult).toContain("email: test@example.com");
+    expect(pullResult).toMatch(/url:.*https:\/\/github\.com\/example/);
+  });
+
+  it("mixed-callout-toggle.md 콜아웃+토글 조합 보존", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "mixed-callout-toggle.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("> [!note] Important Note");
+    expect(pushResult.content).toContain("%%im-nobsidian:toggle:start%%");
+    expect(pushResult.content).toContain("- Outer Toggle");
+    expect(pushResult.content).toContain("- Inner Toggle");
+    expect(pushResult.content).toContain("%%im-nobsidian:toggle:end%%");
+    expect(pushResult.content).toContain("> [!warning] Warning with code");
+    expect(pushResult.content).toContain("> [!tab] First Tab");
+    expect(pushResult.content).toContain("> [!tab] Second Tab");
+    expect(pushResult.properties).toEqual({
+      title: "Mixed Callout Toggle",
+      tags: ["callout", "toggle"],
+    });
   });
 });
