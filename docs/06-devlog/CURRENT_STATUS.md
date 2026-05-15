@@ -1,11 +1,11 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-14
+> 마지막 업데이트: 2026-05-15
 
-## v0.1.1 — Pull 안정성 수정 + 실전 검증 (Current)
+## v0.1.2 — N2O 수준 변환 품질 달성 (Current)
 
-Im-Nobsidian v0.1.1은 Pull 동기화의 치명적 버그 5건을 수정하고,
-180파일 Push + 283파일 Pull 실전 테스트를 완료한 안정화 릴리스입니다.
+Im-Nobsidian v0.1.2는 속성 Write 15개, Relation 양방향, Date range,
+프론트매터 정규화, PDF/Embed 블록을 추가하여 N2O v0.9.95와 동등한 변환 품질을 달성했습니다.
 
 ### 핵심 기능
 
@@ -71,9 +71,22 @@ Im-Nobsidian v0.1.1은 Pull 동기화의 치명적 버그 5건을 수정하고,
 | 283파일 Pull       | 283/283 성공 | 0 UNIQUE 에러, 폴더 계층 정확                                 |
 | 폴더 구조 검증     | ✅ 정확      | Admin, CVfit, ERP_NextGen/Releases, Meetings, Projects, Study |
 
+### v0.1.2에서 추가된 기능
+
+| 기능                 | 상세                                         |
+| -------------------- | -------------------------------------------- |
+| Relation Write       | `[[wikilink]]` → Notion relation 속성 양방향 |
+| Relation Pull 역변환 | pageId → `[[PageName]]` 자동 변환            |
+| People Write         | user ID 기반 쓰기                            |
+| Files Write          | 외부 URL 기반 쓰기                           |
+| Date range           | start + end 양방향 (end 필드 추가)           |
+| PDF 블록 Pull        | `[📄 caption](url)` 커스텀 변환              |
+| Embed 블록 Pull      | `[caption](url)` 커스텀 변환                 |
+| ISO 날짜 정규화      | `T00:00:00.000Z` → `YYYY-MM-DD`              |
+
 ### 테스트
 
-- **단위 테스트**: 377개 통과
+- **단위 테스트**: 409개 통과
 - **E2E 테스트**: 11개 통과 (실제 Notion API)
 - **라운드트립 테스트**: 20개 (14개 픽스처)
 - **실전 동기화**: 180파일 Push + 283파일 Pull 성공
@@ -102,20 +115,21 @@ Im-Nobsidian v0.1.1은 Pull 동기화의 치명적 버그 5건을 수정하고,
 
 > 상세 비교: [ROADMAP.md](./ROADMAP.md) 참고
 
-| 영역                  | Im-Nobsidian v0.1.1 |   N2O v0.9.95   | v0.2.0 목표 |
-| --------------------- | :-----------------: | :-------------: | :---------: |
-| Pull/Push 양방향      |      ✅ (무료)      | ✅ (Push $8/mo) |     ✅      |
-| Relation Push         |      ❌ Pull만      |       ✅        |     ✅      |
-| 프론트매터 라운드트립 |    ⚠️ 포맷 차이     |       ✅        |     ✅      |
-| 이미지 Push           |   📎 플레이스홀더   |       ✅        |     ✅      |
-| Date range            |       start만       |       ✅        |     ✅      |
-| 블록 타입             |         17+         |       27+       |     25+     |
-| 속성 Write            |         11          |       ~15       |     15      |
-| 토글 블록 보존        |      ✅ (강점)      | ❌ callout 깨짐 |     ✅      |
-| CLI                   |    ✅ 8개 (강점)    |       ❌        |     ✅      |
+| 영역                  | Im-Nobsidian v0.1.2 |   N2O v0.9.95   |   비고   |
+| --------------------- | :-----------------: | :-------------: | :------: |
+| Pull/Push 양방향      |      ✅ (무료)      | ✅ (Push $8/mo) | **우위** |
+| Relation Push         |         ✅          |       ✅        |   동등   |
+| 프론트매터 라운드트립 |      ✅ 정규화      |       ✅        |   동등   |
+| 이미지 Push           |      ✅ 업로드      |       ✅        |   동등   |
+| Date range            |      start+end      |       ✅        |   동등   |
+| 블록 타입             |         25+         |       27+       |   근접   |
+| 속성 Write            |         15          |       ~15       |   동등   |
+| 토글 블록 보존        |      ✅ (강점)      | ❌ callout 깨짐 | **우위** |
+| CLI                   |    ✅ 8개 (강점)    |       ❌        | **우위** |
+| 가격                  |      **무료**       |   $8/mo~$249    | **우위** |
+| 소스                  |  **MIT 오픈소스**   |     Closed      | **우위** |
 
 ### 다음 단계
 
-1. **v0.2.0** — N2O 수준 변환 품질 달성 (Relation Push, 프론트매터 품질, 이미지 Push, Date range, 블록 25+, 속성 Write 15)
-2. **v0.5.0** — Obsidian 커뮤니티 플러그인 (sql.js WASM)
-3. **v1.0.0** — Database view sync, multi-workspace, 1000+ 노트
+1. **v0.5.0** — Obsidian 커뮤니티 플러그인 (sql.js WASM)
+2. **v1.0.0** — Database view sync, multi-workspace, 1000+ 노트
