@@ -136,8 +136,11 @@ export class SyncOrchestrator {
             created++;
             break;
           case "modified":
-          case "moved":
             await this.pushUpdate(change.path);
+            updated++;
+            break;
+          case "moved":
+            await this.pushMove(change.path);
             updated++;
             break;
           case "deleted":
@@ -353,13 +356,22 @@ export class SyncOrchestrator {
         // 파일이 삭제된 경우
       }
 
+      let remoteContent = "";
+      if (record.notionPageId) {
+        try {
+          remoteContent = await this.fetchPageMarkdown(record.notionPageId);
+        } catch {
+          // 페이지가 삭제된 경우
+        }
+      }
+
       conflicts.push({
         syncRecord: record,
         localChange,
         remoteChange,
         baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
         localContent,
-        remoteContent: "",
+        remoteContent,
       });
     }
 
@@ -467,7 +479,7 @@ export class SyncOrchestrator {
       parentMode: this.config.notion.parentMode,
     });
 
-    await this.pushUpdatePage(record.notionPageId, conversionResult.content);
+    await this.pushUpdatePage(record.notionPageId, conversionResult.content, record.baseSnapshot);
 
     await this.imageHandler.uploadAndAppendImages(record.notionPageId, conversionResult.images);
 
@@ -511,6 +523,26 @@ export class SyncOrchestrator {
     } else {
       this.stateDb.updateStatus(record.id, "pending");
     }
+  }
+
+  private async pushMove(path: string): Promise<void> {
+    const record = this.stateDb.getByPath(path);
+    if (!record?.notionPageId) return;
+
+    const newParentId = await this.resolveNotionParent(path);
+    const currentParentId = record.notionParentId;
+
+    if (currentParentId && !notionIdsEqual(newParentId, currentParentId)) {
+      try {
+        const parentType = this.isDatabaseMode ? "database" : "page";
+        await this.notionClient.movePage(record.notionPageId, newParentId, parentType);
+        this.stateDb.setNotionParentId(record.id, newParentId);
+      } catch {
+        getLogger().warn(`[Im-Nobsidian] Move API 실패 — "${path}" 내용만 업데이트합니다`);
+      }
+    }
+
+    await this.pushUpdate(path);
   }
 
   private async detectRemoteChanges(): Promise<RemoteChange[]> {
@@ -913,10 +945,24 @@ export class SyncOrchestrator {
     return page;
   }
 
-  private async pushUpdatePage(pageId: string, markdownContent: string): Promise<void> {
+  private async pushUpdatePage(
+    pageId: string,
+    markdownContent: string,
+    baseSnapshot?: Buffer | null,
+  ): Promise<void> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const enhanced = obsidianToNotionEnhanced(markdownContent);
+
+        if (baseSnapshot) {
+          const baseEnhanced = obsidianToNotionEnhanced(baseSnapshot.toString("utf-8"));
+          const patches = this.computePatches(baseEnhanced, enhanced);
+          if (patches.length > 0 && patches.length <= 20) {
+            await this.notionClient.updatePageMarkdownPartial(pageId, patches);
+            return;
+          }
+        }
+
         await this.notionClient.replacePageMarkdown(pageId, enhanced);
         return;
       } catch {
@@ -941,6 +987,60 @@ export class SyncOrchestrator {
         }
       }),
     );
+  }
+
+  private computePatches(
+    oldContent: string,
+    newContent: string,
+  ): Array<{ oldStr: string; newStr: string }> {
+    const oldLines = oldContent.split("\n");
+    const newLines = newContent.split("\n");
+    const patches: Array<{ oldStr: string; newStr: string }> = [];
+
+    let i = 0;
+    let j = 0;
+    while (i < oldLines.length && j < newLines.length) {
+      if (oldLines[i] === newLines[j]) {
+        i++;
+        j++;
+        continue;
+      }
+
+      let oldEnd = i + 1;
+      let newEnd = j + 1;
+      const lookahead = Math.min(10, oldLines.length - i, newLines.length - j);
+      for (let k = 1; k <= lookahead; k++) {
+        if (i + k < oldLines.length && newLines[j] === oldLines[i + k]) {
+          oldEnd = i + k;
+          newEnd = j;
+          break;
+        }
+        if (j + k < newLines.length && oldLines[i] === newLines[j + k]) {
+          oldEnd = i;
+          newEnd = j + k;
+          break;
+        }
+        oldEnd = i + k;
+        newEnd = j + k;
+      }
+
+      const oldChunk = oldLines.slice(i, oldEnd).join("\n");
+      const newChunk = newLines.slice(j, newEnd).join("\n");
+      if (oldChunk || newChunk) {
+        patches.push({ oldStr: oldChunk, newStr: newChunk });
+      }
+      i = oldEnd;
+      j = newEnd;
+    }
+
+    if (i < oldLines.length || j < newLines.length) {
+      patches.push({
+        oldStr: oldLines.slice(i).join("\n"),
+        newStr: newLines.slice(j).join("\n"),
+      });
+    }
+
+    return patches;
   }
 
   private async fetchPageMarkdown(pageId: string): Promise<string> {

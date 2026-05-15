@@ -153,6 +153,14 @@ export class StateDB {
       .run(lastEdited, id);
   }
 
+  setNotionParentId(id: string, parentId: string): void {
+    this.db
+      .prepare(
+        "UPDATE sync_state SET notion_parent_id = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(parentId, id);
+  }
+
   delete(id: string): void {
     this.db.prepare("DELETE FROM sync_state WHERE id = ?").run(id);
   }

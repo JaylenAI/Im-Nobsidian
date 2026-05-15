@@ -129,6 +129,44 @@ export class NotionClient {
     );
   }
 
+  async updatePageMarkdownPartial(
+    pageId: string,
+    patches: Array<{ oldStr: string; newStr: string; replaceAll?: boolean }>,
+  ): Promise<PageMarkdownResponse> {
+    return this.withRateLimit(() =>
+      this.client.pages.updateMarkdown({
+        page_id: pageId,
+        type: "update_content",
+        update_content: {
+          content_updates: patches.map((p) => ({
+            old_str: p.oldStr,
+            new_str: p.newStr,
+            replace_all_matches: p.replaceAll ?? false,
+          })),
+          allow_deleting_content: true,
+        },
+      }),
+    );
+  }
+
+  // ─── Page Move ───
+
+  async movePage(
+    pageId: string,
+    newParentId: string,
+    newParentType: "page" | "database",
+  ): Promise<PageObjectResponse> {
+    const parent =
+      newParentType === "database" ? { database_id: newParentId } : { page_id: newParentId };
+    return this.withRateLimit(
+      () =>
+        this.client.pages.update({
+          page_id: pageId,
+          parent,
+        } as never) as Promise<PageObjectResponse>,
+    );
+  }
+
   // ─── Database / DataSource ───
 
   async getDatabaseSchema(
