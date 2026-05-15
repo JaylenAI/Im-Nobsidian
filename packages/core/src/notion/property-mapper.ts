@@ -122,7 +122,7 @@ export class PropertyMapper {
         for (const item of items) {
           const str = String(item);
           const match = str.match(WIKILINK_REGEX);
-          if (match && this.wikilinkResolver) {
+          if (match?.[1] && this.wikilinkResolver) {
             const pageId = this.wikilinkResolver.resolve(match[1]);
             if (pageId) ids.push({ id: pageId });
           } else if (str.match(/^[0-9a-f-]{32,36}$/)) {

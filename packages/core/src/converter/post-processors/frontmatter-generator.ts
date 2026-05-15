@@ -52,10 +52,10 @@ function normalizeValue(value: unknown): unknown {
 function normalizeDate(dateStr: string): string {
   if (typeof dateStr !== "string") return dateStr;
   if (dateStr.match(/T00:00:00\.000[Z+]/)) {
-    return dateStr.split("T")[0];
+    return dateStr.split("T")[0] ?? dateStr;
   }
   if (dateStr.match(/T00:00:00[Z+]/)) {
-    return dateStr.split("T")[0];
+    return dateStr.split("T")[0] ?? dateStr;
   }
   return dateStr;
 }
