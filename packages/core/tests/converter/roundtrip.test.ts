@@ -53,13 +53,14 @@ describe("Roundtrip 테스트", () => {
     pipeline.registerPostProcessor(new FrontmatterGenerator());
   });
 
-  it("frontmatter 라운드트립: 추출 → 속성 테이블 → 재생성", async () => {
+  it("frontmatter 라운드트립: 추출 → YAML 코드블록 → 재생성", async () => {
     const input = `---\ntitle: Test\nstatus: active\n---\n\n# Hello World`;
     const pushResult = pipeline.convertToNotion(input, pushContext);
 
     expect(pushResult.properties).toEqual({ title: "Test", status: "active" });
-    expect(pushResult.content).toContain("| Property | Value |");
-    expect(pushResult.content).toContain("| status | active |");
+    expect(pushResult.content).toContain("```yaml");
+    expect(pushResult.content).toContain("# im-nobsidian:properties");
+    expect(pushResult.content).toContain("status: active");
     expect(pushResult.content).toContain("# Hello World");
 
     const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
@@ -103,15 +104,41 @@ describe("Roundtrip 테스트", () => {
     });
   });
 
-  it("wikilink 라운드트립: [[link]] → markdown → [[link]]", () => {
+  it("wikilink 라운드트립: [[link]] → 보존 링크 → [[link]]", () => {
     const wikiPipeline = new ConversionPipeline();
     wikiPipeline.registerPreProcessor(new WikilinkResolver());
     wikiPipeline.registerPostProcessor(new MentionToWikilink());
 
     const input = "See [[Project Plan]] for details";
     const pushResult = wikiPipeline.convertToNotion(input, pushContext);
-    expect(pushResult.content).toContain("**Project Plan**");
+    expect(pushResult.content).toContain("im-nobsidian://wikilink/Project%20Plan");
     expect(pushResult.content).not.toContain("[[");
+
+    const pullResult = wikiPipeline.convertToMarkdown(pushResult.content, pullContext);
+    expect(pullResult).toContain("[[Project Plan]]");
+    expect(pullResult).not.toContain("im-nobsidian://");
+  });
+
+  it("wikilink 라운드트립: 리졸버로 페이지 멘션 변환 → Pull 시 복원", () => {
+    const resolver = (text: string) => {
+      if (text === "Project Plan") {
+        return {
+          obsidianPath: "project-plan.md",
+          notionPageId: "page-abc",
+          title: "Project Plan",
+          aliases: [],
+        };
+      }
+      return null;
+    };
+
+    const wikiPipeline = new ConversionPipeline();
+    wikiPipeline.registerPreProcessor(new WikilinkResolver(resolver));
+    wikiPipeline.registerPostProcessor(new MentionToWikilink());
+
+    const input = "See [[Project Plan]] for details";
+    const pushResult = wikiPipeline.convertToNotion(input, pushContext);
+    expect(pushResult.content).toContain('<mention-page id="page-abc">Project Plan</mention-page>');
   });
 
   it("image-embed-note.md 이미지 임베드 보존", async () => {
@@ -126,6 +153,16 @@ describe("Roundtrip 테스트", () => {
       title: "Image Embed Test",
       tags: ["image", "test"],
     });
+
+    const localImages = pushResult.images.filter((img) => !img.isExternal);
+    expect(localImages).toHaveLength(3);
+    expect(localImages.map((img) => img.localPath)).toEqual(
+      expect.arrayContaining(["screenshot.png", "diagram.jpg", "architecture.png"]),
+    );
+
+    const externalImages = pushResult.images.filter((img) => img.isExternal);
+    expect(externalImages).toHaveLength(1);
+    expect(externalImages[0]!.url).toBe("https://example.com/photo.png");
   });
 
   it("complex-formatting-note.md 중첩 리스트/복합 서식 보존", async () => {
@@ -227,5 +264,174 @@ describe("Roundtrip 테스트", () => {
     expect(pullResult).toContain("score: 95.5");
     expect(pullResult).toContain("reviewed: true");
     expect(pullResult).toContain("# Frontmatter Heavy");
+  });
+
+  it("callout-note.md 콜아웃 타입 보존 (block-api 경로)", async () => {
+    const blockPush: ConversionContext = {
+      direction: "push",
+      path: "block-api",
+      filePath: "test.md",
+    };
+
+    const blockPipeline = new ConversionPipeline();
+    blockPipeline.registerPreProcessor(new FrontmatterExtractor());
+    blockPipeline.registerPreProcessor(new CalloutTransformer());
+    blockPipeline.registerPostProcessor(new CalloutRestorer());
+    blockPipeline.registerPostProcessor(new FrontmatterGenerator());
+
+    const input = await readFile(join(FIXTURES_DIR, "callout-note.md"), "utf-8");
+    const pushResult = blockPipeline.convertToNotion(input, blockPush);
+
+    expect(pushResult.content).toContain("im-nobsidian:callout:type=note");
+    expect(pushResult.content).toContain("im-nobsidian:callout:type=warning");
+    expect(pushResult.content).toContain("im-nobsidian:callout:type=tip&foldable=open");
+    expect(pushResult.content).toContain("im-nobsidian:callout:type=danger&foldable=closed");
+
+    const pullResult = blockPipeline.convertToMarkdown(pushResult.content, pullContext);
+
+    expect(pullResult).toContain("[!note]");
+    expect(pullResult).toContain("[!warning]");
+    expect(pullResult).toContain("[!tip]+");
+    expect(pullResult).toContain("[!danger]-");
+    expect(pullResult).toContain("[!info]");
+    expect(pullResult).toContain("[!quote]");
+  });
+
+  it("callout-note.md markdown-api 경로 passthrough", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "callout-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("> [!note] Simple Note");
+    expect(pushResult.content).toContain("> [!warning] Be Careful");
+    expect(pushResult.content).toContain("> [!tip]+ Expandable Tip");
+    expect(pushResult.content).toContain("> [!danger]- Hidden Danger");
+  });
+
+  it("math-note.md 수식 완전 라운드트립", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "math-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("$E = mc^2$");
+    expect(pushResult.content).toContain("$$");
+    expect(pushResult.content).toContain("\\int_{-\\infty}^{\\infty}");
+    expect(pushResult.content).toContain("\\sum_{i=1}^{n}");
+    expect(pushResult.properties).toEqual({ title: "Math Test" });
+  });
+
+  it("wikilinks-note.md 다중 위키링크 보존 라운드트립", async () => {
+    const wikiPipeline = new ConversionPipeline();
+    wikiPipeline.registerPreProcessor(new FrontmatterExtractor());
+    wikiPipeline.registerPreProcessor(new WikilinkResolver());
+    wikiPipeline.registerPostProcessor(new MentionToWikilink());
+    wikiPipeline.registerPostProcessor(new FrontmatterGenerator());
+
+    const input = await readFile(join(FIXTURES_DIR, "wikilinks-note.md"), "utf-8");
+    const pushResult = wikiPipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("im-nobsidian://wikilink/Project%20Plan");
+    expect(pushResult.content).toContain("im-nobsidian://wikilink/TODO%20List");
+    expect(pushResult.content).toContain("im-nobsidian://wikilink/Architecture");
+    expect(pushResult.content).toContain("[markdown link](https://example.com)");
+
+    const pullResult = wikiPipeline.convertToMarkdown(pushResult.content, pullContext);
+
+    expect(pullResult).toContain("[[Project Plan]]");
+    expect(pullResult).toContain("[[Meeting Notes|Meetings]]");
+    expect(pullResult).toContain("[[TODO List]]");
+    expect(pullResult).toContain("[[Architecture]]");
+    expect(pullResult).toContain("[[API Design|Design Doc]]");
+    expect(pullResult).toContain("[markdown link](https://example.com)");
+  });
+
+  it("toggle-note.md 토글 구조 보존", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "toggle-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("<details>");
+    expect(pushResult.content).toContain("<summary>Click to expand</summary>");
+    expect(pushResult.content).toContain("This content is inside a toggle.");
+    expect(pushResult.content).toContain("<summary>Outer Toggle</summary>");
+    expect(pushResult.content).toContain("<summary>Inner Toggle</summary>");
+    expect(pushResult.content).toContain("Inner content with **bold** and `code`.");
+    expect(pushResult.content).toContain("Normal paragraph after toggles.");
+
+    expect(pushResult.properties).toEqual({ title: "Toggle Test", tags: ["toggle"] });
+  });
+
+  it("special-chars-note.md 특수문자 프론트매터 왕복", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "special-chars-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.properties).toEqual({
+      title: "Special: Characters & More",
+      status: "active",
+      description: "Pipes | commas, and 'quotes'",
+      formula: "x = y + z",
+      tags: ["tag with spaces", "normal-tag"],
+    });
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    expect(pullResult).toContain("'Special: Characters & More'");
+    expect(pullResult).toContain("Pipes | commas");
+    expect(pullResult).toContain("formula: x = y + z");
+    expect(pullResult).toContain("# Special Characters");
+  });
+
+  it("minimal-note.md 최소 문서 라운드트립", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "minimal-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.properties).toEqual({ title: "Minimal" });
+    expect(pushResult.content).toContain("title: Minimal");
+    expect(pushResult.content).toContain("Just one line.");
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    expect(pullResult).toContain("title: Minimal");
+    expect(pullResult).toContain("Just one line.");
+  });
+
+  it("nested-structure-note.md 깊은 중첩 구조 보존", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "nested-structure-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    expect(pushResult.content).toContain("- A");
+    expect(pushResult.content).toContain("  - A-1");
+    expect(pushResult.content).toContain("    - A-1-a");
+    expect(pushResult.content).toContain("      - A-1-a-i");
+    expect(pushResult.content).toContain("1. Ordered top");
+    expect(pushResult.content).toContain("   - Unordered child");
+    expect(pushResult.content).toContain("> Level 1");
+    expect(pushResult.content).toContain("- [ ] Parent task");
+    expect(pushResult.content).toContain("  - [x] Sub task done");
+    expect(pushResult.content).toContain("    - [x] Sub-sub done");
+
+    expect(pushResult.properties).toEqual({ title: "Nested Structure", status: "review" });
+  });
+
+  it("완전 순환 Push→Pull 동일성: simple-note.md", async () => {
+    const input = await readFile(join(FIXTURES_DIR, "simple-note.md"), "utf-8");
+    const pushResult = pipeline.convertToNotion(input, pushContext);
+
+    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
+      properties: pushResult.properties,
+    });
+
+    const normalizedInput = normalize(input);
+    const normalizedOutput = normalize(pullResult);
+
+    expect(normalizedOutput).toContain("title: Simple Note");
+    expect(normalizedOutput).toContain("status: active");
+    expect(normalizedOutput).toContain("# Simple Note");
+    expect(normalizedOutput).toContain("- Bullet point 1");
+    expect(normalizedOutput).toContain("- [x] Completed task");
+    expect(normalizedOutput).toContain("```typescript");
+    expect(normalizedOutput).toContain("> This is a blockquote");
+    expect(normalizedOutput).toContain("[External Link](https://github.com)");
   });
 });

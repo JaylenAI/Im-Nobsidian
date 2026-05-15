@@ -1,3 +1,4 @@
+import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
 export class PropertiesTableInjector implements Processor {
@@ -18,34 +19,21 @@ export class PropertiesTableInjector implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const filteredEntries = Object.entries(properties).filter(([key]) => key !== "title");
-    if (filteredEntries.length === 0) {
+    const filteredProps: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(properties)) {
+      filteredProps[key] = value;
+    }
+
+    if (Object.keys(filteredProps).length === 0) {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const rows = filteredEntries.map(([key, value]) => {
-      const display = formatValue(value);
-      return `| ${key} | ${display} |`;
-    });
+    const yamlStr = matter.stringify("", filteredProps).trim();
+    const yamlBody = yamlStr.slice(4, -3).trim();
+    const codeBlock = "```yaml\n# im-nobsidian:properties\n" + yamlBody + "\n```";
 
-    const table = ["| Property | Value |", "| --- | --- |", ...rows].join("\n");
-
-    const content = table + "\n\n---\n\n" + input.content;
+    const content = codeBlock + "\n\n---\n\n" + input.content;
 
     return { content, metadata: input.metadata };
   }
-}
-
-function formatValue(value: unknown): string {
-  if (value === null || value === undefined) return "";
-  if (value instanceof Date) {
-    return value.toISOString().replace(/T00:00:00(?:\.000)?Z$/, "");
-  }
-  if (Array.isArray(value)) {
-    return value.map((v) => formatValue(v)).join(", ");
-  }
-  if (typeof value === "object") {
-    return JSON.stringify(value);
-  }
-  return String(value);
 }

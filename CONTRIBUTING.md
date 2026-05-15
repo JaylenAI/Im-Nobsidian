@@ -34,7 +34,14 @@ pnpm typecheck
 pnpm lint
 
 # E2E tests (requires Notion token / Notion 토큰 필요)
-NOTION_TOKEN=ntn_xxx NOTION_ROOT_PAGE_ID=xxx pnpm test
+NOTION_TOKEN=ntn_xxx NOTION_ROOT_PAGE_ID=xxx pnpm --filter @im-nobsidian/core test
+```
+
+### Register CLI from local build / 로컬 빌드에서 CLI 등록
+
+```bash
+cd packages/cli && npm link && cd ../..
+nobsi --version
 ```
 
 ## Branch Strategy / 브랜치 전략
@@ -43,6 +50,7 @@ NOTION_TOKEN=ntn_xxx NOTION_ROOT_PAGE_ID=xxx pnpm test
 - `dev` — Development integration / 개발 통합 브랜치
 - `feature/*` — New features (branch from dev → merge to dev)
 - `fix/*` — Bug fixes
+- `docs/*` — Documentation updates
 
 ## Commit Messages / 커밋 메시지
 
@@ -71,9 +79,24 @@ Types: `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf`
 ```
 packages/
 ├── core/              # @im-nobsidian/core — sync engine / 동기화 엔진
-├── cli/               # im-nobsidian — CLI tool (nobsi command) / CLI 도구
-└── obsidian-plugin/   # Obsidian community plugin / 커뮤니티 플러그인
+│   ├── src/
+│   │   ├── converter/     # Markdown ↔ Notion conversion / 변환 파이프라인
+│   │   ├── notion/        # Notion API client / API 클라이언트
+│   │   ├── state/         # SQLite state database / 상태 DB
+│   │   ├── sync/          # Orchestrator, change detection / 동기화 엔진
+│   │   └── utils/         # Utilities / 유틸리티
+│   └── tests/
+├── cli/               # im-nobsidian CLI (nobsi command) / CLI 도구
+└── obsidian-plugin/   # Obsidian community plugin (v0.5.0) / 플러그인
 ```
+
+## Obsidian Plugin / 옵시디언 플러그인
+
+The Obsidian plugin is under development and will be released as v0.5.0.
+It requires a sql.js (WASM) database adapter instead of better-sqlite3.
+
+옵시디언 플러그인은 개발 중이며 v0.5.0으로 배포 예정입니다.
+better-sqlite3 대신 sql.js (WASM) DB 어댑터가 필요합니다.
 
 ## Code of Conduct
 

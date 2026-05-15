@@ -15,7 +15,7 @@ const EMOJI_TYPE_MAP: Record<string, string> = {
   "\u{1F4AC}": "quote",
 };
 
-const CALLOUT_PRESERVE_REGEX = /%% im-nobsidian:callout:type=(\w+)&foldable=(open|closed) %%/g;
+const CALLOUT_PRESERVE_REGEX = /%% im-nobsidian:callout:type=(\w+)(?:&foldable=(open|closed))? %%/g;
 
 export class CalloutRestorer implements Processor {
   readonly name = "CalloutRestorer";
@@ -24,9 +24,12 @@ export class CalloutRestorer implements Processor {
   process(input: ProcessorInput): ProcessorOutput {
     let content = input.content;
 
-    content = content.replace(CALLOUT_PRESERVE_REGEX, (_match, type: string, foldable: string) => {
-      const foldChar = foldable === "open" ? "+" : "-";
-      return `[!${type}]${foldChar}`;
+    content = content.replace(CALLOUT_PRESERVE_REGEX, (_match, type: string, foldable?: string) => {
+      if (foldable) {
+        const foldChar = foldable === "open" ? "+" : "-";
+        return `[!${type}]${foldChar}`;
+      }
+      return `[!${type}]`;
     });
 
     for (const [emoji, type] of Object.entries(EMOJI_TYPE_MAP)) {

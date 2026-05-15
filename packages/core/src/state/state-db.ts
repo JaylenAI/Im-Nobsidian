@@ -145,6 +145,14 @@ export class StateDB {
     }
   }
 
+  setNotionLastEdited(id: string, lastEdited: string): void {
+    this.db
+      .prepare(
+        "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(lastEdited, id);
+  }
+
   delete(id: string): void {
     this.db.prepare("DELETE FROM sync_state WHERE id = ?").run(id);
   }

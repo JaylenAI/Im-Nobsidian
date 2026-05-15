@@ -30,6 +30,10 @@ export class CalloutTransformer implements Processor {
   readonly order = 30;
 
   process(input: ProcessorInput): ProcessorOutput {
+    if (input.context.path === "markdown-api") {
+      return { content: input.content, metadata: input.metadata };
+    }
+
     const content = input.content.replace(
       CALLOUT_REGEX,
       (_match, type: string, foldable: string | undefined, title: string | undefined) => {
@@ -37,7 +41,7 @@ export class CalloutTransformer implements Processor {
         const titleText = title?.trim() || type;
         const foldMeta = foldable
           ? `\n%% im-nobsidian:callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"} %%`
-          : "";
+          : `\n%% im-nobsidian:callout:type=${type} %%`;
 
         return `> ${emoji} **${titleText}**${foldMeta}`;
       },

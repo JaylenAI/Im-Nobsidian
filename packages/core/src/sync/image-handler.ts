@@ -1,12 +1,20 @@
 import { createHash } from "node:crypto";
 import { Sema } from "async-sema";
 import type { VaultFS } from "./vault-fs.js";
+import type { NotionClient } from "../notion/client.js";
+import type { ImageReference } from "../types/convert.js";
+import { getLogger } from "../utils/logger.js";
 
 export interface ImageDownloadResult {
   readonly originalUrl: string;
   readonly localPath: string;
   readonly hash: string;
   readonly size: number;
+}
+
+export interface ImageUploadResult {
+  readonly localPath: string;
+  readonly fileUploadId: string;
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -19,10 +27,23 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/tiff": ".tiff",
 };
 
+const EXTENSION_TO_MIME: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".bmp": "image/bmp",
+  ".ico": "image/x-icon",
+  ".tiff": "image/tiff",
+};
+
 export class ImageHandler {
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly attachmentFolder: string = "attachments",
+    private readonly notionClient?: NotionClient,
   ) {}
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
@@ -94,6 +115,68 @@ export class ImageHandler {
     }
 
     return { content: result, downloads };
+  }
+
+  async uploadLocalImage(localPath: string): Promise<ImageUploadResult> {
+    if (!this.notionClient) {
+      throw new Error("NotionClient required for image upload");
+    }
+
+    const buffer = await this.readImageFromVault(localPath);
+    const filename = localPath.split("/").pop() ?? "image.png";
+    const contentType = this.getContentTypeFromPath(filename);
+    const blob = new Blob([buffer], { type: contentType });
+    const fileUploadId = await this.notionClient.uploadFile(blob, filename, contentType);
+
+    return { localPath, fileUploadId };
+  }
+
+  async uploadAndAppendImages(
+    pageId: string,
+    images: ImageReference[],
+  ): Promise<ImageUploadResult[]> {
+    if (!this.notionClient) return [];
+
+    const localImages = images.filter((img) => !img.isExternal && img.localPath);
+    if (localImages.length === 0) return [];
+
+    const results: ImageUploadResult[] = [];
+    const imageBlocks: unknown[] = [];
+
+    for (const img of localImages) {
+      try {
+        const result = await this.uploadLocalImage(img.localPath!);
+        results.push(result);
+        imageBlocks.push({
+          type: "image",
+          image: {
+            type: "file_upload",
+            file_upload: { id: result.fileUploadId },
+          },
+        });
+      } catch (error) {
+        getLogger().warn(`이미지 업로드 실패 (${img.localPath}):`, error);
+      }
+    }
+
+    if (imageBlocks.length > 0) {
+      await this.notionClient.appendChildren(pageId, imageBlocks);
+    }
+
+    return results;
+  }
+
+  private async readImageFromVault(localPath: string): Promise<Buffer> {
+    try {
+      return await this.vaultFs.readBinary(localPath);
+    } catch {
+      return await this.vaultFs.readBinary(`${this.attachmentFolder}/${localPath}`);
+    }
+  }
+
+  private getContentTypeFromPath(filename: string): string {
+    const ext = filename.match(/\.[^.]+$/)?.[0]?.toLowerCase();
+    return (ext && EXTENSION_TO_MIME[ext]) ?? "application/octet-stream";
   }
 
   private isNotionImageUrl(url: string): boolean {

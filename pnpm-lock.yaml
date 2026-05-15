@@ -84,8 +84,8 @@ importers:
   packages/core:
     dependencies:
       "@notionhq/client":
-        specifier: ^2.2.0
-        version: 2.3.0
+        specifier: ^5.21.0
+        version: 5.21.0
       "@tryfabric/martian":
         specifier: ^1.2.0
         version: 1.2.4
@@ -1344,12 +1344,12 @@ packages:
       }
     engines: { node: ">=12" }
 
-  "@notionhq/client@2.3.0":
+  "@notionhq/client@5.21.0":
     resolution:
       {
-        integrity: sha512-l7WqTCpQqC+HibkB9chghONQTYcxNQT0/rOJemBfmuKQRTu2vuV8B3yA395iKaUdDo7HI+0KvQaz9687Xskzkw==,
+        integrity: sha512-X+T+hzaQFleOUGm4xUOUm51pOpdZ1+6T4BsRjGlcdEOTJLNkUEv8nZATq9O3ZY4NQEgICc0qwQ0I25OdYprX0w==,
       }
-    engines: { node: ">=12" }
+    engines: { node: ">=18" }
 
   "@pkgjs/parseargs@0.11.0":
     resolution:
@@ -5260,12 +5260,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  "@notionhq/client@2.3.0":
-    dependencies:
-      "@types/node-fetch": 2.6.13
-      node-fetch: 2.7.0
-    transitivePeerDependencies:
-      - encoding
+  "@notionhq/client@5.21.0": {}
 
   "@pkgjs/parseargs@0.11.0":
     optional: true

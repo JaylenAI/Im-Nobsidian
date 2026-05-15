@@ -4,6 +4,7 @@ import type {
   BlockObjectResponse,
   PageObjectResponse,
   PartialBlockObjectResponse,
+  PageMarkdownResponse,
 } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "./property-mapper.js";
 
@@ -29,6 +30,8 @@ export class NotionClient {
   getInternalClient(): Client {
     return this.client;
   }
+
+  // ─── Page CRUD ───
 
   async getPage(pageId: string): Promise<PageObjectResponse> {
     return this.withRateLimit(
@@ -65,6 +68,35 @@ export class NotionClient {
     );
   }
 
+  async createPageWithMarkdown(params: {
+    parentId: string;
+    parentType: "page" | "database";
+    title: string;
+    markdown: string;
+    properties?: Record<string, unknown>;
+  }): Promise<PageObjectResponse> {
+    const parent =
+      params.parentType === "database"
+        ? { database_id: params.parentId }
+        : { page_id: params.parentId };
+
+    const properties =
+      params.parentType === "page"
+        ? { title: { title: [{ text: { content: params.title } }] } }
+        : ((params.properties as never) ?? {
+            title: { title: [{ text: { content: params.title } }] },
+          });
+
+    return this.withRateLimit(
+      () =>
+        this.client.pages.create({
+          parent,
+          properties: properties as never,
+          markdown: params.markdown,
+        }) as Promise<PageObjectResponse>,
+    );
+  }
+
   async updatePageProperties(
     pageId: string,
     properties: Record<string, unknown>,
@@ -78,14 +110,36 @@ export class NotionClient {
     );
   }
 
+  // ─── Markdown API ───
+
+  async getPageMarkdown(pageId: string): Promise<PageMarkdownResponse> {
+    return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: pageId }));
+  }
+
+  async replacePageMarkdown(pageId: string, markdown: string): Promise<PageMarkdownResponse> {
+    return this.withRateLimit(() =>
+      this.client.pages.updateMarkdown({
+        page_id: pageId,
+        type: "replace_content",
+        replace_content: {
+          new_str: markdown,
+          allow_deleting_content: true,
+        },
+      }),
+    );
+  }
+
+  // ─── Database / DataSource ───
+
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
     const db = await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     );
-    const properties = (db as { properties: Record<string, { id: string; type: string }> })
-      .properties;
+    const properties = (
+      db as unknown as { properties: Record<string, { id: string; type: string }> }
+    ).properties;
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -98,8 +152,8 @@ export class NotionClient {
     options?: { startCursor?: string; pageSize?: number },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
     const response = await this.withRateLimit(() =>
-      this.client.databases.query({
-        database_id: databaseId,
+      this.client.dataSources.query({
+        data_source_id: databaseId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? 100,
       }),
@@ -113,6 +167,8 @@ export class NotionClient {
   async archivePage(pageId: string): Promise<void> {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
+
+  // ─── Block CRUD ───
 
   async listChildren(
     blockId: string,
@@ -164,9 +220,34 @@ export class NotionClient {
     await this.withRateLimit(() => this.client.blocks.delete({ block_id: blockId }));
   }
 
+  // ─── File Upload ───
+
+  async uploadFile(fileData: Blob, filename: string, contentType: string): Promise<string> {
+    const upload = await this.withRateLimit(() =>
+      this.client.fileUploads.create({ filename, content_type: contentType }),
+    );
+
+    const fileUploadId = (upload as unknown as { id: string }).id;
+
+    await this.withRateLimit(() =>
+      this.client.fileUploads.send({
+        file_upload_id: fileUploadId,
+        file: { data: fileData, filename },
+      }),
+    );
+
+    await this.withRateLimit(() =>
+      this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
+    );
+
+    return fileUploadId;
+  }
+
+  // ─── Search & Navigation ───
+
   async search(params: {
     query?: string;
-    filter?: { property: "object"; value: "page" | "database" };
+    filter?: { property: "object"; value: "page" | "data_source" };
     startCursor?: string;
     pageSize?: number;
   }): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
@@ -215,11 +296,17 @@ export class NotionClient {
     return all;
   }
 
+  // ─── Property Extraction ───
+
   extractTitle(page: PageObjectResponse): string {
-    for (const prop of Object.values(page.properties)) {
-      if (prop.type === "title" && "title" in prop) {
-        const titleArr = prop.title as Array<{ plain_text?: string }>;
-        if (titleArr[0]?.plain_text) return titleArr[0].plain_text;
+    const props = page.properties as Record<
+      string,
+      { type: string; title?: Array<{ plain_text?: string }> }
+    >;
+    for (const prop of Object.values(props)) {
+      if (prop.type === "title" && prop.title) {
+        const joined = prop.title.map((t) => t.plain_text ?? "").join("");
+        if (joined) return joined;
       }
     }
     return "제목 없음";
@@ -228,6 +315,8 @@ export class NotionClient {
   extractProperties(page: PageObjectResponse): Record<string, unknown> {
     return this.propertyMapper.fromNotionProperties(page.properties as Record<string, unknown>);
   }
+
+  // ─── Internal ───
 
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
     await this.sema.acquire();
@@ -242,7 +331,7 @@ export class NotionClient {
     try {
       return await fn();
     } catch (error: unknown) {
-      if (isRateLimited(error) && attempt < 5) {
+      if (isRetryable(error) && attempt < 5) {
         const baseDelay = extractRetryAfter(error) ?? 1000 * Math.pow(2, attempt);
         const jitter = baseDelay * (0.5 + Math.random() * 0.5);
         await sleep(jitter);
@@ -253,19 +342,21 @@ export class NotionClient {
   }
 }
 
-function isRateLimited(error: unknown): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "status" in error &&
-    (error as { status: number }).status === 429
-  );
+function isRetryable(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: string }).code;
+  if (code === "notionhq_client_request_timeout" || code === "ECONNRESET" || code === "ETIMEDOUT") {
+    return true;
+  }
+  if (!("status" in error)) return false;
+  const status = (error as { status: number }).status;
+  return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
 function extractRetryAfter(error: unknown): number | null {
   if (typeof error === "object" && error !== null && "headers" in error) {
     const headers = (error as { headers: Record<string, string> }).headers;
-    const retryAfter = headers["retry-after"];
+    const retryAfter = headers?.["retry-after"];
     if (retryAfter) return Number(retryAfter) * 1000;
   }
   return null;

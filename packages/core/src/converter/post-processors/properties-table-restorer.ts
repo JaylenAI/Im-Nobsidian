@@ -1,6 +1,9 @@
+import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 
-const PROPERTIES_TABLE_REGEX =
+const YAML_PROPERTIES_REGEX = /```yaml\n# im-nobsidian:properties\n([\s\S]*?)```\n*(?:---\n*)?/;
+
+const LEGACY_TABLE_REGEX =
   /^\s*\| Property\s*\| Value\s*\|\n\s*\|\s*-{3,}\s*\|\s*-{3,}\s*\|\n((?:\|[^\n]+\|\n?)+)\n*---\n*/;
 
 export class PropertiesTableRestorer implements Processor {
@@ -12,11 +15,45 @@ export class PropertiesTableRestorer implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const match = input.content.match(PROPERTIES_TABLE_REGEX);
-    if (!match) {
+    const yamlMatch = input.content.match(YAML_PROPERTIES_REGEX);
+    if (yamlMatch) {
+      return this.restoreFromYaml(input, yamlMatch);
+    }
+
+    const tableMatch = input.content.match(LEGACY_TABLE_REGEX);
+    if (tableMatch) {
+      return this.restoreFromTable(input, tableMatch);
+    }
+
+    return { content: input.content, metadata: input.metadata };
+  }
+
+  private restoreFromYaml(input: ProcessorInput, match: RegExpMatchArray): ProcessorOutput {
+    const yamlContent = match[1]!;
+    const fakeDocument = `---\n${yamlContent}---\n`;
+
+    let parsed: Record<string, unknown>;
+    try {
+      const result = matter(fakeDocument);
+      parsed = result.data;
+    } catch {
       return { content: input.content, metadata: input.metadata };
     }
 
+    const properties: Record<string, unknown> = {
+      ...(input.metadata.properties as Record<string, unknown> | undefined),
+      ...parsed,
+    };
+
+    const content = input.content.replace(YAML_PROPERTIES_REGEX, "").trimStart();
+
+    return {
+      content,
+      metadata: { ...input.metadata, properties },
+    };
+  }
+
+  private restoreFromTable(input: ProcessorInput, match: RegExpMatchArray): ProcessorOutput {
     const rows = match[1]!.trim().split("\n");
     const properties: Record<string, unknown> = {
       ...(input.metadata.properties as Record<string, unknown> | undefined),
@@ -30,11 +67,11 @@ export class PropertiesTableRestorer implements Processor {
       if (cells.length >= 2) {
         const key = cells[0]!;
         const rawValue = cells[1]!;
-        properties[key] = parseValue(rawValue);
+        properties[key] = parseLegacyValue(rawValue);
       }
     }
 
-    const content = input.content.replace(PROPERTIES_TABLE_REGEX, "").trimStart();
+    const content = input.content.replace(LEGACY_TABLE_REGEX, "").trimStart();
 
     return {
       content,
@@ -43,26 +80,12 @@ export class PropertiesTableRestorer implements Processor {
   }
 }
 
-function stripQuotes(s: string): string {
-  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
-    return s.slice(1, -1);
-  }
-  return s;
-}
-
-const ISO_DATE_REGEX = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?$/;
-
-function parseValue(raw: string): unknown {
+function parseLegacyValue(raw: string): unknown {
   if (raw === "" || raw === "null") return null;
   if (raw === "true") return true;
   if (raw === "false") return false;
 
   const unquoted = stripQuotes(raw);
-
-  if (ISO_DATE_REGEX.test(unquoted)) {
-    return unquoted.replace(/T00:00:00(?:\.000)?Z?$/, "");
-  }
-
   const num = Number(unquoted);
   if (!isNaN(num) && unquoted.trim() !== "") return num;
 
@@ -86,4 +109,11 @@ function parseValue(raw: string): unknown {
   }
 
   return unquoted;
+}
+
+function stripQuotes(s: string): string {
+  if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
+    return s.slice(1, -1);
+  }
+  return s;
 }

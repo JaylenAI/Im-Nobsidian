@@ -267,20 +267,18 @@ await orchestrator.sync({ dryRun: false });
 
 ## Known Limitations
 
-| Limitation         | Reason                                                      | Workaround                                                 |
-| ------------------ | ----------------------------------------------------------- | ---------------------------------------------------------- |
-| Image push         | Notion API has no file upload endpoint                      | Images preserved as placeholders on push, restored on pull |
-| Notion-only blocks | API returns `unsupported` for buttons, forms, synced blocks | Preserved as callout placeholders                          |
-| Rate limit         | Notion enforces 3 requests/second                           | Built-in rate limiter with exponential backoff             |
-| Wikilink push      | Wikilinks degrade to bold text on push                      | Page mention linking planned for v0.1.1                    |
+| Limitation             | Reason                                                           | Workaround                                               |
+| ---------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
+| Notion-only blocks     | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                        |
+| Rate limit             | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff           |
+| Blank line compression | Notion Markdown API normalizes whitespace                        | No semantic difference — renders identically in Obsidian |
+| First-push wikilinks   | Cross-references between new pages may not resolve on first sync | Resolved automatically on subsequent syncs               |
 
 ## Roadmap
 
 ```
-v0.1.0  ✅ Current — CLI + Library, 15+ block types, database mode
-v0.1.1  → Wikilink → Notion page mention linking
-v0.2.0  → martian fork + CVE fixes + Myers diff
-v0.3.0  → Incremental sync + block-level diff
+v0.1.0  ✅ Current — Bidirectional sync via Notion Markdown API
+v0.2.0  → Incremental sync + block-level diff + Myers diff
 v0.5.0  → Obsidian community plugin (sql.js WASM)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
@@ -294,9 +292,13 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 355 tests
+pnpm test          # 377 tests
 pnpm lint
 pnpm typecheck
+
+# Register the nobsi command globally from local build
+cd packages/cli && npm link && cd ../..
+nobsi --version
 ```
 
 ### Project Structure
