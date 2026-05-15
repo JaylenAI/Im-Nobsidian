@@ -47,6 +47,9 @@ export class ChangeDetector {
     const syncedRecords = this.stateDb.getByStatus("synced");
     for (const record of syncedRecords) {
       if (!existingPaths.has(record.obsidianPath)) {
+        if (record.fileType === "folder-note" || record.fileType === "folder-only") {
+          if (!record.obsidianPath.endsWith(".md")) continue;
+        }
         changes.push({
           path: record.obsidianPath,
           type: "deleted",
