@@ -343,7 +343,12 @@ export class NotionClient {
 }
 
 function isRetryable(error: unknown): boolean {
-  if (typeof error !== "object" || error === null || !("status" in error)) return false;
+  if (typeof error !== "object" || error === null) return false;
+  const code = (error as { code?: string }).code;
+  if (code === "notionhq_client_request_timeout" || code === "ECONNRESET" || code === "ETIMEDOUT") {
+    return true;
+  }
+  if (!("status" in error)) return false;
   const status = (error as { status: number }).status;
   return status === 429 || status === 502 || status === 503 || status === 504;
 }

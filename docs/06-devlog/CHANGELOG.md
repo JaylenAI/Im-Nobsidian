@@ -3,6 +3,22 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.1] - 2026-05-14
+
+### Fixed
+
+- **`resolveParentPath()` 재귀적 경로 해석** — Pull 시 깊은 중첩 폴더 구조가 1단계로 평탄화되던 문제 수정. 부모 페이지를 재귀적으로 추적하여 전체 경로 체인 복원
+- **`pullCreate()` 폴더 레코드 제거** — 같은 parentPageId를 notionPageId로 사용하여 UNIQUE 제약 조건 충돌 (7건) 발생하던 문제 수정
+- **`isRetryable()` 에러 코드 확장** — `notionhq_client_request_timeout`, `ECONNRESET`, `ETIMEDOUT` 에러를 자동 재시도 대상에 추가
+- **`detectLocalChanges()` 폴더 레코드 삭제 감지 방지** — `folder-note`/`folder-only` fileType을 가진 레코드가 잘못 삭제로 감지되던 문제 수정
+- **`ensureFolderPage()` 폴더-노트 중복 생성 방지** — StateDB에서 기존 폴더-노트 레코드를 먼저 확인하여 중복 페이지 생성 방지
+
+### Verified
+
+- 180파일 GC_AI Push: 180/180 성공, 0 실패
+- 283파일 Pull: 283/283 성공, 0 UNIQUE 에러
+- 폴더 구조: GC_AI/Admin, CVfit, ERP_NextGen/Releases, Meetings, Projects, Study 전부 정확
+
 ## [0.1.0] - 2026-05-14
 
 ### Added

@@ -2,9 +2,10 @@
 
 > 마지막 업데이트: 2026-05-14
 
-## v0.1.0 — 첫 공개 릴리스
+## v0.1.1 — Pull 안정성 수정 + 실전 검증 (Current)
 
-Im-Nobsidian v0.1.0은 Obsidian ↔ Notion 양방향 동기화를 CLI로 제공하는 첫 공식 릴리스입니다.
+Im-Nobsidian v0.1.1은 Pull 동기화의 치명적 버그 5건을 수정하고,
+180파일 Push + 283파일 Pull 실전 테스트를 완료한 안정화 릴리스입니다.
 
 ### 핵심 기능
 
@@ -52,12 +53,30 @@ Im-Nobsidian v0.1.0은 Obsidian ↔ Notion 양방향 동기화를 CLI로 제공�
 | `nobsi resolve` | ✅   | `--strategy`                                     |
 | `nobsi watch`   | ✅   | 자동 동기화                                      |
 
+### v0.1.1에서 수정된 버그
+
+| 수정 항목                       | 증상                                 | 원인                                       | 해결                                 |
+| ------------------------------- | ------------------------------------ | ------------------------------------------ | ------------------------------------ |
+| `resolveParentPath()` 재귀 해석 | Pull 시 폴더가 1단계만 해석 → 평탄화 | 부모 경로를 1-depth만 조회                 | 재귀적 경로 해석으로 깊은 중첩 지원  |
+| `pullCreate()` 폴더 레코드      | UNIQUE 제약 조건 충돌 (7건)          | 같은 parentPageId를 notionPageId로 사용    | 불필요한 폴더 레코드 생성 제거       |
+| `isRetryable()` 확장            | 타임아웃/네트워크 에러 시 크래시     | timeout/ECONNRESET/ETIMEDOUT 미처리        | 재시도 대상 에러 코드 추가           |
+| `detectLocalChanges()`          | 폴더 레코드 잘못된 삭제 감지         | folder-note/folder-only를 일반 파일로 취급 | fileType 체크로 폴더 레코드 스킵     |
+| `ensureFolderPage()`            | 폴더-노트 중복 생성                  | 기존 폴더-노트 레코드 미확인               | StateDB에서 기존 레코드 확인 후 생성 |
+
+### 실전 검증 결과
+
+| 테스트             | 결과         | 비고                                                          |
+| ------------------ | ------------ | ------------------------------------------------------------- |
+| 180파일 GC_AI Push | 180/180 성공 | 0 실패, 폴더 구조 완벽 보존                                   |
+| 283파일 Pull       | 283/283 성공 | 0 UNIQUE 에러, 폴더 계층 정확                                 |
+| 폴더 구조 검증     | ✅ 정확      | Admin, CVfit, ERP_NextGen/Releases, Meetings, Projects, Study |
+
 ### 테스트
 
 - **단위 테스트**: 377개 통과
 - **E2E 테스트**: 11개 통과 (실제 Notion API)
 - **라운드트립 테스트**: 20개 (14개 픽스처)
-- **실제 동기화 검증**: 52개 노트 + 249개 이미지 Pull 성공
+- **실전 동기화**: 180파일 Push + 283파일 Pull 성공
 
 ### Obsidian 플러그인
 
@@ -79,9 +98,24 @@ Im-Nobsidian v0.1.0은 Obsidian ↔ Notion 양방향 동기화를 CLI로 제공�
 | Notion 전용 블록 | 📌 읽기 전용    | API가 unsupported 반환        |
 | Rate limit       | 3 req/s         | Notion 공식 제한              |
 
+### N2O 대비 현황
+
+> 상세 비교: [ROADMAP.md](./ROADMAP.md) 참고
+
+| 영역                  | Im-Nobsidian v0.1.1 |   N2O v0.9.95   | v0.2.0 목표 |
+| --------------------- | :-----------------: | :-------------: | :---------: |
+| Pull/Push 양방향      |      ✅ (무료)      | ✅ (Push $8/mo) |     ✅      |
+| Relation Push         |      ❌ Pull만      |       ✅        |     ✅      |
+| 프론트매터 라운드트립 |    ⚠️ 포맷 차이     |       ✅        |     ✅      |
+| 이미지 Push           |   📎 플레이스홀더   |       ✅        |     ✅      |
+| Date range            |       start만       |       ✅        |     ✅      |
+| 블록 타입             |         17+         |       27+       |     25+     |
+| 속성 Write            |         11          |       ~15       |     15      |
+| 토글 블록 보존        |      ✅ (강점)      | ❌ callout 깨짐 |     ✅      |
+| CLI                   |    ✅ 8개 (강점)    |       ❌        |     ✅      |
+
 ### 다음 단계
 
-1. **v0.1.0** npm 배포 + GitHub Release
-2. **v0.2.0** Incremental sync + block-level diff
-3. **v0.5.0** Obsidian 커뮤니티 플러그인 등록
-4. **v1.0.0** Database view sync, multi-workspace, 1000+ 노트
+1. **v0.2.0** — N2O 수준 변환 품질 달성 (Relation Push, 프론트매터 품질, 이미지 Push, Date range, 블록 25+, 속성 Write 15)
+2. **v0.5.0** — Obsidian 커뮤니티 플러그인 (sql.js WASM)
+3. **v1.0.0** — Database view sync, multi-workspace, 1000+ 노트

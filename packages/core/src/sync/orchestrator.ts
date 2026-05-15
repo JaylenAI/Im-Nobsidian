@@ -776,6 +776,23 @@ export class SyncOrchestrator {
     const existing = this.stateDb.getByPath(folderPath);
     if (existing?.notionPageId) return;
 
+    const folderNotePath = `${folderPath}/${folderPath.split("/").pop()}.md`;
+    const folderNoteRecord = this.stateDb.getByPath(folderNotePath);
+    if (folderNoteRecord?.notionParentId) {
+      this.stateDb.upsert({
+        obsidianPath: folderPath,
+        notionPageId: folderNoteRecord.notionParentId,
+        notionParentId: "",
+        contentHash: "",
+        notionLastEdited: folderNoteRecord.notionLastEdited,
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: "folder-note",
+        status: "synced",
+      });
+      return;
+    }
+
     const parts = folderPath.split("/");
     const folderName = parts[parts.length - 1]!;
 
@@ -849,7 +866,9 @@ export class SyncOrchestrator {
     try {
       const parentPage = await this.notionClient.getPage(parentId);
       const parentTitle = this.notionClient.extractTitle(parentPage);
-      return sanitizeFileName(parentTitle);
+      const grandparentPath = await this.resolveParentPath(parentPage);
+      const safeName = sanitizeFileName(parentTitle);
+      return grandparentPath ? `${grandparentPath}/${safeName}` : safeName;
     } catch {
       return "";
     }
