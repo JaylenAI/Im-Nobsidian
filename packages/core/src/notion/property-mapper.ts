@@ -7,9 +7,20 @@ type NotionPropertySchema = {
 type NotionPropertyValue = Record<string, unknown>;
 
 const DATE_REGEX = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?/;
+const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
+
+export interface WikilinkResolver {
+  resolve(title: string): string | null;
+  resolvePageId(pageId: string): string | null;
+}
 
 export class PropertyMapper {
   private schema: Map<string, NotionPropertySchema> = new Map();
+  private wikilinkResolver: WikilinkResolver | null = null;
+
+  setWikilinkResolver(resolver: WikilinkResolver): void {
+    this.wikilinkResolver = resolver;
+  }
 
   loadSchema(properties: Record<string, { id: string; type: string }>): void {
     this.schema.clear();
@@ -82,9 +93,13 @@ export class PropertyMapper {
         return { checkbox: Boolean(value) };
 
       case "date": {
+        if (typeof value === "object" && value !== null && "start" in value) {
+          const obj = value as { start: string; end?: string | null };
+          return { date: { start: obj.start, end: obj.end ?? null } };
+        }
         const dateStr = String(value);
         if (DATE_REGEX.test(dateStr)) {
-          return { date: { start: dateStr } };
+          return { date: { start: dateStr, end: null } };
         }
         return null;
       }
@@ -100,6 +115,50 @@ export class PropertyMapper {
 
       case "status":
         return { status: { name: String(value) } };
+
+      case "relation": {
+        const items = Array.isArray(value) ? value : [value];
+        const ids: Array<{ id: string }> = [];
+        for (const item of items) {
+          const str = String(item);
+          const match = str.match(WIKILINK_REGEX);
+          if (match && this.wikilinkResolver) {
+            const pageId = this.wikilinkResolver.resolve(match[1]);
+            if (pageId) ids.push({ id: pageId });
+          } else if (str.match(/^[0-9a-f-]{32,36}$/)) {
+            ids.push({ id: str });
+          }
+        }
+        return ids.length > 0 ? { relation: ids } : null;
+      }
+
+      case "people": {
+        const users = Array.isArray(value) ? value : [value];
+        const peopleArr = users
+          .map((u) => {
+            const s = String(u);
+            if (s.match(/^[0-9a-f-]{32,36}$/)) return { object: "user" as const, id: s };
+            return null;
+          })
+          .filter(Boolean);
+        return peopleArr.length > 0 ? { people: peopleArr } : null;
+      }
+
+      case "files": {
+        const fileList = Array.isArray(value) ? value : [value];
+        const filesArr = fileList.map((f) => {
+          if (typeof f === "object" && f !== null && "url" in f) {
+            const obj = f as { name?: string; url: string };
+            return { type: "external", name: obj.name ?? "file", external: { url: obj.url } };
+          }
+          return {
+            type: "external",
+            name: String(f),
+            external: { url: String(f) },
+          };
+        });
+        return { files: filesArr };
+      }
 
       default:
         return { rich_text: [{ text: { content: String(value) } }] };
@@ -120,7 +179,7 @@ export class PropertyMapper {
     }
     if (typeof value === "string") {
       if (DATE_REGEX.test(value)) {
-        return { date: { start: value } };
+        return { date: { start: value, end: null } };
       }
       if (value.startsWith("http://") || value.startsWith("https://")) {
         return { url: value };
@@ -148,8 +207,12 @@ export class PropertyMapper {
       }
       case "checkbox":
         return prop.checkbox;
-      case "date":
-        return prop.date ?? null;
+      case "date": {
+        const dateObj = prop.date as { start: string; end?: string | null } | null;
+        if (!dateObj) return null;
+        if (dateObj.end) return { start: dateObj.start, end: dateObj.end };
+        return dateObj.start;
+      }
       case "url":
         return prop.url;
       case "email":
@@ -191,7 +254,14 @@ export class PropertyMapper {
       }
       case "relation": {
         const rel = prop.relation as Array<{ id: string }> | undefined;
-        return rel?.map((r) => r.id) ?? [];
+        if (!rel || rel.length === 0) return [];
+        return rel.map((r) => {
+          if (this.wikilinkResolver) {
+            const title = this.wikilinkResolver.resolvePageId(r.id);
+            if (title) return `[[${title}]]`;
+          }
+          return r.id;
+        });
       }
       case "rollup": {
         const rollup = prop.rollup as { type: string; [k: string]: unknown } | undefined;

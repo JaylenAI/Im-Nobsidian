@@ -143,6 +143,8 @@ export class BlockConverter {
     this.registerTocTransformer();
     this.registerBreadcrumbTransformer();
     this.registerLinkPreviewTransformer();
+    this.registerPdfTransformer();
+    this.registerEmbedTransformer();
     this.registerCalloutTransformer();
     this.registerToggleHeadingTransformers();
   }
@@ -369,6 +371,35 @@ export class BlockConverter {
       const b = block as unknown as { link_preview: { url: string } };
       const url = b.link_preview?.url ?? "";
       return `[${url}](${url})`;
+    });
+  }
+
+  private registerPdfTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("pdf", async (block) => {
+      const b = block as unknown as {
+        pdf: {
+          type: string;
+          file?: { url: string };
+          external?: { url: string };
+          caption?: RichTextItem[];
+        };
+      };
+      const url = b.pdf?.type === "file" ? (b.pdf.file?.url ?? "") : (b.pdf?.external?.url ?? "");
+      const caption = b.pdf?.caption ? richTextToMarkdown(b.pdf.caption as never) : "";
+      return `[📄 ${caption || "PDF"}](${url})`;
+    });
+  }
+
+  private registerEmbedTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("embed", async (block) => {
+      const b = block as unknown as {
+        embed: { url: string; caption?: RichTextItem[] };
+      };
+      const url = b.embed?.url ?? "";
+      const caption = b.embed?.caption ? richTextToMarkdown(b.embed.caption as never) : "";
+      return `[${caption || url}](${url})`;
     });
   }
 
