@@ -1,4 +1,4 @@
-# Im-Nobsidian v0.2.0 완전 개선 계획
+# Im-Nobsidian v0.1.3 완전 개선 계획
 
 > 작성일: 2026-05-13
 > 목표: Notion API 한계 외 **모든 콘텐츠 양방향 완벽 보존**
@@ -11,7 +11,7 @@
 
 ### 핵심 기술 전환
 
-| 항목            | Before (v0.1.x)                  | After (v0.2.0)                                               |
+| 항목            | Before (v0.1.x)                  | After (v0.1.3)                                               |
 | --------------- | -------------------------------- | ------------------------------------------------------------ |
 | Pull 변환       | notion-to-md v3 (Issue #98 버그) | **Notion Markdown API** (GET /v1/pages/:id/markdown)         |
 | Push 변환       | martian + blocks API             | **Markdown API** (POST/PATCH markdown) + blocks API fallback |
@@ -204,7 +204,7 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 
 ---
 
-## Phase 6: 테스트 + 문서 + v0.2.0 릴리스 [2일]
+## Phase 6: 테스트 + 문서 + v0.1.3 릴리스 [2일]
 
 **Branch**: `feature/tests-and-release`
 **상태**: [x] 완료 (2026-05-13)
@@ -215,7 +215,7 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 - [x] 라운드트립 테스트 20개 (토글, 위키링크, 이미지, 프론트매터, 중첩구조)
 - [ ] Sources 폴더 실제 E2E (Notion API 토큰 필요)
 - [ ] 마음AI 페이지 실제 E2E (Notion API 토큰 필요)
-- [x] CHANGELOG: v0.2.0 항목
+- [x] CHANGELOG: v0.1.3 항목
 - [x] 알려진 한계 문서화 (인라인 DB, 버튼/폼, 실시간 동시 편집)
 - [x] CURRENT_STATUS.md 업데이트
 - [x] pnpm lint && pnpm typecheck && pnpm build 전부 클린
@@ -223,7 +223,7 @@ File Upload API로 로컬 이미지를 Notion에 실제 업로드. 플레이스�
 
 ### 최종 결과
 
-| 기능             | v0.1.x           | v0.2.0                       |
+| 기능             | v0.1.x           | v0.1.3                       |
 | ---------------- | ---------------- | ---------------------------- |
 | 토글 내부 콘텐츠 | ❌ 누락          | ✅ 완벽                      |
 | 중첩 토글        | ❌ 누락          | ✅ 완벽                      |

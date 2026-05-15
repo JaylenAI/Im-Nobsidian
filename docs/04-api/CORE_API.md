@@ -161,7 +161,11 @@ const notionMd = obsidianToNotionEnhanced(obsidianMarkdown);
 - `<details>` 토글 → `%%im-nobsidian:toggle%%` 마커
 - `<mention-page>` → `[[위키링크]]`
 - `<page>` 링크 → `[[위키링크]]`
-- `<span color>` → 일반 텍스트
+- `<span color>` → 보존 마커 (`%%im-nobsidian:color:...%%`)
+- `<span underline>` → 보존 마커 (`%%im-nobsidian:underline%%`)
+- `<audio>/<video>/<pdf>/<file>` → 이모지 링크
+- `<tab>` → `> [!tab]` 콜아웃
+- `<unknown>` → 보존 마커 (`%%im-nobsidian:unknown:...%%`)
 - `<empty-block/>` → 제거
 - HTML 테이블 → 마크다운 테이블
 - 수학 수식 (inline/block) 정규화

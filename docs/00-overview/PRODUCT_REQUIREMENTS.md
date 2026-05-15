@@ -39,7 +39,7 @@
 | M-15 | Rate Limit 처리        | async-sema 3 req/s + 429 자동 백오프                                                              | 100 파일 push 시 429 없음          |
 | M-16 | 에러 복구              | 네트워크 오류 시 재시도 + 부분 동기화                                                             | 중간 실패 후 재시도 성공           |
 
-### Should Have — v0.2.0
+### Should Have — v0.1.x
 
 일상 사용에 필요한 핵심 변환 + 플러그인.
 
@@ -58,7 +58,7 @@
 | S-11 | 파일 이동/이름변경 감지 | rename 이벤트로 Notion 페이지 제목/위치 업데이트                            | 중복 생성 없음                   |
 | S-12 | Preserve Marker 시스템  | `%% im-nobsidian:... %%` 마커로 라운드트립 보존                             | 모든 C등급 기능에 적용           |
 
-### Could Have — v0.3.0 ~ v0.5.0
+### Could Have — v0.2.0 ~ v0.5.0
 
 데이터베이스, 고급 변환, 자동화.
 
@@ -152,18 +152,11 @@ v0.1.0 (MVP)           ← Must Have 전체
   → 핵심 변환 + CLI + 수동 동기화
   → GitHub 릴리스 + npm 배포
 
-v0.2.0 (Essential)     ← Should Have 전체
-  → 위키링크, 콜아웃, 프론트매터, 이미지
-  → Obsidian 커뮤니티 플러그인 등록
+v0.1.x (Essential)     ← Should Have 전체
+  → 위키링크, 콜아웃, 프론트매터, 이미지, API 최신화
 
-v0.3.0 (Database)      ← C-01 ~ C-05
-  → Notion Database 양방향 동기화
-
-v0.4.0 (Visual)        ← C-06 ~ C-09
-  → 인라인 색상, 컬럼, 토글, 자동 동기화
-
-v0.5.0 (Polish)        ← C-10 ~ C-16
-  → 벌크 연산, 고급 변환, diff 명령
+v0.5.0 (Plugin)        ← Obsidian 커뮤니티 플러그인
+  → sql.js WASM, Plugin UI, 커뮤니티 등록
 
 v1.0.0 (Stable)
   → 전체 안정화 + 문서 완성 + 성능 최적화

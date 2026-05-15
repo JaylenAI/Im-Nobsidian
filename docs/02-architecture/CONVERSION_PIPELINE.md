@@ -329,18 +329,16 @@ Notion callout → Obsidian 콜아웃 구문 복원.
 
 ### 3. ColorAnnotator
 
-Notion 인라인 색상 → CSS 클래스 span 변환.
+Notion 인라인 색상/밑줄 → 보존 마커 변환.
 
 ```typescript
-// Notion: { annotations: { color: "red" } }  (텍스트 색상)
-// Notion: { annotations: { color: "red_background" } }  (배경 색상)
+// Notion Enhanced MD: <span color="red">텍스트</span>
+// → %%im-nobsidian:color:red%%텍스트%%/color%%
 
-// Obsidian 변환:
-// <span class="notion-red">텍스트</span>
-// <span class="notion-red-bg">텍스트</span>
+// Notion Enhanced MD: <span underline="true">텍스트</span>
+// → %%im-nobsidian:underline%%텍스트%%/underline%%
 
-// preserve marker 방식 (플러그인 미설치 환경):
-// %% im-nobsidian:color:red %%텍스트%% im-nobsidian:end %%
+// Push 시 보존 마커 → 원본 <span> 태그로 복원
 ```
 
 ### 4. ColumnLayoutBuilder
@@ -444,6 +442,8 @@ Notion 페이지 커버/아이콘 → frontmatter 변환.
 | ---------------- | ----- | ------------------------- |
 | `callout`        | point | 콜아웃 foldable 상태      |
 | `color`          | range | 인라인 색상 범위          |
+| `underline`      | range | 밑줄 텍스트 범위          |
+| `unknown`        | point | Notion 전용 블록 보존     |
 | `column`         | point | 컬럼 비율 메타데이터      |
 | `toggle-heading` | point | 토글 헤딩 레벨            |
 | `inline-db`      | range | 인라인 DB 시작~끝         |

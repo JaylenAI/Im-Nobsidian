@@ -266,7 +266,7 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.2.0  ✅ 현재 — Notion API 최신화 + Enhanced MD 확대
+v0.1.3  ✅ 현재 — Notion API 최신화 + Enhanced MD 확대
 v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```

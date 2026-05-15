@@ -2,9 +2,9 @@
 
 > 마지막 업데이트: 2026-05-15
 
-## v0.2.0 — Notion API 최신화 + Enhanced MD 확대 (Current)
+## v0.1.3 — Notion API 최신화 + Enhanced MD 확대 (Current)
 
-Im-Nobsidian v0.2.0은 2026년 Notion 신규 API를 완전 통합하고,
+Im-Nobsidian v0.1.3은 2026년 Notion 신규 API를 완전 통합하고,
 Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 끌어올렸습니다.
 
 ### 핵심 기능
@@ -76,7 +76,7 @@ Enhanced Markdown 변환기를 확대하여 동기화 커버리지를 ~95%로 �
 | 283파일 Pull       | 283/283 성공 | 0 UNIQUE 에러, 폴더 계층 정확                                 |
 | 폴더 구조 검증     | ✅ 정확      | Admin, CVfit, ERP_NextGen/Releases, Meetings, Projects, Study |
 
-### v0.2.0에서 추가된 기능
+### v0.1.3에서 추가된 기능
 
 | 기능               | 상세                                                       |
 | ------------------ | ---------------------------------------------------------- |

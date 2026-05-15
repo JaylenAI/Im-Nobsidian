@@ -282,7 +282,7 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.2.0  ✅ Current — Notion API modernization + Enhanced MD expansion
+v0.1.3  ✅ Current — Notion API modernization + Enhanced MD expansion
 v0.5.0  → Obsidian community plugin (sql.js WASM)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```

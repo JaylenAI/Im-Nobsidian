@@ -2,7 +2,7 @@
 
 > Last updated: 2026-05-15
 
-## Current State (v0.2.0)
+## Current State (v0.1.3)
 
 True bidirectional Obsidian <-> Notion sync via CLI.
 434 tests passing, 25+ block types, 21 property read types, 15 property write types.
@@ -14,7 +14,7 @@ Partial update (search-and-replace), Move page API, media/color/underline/unknow
 ## Release Timeline
 
 ```
-v0.2.0  <-- Current — Notion API 최신화 + Enhanced MD 확대
+v0.1.3  <-- Current — Notion API 최신화 + Enhanced MD 확대
 v0.5.0  --> Next — Obsidian community plugin (sql.js WASM)
 v1.0.0  --> Database view sync, multi-workspace, 1000+ notes
 ```
@@ -48,6 +48,22 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 1. `datasources resolve` — DB ID -> Data Source ID 변환 (DB 모드 개선)
 2. `ntn login` OAuth 플로우 — v1.0.0에서 PAT 대신 OAuth 인증 검토
 3. Notion Workers — 실시간 webhook 기반 동기화 (v1.0.0 이후 검토)
+
+---
+
+## v0.1.0 — MVP Release
+
+### Added
+
+- Notion Markdown API 기반 Pull/Push 핵심 경로
+- File Upload API 3단계 구현 (create → send → complete)
+- 위키링크 ↔ 페이지 멘션 양방향 매핑
+- YAML 코드블록 프론트매터 무손실 보존
+- Enhanced Markdown 변환기 (10 전처리기 + 7 후처리기)
+- 콜아웃 타입/접기 상태 preserve marker 보존
+- 3-way 머지 충돌 해결 (ask / local-wins / remote-wins / manual)
+- CLI 8개 명령어 (init, push, pull, sync, status, diff, resolve, watch)
+- SQLite WAL 상태 DB + Rate limiting (3 req/s)
 
 ---
 
@@ -85,7 +101,7 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 
 ---
 
-## v0.2.0 — Notion API 최신화 + Enhanced MD 확대
+## v0.1.3 — Notion API 최신화 + Enhanced MD 확대
 
 ### Added
 
