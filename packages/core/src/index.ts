@@ -51,8 +51,22 @@ export type {
 } from "./notion/index.js";
 
 // Sync
-export { SyncOrchestrator, ChangeDetector, NodeVaultFS, ImageHandler } from "./sync/index.js";
-export type { VaultFS, FileInfo, ImageDownloadResult, PathFilterConfig } from "./sync/index.js";
+export {
+  SyncOrchestrator,
+  ChangeDetector,
+  NodeVaultFS,
+  ImageHandler,
+  FileHandler,
+} from "./sync/index.js";
+export type {
+  VaultFS,
+  FileInfo,
+  NonMdFileInfo,
+  ImageDownloadResult,
+  PathFilterConfig,
+  FileUploadResult,
+  FileDownloadResult,
+} from "./sync/index.js";
 
 // Converter
 export {

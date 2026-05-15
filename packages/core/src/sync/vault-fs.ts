@@ -1,5 +1,11 @@
 import type { FileInfo } from "./change-detector.js";
 
+export interface NonMdFileInfo {
+  readonly path: string;
+  readonly size: number;
+  readonly mtime: string;
+}
+
 export interface VaultFS {
   readFile(path: string): Promise<string>;
   readBinary(path: string): Promise<Buffer>;
@@ -10,4 +16,5 @@ export interface VaultFS {
   exists(path: string): Promise<boolean>;
   ensureFolder(path: string): Promise<void>;
   listMarkdownFiles(): Promise<FileInfo[]>;
+  listNonMarkdownFiles(): Promise<NonMdFileInfo[]>;
 }

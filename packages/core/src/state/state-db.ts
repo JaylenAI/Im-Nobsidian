@@ -2,6 +2,7 @@ import Database from "better-sqlite3";
 import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
 import { generateId } from "../utils/id.js";
 import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
+import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
 
 export class StateDB {
   private readonly db: Database.Database;
@@ -23,6 +24,9 @@ export class StateDB {
     const version = this.getSchemaVersion();
     if (version < 1) {
       this.db.exec(INITIAL_MIGRATION);
+    }
+    if (version < 2) {
+      this.db.exec(FILE_REGISTRY_MIGRATION);
     }
   }
 
@@ -218,6 +222,62 @@ export class StateDB {
       .run(key, value);
   }
 
+  // --- file_registry ---
+
+  isFileRegistered(localPath: string): boolean {
+    const row = this.db.prepare("SELECT 1 FROM file_registry WHERE local_path = ?").get(localPath);
+    return !!row;
+  }
+
+  getFileRegistry(localPath: string): FileRegistryEntry | null {
+    const row = this.db
+      .prepare("SELECT * FROM file_registry WHERE local_path = ?")
+      .get(localPath) as RawFileRegistryRow | undefined;
+    return row ? this.mapFileRegistryRow(row) : null;
+  }
+
+  getFilesByPageId(notionPageId: string): FileRegistryEntry[] {
+    const rows = this.db
+      .prepare("SELECT * FROM file_registry WHERE notion_page_id = ?")
+      .all(notionPageId) as RawFileRegistryRow[];
+    return rows.map((r) => this.mapFileRegistryRow(r));
+  }
+
+  registerFile(entry: RegisterFileInput): void {
+    const id = generateId();
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO file_registry
+          (id, local_path, notion_page_id, file_upload_id, file_type, file_hash, file_size)
+        VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        id,
+        entry.localPath,
+        entry.notionPageId,
+        entry.fileUploadId,
+        entry.fileType,
+        entry.fileHash,
+        entry.fileSize,
+      );
+  }
+
+  deleteFileRegistry(localPath: string): void {
+    this.db.prepare("DELETE FROM file_registry WHERE local_path = ?").run(localPath);
+  }
+
+  private mapFileRegistryRow(row: RawFileRegistryRow): FileRegistryEntry {
+    return {
+      id: row.id,
+      localPath: row.local_path,
+      notionPageId: row.notion_page_id,
+      fileUploadId: row.file_upload_id,
+      fileType: row.file_type,
+      fileHash: row.file_hash,
+      fileSize: row.file_size,
+    };
+  }
+
   // --- preserve markers ---
 
   storePreserveMarkers(path: string, markers: PreserveMarker[]): void {
@@ -311,4 +371,33 @@ interface RawWikilinkRow {
   title: string;
   aliases: string;
   updated_at: string;
+}
+
+interface RawFileRegistryRow {
+  id: string;
+  local_path: string;
+  notion_page_id: string;
+  file_upload_id: string;
+  file_type: string;
+  file_hash: string;
+  file_size: number;
+}
+
+export interface FileRegistryEntry {
+  readonly id: string;
+  readonly localPath: string;
+  readonly notionPageId: string;
+  readonly fileUploadId: string;
+  readonly fileType: string;
+  readonly fileHash: string;
+  readonly fileSize: number;
+}
+
+export interface RegisterFileInput {
+  readonly localPath: string;
+  readonly notionPageId: string;
+  readonly fileUploadId: string;
+  readonly fileType: string;
+  readonly fileHash: string;
+  readonly fileSize: number;
 }

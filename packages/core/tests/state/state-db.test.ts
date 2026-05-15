@@ -226,4 +226,99 @@ describe("StateDB", () => {
       expect(db.getAll()).toHaveLength(2);
     });
   });
+
+  describe("file_registry", () => {
+    it("파일 등록 및 조회", () => {
+      db.registerFile({
+        localPath: "images/photo.png",
+        notionPageId: "page-123",
+        fileUploadId: "upload-456",
+        fileType: "image",
+        fileHash: "hash123",
+        fileSize: 1024,
+      });
+
+      expect(db.isFileRegistered("images/photo.png")).toBe(true);
+      expect(db.isFileRegistered("images/other.png")).toBe(false);
+
+      const entry = db.getFileRegistry("images/photo.png");
+      expect(entry).not.toBeNull();
+      expect(entry!.localPath).toBe("images/photo.png");
+      expect(entry!.fileType).toBe("image");
+      expect(entry!.fileHash).toBe("hash123");
+      expect(entry!.fileSize).toBe(1024);
+    });
+
+    it("페이지별 파일 조회", () => {
+      db.registerFile({
+        localPath: "docs/report.pdf",
+        notionPageId: "page-abc",
+        fileUploadId: "upload-1",
+        fileType: "pdf",
+        fileHash: "h1",
+        fileSize: 2048,
+      });
+      db.registerFile({
+        localPath: "docs/data.xlsx",
+        notionPageId: "page-abc",
+        fileUploadId: "upload-2",
+        fileType: "file",
+        fileHash: "h2",
+        fileSize: 4096,
+      });
+      db.registerFile({
+        localPath: "other/img.png",
+        notionPageId: "page-xyz",
+        fileUploadId: "upload-3",
+        fileType: "image",
+        fileHash: "h3",
+        fileSize: 512,
+      });
+
+      const abcFiles = db.getFilesByPageId("page-abc");
+      expect(abcFiles).toHaveLength(2);
+
+      const xyzFiles = db.getFilesByPageId("page-xyz");
+      expect(xyzFiles).toHaveLength(1);
+    });
+
+    it("파일 삭제", () => {
+      db.registerFile({
+        localPath: "temp/file.zip",
+        notionPageId: "page-1",
+        fileUploadId: "upload-1",
+        fileType: "file",
+        fileHash: "h1",
+        fileSize: 100,
+      });
+
+      expect(db.isFileRegistered("temp/file.zip")).toBe(true);
+      db.deleteFileRegistry("temp/file.zip");
+      expect(db.isFileRegistered("temp/file.zip")).toBe(false);
+    });
+
+    it("동일 경로 재등록 시 덮어쓰기", () => {
+      db.registerFile({
+        localPath: "photo.png",
+        notionPageId: "page-1",
+        fileUploadId: "upload-old",
+        fileType: "image",
+        fileHash: "old-hash",
+        fileSize: 100,
+      });
+
+      db.registerFile({
+        localPath: "photo.png",
+        notionPageId: "page-1",
+        fileUploadId: "upload-new",
+        fileType: "image",
+        fileHash: "new-hash",
+        fileSize: 200,
+      });
+
+      const entry = db.getFileRegistry("photo.png");
+      expect(entry!.fileHash).toBe("new-hash");
+      expect(entry!.fileUploadId).toBe("upload-new");
+    });
+  });
 });

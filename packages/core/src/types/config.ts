@@ -17,6 +17,7 @@ export const ConfigSchema = z.object({
     autoSync: z.boolean().default(false),
     autoSyncInterval: z.number().min(30).max(3600).default(300),
     deleteSync: z.boolean().default(false),
+    syncFiles: z.boolean().default(true),
   }),
   paths: z.object({
     include: z.array(z.string()).default(["**/*"]),
@@ -52,6 +53,7 @@ export const DEFAULT_CONFIG: Config = {
     autoSync: false,
     autoSyncInterval: 300,
     deleteSync: false,
+    syncFiles: true,
   },
   paths: {
     include: ["**/*"],

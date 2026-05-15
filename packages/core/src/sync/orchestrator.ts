@@ -22,6 +22,7 @@ import type { ConversionPipeline } from "../converter/pipeline.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
+import { FileHandler } from "./file-handler.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
@@ -38,6 +39,7 @@ export class SyncOrchestrator {
   private readonly pipeline: ConversionPipeline;
   private readonly blockConverter: BlockConverter;
   private readonly imageHandler: ImageHandler;
+  private readonly fileHandler: FileHandler;
   private readonly propertyMapper: PropertyMapper;
   private dbSchemaLoaded = false;
 
@@ -53,6 +55,7 @@ export class SyncOrchestrator {
     });
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments, notionClient);
+    this.fileHandler = new FileHandler(vaultFs, notionClient, stateDb);
     this.propertyMapper = new PropertyMapper();
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
@@ -161,6 +164,17 @@ export class SyncOrchestrator {
     });
 
     await Promise.all(tasks.map((t) => t()));
+
+    if (this.config.sync.syncFiles !== false) {
+      try {
+        const fileResults = await this.fileHandler.pushAllFiles();
+        if (fileResults.length > 0) {
+          getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
+        }
+      } catch (error) {
+        getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
+      }
+    }
 
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());

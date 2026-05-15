@@ -1,7 +1,7 @@
 import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
-import type { VaultFS } from "./vault-fs.js";
+import type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 
 export interface PathFilterConfig {
@@ -89,6 +89,12 @@ export class NodeVaultFS implements VaultFS {
     return files;
   }
 
+  async listNonMarkdownFiles(): Promise<NonMdFileInfo[]> {
+    const files: NonMdFileInfo[] = [];
+    await this.walkDirNonMd(this.rootPath, files);
+    return files;
+  }
+
   private matchesPattern(relativePath: string, pattern: string): boolean {
     if (pattern === "**/*" || pattern === "**") return true;
 
@@ -117,6 +123,31 @@ export class NodeVaultFS implements VaultFS {
     }
 
     return this.excludePatterns.some((p) => this.matchesPattern(relativePath, p));
+  }
+
+  private async walkDirNonMd(dir: string, result: NonMdFileInfo[]): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+
+      if (entry.name.startsWith(".")) continue;
+
+      const relativePath = relative(this.rootPath, fullPath);
+
+      if (this.isExcluded(relativePath)) continue;
+
+      if (entry.isDirectory()) {
+        await this.walkDirNonMd(fullPath, result);
+      } else if (entry.isFile() && !entry.name.endsWith(".md")) {
+        const fileStat = await stat(fullPath);
+        result.push({
+          path: relativePath,
+          size: fileStat.size,
+          mtime: fileStat.mtime.toISOString(),
+        });
+      }
+    }
   }
 
   private async walkDir(dir: string, result: FileInfo[]): Promise<void> {
