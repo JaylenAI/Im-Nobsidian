@@ -141,14 +141,22 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Email).toBe("test@example.com");
   });
 
-  it("date 속성 추출", () => {
-    const dateObj = { start: "2026-01-01", end: null };
+  it("date 속성 추출 (end 없음)", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
-      Due: { type: "date", date: dateObj },
+      Due: { type: "date", date: { start: "2026-01-01", end: null } },
     });
 
-    expect(client.extractProperties(page).Due).toEqual(dateObj);
+    expect(client.extractProperties(page).Due).toBe("2026-01-01");
+  });
+
+  it("date 속성 추출 (end 있음)", () => {
+    const page = createMockPage({
+      title: { type: "title", title: [{ plain_text: "T" }] },
+      Due: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
+    });
+
+    expect(client.extractProperties(page).Due).toEqual({ start: "2026-01-01", end: "2026-12-31" });
   });
 
   it("phone_number 속성 추출", () => {

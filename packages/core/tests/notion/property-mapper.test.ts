@@ -53,7 +53,7 @@ describe("PropertyMapper", () => {
 
     it("date 속성 변환", () => {
       const result = mapper.toNotionProperties({ due: "2026-06-30" }, "Test");
-      expect(result.due).toEqual({ date: { start: "2026-06-30" } });
+      expect(result.due).toEqual({ date: { start: "2026-06-30", end: null } });
     });
 
     it("url 속성 변환", () => {
@@ -101,7 +101,7 @@ describe("PropertyMapper", () => {
 
     it("날짜 문자열 → date", () => {
       const result = mapper.toNotionProperties({ created: "2026-01-15" }, "Test");
-      expect(result.created).toEqual({ date: { start: "2026-01-15" } });
+      expect(result.created).toEqual({ date: { start: "2026-01-15", end: null } });
     });
 
     it("URL 문자열 → url", () => {
@@ -146,11 +146,18 @@ describe("PropertyMapper", () => {
       expect(result.done).toBe(true);
     });
 
-    it("date → 객체", () => {
+    it("date → 문자열 (end 없을 때)", () => {
       const result = mapper.fromNotionProperties({
         due: { type: "date", date: { start: "2026-06-30" } },
       });
-      expect(result.due).toEqual({ start: "2026-06-30" });
+      expect(result.due).toBe("2026-06-30");
+    });
+
+    it("date → 객체 (end 있을 때)", () => {
+      const result = mapper.fromNotionProperties({
+        due: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
+      });
+      expect(result.due).toEqual({ start: "2026-01-01", end: "2026-12-31" });
     });
 
     it("url → 문자열", () => {
