@@ -1,5 +1,15 @@
 import { z } from "zod";
 
+const DatabaseSyncSchema = z.object({
+  databaseId: z.string(),
+  localFolder: z.string(),
+  propertyMapping: z.record(z.string()).optional(),
+  pullFilter: z.unknown().optional(),
+  titleProperty: z.string().default("Name"),
+});
+
+export type DatabaseSyncConfig = z.infer<typeof DatabaseSyncSchema>;
+
 export const ConfigSchema = z.object({
   version: z.literal(1),
   notion: z.object({
@@ -8,6 +18,7 @@ export const ConfigSchema = z.object({
     workspaceId: z.string().optional(),
     parentMode: z.enum(["page", "database"]).default("page"),
     databaseId: z.string().optional(),
+    databases: z.array(DatabaseSyncSchema).default([]),
   }),
   sync: z.object({
     direction: z.enum(["push", "pull", "both"]).default("both"),
@@ -46,6 +57,7 @@ export const DEFAULT_CONFIG: Config = {
     token: "",
     rootPageId: "",
     parentMode: "page",
+    databases: [],
   },
   sync: {
     direction: "both",

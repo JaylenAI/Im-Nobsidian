@@ -15,6 +15,7 @@ function createMockVaultFs(): VaultFS {
     exists: vi.fn().mockResolvedValue(false),
     ensureFolder: vi.fn().mockResolvedValue(undefined),
     listMarkdownFiles: vi.fn().mockResolvedValue([]),
+    listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -34,6 +35,8 @@ function createMockStateDb() {
     setMeta: vi.fn(),
     storePreserveMarkers: vi.fn(),
     getPreserveMarkers: vi.fn().mockReturnValue([]),
+    resolveWikilink: vi.fn().mockReturnValue(null),
+    resolvePageId: vi.fn().mockReturnValue(null),
     transaction: vi.fn().mockImplementation((fn: () => unknown) => fn()),
     close: vi.fn(),
   };
@@ -82,6 +85,11 @@ function createMockNotionClient() {
     }),
     extractTitle: vi.fn().mockReturnValue("Test Page"),
     extractProperties: vi.fn().mockReturnValue({}),
+    getDatabaseSchema: vi.fn().mockResolvedValue({}),
+    queryAllDatabasePages: vi.fn().mockResolvedValue([]),
+    queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
+    movePage: vi.fn().mockResolvedValue({}),
+    updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
   };
 }
 

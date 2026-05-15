@@ -126,6 +126,7 @@ export default class ImNobsidianPlugin extends Plugin {
           token: this.settings.token,
           rootPageId: this.settings.rootPageId,
           parentMode: "page" as const,
+          databases: [],
         },
         sync: {
           ...DEFAULT_CONFIG.sync,

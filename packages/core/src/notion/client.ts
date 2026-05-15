@@ -187,19 +187,45 @@ export class NotionClient {
 
   async queryDatabase(
     databaseId: string,
-    options?: { startCursor?: string; pageSize?: number },
+    options?: { startCursor?: string; pageSize?: number; filter?: unknown },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
         data_source_id: databaseId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? 100,
+        filter: options?.filter as never,
       }),
     );
     return {
       results: response.results as PageObjectResponse[],
       nextCursor: response.next_cursor,
     };
+  }
+
+  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
+    const all: PageObjectResponse[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await this.queryDatabase(databaseId, {
+        startCursor: cursor,
+        pageSize: 100,
+        filter,
+      });
+      all.push(...response.results);
+      cursor = response.nextCursor ?? undefined;
+    } while (cursor);
+
+    return all;
+  }
+
+  async getDataSourceId(databaseId: string): Promise<string> {
+    const db = await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    );
+    const dataSources = (db as unknown as { data_sources?: Array<{ id: string }> }).data_sources;
+    return dataSources?.[0]?.id ?? databaseId;
   }
 
   async archivePage(pageId: string): Promise<void> {

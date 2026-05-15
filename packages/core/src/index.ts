@@ -32,6 +32,7 @@ export type {
 } from "./types/index.js";
 
 export { ConfigSchema, DEFAULT_CONFIG } from "./types/config.js";
+export type { DatabaseSyncConfig } from "./types/config.js";
 
 // Config
 export { ConfigManager } from "./config/index.js";
@@ -57,6 +58,7 @@ export {
   NodeVaultFS,
   ImageHandler,
   FileHandler,
+  DatabaseSyncer,
 } from "./sync/index.js";
 export type {
   VaultFS,
@@ -66,6 +68,7 @@ export type {
   PathFilterConfig,
   FileUploadResult,
   FileDownloadResult,
+  DatabaseSyncResult,
 } from "./sync/index.js";
 
 // Converter

@@ -23,6 +23,7 @@ import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
+import { DatabaseSyncer } from "./database-syncer.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
@@ -40,6 +41,7 @@ export class SyncOrchestrator {
   private readonly blockConverter: BlockConverter;
   private readonly imageHandler: ImageHandler;
   private readonly fileHandler: FileHandler;
+  private readonly databaseSyncer: DatabaseSyncer;
   private readonly propertyMapper: PropertyMapper;
   private dbSchemaLoaded = false;
 
@@ -57,6 +59,14 @@ export class SyncOrchestrator {
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments, notionClient);
     this.fileHandler = new FileHandler(vaultFs, notionClient, stateDb);
     this.propertyMapper = new PropertyMapper();
+    this.databaseSyncer = new DatabaseSyncer(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      this.pipeline,
+      this.imageHandler,
+    );
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
       resolvePageId: (pageId: string) => stateDb.resolvePageId(pageId)?.title ?? null,
@@ -176,6 +186,17 @@ export class SyncOrchestrator {
       }
     }
 
+    if ((this.config.notion.databases?.length ?? 0) > 0) {
+      try {
+        const dbResult = await this.databaseSyncer.pushAll();
+        created += dbResult.created;
+        updated += dbResult.updated;
+        failed.push(...dbResult.failed);
+      } catch (error) {
+        getLogger().warn("[Im-Nobsidian] DB Push 중 오류:", error);
+      }
+    }
+
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
     this.stateDb.setMeta("push_in_progress", "");
@@ -286,6 +307,24 @@ export class SyncOrchestrator {
     });
 
     await Promise.all(tasks.map((t) => t()));
+
+    if ((this.config.notion.databases?.length ?? 0) > 0) {
+      try {
+        const dbResult = await this.databaseSyncer.pullAll();
+        created += dbResult.created;
+        updated += dbResult.updated;
+        failed.push(...dbResult.failed);
+        if (dbResult.created + dbResult.updated > 0) {
+          const dbPaths = this.stateDb
+            .getByStatus("synced")
+            .filter((r) => r.fileType === "db-row")
+            .map((r) => r.obsidianPath);
+          writtenPaths.push(...dbPaths.slice(-dbResult.created - dbResult.updated));
+        }
+      } catch (error) {
+        getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
+      }
+    }
 
     this.stateDb.setMeta("last_pull_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
