@@ -81,6 +81,48 @@ describe("PropertyMapper", () => {
     });
   });
 
+  describe("toNotionProperties — 읽기전용 속성 스킵", () => {
+    beforeEach(() => {
+      mapper.loadSchema({
+        created: { id: "a", type: "created_time" },
+        edited: { id: "b", type: "last_edited_time" },
+        creator: { id: "c", type: "created_by" },
+        editor: { id: "d", type: "last_edited_by" },
+        calc: { id: "e", type: "formula" },
+        summary: { id: "f", type: "rollup" },
+        uid: { id: "g", type: "unique_id" },
+        verify: { id: "h", type: "verification" },
+        name: { id: "i", type: "rich_text" },
+      });
+    });
+
+    it("읽기전용 속성은 변환 결과에 포함되지 않음", () => {
+      const result = mapper.toNotionProperties(
+        {
+          created: "2026-01-01",
+          edited: "2026-05-15",
+          creator: "Alice",
+          editor: "Bob",
+          calc: "computed",
+          summary: "rolled up",
+          uid: "TASK-1",
+          verify: "verified",
+          name: "유효한 값",
+        },
+        "Test",
+      );
+      expect(result.created).toBeUndefined();
+      expect(result.edited).toBeUndefined();
+      expect(result.creator).toBeUndefined();
+      expect(result.editor).toBeUndefined();
+      expect(result.calc).toBeUndefined();
+      expect(result.summary).toBeUndefined();
+      expect(result.uid).toBeUndefined();
+      expect(result.verify).toBeUndefined();
+      expect(result.name).toEqual({ rich_text: [{ text: { content: "유효한 값" } }] });
+    });
+  });
+
   describe("toNotionProperties — 타입 추론 변환", () => {
     it("boolean → checkbox", () => {
       const result = mapper.toNotionProperties({ active: true }, "Test");

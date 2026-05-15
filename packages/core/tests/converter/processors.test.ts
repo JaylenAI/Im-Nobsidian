@@ -179,6 +179,35 @@ describe("FrontmatterGenerator", () => {
     });
     expect(result.content).toBe("# Hello");
   });
+
+  it("타임존 오프셋 자정 시각 정규화 (KST)", () => {
+    const result = processor.process({
+      content: "# Test",
+      metadata: { properties: { created: "2026-05-15T00:00:00.000+09:00" } },
+      context: pullContext,
+    });
+    expect(result.content).toContain("created: '2026-05-15'");
+    expect(result.content).not.toContain("T00:00:00");
+  });
+
+  it("자정 시각 UTC 정규화", () => {
+    const result = processor.process({
+      content: "# Test",
+      metadata: { properties: { due: "2026-06-30T00:00:00.000Z" } },
+      context: pullContext,
+    });
+    expect(result.content).toContain("due: '2026-06-30'");
+  });
+
+  it("빈 배열 속성 프론트매터에서 제외", () => {
+    const result = processor.process({
+      content: "# Test",
+      metadata: { properties: { tags: [], status: "active" } },
+      context: pullContext,
+    });
+    expect(result.content).not.toContain("tags:");
+    expect(result.content).toContain("status: active");
+  });
 });
 
 describe("HtmlAnnotationStripper", () => {
