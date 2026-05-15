@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.2] - 2026-05-15
+
+### Added
+
+- **Relation Write** — 프론트매터 `[[wikilink]]` → Notion relation 속성 양방향 매핑
+- **Relation Pull 역변환** — Notion relation pageId → `[[PageName]]` wikilink 자동 변환
+- **People Write** — user ID 기반 Notion people 속성 쓰기
+- **Files Write** — 외부 URL 기반 Notion files 속성 쓰기
+- **Date range Write** — start + end 양방향 지원 (end 필드 추가)
+- **PDF 블록 Pull** — 커스텀 트랜스포머로 `[📄 caption](url)` 변환
+- **Embed 블록 Pull** — 커스텀 트랜스포머로 `[caption](url)` 변환
+- **ISO 날짜 정규화** — `T00:00:00.000Z` 제거하여 깔끔한 `YYYY-MM-DD` 프론트매터
+- **WikilinkResolver 연동** — orchestrator에서 propertyMapper에 stateDb 위키링크 해석기 연결
+- 테스트 377→409 (date range, relation 테스트 추가)
+
 ## [0.1.1] - 2026-05-14
 
 ### Fixed

@@ -54,6 +54,10 @@ export class SyncOrchestrator {
     this.blockConverter = new BlockConverter();
     this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments, notionClient);
     this.propertyMapper = new PropertyMapper();
+    this.propertyMapper.setWikilinkResolver({
+      resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
+      resolvePageId: (pageId: string) => stateDb.resolvePageId(pageId)?.title ?? null,
+    });
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
   }
