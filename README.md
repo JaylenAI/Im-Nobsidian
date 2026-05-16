@@ -169,26 +169,26 @@ When both sides change the same file:
 
 ## Supported Conversions
 
-| Feature                                         |     Push      |     Pull     |
-| ----------------------------------------------- | :-----------: | :----------: |
-| Headings, paragraphs, bold/italic/strikethrough |      ✅       |      ✅      |
-| Code blocks (30+ languages)                     |      ✅       |      ✅      |
-| Ordered / unordered / checkbox lists            |      ✅       |      ✅      |
-| Links and wikilinks                             |      ✅       |      ✅      |
-| Callouts / Notion callout blocks (collapsible)  |      ✅       |      ✅      |
-| Math equations (LaTeX, inline + block)          |      ✅       |      ✅      |
-| Tables                                          |      ✅       |      ✅      |
-| Dividers                                        |      ✅       |      ✅      |
-| Toggle blocks                                   |      ✅       |      ✅      |
-| Column layouts                                  |      ✅       |      ✅      |
-| Colors and underlines                           |      ✅       | ✅ Preserved |
-| Media (audio / video / pdf / file)              |      ✅       |      ✅      |
-| Tab blocks                                      |      ✅       | ✅ Preserved |
-| Video / embed URLs                              |      ✅       |      ✅      |
-| Frontmatter ↔ database properties (21 types)    |      ✅       |      ✅      |
-| Images                                          | ⚠️ Upload bug | ✅ Download  |
-| Notion-only blocks (bookmark, embed, etc.)      |      ✅       | ✅ Preserved |
-| Notion-only blocks (button, form, synced block) |       —       | 📌 Preserved |
+| Feature                                         | Push |     Pull     |
+| ----------------------------------------------- | :--: | :----------: |
+| Headings, paragraphs, bold/italic/strikethrough |  ✅  |      ✅      |
+| Code blocks (30+ languages)                     |  ✅  |      ✅      |
+| Ordered / unordered / checkbox lists            |  ✅  |      ✅      |
+| Links and wikilinks                             |  ✅  |      ✅      |
+| Callouts / Notion callout blocks (collapsible)  |  ✅  |      ✅      |
+| Math equations (LaTeX, inline + block)          |  ✅  |      ✅      |
+| Tables                                          |  ✅  |      ✅      |
+| Dividers                                        |  ✅  |      ✅      |
+| Toggle blocks                                   |  ✅  |      ✅      |
+| Column layouts                                  |  ✅  |      ✅      |
+| Colors and underlines                           |  ✅  | ✅ Preserved |
+| Media (audio / video / pdf / file)              |  ✅  |      ✅      |
+| Tab blocks                                      |  ✅  | ✅ Preserved |
+| Video / embed URLs                              |  ✅  |      ✅      |
+| Frontmatter ↔ database properties (21 types)    |  ✅  |      ✅      |
+| Images                                          |  ✅  | ✅ Download  |
+| Notion-only blocks (bookmark, embed, etc.)      |  ✅  | ✅ Preserved |
+| Notion-only blocks (button, form, synced block) |  —   | 📌 Preserved |
 
 ## Configuration
 
@@ -276,7 +276,7 @@ await orchestrator.sync({ dryRun: false });
 
 | Limitation             | Reason                                                           | Workaround                                               |
 | ---------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
-| Image push             | File Upload API state transition bug (`uploaded` → `pending`)    | Images preserved as placeholders; pull downloads work    |
+| Image push             | File Upload API requires status check after send                 | Conditionally skip complete() for single-part uploads    |
 | Notion-only blocks     | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                        |
 | Rate limit             | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff           |
 | Blank line compression | Notion Markdown API normalizes whitespace                        | No semantic difference — renders identically in Obsidian |

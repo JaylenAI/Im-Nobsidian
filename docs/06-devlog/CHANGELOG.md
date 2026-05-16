@@ -18,6 +18,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   - Orchestrator 모킹 보강 16개
 - 라운드트립 픽스처 17 → 20개 (complex-table, frontmatter-all-types, mixed-callout-toggle)
 
+### Fixed
+
+- **이미지 Push File Upload API 버그** — `send()` 후 상태가 `uploaded`로 자동 전환되어 `complete()` 호출 시 에러 발생하던 문제 수정. send() 응답 상태 확인 후 `pending`일 때만 complete() 호출
+
 ### Changed
 
 - `SyncOrchestrator` — DatabaseSyncer 위임으로 push/pull 시 DB 동기화 자동 실행
@@ -125,7 +129,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Known Limitations
 
-- **이미지 Push** — File Upload API 상태 전환 버그 (`uploaded` → `pending`). Pull 다운로드는 정상 동작
+- **이미지 Push** — 단일 파트 업로드 시 send() 후 상태 확인 필요 (complete() 조건부 호출로 해결)
 - **빈 줄 압축** — Notion Markdown API가 빈 줄을 정규화 (렌더링 차이 없음)
 - **첫 Push 위키링크** — 새 페이지 간 교차 참조는 첫 동기화 시 미해결, 이후 자동 해결
 - **Notion 전용 블록** — 버튼/폼/동기블록은 API가 unsupported 반환, 플레이스홀더 보존
