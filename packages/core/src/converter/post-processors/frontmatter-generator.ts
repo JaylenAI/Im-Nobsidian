@@ -36,6 +36,10 @@ function normalizeProperties(props: Record<string, unknown>): Record<string, unk
 }
 
 function normalizeValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    return normalizeDate(value.toISOString());
+  }
+
   if (typeof value === "string") {
     return normalizeDate(value);
   }

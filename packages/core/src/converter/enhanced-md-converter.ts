@@ -1,14 +1,15 @@
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
+const NOTION_CALLOUT_TAG_RE = /<callout>\n?([\s\S]*?)<\/callout>/g;
 const NOTION_TOGGLE_RE = /<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
 const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
 const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
 const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
 
-const NOTION_AUDIO_RE = /<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
-const NOTION_VIDEO_RE = /<video src="([^"]*)">([\s\S]*?)<\/video>/g;
-const NOTION_PDF_RE = /<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
-const NOTION_FILE_RE = /<file src="([^"]*)">([\s\S]*?)<\/file>/g;
+const NOTION_AUDIO_RE = /[\t ]*<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
+const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
+const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
+const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 const NOTION_UNDERLINE_RE = /<span underline="true">([\s\S]*?)<\/span>/g;
 
@@ -33,6 +34,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertUnderlineSpans(result);
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
+  result = unescapeNotionChars(result);
 
   return result;
 }
@@ -73,27 +75,36 @@ function convertToggles(content: string): string {
   return content.replace(NOTION_TOGGLE_RE, replaceToggle);
 }
 
+function calloutBodyToObsidian(body: string): string {
+  const lines = body
+    .split("\n")
+    .map((l) => l.replace(/^\t/, ""))
+    .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
+  const firstLine = lines[0] ?? "";
+
+  const emojiMatch = /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
+  const type = emojiMatch ? emojiToCalloutType(emojiMatch[1]!) : "note";
+  const title = emojiMatch ? emojiMatch[2]! : firstLine;
+  const rest = lines.slice(1).join("\n").trim();
+
+  const calloutTitle = title ? `> [!${type}] ${title}` : `> [!${type}]`;
+  const calloutBody = rest
+    ? "\n" +
+      rest
+        .split("\n")
+        .map((line) => `> ${line}`)
+        .join("\n")
+    : "";
+
+  return calloutTitle + calloutBody;
+}
+
 function convertCallouts(content: string): string {
-  return content.replace(NOTION_CALLOUT_RE, (_match, body: string) => {
-    const lines = body.trim().split("\n");
-    const firstLine = lines[0] ?? "";
-
-    const emojiMatch = /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
-    const type = emojiMatch ? emojiToCalloutType(emojiMatch[1]!) : "note";
-    const title = emojiMatch ? emojiMatch[2]! : firstLine;
-    const rest = lines.slice(1).join("\n").trim();
-
-    const calloutTitle = title ? `> [!${type}] ${title}` : `> [!${type}]`;
-    const calloutBody = rest
-      ? "\n" +
-        rest
-          .split("\n")
-          .map((line) => `> ${line}`)
-          .join("\n")
-      : "";
-
-    return calloutTitle + calloutBody;
-  });
+  let result = content.replace(NOTION_CALLOUT_TAG_RE, (_match, body: string) =>
+    calloutBodyToObsidian(body),
+  );
+  result = result.replace(NOTION_CALLOUT_RE, (_match, body: string) => calloutBodyToObsidian(body));
+  return result;
 }
 
 function convertPageMentions(content: string): string {
@@ -319,12 +330,24 @@ function convertNotionMath(content: string): string {
     return `$$\n${eq.trim()}\n$$`;
   });
   result = result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`);
+  result = result.replace(/\\\$([^$]+?)\\\$/g, (_match, inner: string) => {
+    const unescaped = inner.replace(/\\\^/g, "^").replace(/\\~/g, "~");
+    return `$${unescaped}$`;
+  });
   return result;
+}
+
+function unescapeNotionChars(content: string): string {
+  return content.replace(/\\~/g, "~").replace(/\\\^/g, "^");
 }
 
 const NOTION_TABLE_RE = /<table[^>]*>([\s\S]*?)<\/table>/g;
 const TABLE_ROW_RE = /<tr>([\s\S]*?)<\/tr>/g;
 const TABLE_CELL_RE = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g;
+
+function isAlignmentRow(cells: string[]): boolean {
+  return cells.every((c) => /^:?-{2,}:?$/.test(c.trim()));
+}
 
 function convertNotionTables(content: string): string {
   return content.replace(NOTION_TABLE_RE, (_match, tableBody: string) => {
@@ -339,7 +362,9 @@ function convertNotionTables(content: string): string {
       while ((cellMatch = cellRe.exec(rowMatch[1]!)) !== null) {
         cells.push(cellMatch[1]!.trim());
       }
-      rows.push(cells);
+      if (!isAlignmentRow(cells)) {
+        rows.push(cells);
+      }
     }
 
     if (rows.length === 0) return _match;
