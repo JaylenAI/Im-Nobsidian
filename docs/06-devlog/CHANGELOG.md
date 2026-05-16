@@ -125,7 +125,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Known Limitations
 
-- **이미지 Push** — Notion API 제한으로 직접 업로드 불가, 플레이스홀더 보존
+- **이미지 Push** — File Upload API 상태 전환 버그 (`uploaded` → `pending`). Pull 다운로드는 정상 동작
 - **빈 줄 압축** — Notion Markdown API가 빈 줄을 정규화 (렌더링 차이 없음)
 - **첫 Push 위키링크** — 새 페이지 간 교차 참조는 첫 동기화 시 미해결, 이후 자동 해결
 - **Notion 전용 블록** — 버튼/폼/동기블록은 API가 unsupported 반환, 플레이스홀더 보존

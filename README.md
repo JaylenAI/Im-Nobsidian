@@ -169,26 +169,26 @@ When both sides change the same file:
 
 ## Supported Conversions
 
-| Feature                                         |      Push      |     Pull     |
-| ----------------------------------------------- | :------------: | :----------: |
-| Headings, paragraphs, bold/italic/strikethrough |       ✅       |      ✅      |
-| Code blocks (30+ languages)                     |       ✅       |      ✅      |
-| Ordered / unordered / checkbox lists            |       ✅       |      ✅      |
-| Links and wikilinks                             |       ✅       |      ✅      |
-| Callouts / Notion callout blocks (collapsible)  |       ✅       |      ✅      |
-| Math equations (LaTeX, inline + block)          |       ✅       |      ✅      |
-| Tables                                          |       ✅       |      ✅      |
-| Dividers                                        |       ✅       |      ✅      |
-| Toggle blocks                                   |       ✅       |      ✅      |
-| Column layouts                                  |       ✅       |      ✅      |
-| Colors and underlines                           |       ✅       | ✅ Preserved |
-| Media (audio / video / pdf / file)              |       ✅       |      ✅      |
-| Tab blocks                                      |       ✅       | ✅ Preserved |
-| Video / embed URLs                              |       ✅       |      ✅      |
-| Frontmatter ↔ database properties (21 types)    |       ✅       |      ✅      |
-| Images                                          | 📎 Placeholder | ✅ Download  |
-| Notion-only blocks (bookmark, embed, etc.)      |       ✅       | ✅ Preserved |
-| Notion-only blocks (button, form, synced block) |       —        | 📌 Preserved |
+| Feature                                         |     Push      |     Pull     |
+| ----------------------------------------------- | :-----------: | :----------: |
+| Headings, paragraphs, bold/italic/strikethrough |      ✅       |      ✅      |
+| Code blocks (30+ languages)                     |      ✅       |      ✅      |
+| Ordered / unordered / checkbox lists            |      ✅       |      ✅      |
+| Links and wikilinks                             |      ✅       |      ✅      |
+| Callouts / Notion callout blocks (collapsible)  |      ✅       |      ✅      |
+| Math equations (LaTeX, inline + block)          |      ✅       |      ✅      |
+| Tables                                          |      ✅       |      ✅      |
+| Dividers                                        |      ✅       |      ✅      |
+| Toggle blocks                                   |      ✅       |      ✅      |
+| Column layouts                                  |      ✅       |      ✅      |
+| Colors and underlines                           |      ✅       | ✅ Preserved |
+| Media (audio / video / pdf / file)              |      ✅       |      ✅      |
+| Tab blocks                                      |      ✅       | ✅ Preserved |
+| Video / embed URLs                              |      ✅       |      ✅      |
+| Frontmatter ↔ database properties (21 types)    |      ✅       |      ✅      |
+| Images                                          | ⚠️ Upload bug | ✅ Download  |
+| Notion-only blocks (bookmark, embed, etc.)      |      ✅       | ✅ Preserved |
+| Notion-only blocks (button, form, synced block) |       —       | 📌 Preserved |
 
 ## Configuration
 
@@ -276,6 +276,7 @@ await orchestrator.sync({ dryRun: false });
 
 | Limitation             | Reason                                                           | Workaround                                               |
 | ---------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
+| Image push             | File Upload API state transition bug (`uploaded` → `pending`)    | Images preserved as placeholders; pull downloads work    |
 | Notion-only blocks     | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                        |
 | Rate limit             | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff           |
 | Blank line compression | Notion Markdown API normalizes whitespace                        | No semantic difference — renders identically in Obsidian |
@@ -284,7 +285,7 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.3  ✅ Current — Notion API modernization + Enhanced MD expansion
+v0.1.4  ✅ Current — Multi-database sync + test expansion (486 tests)
 v0.5.0  → Obsidian community plugin (sql.js WASM)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
@@ -298,7 +299,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 434 tests
+pnpm test          # 486 tests
 pnpm lint
 pnpm typecheck
 
