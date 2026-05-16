@@ -1,22 +1,24 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-16
+> Last updated: 2026-05-17
 
-## Current State (v0.1.4)
+## Current State (v0.1.5)
 
 True bidirectional Obsidian <-> Notion sync via CLI.
 486 tests passing, 25+ block types, 21 property read types, 15 property write types.
 다중 데이터베이스 동기화(DatabaseSyncer), Standalone 파일 동기화, 부분 업데이트 3단계 폴백.
-동기화 커버리지 ~95% 달성.
+Pull 변환 버그 5건 수정 (콜아웃/테이블/수식/첨자/날짜).
+13종 포맷 E2E 라운드트립 검증 완료. 동기화 커버리지 ~95% 달성.
 
 ---
 
 ## Release Timeline
 
 ```
-v0.1.4  <-- Current — 다중 DB 동기화 + 테스트 확대
-v0.5.0  --> Next — Obsidian community plugin (sql.js WASM)
-v1.0.0  --> Database view sync, multi-workspace, 1000+ notes
+v0.1.5  <-- Current — Pull 변환 버그 수정 + E2E 검증 완료
+v0.2.0  --> Next — Notion DB 뷰 렌더링 엔진 (Gallery/Board/Calendar/Table)
+v0.5.0  --> Obsidian community plugin (sql.js WASM + 뷰 렌더링 UI)
+v1.0.0  --> Multi-workspace, 1000+ notes, OAuth
 ```
 
 ---
@@ -140,13 +142,111 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 
 ---
 
+## v0.1.5 — Pull 변환 버그 수정
+
+### Fixed
+
+- [x] Notion `<callout>` 태그 → Obsidian 콜아웃 변환 지원
+- [x] 미디어 태그 앞 탭/공백 허용 (리스트 내 미디어 처리)
+- [x] 이스케이프된 인라인 수식/첨자 문자 복원 (`\$`, `\^`, `\~`)
+- [x] 테이블 정렬 행 중복 필터링
+- [x] `gray-matter` Date 객체 프론트매터 정규화 처리
+
+### Verified (E2E — 2026-05-17)
+
+- [x] 7개 파일 13종 포맷 Push→Pull 라운드트립 — 11/13 완벽 동일
+- [x] 실전형 3파일 (회의록/기술사양/학습노트) 라운드트립 — 완벽
+- [x] 콜아웃 8종 (note/tip/warning/danger/info/example/quote/bug) — 전체 복원
+- [x] 수학 수식 인라인 6개 + 블록 3개 — 전체 복원
+- [x] 첨자 5개 (H~2~O, CO~2~, X^2^, a^n^, Fe~2~O~3~) — 전체 복원
+- [x] 대형 테이블 10행 7열 — 정렬 행 중복 없음
+- [x] 4단계 중첩 리스트 — 완벽 보존
+
+---
+
+## v0.2.0 — Notion DB 뷰 렌더링 엔진 (N2O 수준 달성)
+
+> **목표**: Obsidian 안에서 Notion DB를 갤러리/보드/캘린더/테이블 뷰로 시각적으로 렌더링.
+> N2O 플러그인과 동등 이상의 UIUX 구현. 플러그인 개발 전 코어 엔진에 뷰 렌더링 기반 구축.
+
+### Phase 2A: DB 메타데이터 확장 (2~3일)
+
+- [ ] `getDatabaseCoverAndIcon()` — DB 행의 커버 이미지 URL + 아이콘(이모지/이미지) 추출
+- [ ] 커버/아이콘을 프론트매터에 저장 (`cover:`, `icon:` 필드)
+- [ ] `getDatabaseViewConfig()` — DB의 뷰 설정 조회 (Notion API 지원 범위 내)
+- [ ] DB 스키마에 뷰 타입 힌트 저장 (`.im-nobsidian/db-views.json`)
+- [ ] PropertyMapper에 커버/아이콘 역매핑 추가
+
+### Phase 2B: 뷰 렌더링 코어 엔진 (1~2주)
+
+- [ ] `ViewRenderer` 인터페이스 설계
+  ```typescript
+  interface ViewRenderer {
+    render(entries: DBEntry[], viewConfig: ViewConfig): string | HTMLElement;
+  }
+  ```
+- [ ] `GalleryViewRenderer` — 커버 이미지 카드 그리드
+  - CSS Grid 레이아웃 (3~5열 반응형)
+  - 커버 이미지 + 아이콘 + 제목 + 태그 배지
+  - 카드 클릭 → 해당 .md 파일 열기
+  - 카드 사이즈: small/medium/large
+- [ ] `TableViewRenderer` — 정렬/필터 가능한 테이블
+  - 헤더 클릭 정렬 (ASC/DESC)
+  - 속성 타입별 셀 렌더링 (체크박스, 태그, 날짜 등)
+  - 필터 드롭다운 (select/multi_select/status 기반)
+- [ ] `BoardViewRenderer` — 칸반 보드
+  - select/status 속성 기준 컬럼 자동 그룹핑
+  - 카드 드래그앤드롭 → 속성 변경 → Notion Push
+  - 컬럼별 카드 수 표시
+- [ ] `CalendarViewRenderer` — 월간 캘린더
+  - date 속성 기준 날짜 셀 배치
+  - 월/주 전환
+  - 날짜 셀 클릭 → 해당 노트 열기/생성
+
+### Phase 2C: 뷰 데이터 파이프라인 (3~5일)
+
+- [ ] `DBEntryCollector` — 프론트매터에서 뷰 렌더링에 필요한 데이터 수집
+  - 로컬 .md 파일 스캔 → 프론트매터 파싱 → DBEntry 배열 생성
+  - 커버 이미지 로컬 캐싱 (attachments 폴더)
+  - 이모지 아이콘 파싱
+- [ ] `ViewConfigManager` — 뷰 설정 CRUD
+  - 사용자가 뷰 타입 선택 (gallery/board/table/calendar)
+  - 표시할 속성 선택
+  - 그룹핑/정렬/필터 기본값 설정
+- [ ] 뷰 렌더링 결과 → Obsidian `MarkdownRenderChild` 또는 `ItemView`로 표시
+
+### Phase 2D: 양방향 인터랙션 (1~2주)
+
+- [ ] 뷰에서 속성 변경 → 프론트매터 업데이트 → Notion Push 트리거
+- [ ] 보드 드래그앤드롭 → status/select 속성 변경
+- [ ] 갤러리 카드 클릭 → `workspace.openFile()` 연동
+- [ ] 테이블 셀 인라인 편집 → 속성 즉시 업데이트
+- [ ] "+ 새 페이지" 버튼 → 새 .md 파일 생성 + Notion Push
+
+### Phase 2E: 테스트 + 검증 (3~5일)
+
+- [ ] ViewRenderer 단위 테스트 (각 뷰 타입별 렌더링 출력 검증)
+- [ ] DBEntryCollector 프론트매터 파싱 테스트
+- [ ] 실전 DB 동기화 E2E: Notion DB Pull → 뷰 렌더링 → 속성 변경 → Push → Notion 반영 확인
+- [ ] 성능 테스트: 100+ 행 DB 뷰 렌더링 속도
+
+### 검증 기준
+
+> **스크린샷 비교 가능 수준**: 동일한 Notion DB를 N2O와 Im-Nobsidian으로 각각 렌더링했을 때
+> 갤러리 카드 레이아웃, 커버 이미지, 태그 배지, 카드 클릭 동작이 동등해야 함.
+
+---
+
 ## v0.5.0 — Obsidian Plugin Release
 
 ### Tasks
 
 - [ ] sql.js (WASM) DB adapter (replace better-sqlite3)
 - [ ] DBAdapter 인터페이스 분리 + better-sqlite-adapter + sql-js-adapter
-- [ ] Plugin UI 완성 (설정, 리본, 상태바, 진행률)
+- [ ] Plugin UI 완성 (사이드바 Sync/Pull/Push 버튼, Settings 탭, 상태바, 진행률)
+- [ ] Auto-sync / Real-time 토글 (코어 watch 엔진 연동)
+- [ ] Preview Changes / Scan Vault UI
+- [ ] v0.2.0 뷰 렌더링 엔진 플러그인 통합 (Gallery/Board/Calendar/Table 뷰)
 - [ ] Obsidian 실전 검증 (10+ notes vault)
 - [ ] obsidianmd/obsidian-releases PR submission
 - [ ] BRAT beta channel pre-release
@@ -157,9 +257,9 @@ ntn은 Im-Nobsidian의 접근 방식이 올바름을 공식적으로 검증해�
 
 ### Tasks
 
-- [ ] Database view sync (filters, sorts)
 - [ ] Notion OAuth 인증 (ntn login 방식 참고)
 - [ ] Multi-workspace support
 - [ ] Performance: 1000+ notes within 5 minutes
 - [ ] Notion Workers webhook 연동 검토
 - [ ] Obsidian community plugin official registration
+- [ ] 타임라인 뷰 (간트 차트 형태)

@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.5] - 2026-05-17
+
+### Fixed
+
+- **Notion `<callout>` 태그 변환** — Notion API가 `<callout>` 태그를 반환하지만 기존 변환기는 `::: callout` 형식만 처리. 양쪽 형식 모두 지원하도록 `convertCallouts()` 리팩토링
+- **미디어 태그 들여쓰기** — Notion API가 리스트 내 미디어를 `\t<pdf src=...>` 형태로 반환. 미디어 태그 정규식에 `[\t ]*` 선행 공백 허용 추가
+- **인라인 수식 이스케이프** — Notion API가 `$E = mc^2$`를 `\$E = mc\^2\$`로 이스케이프. `convertNotionMath()`에 이스케이프된 수식 복원 로직 추가
+- **첨자 이스케이프** — `H~2~O` → `H\~2\~O`, `X^2^` → `X\^2\^` 이스케이프 복원. `unescapeNotionChars()` 추가
+- **테이블 정렬 행 중복** — Notion API가 `|---|` 정렬 행을 데이터 행으로 저장하여 Pull 시 정렬 행 중복 생성. `isAlignmentRow()` 필터 추가
+- **gray-matter Date 객체** — `gray-matter`가 ISO 날짜 문자열을 JavaScript `Date` 객체로 자동 변환하여 정규화 우회. `normalizeValue()`에 `Date` 인스턴스 처리 추가
+
+### Verified (E2E — 2026-05-17)
+
+- 7개 파일 13종 포맷 Push→Pull 라운드트립 — 11/13 완벽
+- 실전형 3파일 (회의록/기술사양/학습노트) 라운드트립 — 완벽
+- 콜아웃 8종, 수학 수식 9개, 첨자 5개, 대형 테이블 10행 — 전체 복원
+- 486 단위 테스트 전체 통과
+
 ## [0.1.4] - 2026-05-16
 
 ### Added
