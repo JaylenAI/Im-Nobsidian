@@ -293,16 +293,19 @@ export class NotionClient {
 
     const fileUploadId = (upload as unknown as { id: string }).id;
 
-    await this.withRateLimit(() =>
+    const sendResult = await this.withRateLimit(() =>
       this.client.fileUploads.send({
         file_upload_id: fileUploadId,
         file: { data: fileData, filename },
       }),
     );
 
-    await this.withRateLimit(() =>
-      this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
-    );
+    const status = (sendResult as unknown as { status: string }).status;
+    if (status === "pending") {
+      await this.withRateLimit(() =>
+        this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
+      );
+    }
 
     return fileUploadId;
   }
