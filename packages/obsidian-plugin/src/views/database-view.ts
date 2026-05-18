@@ -1,7 +1,8 @@
-import { ItemView, type TFile, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, type TFile, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import ViewContainer from "./ViewContainer.svelte";
 import type { ViewRenderData, DBEntry, ViewConfig, ViewDataProvider } from "@im-nobsidian/core";
+import type { EntryEditor } from "@im-nobsidian/core";
 
 export const DATABASE_VIEW_TYPE = "im-nobsidian-db-view";
 
@@ -10,6 +11,7 @@ export class DatabaseItemView extends ItemView {
   private viewData: ViewRenderData | null = null;
   private availableViews: ViewConfig[] = [];
   private provider: ViewDataProvider | null = null;
+  private editor: EntryEditor | null = null;
   private databaseId: string = "";
   private folderPath: string = "";
 
@@ -33,8 +35,10 @@ export class DatabaseItemView extends ItemView {
     provider: ViewDataProvider;
     databaseId: string;
     folderPath: string;
+    editor?: EntryEditor;
   }) {
     this.provider = params.provider;
+    this.editor = params.editor ?? null;
     this.databaseId = params.databaseId;
     this.folderPath = params.folderPath;
     await this.loadData();
@@ -77,12 +81,8 @@ export class DatabaseItemView extends ItemView {
         availableViews: this.availableViews,
         onViewChange: (viewId: string) => this.loadData(viewId),
         onEntryClick: (entry: DBEntry) => this.openEntry(entry),
-        onEntryMove: (_entry: DBEntry, _newGroup: string) => {
-          // Phase 4에서 구현 — 속성 변경 + Notion Push
-        },
-        onDateClick: (_date: string) => {
-          // Phase 4에서 구현 — 새 페이지 생성
-        },
+        onEntryMove: (entry: DBEntry, newGroup: string) => this.handleEntryMove(entry, newGroup),
+        onDateClick: (date: string) => this.handleDateClick(date),
       },
     });
   }
@@ -91,6 +91,42 @@ export class DatabaseItemView extends ItemView {
     const file = this.app.vault.getAbstractFileByPath(entry.path);
     if (file) {
       await this.app.workspace.getLeaf(false).openFile(file as TFile);
+    }
+  }
+
+  private async handleEntryMove(entry: DBEntry, newGroup: string) {
+    if (!this.editor || !this.viewData?.viewConfig.groupBy) return;
+
+    const groupProp =
+      this.viewData.viewConfig.groupBy.propertyName ?? this.viewData.viewConfig.groupBy.propertyId;
+
+    try {
+      await this.editor.moveEntryToGroup(entry, groupProp, newGroup);
+      new Notice(`${entry.title} → ${newGroup}`);
+      await this.loadData(this.viewData.viewConfig.id);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`이동 실패: ${msg}`);
+    }
+  }
+
+  private async handleDateClick(date: string) {
+    if (!this.editor) return;
+
+    try {
+      const path = await this.editor.createEntry(this.folderPath, `새 항목 ${date}`, {
+        [this.viewData?.viewConfig.datePropertyName ?? "date"]: date,
+      });
+      new Notice(`생성: ${path}`);
+      await this.loadData(this.viewData?.viewConfig.id);
+
+      const file = this.app.vault.getAbstractFileByPath(path);
+      if (file) {
+        await this.app.workspace.getLeaf(false).openFile(file as TFile);
+      }
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      new Notice(`생성 실패: ${msg}`);
     }
   }
 

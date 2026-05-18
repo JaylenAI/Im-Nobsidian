@@ -1,4 +1,5 @@
 export { ViewDataProvider } from "./view-data-provider.js";
+export { EntryEditor } from "./entry-editor.js";
 export {
   sortEntries,
   groupEntries,

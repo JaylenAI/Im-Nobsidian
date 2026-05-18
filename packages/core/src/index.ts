@@ -130,6 +130,7 @@ export type { WatchSyncOptions } from "./watcher/index.js";
 // View
 export {
   ViewDataProvider,
+  EntryEditor,
   sortEntries,
   groupEntries,
   extractCalendarEntries,

@@ -6,6 +6,7 @@ import {
   ConflictResolver,
   DEFAULT_CONFIG,
   ViewDataProvider,
+  EntryEditor,
 } from "@im-nobsidian/core";
 import type { Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { ImNobsidianSettingTab } from "./settings.js";
@@ -48,6 +49,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private vaultEventSyncing = false;
   private viewProvider: ViewDataProvider | null = null;
+  private entryEditor: EntryEditor | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -165,6 +167,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
       this.orchestrator = new SyncOrchestrator(config, this.stateDb, client, vaultAdapter);
       this.viewProvider = new ViewDataProvider(vaultAdapter);
+      this.entryEditor = new EntryEditor(vaultAdapter);
       this.updateStatusBar("ready");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -464,6 +467,7 @@ export default class ImNobsidianPlugin extends Plugin {
         provider: this.viewProvider,
         databaseId,
         folderPath,
+        editor: this.entryEditor ?? undefined,
       });
     }
   }
