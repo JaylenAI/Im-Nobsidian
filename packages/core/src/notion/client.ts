@@ -6,7 +6,12 @@ import type {
   PartialBlockObjectResponse,
   PageMarkdownResponse,
 } from "@notionhq/client/build/src/api-endpoints.js";
+import type {
+  DataSourceViewObjectResponse,
+  ListDatabaseViewsResponse,
+} from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper } from "./property-mapper.js";
+import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 
 export interface NotionClientOptions {
   readonly token: string;
@@ -363,6 +368,106 @@ export class NotionClient {
     return all;
   }
 
+  // ─── Views API ───
+
+  async listDatabaseViews(databaseId: string): Promise<ViewConfig[]> {
+    const allViews: ViewConfig[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await this.withRateLimit(() =>
+        this.client.views.list({
+          database_id: databaseId,
+          start_cursor: cursor,
+          page_size: 100,
+        }),
+      );
+
+      const viewRefs = (response as ListDatabaseViewsResponse).results;
+      for (const ref of viewRefs) {
+        try {
+          const detail = await this.getView(ref.id as string);
+          if (detail) allViews.push(detail);
+        } catch {
+          // 뷰 상세 조회 실패 시 스킵
+        }
+      }
+
+      cursor = (response as ListDatabaseViewsResponse).next_cursor as string | undefined;
+    } while (cursor);
+
+    return allViews;
+  }
+
+  async getView(viewId: string): Promise<ViewConfig | null> {
+    const view = await this.withRateLimit(() => this.client.views.retrieve({ view_id: viewId }));
+
+    const v = view as DataSourceViewObjectResponse;
+    if (!v.type) return null;
+
+    return parseViewResponse(v);
+  }
+
+  async getDatabaseViewsConfig(databaseId: string): Promise<DatabaseViewsConfig> {
+    const views = await this.listDatabaseViews(databaseId);
+    return {
+      databaseId,
+      lastSynced: new Date().toISOString(),
+      views,
+    };
+  }
+
+  // ─── Cover / Icon Extraction ───
+
+  extractCover(page: PageObjectResponse): PageCover | null {
+    const raw = page as unknown as {
+      cover?: {
+        type: string;
+        file?: { url: string; expiry_time?: string };
+        external?: { url: string };
+      };
+    };
+    if (!raw.cover) return null;
+
+    if (raw.cover.type === "file" && raw.cover.file) {
+      return {
+        type: "file",
+        url: raw.cover.file.url,
+        expiryTime: raw.cover.file.expiry_time,
+      };
+    }
+    if (raw.cover.type === "external" && raw.cover.external) {
+      return { type: "external", url: raw.cover.external.url };
+    }
+    return null;
+  }
+
+  extractIcon(page: PageObjectResponse): PageIcon | null {
+    const raw = page as unknown as {
+      icon?: {
+        type: string;
+        emoji?: string;
+        external?: { url: string };
+        file?: { url: string; expiry_time?: string };
+        icon?: { name: string; color?: string };
+      };
+    };
+    if (!raw.icon) return null;
+
+    switch (raw.icon.type) {
+      case "emoji":
+        return { type: "emoji", value: raw.icon.emoji! };
+      case "external":
+        return { type: "external", value: raw.icon.external!.url };
+      case "file":
+        return { type: "file", value: raw.icon.file!.url };
+      case "icon":
+        return { type: "icon", value: raw.icon.icon!.name, color: raw.icon.icon!.color };
+      default:
+        return null;
+    }
+  }
+
   // ─── Property Extraction ───
 
   extractTitle(page: PageObjectResponse): string {
@@ -431,4 +536,77 @@ function extractRetryAfter(error: unknown): number | null {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseViewResponse(v: DataSourceViewObjectResponse): ViewConfig {
+  const config: ViewConfig = {
+    id: v.id as string,
+    name: v.name,
+    type: v.type,
+    dataSourceId: v.data_source_id,
+    filter: v.filter,
+    sorts: v.sorts?.map((s) => {
+      if ("property" in s) {
+        return { property: s.property, direction: s.direction };
+      }
+      return { timestamp: s.timestamp, direction: s.direction };
+    }),
+    ...extractViewTypeConfig(v.configuration),
+  };
+  return config;
+}
+
+type MutableViewConfig = {
+  -readonly [K in keyof ViewConfig]: ViewConfig[K];
+};
+
+function extractViewTypeConfig(
+  cfg: DataSourceViewObjectResponse["configuration"],
+): Partial<MutableViewConfig> {
+  if (!cfg) return {};
+
+  const result: Partial<MutableViewConfig> = {};
+
+  if ("properties" in cfg && cfg.properties) {
+    result.properties = cfg.properties.map((p) => ({
+      propertyId: p.property_id,
+      propertyName: p.property_name,
+      visible: p.visible,
+      width: p.width,
+      wrap: p.wrap,
+    }));
+  }
+
+  if ("group_by" in cfg && cfg.group_by) {
+    const gb = cfg.group_by;
+    result.groupBy = {
+      type: gb.type,
+      propertyId: gb.property_id,
+      propertyName: "property_name" in gb ? (gb.property_name as string) : undefined,
+      sort:
+        "sort" in gb && gb.sort
+          ? ((gb.sort as { type: string }).type as "manual" | "ascending" | "descending")
+          : undefined,
+      hideEmptyGroups: "hide_empty_groups" in gb ? (gb.hide_empty_groups as boolean) : undefined,
+    };
+  }
+
+  if ("cover" in cfg && cfg.cover) {
+    result.cover = {
+      type: cfg.cover.type,
+      propertyId: cfg.cover.property_id,
+    };
+  }
+
+  if ("cover_size" in cfg) result.coverSize = cfg.cover_size;
+  if ("cover_aspect" in cfg) result.coverAspect = cfg.cover_aspect;
+
+  if ("date_property_id" in cfg) {
+    result.datePropertyId = cfg.date_property_id;
+    result.datePropertyName = cfg.date_property_name;
+  }
+
+  if ("view_range" in cfg) result.viewRange = cfg.view_range;
+
+  return result;
 }

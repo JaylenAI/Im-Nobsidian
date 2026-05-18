@@ -1,8 +1,27 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-16
+> 마지막 업데이트: 2026-05-18
 
-## v0.1.5 — Pull 변환 버그 수정 + E2E 검증 완료 (Current)
+## v0.2.0 — DB 뷰 렌더링 (진행중)
+
+### Phase 1: DB 메타데이터 + Views API 통합 ✅ 완료
+
+- Notion Views API (SDK v5.21.0) 연동: `listDatabaseViews()`, `getView()`, `getDatabaseViewsConfig()`
+- `extractCover()`, `extractIcon()`: 페이지 커버/아이콘 추출
+- `pullDatabaseViews()`: 뷰 설정 `.im-nobsidian/db-views.json` 캐시
+- `pullDatabasePage()`: 커버 이미지 로컬 다운로드 + 아이콘 프론트매터 저장
+- 494 테스트 전부 통과 (기존 486 + 신규 8)
+
+### 다음: Phase 2 — 뷰 렌더링 코어 엔진 (Svelte)
+
+- ViewDataProvider: db-views.json + 로컬 .md → 뷰 렌더링용 데이터 구성
+- Gallery/Board/Table/Calendar 4종 Svelte 컴포넌트
+- obsidian-projects (marcusolsson) 아키텍처 참고
+- 상세: `docs/06-devlog/PHASE_PLAN_v0.2.0_VIEW_RENDERING.md`
+
+---
+
+## v0.1.5 — Pull 변환 버그 수정 + E2E 검증 완료
 
 Im-Nobsidian v0.1.5는 Pull 시 콜아웃/테이블/수식/첨자/날짜 변환 버그 5건을 수정하고,
 7개 파일 13종 포맷 + 실전형 3파일로 E2E 라운드트립 검증을 완료했습니다.

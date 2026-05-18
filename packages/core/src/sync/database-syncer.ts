@@ -4,6 +4,7 @@ import type { NotionClient } from "../notion/client.js";
 import type { VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { FailedOperation } from "../types/sync.js";
+import type { DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
@@ -103,6 +104,8 @@ export class DatabaseSyncer {
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
 
+    await this.pullDatabaseViews(dbConfig);
+
     const pages = await this.notionClient.queryAllDatabasePages(
       dbConfig.databaseId,
       dbConfig.pullFilter,
@@ -137,6 +140,30 @@ export class DatabaseSyncer {
     return { created, updated, failed };
   }
 
+  private async pullDatabaseViews(dbConfig: DatabaseSyncConfig): Promise<void> {
+    try {
+      const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
+      const configPath = ".im-nobsidian/db-views.json";
+      await this.vaultFs.ensureFolder(".im-nobsidian");
+
+      let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
+      try {
+        const existing = await this.vaultFs.readFile(configPath);
+        allViewsConfigs = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
+      } catch {
+        // 파일 없으면 빈 객체
+      }
+
+      allViewsConfigs[dbConfig.databaseId] = viewsConfig;
+      await this.vaultFs.writeFile(configPath, JSON.stringify(allViewsConfigs, null, 2));
+      getLogger().info(
+        `[DB Sync] 뷰 설정 ${viewsConfig.views.length}개 저장: ${dbConfig.databaseId}`,
+      );
+    } catch (error) {
+      getLogger().warn(`[DB Sync] 뷰 설정 Pull 실패 (계속 진행):`, error);
+    }
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -148,6 +175,30 @@ export class DatabaseSyncer {
       (page as unknown as { properties: Record<string, unknown> }).properties,
     );
     properties.title = title;
+
+    const cover = this.notionClient.extractCover(page);
+    const icon = this.notionClient.extractIcon(page);
+
+    if (cover) {
+      try {
+        const coverResult = await this.imageHandler.downloadAllImages(
+          `![cover](${cover.url})`,
+          `${safeName}-cover`,
+        );
+        const localUrlMatch = coverResult.content.match(/!\[cover\]\((.+?)\)/);
+        if (localUrlMatch?.[1]) {
+          properties.cover = localUrlMatch[1];
+        } else {
+          properties.cover = cover.url;
+        }
+      } catch {
+        properties.cover = cover.url;
+      }
+    }
+
+    if (icon) {
+      properties.icon = icon.value;
+    }
 
     let markdown = "";
     try {

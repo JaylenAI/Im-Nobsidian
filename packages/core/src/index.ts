@@ -33,6 +33,16 @@ export type {
 
 export { ConfigSchema, DEFAULT_CONFIG } from "./types/config.js";
 export type { DatabaseSyncConfig } from "./types/config.js";
+export type {
+  ViewType,
+  ViewConfig,
+  ViewPropertyConfig,
+  CoverConfig,
+  GroupByConfig,
+  DatabaseViewsConfig,
+  PageCover,
+  PageIcon,
+} from "./types/view.js";
 
 // Config
 export { ConfigManager } from "./config/index.js";

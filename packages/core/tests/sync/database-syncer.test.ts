@@ -72,7 +72,14 @@ function createMockNotionClient() {
     }),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
     extractTitle: vi.fn().mockReturnValue("Test Page"),
+    extractCover: vi.fn().mockReturnValue(null),
+    extractIcon: vi.fn().mockReturnValue(null),
     uploadFile: vi.fn().mockResolvedValue("upload-id"),
+    getDatabaseViewsConfig: vi.fn().mockResolvedValue({
+      databaseId: "db-123",
+      lastSynced: "2026-05-18T00:00:00.000Z",
+      views: [],
+    }),
   };
 }
 
@@ -170,7 +177,6 @@ describe("DatabaseSyncer", () => {
 
       expect(result.created).toBe(1);
       expect(result.updated).toBe(0);
-      expect(mockVaultFs.writeFile).toHaveBeenCalledTimes(1);
       expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
         "databases/tasks/Task One.md",
         expect.stringContaining("title: Task One"),
@@ -204,7 +210,10 @@ describe("DatabaseSyncer", () => {
 
       expect(result.created).toBe(0);
       expect(result.updated).toBe(0);
-      expect(mockVaultFs.writeFile).not.toHaveBeenCalled();
+      expect(mockVaultFs.writeFile).not.toHaveBeenCalledWith(
+        expect.stringContaining("databases/tasks/"),
+        expect.any(String),
+      );
     });
 
     it("lastEdited가 다르면 업데이트", async () => {
@@ -229,7 +238,10 @@ describe("DatabaseSyncer", () => {
       const result = await syncer.pullAll();
 
       expect(result.updated).toBe(1);
-      expect(mockVaultFs.writeFile).toHaveBeenCalledTimes(1);
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "databases/tasks/Updated Task.md",
+        expect.any(String),
+      );
     });
 
     it("속성을 프론트매터로 변환하여 포함", async () => {
@@ -252,7 +264,11 @@ describe("DatabaseSyncer", () => {
 
       await syncer.pullAll();
 
-      const writtenContent = (mockVaultFs.writeFile as any).mock.calls[0][1] as string;
+      const mdCall = (mockVaultFs.writeFile as any).mock.calls.find((c: string[]) =>
+        c[0].endsWith(".md"),
+      );
+      expect(mdCall).toBeTruthy();
+      const writtenContent = mdCall[1] as string;
       expect(writtenContent).toContain("title: My Task");
       expect(writtenContent).toContain("Status: Done");
       expect(writtenContent).toContain("Priority: 3");
@@ -279,7 +295,11 @@ describe("DatabaseSyncer", () => {
 
       await syncer.pullAll();
 
-      const writtenContent = (mockVaultFs.writeFile as any).mock.calls[0][1] as string;
+      const mdCall = (mockVaultFs.writeFile as any).mock.calls.find((c: string[]) =>
+        c[0].endsWith(".md"),
+      );
+      expect(mdCall).toBeTruthy();
+      const writtenContent = mdCall[1] as string;
       expect(writtenContent).toContain("## Section 1");
       expect(writtenContent).toContain("Some content here.");
       expect(writtenContent).toContain("- Item 1");

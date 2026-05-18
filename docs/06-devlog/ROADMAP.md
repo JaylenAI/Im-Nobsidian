@@ -2,24 +2,36 @@
 
 > Last updated: 2026-05-17
 
-## Current State (v0.1.5)
+## Current State (v0.2.0-dev)
 
-True bidirectional Obsidian <-> Notion sync via CLI.
-486 tests passing, 25+ block types, 21 property read types, 15 property write types.
+494 tests passing, 25+ block types, 21 property read types, 15 property write types.
 다중 데이터베이스 동기화(DatabaseSyncer), Standalone 파일 동기화, 부분 업데이트 3단계 폴백.
-Pull 변환 버그 5건 수정 (콜아웃/테이블/수식/첨자/날짜).
-13종 포맷 E2E 라운드트립 검증 완료. 동기화 커버리지 ~95% 달성.
+Notion Views API 연동 완료 (Phase 1). DB 뷰 렌더링 엔진 개발 중.
+동기화 커버리지 ~95% 달성.
 
 ---
 
 ## Release Timeline
 
 ```
-v0.1.5  <-- Current — Pull 변환 버그 수정 + E2E 검증 완료
-v0.2.0  --> Next — Notion DB 뷰 렌더링 엔진 (Gallery/Board/Calendar/Table)
-v0.5.0  --> Obsidian community plugin (sql.js WASM + 뷰 렌더링 UI)
+v0.1.5  --- 완료 — Pull 변환 버그 수정 + E2E 검증 완료
+v0.2.0  <-- Current — Notion DB 뷰 렌더링 엔진 (Gallery/Board/Calendar/Table)
+v0.5.0  --> Next — Obsidian community plugin (sql.js WASM + 뷰 렌더링 UI)
 v1.0.0  --> Multi-workspace, 1000+ notes, OAuth
 ```
+
+### v0.2.0 Phase 진행 상황
+
+| Phase   | 내용                           | 상태    |
+| ------- | ------------------------------ | ------- |
+| Phase 1 | DB 메타데이터 + Views API 통합 | ✅ 완료 |
+| Phase 2 | 뷰 렌더링 코어 엔진 (Svelte)   | 🔜 다음 |
+| Phase 3 | 옵시디언 통합 레이어           | 대기    |
+| Phase 4 | 양방향 상호작용                | 대기    |
+| Phase 5 | 테스트 + v0.2.0 릴리스         | 대기    |
+
+상세 계획: `docs/06-devlog/PHASE_PLAN_v0.2.0_VIEW_RENDERING.md`
+기술 결정: `docs/02-architecture/adr/005-db-view-rendering-tech.md`
 
 ---
 
