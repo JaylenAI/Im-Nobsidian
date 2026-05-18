@@ -1,12 +1,13 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-17
+> Last updated: 2026-05-18
 
 ## Current State (v0.2.0-dev)
 
-494 tests passing, 25+ block types, 21 property read types, 15 property write types.
+553 tests passing, 25+ block types, 21 property read types, 15 property write types.
 다중 데이터베이스 동기화(DatabaseSyncer), Standalone 파일 동기화, 부분 업데이트 3단계 폴백.
-Notion Views API 연동 완료 (Phase 1). DB 뷰 렌더링 엔진 개발 중.
+Notion Views API 연동 + DB 뷰 렌더링 엔진(Gallery/Board/Table/Calendar) 코드 완성.
+**Obsidian 플러그인 프로덕션 릴리스 진행 중** (sql.js 전환 + UI 완성 + 커뮤니티 등록).
 동기화 커버리지 ~95% 달성.
 
 ---
@@ -15,12 +16,11 @@ Notion Views API 연동 완료 (Phase 1). DB 뷰 렌더링 엔진 개발 중.
 
 ```
 v0.1.5  --- 완료 — Pull 변환 버그 수정 + E2E 검증 완료
-v0.2.0  <-- Current — Notion DB 뷰 렌더링 엔진 (Gallery/Board/Calendar/Table)
-v0.5.0  --> Next — Obsidian community plugin (sql.js WASM + 뷰 렌더링 UI)
-v1.0.0  --> Multi-workspace, 1000+ notes, OAuth
+v0.2.0  <-- Current — 플러그인 프로덕션 릴리스 (sql.js + UI + 커뮤니티 등록)
+v1.0.0  --> Next — Multi-workspace, 1000+ notes, OAuth, 모바일 지원
 ```
 
-### v0.2.0 Phase 진행 상황
+### v0.2.0 — 뷰 렌더링 엔진 (완료)
 
 | Phase   | 내용                           | 상태    |
 | ------- | ------------------------------ | ------- |
@@ -28,10 +28,26 @@ v1.0.0  --> Multi-workspace, 1000+ notes, OAuth
 | Phase 2 | 뷰 렌더링 코어 엔진 (Svelte 5) | ✅ 완료 |
 | Phase 3 | 옵시디언 통합 레이어           | ✅ 완료 |
 | Phase 4 | 양방향 상호작용                | ✅ 완료 |
-| Phase 5 | 테스트 + v0.2.0 릴리스         | ✅ 완료 |
+| Phase 5 | 테스트 + 문서                  | ✅ 완료 |
 
 상세 계획: `docs/06-devlog/PHASE_PLAN_v0.2.0_VIEW_RENDERING.md`
 기술 결정: `docs/02-architecture/adr/005-db-view-rendering-tech.md`
+
+### v0.2.0 — 플러그인 프로덕션 릴리스 (진행 중)
+
+| Phase   | 내용                             | 상태    |
+| ------- | -------------------------------- | ------- |
+| Phase 1 | StateDB 어댑터 인터페이스 분리   | ⬜ 대기 |
+| Phase 2 | sql.js WASM 어댑터 구현          | ⬜ 대기 |
+| Phase 3 | 커뮤니티 플러그인 심사 요건 충족 | ⬜ 대기 |
+| Phase 4 | 사이드바 + 리본 + UI 강화        | ⬜ 대기 |
+| Phase 5 | 뷰 렌더링 고급 기능              | ⬜ 대기 |
+| Phase 6 | 플러그인 테스트 50+              | ⬜ 대기 |
+| Phase 7 | 문서 + 폴리싱 + BRAT 베타        | ⬜ 대기 |
+| Phase 8 | 커뮤니티 플러그인 제출           | ⬜ 대기 |
+
+상세 계획: `docs/06-devlog/PHASE_PLAN_v0.2.0_PLUGIN_RELEASE.md`
+기술 결정: `docs/02-architecture/adr/006-sqljs-adapter-pattern.md`
 
 ---
 

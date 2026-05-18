@@ -2,7 +2,43 @@
 
 > 마지막 업데이트: 2026-05-18
 
-## v0.2.0 — DB 뷰 렌더링 엔진 완료
+## v0.2.0 — 플러그인 프로덕션 릴리스 (진행 중)
+
+### 목표
+
+sql.js 전환 → 플러그인 UI 완성 → 커뮤니티 플러그인 등록 → 오픈소스 배포.
+전세계 유일의 Notion Views API 기반 DB 뷰 렌더링 + 양방향 동기화 플러그인.
+
+### 진행 현황
+
+| Phase   | 내용                                     | 상태    |
+| ------- | ---------------------------------------- | ------- |
+| Phase 1 | StateDB 어댑터 인터페이스 분리           | ⬜ 대기 |
+| Phase 2 | sql.js WASM 어댑터 구현                  | ⬜ 대기 |
+| Phase 3 | 커뮤니티 심사 요건 충족 (결함 6건 수정)  | ⬜ 대기 |
+| Phase 4 | 사이드바 + 리본 + UI 강화                | ⬜ 대기 |
+| Phase 5 | 뷰 고급 기능 (Filter/편집/List/Timeline) | ⬜ 대기 |
+| Phase 6 | 플러그인 테스트 50+                      | ⬜ 대기 |
+| Phase 7 | 문서 + BRAT 베타                         | ⬜ 대기 |
+| Phase 8 | 커뮤니티 플러그인 제출                   | ⬜ 대기 |
+
+상세 계획: `docs/06-devlog/PHASE_PLAN_v0.2.0_PLUGIN_RELEASE.md`
+아키텍처 결정: `docs/02-architecture/adr/006-sqljs-adapter-pattern.md`
+
+### 치명적 결함 (수정 예정)
+
+| 문제                                   | 해결 Phase |
+| -------------------------------------- | ---------- |
+| better-sqlite3 → Electron 크래시       | Phase 1-2  |
+| manifest id에 "obsidian" 포함          | Phase 3    |
+| `containerEl.children[1]` 비공식 접근  | Phase 3    |
+| `createEl("h2")` → `setHeading()` 필요 | Phase 3    |
+| `detachLeavesOfType()` 레이아웃 리셋   | Phase 3    |
+| 버전 불일치 (manifest vs package.json) | Phase 3    |
+
+---
+
+## v0.2.0 — DB 뷰 렌더링 엔진 (완료)
 
 Notion DB의 Gallery/Board/Table/Calendar 뷰를 Obsidian 안에서 네이티브처럼 렌더링.
 Notion Views API로 뷰 설정 자동 조회 → Svelte 5 컴포넌트로 렌더링 → 양방향 상호작용.
