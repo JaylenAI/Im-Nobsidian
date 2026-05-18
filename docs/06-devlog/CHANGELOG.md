@@ -3,6 +3,25 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-05-18
+
+### Added
+
+- **Notion Views API 연동** — SDK v5.21.0 Views API 8개 엔드포인트 활용. DB 뷰 설정(필터/정렬/그룹핑/커버/아이콘) 자동 조회
+- **Gallery 뷰** — 커버 이미지 카드 그리드 (CSS Grid). 속성 표시, 아이콘, 색상 배지
+- **Board 뷰** — 칸반 보드. HTML5 DnD 카드 이동 → 프론트매터 속성 자동 변경
+- **Table 뷰** — 정렬 가능 테이블. 컬럼 너비 반영, select/status 색상 배지
+- **Calendar 뷰** — 월간 캘린더. 날짜별 엔트리 표시, 날짜 클릭 시 파일 생성
+- **ViewDataProvider** — db-views.json + 로컬 .md 프론트매터 → 뷰 렌더링 데이터 구성
+- **EntryEditor** — 프론트매터 속성 변경, 새 파일 생성, 그룹 이동, 날짜 변경
+- **filter-engine** — 정렬/그룹핑/캘린더 엔트리 추출/월별 필터
+- **color-map** — Notion 10색 전경/배경 CSS 변수 매핑
+- **Code block 프로세서** — `im-nobsidian-view` 코드블록 → 인라인 뷰 렌더링
+- **DatabaseItemView** — Obsidian ItemView로 DB 뷰 탭 열기
+- **Svelte 5 빌드** — esbuild-svelte 통합, CSS injected 모드
+- **extractCover/extractIcon** — 페이지 커버 이미지 로컬 다운로드 + 아이콘 추출
+- **553 테스트** — 뷰 관련 59개 테스트 추가
+
 ## [0.1.5] - 2026-05-17
 
 ### Fixed

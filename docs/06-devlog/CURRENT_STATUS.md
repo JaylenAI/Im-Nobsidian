@@ -2,22 +2,34 @@
 
 > 마지막 업데이트: 2026-05-18
 
-## v0.2.0 — DB 뷰 렌더링 (진행중)
+## v0.2.0 — DB 뷰 렌더링 엔진 완료
 
-### Phase 1: DB 메타데이터 + Views API 통합 ✅ 완료
+Notion DB의 Gallery/Board/Table/Calendar 뷰를 Obsidian 안에서 네이티브처럼 렌더링.
+Notion Views API로 뷰 설정 자동 조회 → Svelte 5 컴포넌트로 렌더링 → 양방향 상호작용.
 
-- Notion Views API (SDK v5.21.0) 연동: `listDatabaseViews()`, `getView()`, `getDatabaseViewsConfig()`
-- `extractCover()`, `extractIcon()`: 페이지 커버/아이콘 추출
-- `pullDatabaseViews()`: 뷰 설정 `.im-nobsidian/db-views.json` 캐시
-- `pullDatabasePage()`: 커버 이미지 로컬 다운로드 + 아이콘 프론트매터 저장
-- 494 테스트 전부 통과 (기존 486 + 신규 8)
+### 핵심 기능
 
-### 다음: Phase 2 — 뷰 렌더링 코어 엔진 (Svelte)
+| 기능                    | 상태    | 비고                                 |
+| ----------------------- | ------- | ------------------------------------ |
+| Notion Views API 연동   | ✅ 완료 | 10종 뷰 설정 자동 조회               |
+| 커버/아이콘 추출        | ✅ 완료 | 로컬 다운로드 + 프론트매터 저장      |
+| ViewDataProvider        | ✅ 완료 | db-views.json + .md → 뷰 데이터 구성 |
+| Gallery 뷰              | ✅ 완료 | 커버 이미지 카드 그리드 (CSS Grid)   |
+| Board 뷰                | ✅ 완료 | 칸반 보드 + HTML5 DnD 카드 이동      |
+| Table 뷰                | ✅ 완료 | 정렬 가능 테이블 + 색상 배지         |
+| Calendar 뷰             | ✅ 완료 | 월간 캘린더 + 날짜별 엔트리          |
+| Code block 프로세서     | ✅ 완료 | `im-nobsidian-view` 인라인 렌더링    |
+| ItemView 등록           | ✅ 완료 | 사이드바/탭에서 DB 뷰 열기           |
+| Board DnD → 속성 변경   | ✅ 완료 | 카드 이동 → 프론트매터 자동 업데이트 |
+| Calendar → 새 파일 생성 | ✅ 완료 | 날짜 클릭 → .md 생성 + 열기          |
+| EntryEditor             | ✅ 완료 | 속성 변경/파일 생성/그룹 이동        |
+| Notion 10색 CSS 매핑    | ✅ 완료 | 전경/배경 색상 변수                  |
+| Svelte 5 빌드 환경      | ✅ 완료 | esbuild-svelte + CSS injected        |
 
-- ViewDataProvider: db-views.json + 로컬 .md → 뷰 렌더링용 데이터 구성
-- Gallery/Board/Table/Calendar 4종 Svelte 컴포넌트
-- obsidian-projects (marcusolsson) 아키텍처 참고
-- 상세: `docs/06-devlog/PHASE_PLAN_v0.2.0_VIEW_RENDERING.md`
+### 테스트
+
+- **단위 테스트**: 553개 통과 (기존 494 + 뷰 59개)
+- **빌드**: 플러그인 + core 클린 빌드
 
 ---
 

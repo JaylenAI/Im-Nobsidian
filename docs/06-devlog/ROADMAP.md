@@ -25,10 +25,10 @@ v1.0.0  --> Multi-workspace, 1000+ notes, OAuth
 | Phase   | 내용                           | 상태    |
 | ------- | ------------------------------ | ------- |
 | Phase 1 | DB 메타데이터 + Views API 통합 | ✅ 완료 |
-| Phase 2 | 뷰 렌더링 코어 엔진 (Svelte)   | 🔜 다음 |
-| Phase 3 | 옵시디언 통합 레이어           | 대기    |
-| Phase 4 | 양방향 상호작용                | 대기    |
-| Phase 5 | 테스트 + v0.2.0 릴리스         | 대기    |
+| Phase 2 | 뷰 렌더링 코어 엔진 (Svelte 5) | ✅ 완료 |
+| Phase 3 | 옵시디언 통합 레이어           | ✅ 완료 |
+| Phase 4 | 양방향 상호작용                | ✅ 완료 |
+| Phase 5 | 테스트 + v0.2.0 릴리스         | ✅ 완료 |
 
 상세 계획: `docs/06-devlog/PHASE_PLAN_v0.2.0_VIEW_RENDERING.md`
 기술 결정: `docs/02-architecture/adr/005-db-view-rendering-tech.md`
