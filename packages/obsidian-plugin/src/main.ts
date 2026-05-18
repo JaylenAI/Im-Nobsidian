@@ -1,15 +1,22 @@
-import { Plugin, Notice } from "obsidian";
+import { Plugin, Notice, MarkdownRenderChild, type TFile } from "obsidian";
 import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
   ConflictResolver,
   DEFAULT_CONFIG,
+  ViewDataProvider,
 } from "@im-nobsidian/core";
 import type { Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
+import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
+
+interface DatabaseConfig {
+  databaseId: string;
+  localFolder: string;
+}
 
 interface ImNobsidianSettings {
   token: string;
@@ -19,6 +26,7 @@ interface ImNobsidianSettings {
   autoSyncInterval: number;
   conflictStrategy: "local-first" | "remote-first" | "manual";
   attachments: string;
+  databases?: DatabaseConfig[];
 }
 
 const DEFAULT_SETTINGS: ImNobsidianSettings = {
@@ -39,6 +47,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private vaultEventSyncing = false;
+  private viewProvider: ViewDataProvider | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -74,6 +83,20 @@ export default class ImNobsidianPlugin extends Plugin {
       callback: () => this.resolveConflicts(),
     });
 
+    this.addCommand({
+      id: "im-nobsidian-db-view",
+      name: "DB 뷰 열기",
+      callback: () => this.openDatabaseView(),
+    });
+
+    this.registerView(DATABASE_VIEW_TYPE, (leaf) => new DatabaseItemView(leaf));
+
+    this.registerMarkdownCodeBlockProcessor("im-nobsidian-view", (source, el, ctx) => {
+      const child = new MarkdownRenderChild(el);
+      ctx.addChild(child);
+      void this.renderInlineView(source.trim(), el);
+    });
+
     this.statusBarEl = this.addStatusBarItem();
     this.updateStatusBar("ready");
 
@@ -92,6 +115,7 @@ export default class ImNobsidianPlugin extends Plugin {
     this.stopAutoSync();
     this.clearVaultDebounce();
     this.stateDb?.close();
+    this.app.workspace.detachLeavesOfType(DATABASE_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -140,6 +164,7 @@ export default class ImNobsidianPlugin extends Plugin {
       };
 
       this.orchestrator = new SyncOrchestrator(config, this.stateDb, client, vaultAdapter);
+      this.viewProvider = new ViewDataProvider(vaultAdapter);
       this.updateStatusBar("ready");
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -411,4 +436,128 @@ export default class ImNobsidianPlugin extends Plugin {
 
     this.statusBarEl.setText(labels[state] ?? "Im-Nobsidian");
   }
+
+  private async openDatabaseView(): Promise<void> {
+    if (!this.viewProvider) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+
+    const allConfigs = await this.viewProvider.loadAllViewConfigs();
+    const dbIds = Object.keys(allConfigs);
+
+    if (dbIds.length === 0) {
+      new Notice("Im-Nobsidian: DB 뷰 설정이 없습니다. Pull을 먼저 실행해주세요.");
+      return;
+    }
+
+    const databaseId = dbIds[0]!;
+    const dbConfig = this.settings.databases?.find((d) => d.databaseId === databaseId);
+    const folderPath = dbConfig?.localFolder ?? "";
+
+    const leaf = this.app.workspace.getLeaf("tab");
+    await leaf.setViewState({ type: DATABASE_VIEW_TYPE, active: true });
+
+    const view = leaf.view;
+    if (view instanceof DatabaseItemView) {
+      await view.setViewParams({
+        provider: this.viewProvider,
+        databaseId,
+        folderPath,
+      });
+    }
+  }
+
+  private async renderInlineView(source: string, container: HTMLElement): Promise<void> {
+    if (!this.viewProvider) {
+      container.createEl("p", {
+        text: "Im-Nobsidian: 설정을 먼저 완료해주세요.",
+        cls: "im-view-error",
+      });
+      return;
+    }
+
+    try {
+      const params = parseViewParams(source);
+      if (!params.databaseId) {
+        container.createEl("p", { text: "database 파라미터가 필요합니다.", cls: "im-view-error" });
+        return;
+      }
+
+      const viewData = params.viewId
+        ? await this.viewProvider.buildViewData(
+            params.databaseId,
+            params.viewId,
+            params.folder ?? "",
+          )
+        : await this.viewProvider.buildDefaultViewData(params.databaseId, params.folder ?? "");
+
+      if (!viewData) {
+        container.createEl("p", { text: "뷰 데이터를 찾을 수 없습니다.", cls: "im-view-error" });
+        return;
+      }
+
+      const { mount } = await import("svelte");
+      const { default: ViewContainer } = await import("./views/ViewContainer.svelte");
+
+      const configs = await this.viewProvider.getViewConfigs(params.databaseId);
+
+      mount(ViewContainer, {
+        target: container,
+        props: {
+          data: viewData,
+          availableViews: configs?.views ?? [],
+          onViewChange: async (viewId: string) => {
+            container.empty();
+            const newData = await this.viewProvider!.buildViewData(
+              params.databaseId!,
+              viewId,
+              params.folder ?? "",
+            );
+            if (newData) {
+              mount(ViewContainer, {
+                target: container,
+                props: {
+                  data: newData,
+                  availableViews: configs?.views ?? [],
+                  onEntryClick: (entry) => {
+                    const file = this.app.vault.getAbstractFileByPath(entry.path);
+                    if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
+                  },
+                },
+              });
+            }
+          },
+          onEntryClick: (entry) => {
+            const file = this.app.vault.getAbstractFileByPath(entry.path);
+            if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
+          },
+        },
+      });
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      container.createEl("p", { text: `뷰 렌더링 실패: ${msg}`, cls: "im-view-error" });
+    }
+  }
+}
+
+interface ViewBlockParams {
+  databaseId?: string;
+  viewId?: string;
+  folder?: string;
+}
+
+function parseViewParams(source: string): ViewBlockParams {
+  const params: ViewBlockParams = {};
+  for (const line of source.split("\n")) {
+    const [key, ...rest] = line.split(":");
+    const value = rest.join(":").trim();
+    if (!key || !value) continue;
+
+    const k = key.trim().toLowerCase();
+    if (k === "database") params.databaseId = value;
+    else if (k === "view") params.viewId = value;
+    else if (k === "folder") params.folder = value;
+  }
+  return params;
 }

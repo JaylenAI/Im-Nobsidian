@@ -83,7 +83,7 @@
       {#if cell.day === null}
         <div class="im-calendar-cell im-calendar-cell-empty"></div>
       {:else}
-        <button
+        <div
           class="im-calendar-cell"
           class:im-calendar-cell-today={
             cell.day === today.getDate() &&
@@ -98,23 +98,34 @@
               onDateClick?.(formatDate(cell.day));
             }
           }}
-          type="button"
+          onkeydown={(e) => {
+            if (e.key === "Enter") {
+              if (cell.entries.length === 1) onEntryClick?.(cell.entries[0]!.entry);
+              else if (cell.day) onDateClick?.(formatDate(cell.day));
+            }
+          }}
+          role="button"
+          tabindex="0"
         >
           <span class="im-calendar-day">{cell.day}</span>
           {#if cell.entries.length > 0}
             <div class="im-calendar-entries">
               {#each cell.entries.slice(0, 3) as ce (ce.entry.path)}
-                <div class="im-calendar-entry" onclick={(e) => { e.stopPropagation(); onEntryClick?.(ce.entry); }}>
+                <button
+                  class="im-calendar-entry"
+                  type="button"
+                  onclick={(e) => { e.stopPropagation(); onEntryClick?.(ce.entry); }}
+                >
                   <IconDisplay icon={ce.entry.icon} size={12} />
                   <span class="im-calendar-entry-title">{ce.entry.title}</span>
-                </div>
+                </button>
               {/each}
               {#if cell.entries.length > 3}
                 <span class="im-calendar-more">+{cell.entries.length - 3}</span>
               {/if}
             </div>
           {/if}
-        </button>
+        </div>
       {/if}
     {/each}
   </div>

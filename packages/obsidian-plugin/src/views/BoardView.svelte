@@ -64,19 +64,20 @@
 
       <div class="im-board-column-body">
         {#each group.entries as entry (entry.path)}
-          <button
+          <div
             class="im-board-card"
             draggable="true"
             ondragstart={(e) => handleDragStart(e, entry)}
             onclick={() => onEntryClick?.(entry)}
-            type="button"
-            role="listitem"
+            onkeydown={(e) => { if (e.key === "Enter") onEntryClick?.(entry); }}
+            role="button"
+            tabindex="0"
           >
             <div class="im-board-card-title">
               <IconDisplay icon={entry.icon} size={16} />
               <span>{entry.title}</span>
             </div>
-          </button>
+          </div>
         {/each}
       </div>
     </div>
