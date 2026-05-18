@@ -127,6 +127,29 @@ export type {
 export { FileWatcher, WatchSyncService } from "./watcher/index.js";
 export type { WatchSyncOptions } from "./watcher/index.js";
 
+// View
+export {
+  ViewDataProvider,
+  sortEntries,
+  groupEntries,
+  extractCalendarEntries,
+  filterByMonth,
+  getVisibleProperties,
+  getNotionColor,
+  getNotionBgColor,
+  generateColorCSS,
+} from "./view/index.js";
+export type {
+  DBEntry,
+  PropertyValue,
+  GroupedEntries,
+  CalendarEntry,
+  NotionColor,
+  ViewRenderData,
+  PropertySchema,
+  PropertyOption,
+} from "./view/index.js";
+
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual } from "./utils/id.js";
