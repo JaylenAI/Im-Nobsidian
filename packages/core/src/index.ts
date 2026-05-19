@@ -33,6 +33,16 @@ export type {
 
 export { ConfigSchema, DEFAULT_CONFIG } from "./types/config.js";
 export type { DatabaseSyncConfig } from "./types/config.js";
+export type {
+  ViewType,
+  ViewConfig,
+  ViewPropertyConfig,
+  CoverConfig,
+  GroupByConfig,
+  DatabaseViewsConfig,
+  PageCover,
+  PageIcon,
+} from "./types/view.js";
 
 // Config
 export { ConfigManager } from "./config/index.js";
@@ -116,6 +126,30 @@ export type {
 // Watcher
 export { FileWatcher, WatchSyncService } from "./watcher/index.js";
 export type { WatchSyncOptions } from "./watcher/index.js";
+
+// View
+export {
+  ViewDataProvider,
+  EntryEditor,
+  sortEntries,
+  groupEntries,
+  extractCalendarEntries,
+  filterByMonth,
+  getVisibleProperties,
+  getNotionColor,
+  getNotionBgColor,
+  generateColorCSS,
+} from "./view/index.js";
+export type {
+  DBEntry,
+  PropertyValue,
+  GroupedEntries,
+  CalendarEntry,
+  NotionColor,
+  ViewRenderData,
+  PropertySchema,
+  PropertyOption,
+} from "./view/index.js";
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";

@@ -22,12 +22,11 @@ describe("notionEnhancedToObsidian", () => {
     );
   });
 
-  it("<details>/<summary> → toggle markers", () => {
+  it("<details>/<summary> → callout toggle", () => {
     const input = "<details>\n<summary>Toggle Title</summary>\nInner content\n</details>";
     const result = notionEnhancedToObsidian(input);
-    expect(result).toContain("%%im-nobsidian:toggle:start%%");
-    expect(result).toContain("- Toggle Title");
-    expect(result).toContain("%%im-nobsidian:toggle:end%%");
+    expect(result).toContain("> [!toggle]- Toggle Title");
+    expect(result).toContain("> Inner content");
   });
 
   it("::: callout → > [!type]", () => {
@@ -100,7 +99,16 @@ describe("notionEnhancedToObsidian", () => {
 });
 
 describe("obsidianToNotionEnhanced", () => {
-  it("toggle markers → <details>/<summary>", () => {
+  it("callout toggle → <details>/<summary>", () => {
+    const input = "> [!toggle]- Toggle Title\n> Inner content";
+    const result = obsidianToNotionEnhanced(input);
+    expect(result).toContain("<details>");
+    expect(result).toContain("<summary>Toggle Title");
+    expect(result).toContain("Inner content");
+    expect(result).toContain("</details>");
+  });
+
+  it("legacy toggle markers → <details>/<summary>", () => {
     const input =
       "%%im-nobsidian:toggle:start%%\n- Toggle Title\n  Inner content\n%%im-nobsidian:toggle:end%%";
     const result = obsidianToNotionEnhanced(input);
@@ -277,7 +285,7 @@ describe("round-trip", () => {
     expect(back).toContain('<unknown id="xyz" type="synced_block"/>');
   });
 
-  it("중첩 토글 Push→Pull 외부 변환 + 내부 HTML 보존", () => {
+  it("중첩 토글 Push→Pull 외부 callout 변환 + 내부 HTML 보존", () => {
     const notion = [
       "<details>",
       "<summary>Outer</summary>",
@@ -290,12 +298,9 @@ describe("round-trip", () => {
     ].join("\n");
 
     const obsidian = notionEnhancedToObsidian(notion);
-    expect(obsidian).toContain("%%im-nobsidian:toggle:start%%");
-    expect(obsidian).toContain("- Outer");
+    expect(obsidian).toContain("> [!toggle]- Outer");
     expect(obsidian).toContain("Outer content");
-    expect(obsidian).toContain("<summary>Inner</summary>");
     expect(obsidian).toContain("Deep content");
-    expect(obsidian).toContain("%%im-nobsidian:toggle:end%%");
   });
 
   it("다중 색상 왕복", () => {

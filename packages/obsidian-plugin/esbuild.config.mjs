@@ -1,5 +1,6 @@
 import esbuild from "esbuild";
 import builtins from "builtin-modules";
+import sveltePlugin from "esbuild-svelte";
 import { copyFileSync } from "node:fs";
 
 const prod = process.argv[2] === "production";
@@ -27,6 +28,11 @@ esbuild
       ...builtins,
       ...nodeBuiltinsWithPrefix,
       "better-sqlite3",
+    ],
+    plugins: [
+      sveltePlugin({
+        compilerOptions: { css: "injected" },
+      }),
     ],
     format: "cjs",
     target: "es2022",

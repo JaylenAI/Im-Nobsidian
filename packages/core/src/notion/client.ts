@@ -6,7 +6,12 @@ import type {
   PartialBlockObjectResponse,
   PageMarkdownResponse,
 } from "@notionhq/client/build/src/api-endpoints.js";
+import type {
+  DataSourceViewObjectResponse,
+  ListDatabaseViewsResponse,
+} from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper } from "./property-mapper.js";
+import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 
 export interface NotionClientOptions {
   readonly token: string;
@@ -17,6 +22,7 @@ export interface NotionClientOptions {
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
+  private readonly token: string;
   private readonly propertyMapper = new PropertyMapper();
 
   constructor(options: NotionClientOptions) {
@@ -24,6 +30,7 @@ export class NotionClient {
       auth: options.token,
       timeoutMs: options.timeoutMs ?? 30000,
     });
+    this.token = options.token;
     this.sema = new Sema(options.concurrency ?? 3);
   }
 
@@ -169,15 +176,35 @@ export class NotionClient {
 
   // ─── Database / DataSource ───
 
+  private async fetchDatabaseLegacy(databaseId: string): Promise<Record<string, unknown>> {
+    const cleanId = databaseId.replace(/-/g, "");
+    const formatted = `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20)}`;
+    const resp = await this.withRateLimit(async () => {
+      const r = await fetch(`https://api.notion.com/v1/databases/${formatted}`, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+        },
+      });
+      if (!r.ok) throw new Error(`Database fetch failed: ${r.status}`);
+      return (await r.json()) as Record<string, unknown>;
+    });
+    return resp;
+  }
+
+  async getDatabaseTitle(databaseId: string): Promise<string> {
+    const db = await this.fetchDatabaseLegacy(databaseId);
+    const titleArr = db.title as Array<{ plain_text: string }> | undefined;
+    return titleArr?.[0]?.plain_text ?? "";
+  }
+
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.withRateLimit(() =>
-      this.client.databases.retrieve({ database_id: databaseId }),
-    );
-    const properties = (
-      db as unknown as { properties: Record<string, { id: string; type: string }> }
-    ).properties;
+    const db = await this.fetchDatabaseLegacy(databaseId);
+    const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
+    if (!properties) return {};
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -189,9 +216,10 @@ export class NotionClient {
     databaseId: string,
     options?: { startCursor?: string; pageSize?: number; filter?: unknown },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    const dsId = await this.getDataSourceId(databaseId);
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
-        data_source_id: databaseId,
+        data_source_id: dsId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? 100,
         filter: options?.filter as never,
@@ -232,6 +260,32 @@ export class NotionClient {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
 
+  async getFileBlockUrl(blockId: string): Promise<string | null> {
+    try {
+      const block = await this.withRateLimit(() =>
+        this.client.blocks.retrieve({ block_id: blockId }),
+      );
+      const b = block as unknown as {
+        type: string;
+        file?: { file?: { url: string }; external?: { url: string } };
+        pdf?: { file?: { url: string }; external?: { url: string } };
+        video?: { file?: { url: string }; external?: { url: string } };
+        audio?: { file?: { url: string }; external?: { url: string } };
+        image?: { file?: { url: string }; external?: { url: string } };
+      };
+      const media = b.file ?? b.pdf ?? b.video ?? b.audio ?? b.image;
+      return media?.file?.url ?? media?.external?.url ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getBlock(blockId: string): Promise<BlockObjectResponse> {
+    return this.withRateLimit(() =>
+      this.client.blocks.retrieve({ block_id: blockId }),
+    ) as Promise<BlockObjectResponse>;
+  }
+
   // ─── Block CRUD ───
 
   async listChildren(
@@ -265,6 +319,41 @@ export class NotionClient {
     } while (cursor);
 
     return blocks;
+  }
+
+  private static readonly CONTAINER_BLOCK_TYPES = new Set([
+    "column_list",
+    "column",
+    "callout",
+    "toggle",
+    "quote",
+  ]);
+
+  async fetchAllChildrenDeep(blockId: string): Promise<BlockObjectResponse[]> {
+    const directChildren = await this.fetchAllChildren(blockId);
+    const allBlocks: BlockObjectResponse[] = [...directChildren];
+
+    const toExpand = directChildren.filter((b) => {
+      if (!b.has_children) return false;
+      if (b.type === "child_page" || b.type === "child_database") return false;
+      if (NotionClient.CONTAINER_BLOCK_TYPES.has(b.type)) return true;
+      if (b.type === "synced_block") {
+        const sb = b as unknown as { synced_block: { synced_from: { block_id: string } | null } };
+        return sb.synced_block?.synced_from === null;
+      }
+      return true;
+    });
+
+    for (const container of toExpand) {
+      try {
+        const nested = await this.fetchAllChildrenDeep(container.id);
+        allBlocks.push(...nested);
+      } catch {
+        // 접근 권한 없는 블록 무시
+      }
+    }
+
+    return allBlocks;
   }
 
   async appendChildren(blockId: string, children: unknown[]): Promise<void> {
@@ -333,7 +422,7 @@ export class NotionClient {
   }
 
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
-    const blocks = await this.fetchAllChildren(parentId);
+    const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
 
     if (childPageBlocks.length === 0) return [];
@@ -342,15 +431,20 @@ export class NotionClient {
     return pages;
   }
 
+  async getChildDatabaseIds(parentId: string): Promise<string[]> {
+    const blocks = await this.fetchAllChildrenDeep(parentId);
+    return blocks.filter((b) => b.type === "child_database").map((b) => b.id);
+  }
+
   async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
 
     while (currentLevel.length > 0) {
-      const childArrays = await Promise.all(currentLevel.map((id) => this.getChildPages(id)));
       const nextLevel: string[] = [];
 
-      for (const children of childArrays) {
+      for (const id of currentLevel) {
+        const children = await this.getChildPages(id);
         for (const child of children) {
           all.push(child);
           nextLevel.push(child.id);
@@ -361,6 +455,106 @@ export class NotionClient {
     }
 
     return all;
+  }
+
+  // ─── Views API ───
+
+  async listDatabaseViews(databaseId: string): Promise<ViewConfig[]> {
+    const allViews: ViewConfig[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await this.withRateLimit(() =>
+        this.client.views.list({
+          database_id: databaseId,
+          start_cursor: cursor,
+          page_size: 100,
+        }),
+      );
+
+      const viewRefs = (response as ListDatabaseViewsResponse).results;
+      for (const ref of viewRefs) {
+        try {
+          const detail = await this.getView(ref.id as string);
+          if (detail) allViews.push(detail);
+        } catch {
+          // 뷰 상세 조회 실패 시 스킵
+        }
+      }
+
+      cursor = (response as ListDatabaseViewsResponse).next_cursor as string | undefined;
+    } while (cursor);
+
+    return allViews;
+  }
+
+  async getView(viewId: string): Promise<ViewConfig | null> {
+    const view = await this.withRateLimit(() => this.client.views.retrieve({ view_id: viewId }));
+
+    const v = view as DataSourceViewObjectResponse;
+    if (!v.type) return null;
+
+    return parseViewResponse(v);
+  }
+
+  async getDatabaseViewsConfig(databaseId: string): Promise<DatabaseViewsConfig> {
+    const views = await this.listDatabaseViews(databaseId);
+    return {
+      databaseId,
+      lastSynced: new Date().toISOString(),
+      views,
+    };
+  }
+
+  // ─── Cover / Icon Extraction ───
+
+  extractCover(page: PageObjectResponse): PageCover | null {
+    const raw = page as unknown as {
+      cover?: {
+        type: string;
+        file?: { url: string; expiry_time?: string };
+        external?: { url: string };
+      };
+    };
+    if (!raw.cover) return null;
+
+    if (raw.cover.type === "file" && raw.cover.file) {
+      return {
+        type: "file",
+        url: raw.cover.file.url,
+        expiryTime: raw.cover.file.expiry_time,
+      };
+    }
+    if (raw.cover.type === "external" && raw.cover.external) {
+      return { type: "external", url: raw.cover.external.url };
+    }
+    return null;
+  }
+
+  extractIcon(page: PageObjectResponse): PageIcon | null {
+    const raw = page as unknown as {
+      icon?: {
+        type: string;
+        emoji?: string;
+        external?: { url: string };
+        file?: { url: string; expiry_time?: string };
+        icon?: { name: string; color?: string };
+      };
+    };
+    if (!raw.icon) return null;
+
+    switch (raw.icon.type) {
+      case "emoji":
+        return { type: "emoji", value: raw.icon.emoji! };
+      case "external":
+        return { type: "external", value: raw.icon.external!.url };
+      case "file":
+        return { type: "file", value: raw.icon.file!.url };
+      case "icon":
+        return { type: "icon", value: raw.icon.icon!.name, color: raw.icon.icon!.color };
+      default:
+        return null;
+    }
   }
 
   // ─── Property Extraction ───
@@ -385,9 +579,18 @@ export class NotionClient {
 
   // ─── Internal ───
 
+  private lastRequestTime = 0;
+  private readonly minRequestInterval = 350;
+
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
     await this.sema.acquire();
     try {
+      const now = Date.now();
+      const elapsed = now - this.lastRequestTime;
+      if (elapsed < this.minRequestInterval) {
+        await sleep(this.minRequestInterval - elapsed);
+      }
+      this.lastRequestTime = Date.now();
       return await this.executeWithRetry(fn);
     } finally {
       this.sema.release();
@@ -431,4 +634,77 @@ function extractRetryAfter(error: unknown): number | null {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseViewResponse(v: DataSourceViewObjectResponse): ViewConfig {
+  const config: ViewConfig = {
+    id: v.id as string,
+    name: v.name,
+    type: v.type,
+    dataSourceId: v.data_source_id,
+    filter: v.filter,
+    sorts: v.sorts?.map((s) => {
+      if ("property" in s) {
+        return { property: s.property, direction: s.direction };
+      }
+      return { timestamp: s.timestamp, direction: s.direction };
+    }),
+    ...extractViewTypeConfig(v.configuration),
+  };
+  return config;
+}
+
+type MutableViewConfig = {
+  -readonly [K in keyof ViewConfig]: ViewConfig[K];
+};
+
+function extractViewTypeConfig(
+  cfg: DataSourceViewObjectResponse["configuration"],
+): Partial<MutableViewConfig> {
+  if (!cfg) return {};
+
+  const result: Partial<MutableViewConfig> = {};
+
+  if ("properties" in cfg && cfg.properties) {
+    result.properties = cfg.properties.map((p) => ({
+      propertyId: p.property_id,
+      propertyName: p.property_name,
+      visible: p.visible,
+      width: p.width,
+      wrap: p.wrap,
+    }));
+  }
+
+  if ("group_by" in cfg && cfg.group_by) {
+    const gb = cfg.group_by;
+    result.groupBy = {
+      type: gb.type,
+      propertyId: gb.property_id,
+      propertyName: "property_name" in gb ? (gb.property_name as string) : undefined,
+      sort:
+        "sort" in gb && gb.sort
+          ? ((gb.sort as { type: string }).type as "manual" | "ascending" | "descending")
+          : undefined,
+      hideEmptyGroups: "hide_empty_groups" in gb ? (gb.hide_empty_groups as boolean) : undefined,
+    };
+  }
+
+  if ("cover" in cfg && cfg.cover) {
+    result.cover = {
+      type: cfg.cover.type,
+      propertyId: cfg.cover.property_id,
+    };
+  }
+
+  if ("cover_size" in cfg) result.coverSize = cfg.cover_size;
+  if ("cover_aspect" in cfg) result.coverAspect = cfg.cover_aspect;
+
+  if ("date_property_id" in cfg) {
+    result.datePropertyId = cfg.date_property_id;
+    result.datePropertyName = cfg.date_property_name;
+  }
+
+  if ("view_range" in cfg) result.viewRange = cfg.view_range;
+
+  return result;
 }

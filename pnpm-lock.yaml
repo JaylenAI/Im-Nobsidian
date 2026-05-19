@@ -133,9 +133,15 @@ importers:
       esbuild:
         specifier: ^0.24.0
         version: 0.24.2
+      esbuild-svelte:
+        specifier: ^0.9.5
+        version: 0.9.5(esbuild@0.24.2)(svelte@5.55.7(@typescript-eslint/types@8.59.2))
       obsidian:
         specifier: ^1.12.3
         version: 1.12.3(@codemirror/state@6.5.0)(@codemirror/view@6.38.6)
+      svelte:
+        specifier: ^5.55.7
+        version: 5.55.7(@typescript-eslint/types@8.59.2)
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
@@ -1279,6 +1285,12 @@ packages:
         integrity: sha512-2kkt/7niJ6MgEPxF0bYdQ6etZaA+fQvDcLKckhy1yIQOzaoKjBBjSj63/aLVjYE3qhRt5dvM+uUyfCg6UKCBbA==,
       }
 
+  "@jridgewell/remapping@2.3.5":
+    resolution:
+      {
+        integrity: sha512-LI9u/+laYG4Ds1TDKSJW2YPrIlcVYOwi2fUC6xB43lueCjgxV4lffOCZCtYFiH6TNOX+tQKXx97T4IKHbhyHEQ==,
+      }
+
   "@jridgewell/resolve-uri@3.1.2":
     resolution:
       {
@@ -1558,6 +1570,14 @@ packages:
     cpu: [x64]
     os: [win32]
 
+  "@sveltejs/acorn-typescript@1.0.9":
+    resolution:
+      {
+        integrity: sha512-lVJX6qEgs/4DOcRTpo56tmKzVPtoWAaVbL4hfO7t7NVwl9AAXzQR6cihesW1BmNMPl+bK6dreu2sOKBP2Q9CIA==,
+      }
+    peerDependencies:
+      acorn: ^8.9.0
+
   "@tryfabric/martian@1.2.4":
     resolution:
       {
@@ -1630,6 +1650,12 @@ packages:
     resolution:
       {
         integrity: sha512-ypzHFE/wBzh+BlH6rrBgS5I/Z7RD21pGhZ2rltb/+ZrVM1awdZwjx7hE5XfuYgHWk9uvV5HLZN3SloevCAp3Bw==,
+      }
+
+  "@types/trusted-types@2.0.7":
+    resolution:
+      {
+        integrity: sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==,
       }
 
   "@types/unist@2.0.11":
@@ -1871,6 +1897,13 @@ packages:
         integrity: sha512-8+9WqebbFzpX9OR+Wa6O29asIogeRMzcGtAINdpMHHyAg10f05aSFVBbcEqGf/PXw1EjAZ+q2/bEBg3DvurK3Q==,
       }
 
+  aria-query@5.3.1:
+    resolution:
+      {
+        integrity: sha512-Z/ZeOgVl7bcSYZ/u/rh0fOpvEpq//LZmdbkXyc7syVzjPAhfOa9ebsdTSjEBDU4vs5nC98Kfduj1uFo0qyET3g==,
+      }
+    engines: { node: ">= 0.4" }
+
   array-union@2.1.0:
     resolution:
       {
@@ -1896,6 +1929,13 @@ packages:
       {
         integrity: sha512-Oei9OH4tRh0YqU3GxhX79dM/mwVgvbZJaSNaRk+bshkj0S5cfHcgYakreBjrHwatXKbz+IoIdYLxrKim2MjW0Q==,
       }
+
+  axobject-query@4.1.0:
+    resolution:
+      {
+        integrity: sha512-qIj0G9wZbMGNLjLmg1PT6v2mE9AH2zlnADJD/2tC6E00hgmhUOfEB6greHPAfLRSufHqROIUTkw6E+M3lH0PTQ==,
+      }
+    engines: { node: ">= 0.4" }
 
   bail@1.0.5:
     resolution:
@@ -2115,6 +2155,13 @@ packages:
       }
     engines: { node: ">= 12" }
 
+  clsx@2.1.1:
+    resolution:
+      {
+        integrity: sha512-eYm0QWBtUrBWZWG0d386OGAw16Z995PiOVo2B7bjWSbHedGl5e0ZWaq65kOGgUSNesEIDkB9ISbTg/JK9dhCZA==,
+      }
+    engines: { node: ">=6" }
+
   color-convert@2.0.1:
     resolution:
       {
@@ -2261,6 +2308,12 @@ packages:
       }
     engines: { node: ">=8" }
 
+  devalue@5.8.1:
+    resolution:
+      {
+        integrity: sha512-4CXDYRBGqN+57wVJkuXBYmpAVUSg3L6JAQa/DFqm238G73E1wuyc/JhGQJzN7vUf/CMphYau2zXbfWzDR5aTEw==,
+      }
+
   diff@9.0.0:
     resolution:
       {
@@ -2360,6 +2413,16 @@ packages:
       }
     engines: { node: ">= 0.4" }
 
+  esbuild-svelte@0.9.5:
+    resolution:
+      {
+        integrity: sha512-16FUSj64aiS28CCxYeK3hVxCyU4PwGBSkeArawAtnWSV7l0Gc+frIOP88MNj8Q7tDAGyEJAHT6OpOvM24BG46w==,
+      }
+    engines: { node: ">=18" }
+    peerDependencies:
+      esbuild: ">=0.17.0"
+      svelte: ">=4.2.1 <6"
+
   esbuild@0.21.5:
     resolution:
       {
@@ -2441,6 +2504,12 @@ packages:
       jiti:
         optional: true
 
+  esm-env@1.2.2:
+    resolution:
+      {
+        integrity: sha512-Epxrv+Nr/CaL4ZcFGPJIYLWFom+YeV1DqMLHJoEd9SYRxNbaFruBwfEX/kkHUJf55j2+TUbmDcmuilbP1TmXHA==,
+      }
+
   espree@10.4.0:
     resolution:
       {
@@ -2462,6 +2531,17 @@ packages:
         integrity: sha512-Ap6G0WQwcU/LHsvLwON1fAQX9Zp0A2Y6Y/cJBl9r/JbW90Zyg4/zbG6zzKa2OTALELarYHmKu0GhpM5EO+7T0g==,
       }
     engines: { node: ">=0.10" }
+
+  esrap@2.2.9:
+    resolution:
+      {
+        integrity: sha512-4KijP+NxCWthMCUC3qHbE6n4vCjqgJS1uAYKhuT/GWfFTf1Qyive2TgOjep+gzbSzRfnNyaN/UU9YmdOt8Eg0A==,
+      }
+    peerDependencies:
+      "@typescript-eslint/types": ^8.2.0
+    peerDependenciesMeta:
+      "@typescript-eslint/types":
+        optional: true
 
   esrecurse@4.3.0:
     resolution:
@@ -2973,6 +3053,12 @@ packages:
       }
     engines: { node: ">=8" }
 
+  is-reference@3.0.3:
+    resolution:
+      {
+        integrity: sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw==,
+      }
+
   is-stream@3.0.0:
     resolution:
       {
@@ -3154,6 +3240,12 @@ packages:
         integrity: sha512-IXO6OCs9yg8tMKzfPZ1YmheJbZCiEsnBdcB03l0OcfK9prKnJb96siuHCr5Fl37/yo9DnKU+TLpxzTUspw9shg==,
       }
     engines: { node: ^12.20.0 || ^14.13.1 || >=16.0.0 }
+
+  locate-character@3.0.0:
+    resolution:
+      {
+        integrity: sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==,
+      }
 
   locate-path@5.0.0:
     resolution:
@@ -4192,6 +4284,13 @@ packages:
       }
     engines: { node: ">=8" }
 
+  svelte@5.55.7:
+    resolution:
+      {
+        integrity: sha512-ymI5ykLPwIHW839E053FQbI1G+jnRFJEw3Kv5Y4njixVWywQBx+NUFpkkKyk5LIb36Fg9DVXSYpqiGekLD0hyw==,
+      }
+    engines: { node: ">=18" }
+
   tar-fs@2.1.4:
     resolution:
       {
@@ -4599,6 +4698,12 @@ packages:
         integrity: sha512-U/PBtDf35ff0D8X8D0jfdzHYEPFxAI7jJlxZXwCSez5M3190m+QobIfh+sWDWSHMCWWJN2AWamkegn6vr6YBTw==,
       }
     engines: { node: ">=18" }
+
+  zimmerframe@1.1.4:
+    resolution:
+      {
+        integrity: sha512-B58NGBEoc8Y9MWWCQGl/gq9xBCe4IiKM0a2x7GZdQKOW5Exr8S1W24J6OgM1njK8xCRGvAJIL/MxXHf6SkmQKQ==,
+      }
 
   zod@3.25.76:
     resolution:
@@ -5214,6 +5319,11 @@ snapshots:
       "@jridgewell/sourcemap-codec": 1.5.5
       "@jridgewell/trace-mapping": 0.3.31
 
+  "@jridgewell/remapping@2.3.5":
+    dependencies:
+      "@jridgewell/gen-mapping": 0.3.13
+      "@jridgewell/trace-mapping": 0.3.31
+
   "@jridgewell/resolve-uri@3.1.2": {}
 
   "@jridgewell/sourcemap-codec@1.5.5": {}
@@ -5340,6 +5450,10 @@ snapshots:
   "@rollup/rollup-win32-x64-msvc@4.60.3":
     optional: true
 
+  "@sveltejs/acorn-typescript@1.0.9(acorn@8.16.0)":
+    dependencies:
+      acorn: 8.16.0
+
   "@tryfabric/martian@1.2.4":
     dependencies:
       "@notionhq/client": 1.0.4
@@ -5387,6 +5501,8 @@ snapshots:
   "@types/tern@0.23.9":
     dependencies:
       "@types/estree": 1.0.9
+
+  "@types/trusted-types@2.0.7": {}
 
   "@types/unist@2.0.11": {}
 
@@ -5576,6 +5692,8 @@ snapshots:
 
   argparse@2.0.1: {}
 
+  aria-query@5.3.1: {}
+
   array-union@2.1.0: {}
 
   assertion-error@2.0.1: {}
@@ -5583,6 +5701,8 @@ snapshots:
   async-sema@3.1.1: {}
 
   asynckit@0.4.0: {}
+
+  axobject-query@4.1.0: {}
 
   bail@1.0.5: {}
 
@@ -5695,6 +5815,8 @@ snapshots:
 
   cli-width@4.1.0: {}
 
+  clsx@2.1.1: {}
+
   color-convert@2.0.1:
     dependencies:
       color-name: 1.1.4
@@ -5749,6 +5871,8 @@ snapshots:
 
   detect-libc@2.1.2: {}
 
+  devalue@5.8.1: {}
+
   diff@9.0.0: {}
 
   dir-glob@3.0.1:
@@ -5796,6 +5920,12 @@ snapshots:
       get-intrinsic: 1.3.0
       has-tostringtag: 1.0.2
       hasown: 2.0.3
+
+  esbuild-svelte@0.9.5(esbuild@0.24.2)(svelte@5.55.7(@typescript-eslint/types@8.59.2)):
+    dependencies:
+      "@jridgewell/trace-mapping": 0.3.31
+      esbuild: 0.24.2
+      svelte: 5.55.7(@typescript-eslint/types@8.59.2)
 
   esbuild@0.21.5:
     optionalDependencies:
@@ -5936,6 +6066,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  esm-env@1.2.2: {}
+
   espree@10.4.0:
     dependencies:
       acorn: 8.16.0
@@ -5947,6 +6079,12 @@ snapshots:
   esquery@1.7.0:
     dependencies:
       estraverse: 5.3.0
+
+  esrap@2.2.9(@typescript-eslint/types@8.59.2):
+    dependencies:
+      "@jridgewell/sourcemap-codec": 1.5.5
+    optionalDependencies:
+      "@typescript-eslint/types": 8.59.2
 
   esrecurse@4.3.0:
     dependencies:
@@ -6212,6 +6350,10 @@ snapshots:
 
   is-plain-obj@2.1.0: {}
 
+  is-reference@3.0.3:
+    dependencies:
+      "@types/estree": 1.0.9
+
   is-stream@3.0.0: {}
 
   is-subdir@1.2.0:
@@ -6318,6 +6460,8 @@ snapshots:
       wrap-ansi: 9.0.2
 
   load-tsconfig@0.2.5: {}
+
+  locate-character@3.0.0: {}
 
   locate-path@5.0.0:
     dependencies:
@@ -6947,6 +7091,27 @@ snapshots:
     dependencies:
       has-flag: 4.0.0
 
+  svelte@5.55.7(@typescript-eslint/types@8.59.2):
+    dependencies:
+      "@jridgewell/remapping": 2.3.5
+      "@jridgewell/sourcemap-codec": 1.5.5
+      "@sveltejs/acorn-typescript": 1.0.9(acorn@8.16.0)
+      "@types/estree": 1.0.9
+      "@types/trusted-types": 2.0.7
+      acorn: 8.16.0
+      aria-query: 5.3.1
+      axobject-query: 4.1.0
+      clsx: 2.1.1
+      devalue: 5.8.1
+      esm-env: 1.2.2
+      esrap: 2.2.9(@typescript-eslint/types@8.59.2)
+      is-reference: 3.0.3
+      locate-character: 3.0.0
+      magic-string: 0.30.21
+      zimmerframe: 1.1.4
+    transitivePeerDependencies:
+      - "@typescript-eslint/types"
+
   tar-fs@2.1.4:
     dependencies:
       chownr: 1.1.4
@@ -7216,6 +7381,8 @@ snapshots:
   yocto-queue@0.1.0: {}
 
   yoctocolors-cjs@2.1.3: {}
+
+  zimmerframe@1.1.4: {}
 
   zod@3.25.76: {}
 

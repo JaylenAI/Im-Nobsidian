@@ -55,7 +55,7 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 | Nobsidion                      | 단방향, Rate limit 없음, 방치 | 양방향, Rate limit, 활발 유지 |
 | Notion 내보내기                | 수동, 형식 깨짐               | 자동, 형식 보존               |
 
-## MVP 범위 (v1.0)
+## MVP 범위 (v0.1.0)
 
 ### Must Have
 

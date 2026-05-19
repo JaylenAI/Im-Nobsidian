@@ -7,9 +7,9 @@
 ## 개발 환경 세팅
 
 ```bash
-git clone https://github.com/hanseungheon/im-nobsidian.git
-cd im-nobsidian
-bash scripts/setup.sh
+git clone https://github.com/JaylenAI/Im-Nobsidian.git
+cd Im-Nobsidian
+pnpm install && pnpm build
 ```
 
 ## 브랜치 전략

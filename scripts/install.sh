@@ -1,6 +1,6 @@
 #!/bin/bash
 # Im-Nobsidian Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.sh | bash
 
 set -euo pipefail
 
@@ -101,7 +101,7 @@ install_node() {
     windows-git-bash)
       error "On Windows, use the PowerShell installer instead:"
       echo ""
-      echo "  irm https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.ps1 | iex"
+      echo "  irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.ps1 | iex"
       echo ""
       exit 1
       ;;
@@ -201,7 +201,7 @@ print_success() {
   echo -e "    https://www.notion.so/my-integrations"
   echo ""
   echo -e "  ${BOLD}Docs:${NC}"
-  echo -e "    https://github.com/JaylenAI/Obsidian_Notion_Syncer"
+  echo -e "    https://github.com/JaylenAI/Im-Nobsidian"
   echo ""
 }
 

@@ -308,6 +308,94 @@ describe("NotionClient - extractProperties", () => {
   });
 });
 
+describe("NotionClient - extractCover", () => {
+  const client = createClient();
+
+  it("file 타입 커버 추출", () => {
+    const page = createMockPage({});
+    (page as any).cover = {
+      type: "file",
+      file: { url: "https://s3.example.com/cover.jpg", expiry_time: "2026-05-18T12:00:00.000Z" },
+    };
+
+    const cover = client.extractCover(page);
+    expect(cover).toEqual({
+      type: "file",
+      url: "https://s3.example.com/cover.jpg",
+      expiryTime: "2026-05-18T12:00:00.000Z",
+    });
+  });
+
+  it("external 타입 커버 추출", () => {
+    const page = createMockPage({});
+    (page as any).cover = {
+      type: "external",
+      external: { url: "https://images.unsplash.com/photo.jpg" },
+    };
+
+    const cover = client.extractCover(page);
+    expect(cover).toEqual({
+      type: "external",
+      url: "https://images.unsplash.com/photo.jpg",
+    });
+  });
+
+  it("커버 없으면 null 반환", () => {
+    const page = createMockPage({});
+    expect(client.extractCover(page)).toBeNull();
+  });
+});
+
+describe("NotionClient - extractIcon", () => {
+  const client = createClient();
+
+  it("이모지 아이콘 추출", () => {
+    const page = createMockPage({});
+    (page as any).icon = { type: "emoji", emoji: "🚀" };
+
+    const icon = client.extractIcon(page);
+    expect(icon).toEqual({ type: "emoji", value: "🚀" });
+  });
+
+  it("external 아이콘 추출", () => {
+    const page = createMockPage({});
+    (page as any).icon = {
+      type: "external",
+      external: { url: "https://example.com/icon.png" },
+    };
+
+    const icon = client.extractIcon(page);
+    expect(icon).toEqual({ type: "external", value: "https://example.com/icon.png" });
+  });
+
+  it("file 아이콘 추출", () => {
+    const page = createMockPage({});
+    (page as any).icon = {
+      type: "file",
+      file: { url: "https://s3.example.com/icon.png", expiry_time: "2026-05-18T12:00:00.000Z" },
+    };
+
+    const icon = client.extractIcon(page);
+    expect(icon).toEqual({ type: "file", value: "https://s3.example.com/icon.png" });
+  });
+
+  it("native 아이콘 추출", () => {
+    const page = createMockPage({});
+    (page as any).icon = {
+      type: "icon",
+      icon: { name: "pizza", color: "blue" },
+    };
+
+    const icon = client.extractIcon(page);
+    expect(icon).toEqual({ type: "icon", value: "pizza", color: "blue" });
+  });
+
+  it("아이콘 없으면 null 반환", () => {
+    const page = createMockPage({});
+    expect(client.extractIcon(page)).toBeNull();
+  });
+});
+
 describe("NotionClient - getInternalClient", () => {
   it("내부 Client 인스턴스 반환", () => {
     const client = createClient();
