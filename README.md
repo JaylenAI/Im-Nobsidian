@@ -40,6 +40,10 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Multi-database sync** &nbsp; Sync multiple Notion databases to separate local folders. Each database gets its own property mapping and filter. Database pages become individual markdown files with frontmatter properties.
 
+**File attachments downloaded** &nbsp; Excel, PDF, Jupyter notebooks, and other file attachments in Notion are automatically downloaded to your local vault. Internal `file://` protocol links are resolved via the Notion API and saved locally.
+
+**Deep child page discovery** &nbsp; Child pages nested inside any block type (lists, paragraphs, headings, toggles) are discovered and synced. Not just top-level children — every page in your hierarchy is found.
+
 **Folder structure = Page hierarchy** &nbsp; Your Obsidian folder tree maps 1:1 to Notion's page hierarchy. `projects/plan.md` → Notion page "plan" under "projects."
 
 **Zero configuration sync state** &nbsp; No database to set up. No server to run. State tracking is fully automatic via a local SQLite file in `.im-nobsidian/` — you never touch it.
@@ -187,6 +191,8 @@ When both sides change the same file:
 | Video / embed URLs                              |  ✅  |      ✅      |
 | Frontmatter ↔ database properties (21 types)    |  ✅  |      ✅      |
 | Images                                          |  ✅  | ✅ Download  |
+| File attachments (xlsx, pdf, ipynb, etc.)       |  —   | ✅ Download  |
+| Cover images + icons                            |  —   | ✅ Download  |
 | Notion-only blocks (bookmark, embed, etc.)      |  ✅  | ✅ Preserved |
 | Notion-only blocks (button, form, synced block) |  —   | 📌 Preserved |
 
@@ -241,7 +247,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian community plugin                            | Coming in v0.5.0                                                                                            |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian community plugin (WIP)                      | Coming in v0.5.0                                                                                            |
 
 ### Using as a Library
 
@@ -276,7 +282,6 @@ await orchestrator.sync({ dryRun: false });
 
 | Limitation             | Reason                                                           | Workaround                                               |
 | ---------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
-| Image push             | File Upload API requires status check after send                 | Conditionally skip complete() for single-part uploads    |
 | Notion-only blocks     | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                        |
 | Rate limit             | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff           |
 | Blank line compression | Notion Markdown API normalizes whitespace                        | No semantic difference — renders identically in Obsidian |
@@ -285,8 +290,8 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.4  ✅ Current — Multi-database sync + test expansion (486 tests)
-v0.5.0  → Obsidian community plugin (sql.js WASM)
+v0.1.5  ✅ Current — DB view rendering, file attachments, deep page discovery (554 tests)
+v0.5.0  → Obsidian community plugin (sql.js WASM + sidebar UI)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
 
@@ -299,7 +304,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 486 tests
+pnpm test          # 554 tests
 pnpm lint
 pnpm typecheck
 
@@ -318,10 +323,12 @@ packages/
 │   │   ├── notion/        # Notion API client + property mapper
 │   │   ├── state/         # SQLite state database
 │   │   ├── sync/          # Orchestrator, change detection, vault FS
+│   │   ├── view/          # DB view rendering engine (filter, color, editor)
 │   │   └── utils/         # Hash, logger, sanitize
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi command)
 └── obsidian-plugin/   # Obsidian community plugin (WIP)
+    └── src/views/         # Svelte view components (Gallery/Board/Table/Calendar)
 ```
 
 ## Contributing

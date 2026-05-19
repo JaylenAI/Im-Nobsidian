@@ -40,6 +40,10 @@ Obsidian에서 편집하면 Notion에 반영됩니다. Notion에서 편집하면
 
 **다중 데이터베이스 동기화** &nbsp; 여러 Notion 데이터베이스를 각각 별도 로컬 폴더에 동기화합니다. 데이터베이스별 속성 매핑과 필터를 설정할 수 있으며, 데이터베이스 페이지가 프론트매터 속성을 가진 개별 마크다운 파일이 됩니다.
 
+**파일 첨부 자동 다운로드** &nbsp; Notion의 Excel, PDF, Jupyter Notebook 등 파일 첨부가 자동으로 로컬 볼트에 다운로드됩니다. 내부 `file://` 프로토콜 링크도 Notion API를 통해 해석되어 로컬에 저장됩니다.
+
+**깊은 자식 페이지 탐색** &nbsp; 리스트, 문단, 제목, 토글 등 어떤 블록 안에 중첩된 자식 페이지도 발견하여 동기화합니다. 최상위 자식만이 아닌, 계층 구조의 모든 페이지를 찾아냅니다.
+
 **폴더 구조 = 페이지 계층** &nbsp; Obsidian 폴더 트리가 Notion 페이지 계층에 1:1로 매핑됩니다. `프로젝트/기획안.md` → Notion "프로젝트" 하위 "기획안" 페이지.
 
 **설정 없는 상태 관리** &nbsp; 데이터베이스 설치도, 서버 실행도 필요 없습니다. `.im-nobsidian/` 폴더의 로컬 SQLite 파일로 자동 관리되며, 유저가 만질 일은 없습니다.
@@ -187,6 +191,8 @@ Obsidian 볼트                          Notion 워크스페이스
 | 비디오 / 임베드 URL                    |  ✅  |     ✅      |
 | 프론트매터 ↔ DB 속성 (21종)            |  ✅  |     ✅      |
 | 이미지                                 |  ✅  | ✅ 다운로드 |
+| 파일 첨부 (xlsx, pdf, ipynb 등)        |  —   | ✅ 다운로드 |
+| 커버 이미지 + 아이콘                   |  —   | ✅ 다운로드 |
 | Notion 전용 블록 (bookmark, embed 등)  |  ✅  |   ✅ 보존   |
 | Notion 전용 블록 (버튼, 폼, 동기 블록) |  —   |   📌 보존   |
 
@@ -260,7 +266,6 @@ await orchestrator.sync({ dryRun: false });
 
 | 제한             | 원인                                                | 대응                                        |
 | ---------------- | --------------------------------------------------- | ------------------------------------------- |
-| 이미지 Push      | File Upload API send 후 상태 확인 필요              | 단일 파트 업로드 시 complete() 조건부 스킵  |
 | Notion 전용 블록 | API가 버튼/폼/동기 블록에 `unsupported` 반환        | 콜아웃 플레이스홀더로 보존                  |
 | Rate limit       | Notion 공식 제한 3 req/s                            | 내장 레이트 리미터 + 지수 백오프            |
 | 빈 줄 압축       | Notion Markdown API가 공백을 정규화                 | 의미적 차이 없음 — 옵시디언에서 동일 렌더링 |
@@ -269,8 +274,8 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.1.4  ✅ 현재 — 다중 DB 동기화 + 테스트 확대 (486개 테스트)
-v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM)
+v0.1.5  ✅ 현재 — DB 뷰 렌더링, 파일 첨부, 깊은 페이지 탐색 (554개 테스트)
+v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM + 사이드바 UI)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```
 
@@ -283,7 +288,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 486개 테스트
+pnpm test          # 554개 테스트
 pnpm lint
 pnpm typecheck
 ```
@@ -298,10 +303,12 @@ packages/
 │   │   ├── notion/        # Notion API 클라이언트 + 속성 매퍼
 │   │   ├── state/         # SQLite 상태 데이터베이스
 │   │   ├── sync/          # 오케스트레이터, 변경 감지, 볼트 FS
+│   │   ├── view/          # DB 뷰 렌더링 엔진 (필터, 색상, 편집기)
 │   │   └── utils/         # 해시, 로거, 파일명 정제
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi 명령어)
 └── obsidian-plugin/   # Obsidian 커뮤니티 플러그인 (개발 중)
+    └── src/views/         # Svelte 뷰 컴포넌트 (Gallery/Board/Table/Calendar)
 ```
 
 ## 기여
