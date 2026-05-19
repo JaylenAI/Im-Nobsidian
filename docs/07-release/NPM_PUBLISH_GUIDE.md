@@ -12,7 +12,7 @@
 | 패키지        | npm 이름             | 접근   |
 | ------------- | -------------------- | ------ |
 | packages/core | `@im-nobsidian/core` | public |
-| packages/cli  | `nobsi`              | public |
+| packages/cli  | `im-nobsidian`       | public |
 
 > `obsidian-im-nobsidian` (플러그인)은 npm이 아닌 Obsidian Community Plugins를 통해 배포
 

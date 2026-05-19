@@ -159,7 +159,7 @@ export class BlockConverter {
       const childMd = (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
       const indented = childMd
         .split("\n")
-        .map((line: string) => (line ? `  ${line}` : ""))
+        .map((line: string) => (line.trim() ? `  ${line}` : "  "))
         .join("\n")
         .trimEnd();
       return `${TOGGLE_START}\n- ${title}\n${indented}\n${TOGGLE_END}`;
@@ -437,7 +437,7 @@ export class BlockConverter {
         const lines = childMd
           .trim()
           .split("\n")
-          .map((l: string) => `> ${l}`);
+          .map((l: string) => (l.trim() ? `> ${l}` : ">"));
         result += "\n" + lines.join("\n");
       }
       return result;

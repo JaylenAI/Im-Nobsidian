@@ -110,6 +110,7 @@ export default class ImNobsidianPlugin extends Plugin {
       this.startAutoSync();
     }
 
+    this.registerColorPostProcessor();
     this.registerVaultEvents();
   }
 
@@ -191,6 +192,47 @@ export default class ImNobsidianPlugin extends Plugin {
       clearInterval(this.autoSyncTimer);
       this.autoSyncTimer = null;
     }
+  }
+
+  private registerColorPostProcessor(): void {
+    this.registerMarkdownPostProcessor((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const colorRegex = /%%im-nobsidian:color:(\w+)%%([\s\S]*?)%%\/color%%/g;
+      const nodesToReplace: { node: Text; fragments: DocumentFragment }[] = [];
+
+      let textNode: Text | null;
+      while ((textNode = walker.nextNode() as Text | null)) {
+        const text = textNode.textContent ?? "";
+        if (!text.includes("%%im-nobsidian:color:")) continue;
+
+        const fragment = document.createDocumentFragment();
+        let lastIndex = 0;
+        let match: RegExpExecArray | null;
+
+        colorRegex.lastIndex = 0;
+        while ((match = colorRegex.exec(text)) !== null) {
+          if (match.index > lastIndex) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+          }
+          const span = document.createElement("span");
+          span.className = `im-nobsidian-color-${match[1]}`;
+          span.textContent = match[2]!;
+          fragment.appendChild(span);
+          lastIndex = colorRegex.lastIndex;
+        }
+
+        if (lastIndex > 0) {
+          if (lastIndex < text.length) {
+            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+          }
+          nodesToReplace.push({ node: textNode, fragments: fragment });
+        }
+      }
+
+      for (const { node, fragments } of nodesToReplace) {
+        node.parentNode?.replaceChild(fragments, node);
+      }
+    });
   }
 
   private registerVaultEvents(): void {
@@ -524,7 +566,7 @@ export default class ImNobsidianPlugin extends Plugin {
                 props: {
                   data: newData,
                   availableViews: configs?.views ?? [],
-                  onEntryClick: (entry) => {
+                  onEntryClick: (entry: { path: string }) => {
                     const file = this.app.vault.getAbstractFileByPath(entry.path);
                     if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
                   },
@@ -532,7 +574,7 @@ export default class ImNobsidianPlugin extends Plugin {
               });
             }
           },
-          onEntryClick: (entry) => {
+          onEntryClick: (entry: { path: string }) => {
             const file = this.app.vault.getAbstractFileByPath(entry.path);
             if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
           },

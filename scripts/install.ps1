@@ -1,5 +1,5 @@
 # Im-Nobsidian Installer for Windows
-# Usage: irm https://raw.githubusercontent.com/JaylenAI/Obsidian_Notion_Syncer/main/scripts/install.ps1 | iex
+# Usage: irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install.ps1 | iex
 
 $ErrorActionPreference = "Stop"
 
@@ -120,7 +120,7 @@ function Write-Done {
     Write-Host "    https://www.notion.so/my-integrations"
     Write-Host ""
     Write-Host "  Docs:" -ForegroundColor White
-    Write-Host "    https://github.com/JaylenAI/Obsidian_Notion_Syncer"
+    Write-Host "    https://github.com/JaylenAI/Im-Nobsidian"
     Write-Host ""
 }
 

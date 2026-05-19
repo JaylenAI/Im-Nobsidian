@@ -1,6 +1,6 @@
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
-const NOTION_CALLOUT_TAG_RE = /<callout>\n?([\s\S]*?)<\/callout>/g;
-const NOTION_TOGGLE_RE = /<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
+const NOTION_CALLOUT_TAG_RE = /<callout[^>]*>\n?([\s\S]*?)<\/callout>/g;
+const NOTION_TOGGLE_RE = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
 const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
 const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
@@ -19,6 +19,8 @@ const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
 export function notionEnhancedToObsidian(enhanced: string): string {
   let result = enhanced;
 
+  result = convertSyncedBlockRef(result);
+  result = normalizeCodeBlockToggles(result);
   result = convertToggles(result);
   result = convertCallouts(result);
   result = convertPageMentions(result);
@@ -32,9 +34,13 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertNotionTables(result);
   result = convertColorSpans(result);
   result = convertUnderlineSpans(result);
+  result = convertColumnBlocks(result);
+  result = convertDatabaseBlocks(result);
+  result = cleanInlineColorAttrs(result);
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
+  result = ensureCalloutContinuity(result);
 
   return result;
 }
@@ -53,9 +59,19 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   return result;
 }
 
+function normalizeCodeBlockToggles(content: string): string {
+  return content.replace(
+    /^- (.+)\n\t```(\w*)\n([\s\S]*?)\n\t```$/gm,
+    (_match, title: string, lang: string, body: string) => {
+      const langTag = lang ? lang : "";
+      return `<details>\n<summary>${title.trim()}</summary>\n\`\`\`${langTag}\n${body}\n\`\`\`\n</details>`;
+    },
+  );
+}
+
 function convertToggles(content: string): string {
   function replaceToggle(match: string): string {
-    const m = /<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/s.exec(match);
+    const m = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/s.exec(match);
     if (!m) return match;
 
     const title = m[1]!.trim();
@@ -63,13 +79,11 @@ function convertToggles(content: string): string {
 
     body = convertToggles(body);
 
-    const indented = body
+    const calloutBody = body
       .split("\n")
-      .map((line) => (line ? `  ${line}` : ""))
-      .join("\n")
-      .trimEnd();
-
-    return `${TOGGLE_START}\n- ${title}\n${indented}\n${TOGGLE_END}`;
+      .map((line) => (line ? `> ${line}` : ">"))
+      .join("\n");
+    return `> [!toggle]- ${title}\n${calloutBody}`;
   }
 
   return content.replace(NOTION_TOGGLE_RE, replaceToggle);
@@ -92,7 +106,7 @@ function calloutBodyToObsidian(body: string): string {
     ? "\n" +
       rest
         .split("\n")
-        .map((line) => `> ${line}`)
+        .map((line) => (line.trim() ? `> ${line}` : ">"))
         .join("\n")
     : "";
 
@@ -108,10 +122,15 @@ function convertCallouts(content: string): string {
 }
 
 function convertPageMentions(content: string): string {
-  return content.replace(NOTION_PAGE_MENTION_RE, (_match, _id: string, text: string) => {
+  let result = content.replace(NOTION_PAGE_MENTION_RE, (_match, _id: string, text: string) => {
     const cleaned = text.trim();
     return `[[${cleaned}]]`;
   });
+  result = result.replace(
+    /<mention-page\s+url="https?:\/\/(?:www\.)?notion\.so\/([a-f0-9]{32})"[^>]*\/>/g,
+    (_match, id: string) => `[[notion:${id}]]`,
+  );
+  return result;
 }
 
 function convertUserMentions(content: string): string {
@@ -132,6 +151,27 @@ function preserveUnknownBlocks(content: string): string {
     const blockType = altMatch?.[1] ?? typeMatch?.[1] ?? "unknown";
     return `%%im-nobsidian:unknown:id=${id}&type=${blockType}%%`;
   });
+}
+
+function convertSyncedBlockRef(content: string): string {
+  let result = content.replace(
+    /<synced_block_reference[^>]*>[\s\S]*?<\/synced_block_reference>/g,
+    (match) => {
+      const inner = match
+        .replace(/<synced_block_reference[^>]*>\n?/, "")
+        .replace(/<\/synced_block_reference>/, "")
+        .split("\n")
+        .map((l) => l.replace(/^\t/, ""))
+        .join("\n")
+        .trim();
+      return inner;
+    },
+  );
+  result = result.replace(
+    /<synced_block[^>]*>\n?([\s\S]*?)<\/synced_block>/g,
+    (_match, inner: string) => inner.trim(),
+  );
+  return result;
 }
 
 // 2A: 미디어 태그 → Obsidian 마크다운
@@ -181,12 +221,27 @@ function convertUnderlineSpans(content: string): string {
 }
 
 function convertTogglesToHtml(content: string): string {
+  const calloutToggleRe = /^> \[!toggle\]-\s*(.+)\n((?:>.*\n?)*)/gm;
+
+  let result = content;
+  let prev = "";
+  let safety = 0;
+  while (result !== prev && safety++ < 100) {
+    prev = result;
+    result = result.replace(calloutToggleRe, (_match, title: string, body: string) => {
+      const bodyText = body
+        .split("\n")
+        .map((line) => line.replace(/^>\s?/, ""))
+        .join("\n")
+        .trim();
+      return `<details>\n<summary>${title.trim()}</summary>\n\n${bodyText}\n\n</details>`;
+    });
+  }
+
   const startRe = new RegExp(escapeRegex(TOGGLE_START), "g");
   const endRe = new RegExp(escapeRegex(TOGGLE_END), "g");
 
-  let result = content;
-  let safety = 0;
-
+  safety = 0;
   while (result.includes(TOGGLE_START) && safety++ < 100) {
     const startIdx = result.indexOf(TOGGLE_START);
     const endIdx = findMatchingEnd(result, startIdx + TOGGLE_START.length);
@@ -301,7 +356,7 @@ function escapeRegex(str: string): string {
 
 const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
 const NOTION_COLOR_SPAN_RE = /<span color="([^"]+)">([\s\S]*?)<\/span>/g;
-const NOTION_EMPTY_BLOCK_RE = /^<empty-block\/>\n?/gm;
+const NOTION_EMPTY_BLOCK_RE = /^(?:>[\t ]*)*[\t ]*<empty-block\/>\n?/gm;
 
 function convertPageLinks(content: string): string {
   return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
@@ -316,6 +371,26 @@ function convertColorSpans(content: string): string {
     NOTION_COLOR_SPAN_RE,
     (_match, color: string, text: string) => `%%im-nobsidian:color:${color}%%${text}%%/color%%`,
   );
+}
+
+function convertDatabaseBlocks(content: string): string {
+  return content.replace(
+    /<database[^>]*>([\s\S]*?)<\/database>/g,
+    (_match, title: string) => `**${title.trim()}** *(Notion DB)*`,
+  );
+}
+
+function cleanInlineColorAttrs(content: string): string {
+  return content.replace(/\s*\{color="[^"]*"\}/g, "");
+}
+
+function convertColumnBlocks(content: string): string {
+  return content.replace(/<columns>\n?([\s\S]*?)<\/columns>/g, (_match, inner: string) => {
+    return inner
+      .replace(/\t?<column>\n?/g, "")
+      .replace(/\t?<\/column>\n?/g, "")
+      .trim();
+  });
 }
 
 function removeEmptyBlocks(content: string): string {
@@ -470,5 +545,23 @@ function unescapePipes(content: string): string {
     }
   }
 
+  return result.join("\n");
+}
+
+function ensureCalloutContinuity(content: string): string {
+  const lines = content.split("\n");
+  const result: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "" && i > 0 && i < lines.length - 1) {
+      const prev = result[result.length - 1] ?? "";
+      const next = lines[i + 1] ?? "";
+      if (/^>/.test(prev) && /^>/.test(next) && !/^> \[!/.test(next)) {
+        result.push(">");
+        continue;
+      }
+    }
+    result.push(line);
+  }
   return result.join("\n");
 }
