@@ -1,45 +1,38 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-12
+> Last updated: 2026-05-19
 
-## Current State (v0.1.0 — Released)
+## Current State (v0.1.5 — Dev)
 
-v0.1.0 npm 배포 완료. CLI 8 commands. 355 tests.
-Bidirectional sync with 15+ block types, database mode, conflict resolution.
-All competitors are one-way only — Im-Nobsidian is the only true bidirectional tool.
+v0.1.5 개발 완료. CLI 8 commands. 554 tests (core 524 + CLI 30).
+25+ block types bidirectional, 21 property read / 15 write types.
+DB view rendering engine (Gallery/Board/Table/Calendar), file attachment download, expanded child page discovery.
 
 ---
 
 ## Release Strategy
 
 ```
-v0.1.0  ─── 즉시 배포 (현재)
+v0.1.0  ─── ✅ 초기 릴리스 완료 (2026-05-11)
             npm publish + GitHub Release
-            Reddit r/ObsidianMD + Obsidian Discord 공유
+            355 tests, 15+ block types
 
-v0.1.1  ─── 위키링크 → Notion 페이지 멘션 연결 (1주 내)
-            가장 눈에 보이는 품질 개선
+v0.1.5  ─── ✅ 개발 완료 (2026-05-19)
+            DB 뷰 렌더링, 파일 첨부, 자식 페이지 탐색 확장
+            554 tests, 25+ block types, 21/15 속성
 
-v0.2.0  ─── martian 포크 + CVE 해소 + Myers diff (2주 내)
-            기술 부채 정리, 보안 이슈 해결
+v0.5.0  ─── Obsidian 커뮤니티 플러그인 등록 (예정)
+            sql.js 어댑터, 사이드바 UI, 플러그인 테스트, BRAT 베타
 
-v0.3.0  ─── 성능 최적화 (3-4주)
-            Incremental sync, block-level diff
-            대규모 볼트(1000+ 노트) 지원
-
-v0.5.0  ─── Obsidian 커뮤니티 플러그인 등록 (1-2개월)
-            sql.js 어댑터, 플러그인 테스트, BRAT 베타
-
-v1.0.0  ─── 안정 릴리스 (3-4개월)
-            Database view sync, relation 속성
-            Notion API 파일 업로드 지원 시 이미지 Push
+v1.0.0  ─── 안정 릴리스 (예정)
+            Database view sync, multi-workspace, 1000+ notes
 ```
 
 ---
 
-## v0.1.0 — MVP Release (Ready)
+## Completed Releases
 
-### Completed
+### v0.1.0 — MVP Release (2026-05-11)
 
 - [x] 양방향 동기화 (push/pull/sync)
 - [x] 15+ Notion 블록 타입 양방향 변환
@@ -49,59 +42,36 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 - [x] 색상/밑줄/멘션 보존
 - [x] 보존 마커 시스템 (라운드트립 보장)
 - [x] 3-way 머지 충돌 해결 (4가지 전략)
-- [x] .im-nobsidian-ignore 경로 필터링
-- [x] CLI 8개 명령어 (init/push/pull/sync/status/diff/resolve/watch)
-- [x] 파일 감시 + 자동 동기화
-- [x] Rate limiting + exponential backoff + jitter
-- [x] SQLite WAL 상태 DB + 트랜잭션
-- [x] 폴더 구조 → Notion 페이지 계층 매핑
-- [x] 이미지 Pull 다운로드 + 중복 제거
-- [x] 341 테스트, 82.7% 커버리지
-- [x] OSS 문서 완비 (README EN/KO, CONTRIBUTING, COC, SECURITY, CHANGELOG)
-- [x] CI/CD (Node 20+22 매트릭스, dependabot, audit, provenance)
+- [x] CLI 8개 명령어
+- [x] 355 테스트, 82.7% 커버리지
 
-### Known Limitations (v0.1.0)
+### v0.1.2 — 속성 매핑 강화 (2026-05-14)
 
-- 이미지 Push: Notion API 파일 업로드 미지원 → 플레이스홀더 보존
-- 위키링크 Push: 볼드 텍스트로 퇴화 (v0.1.1에서 해결 예정)
-- Notion 전용 블록 (버튼/폼/동기블록): 읽기 전용 → 콜아웃 플레이스홀더
-- 3-way 머지: naive diff (복잡한 충돌 시 부정확 가능)
-- @tryfabric/martian: 4년 미업데이트 (v0.2.0에서 포크 예정)
+- [x] 속성 Write 15개 타입 + 프론트매터 정규화
+- [x] Enhanced MD 변환기 확대 (미디어/탭/색상/밑줄)
+- [x] Notion API 최신화 (부분 업데이트, 페이지 이동)
 
----
+### v0.1.3 — DB 동기화 (2026-05-15)
 
-## v0.1.1 — Wikilink Enhancement
+- [x] DatabaseSyncer 구현 (DB 페이지 양방향)
+- [x] Standalone 파일 동기화 (비-md 파일)
+- [x] 486 테스트 도달
 
-### Tasks
+### v0.1.4 — E2E 검증 (2026-05-16)
 
-- [ ] Push 시 `[[페이지]]` → wikilink_map 조회 → Notion 페이지 멘션 생성
-- [ ] Pull 시 Notion 페이지 멘션 → `[[파일경로]]` 위키링크 복원
-- [ ] wikilink_map 자동 갱신 (push/pull 양쪽에서)
-- [ ] 별칭(alias) 해석 지원
-- [ ] 라운드트립 테스트 추가
+- [x] File Upload API 상태 전환 버그 수정
+- [x] Pull 변환 버그 5건 수정
+- [x] 테스트 확대 (부분 업데이트, Enhanced MD 라운드트립)
 
----
+### v0.1.5 — DB 뷰 + 동기화 품질 (2026-05-17~19)
 
-## v0.2.0 — Technical Debt
-
-### Tasks
-
-- [ ] @tryfabric/martian 포크 (katex >=0.16 업데이트, ESM 호환)
-- [ ] 3-way 머지: Myers diff 알고리즘 교체 (`diff` 라이브러리 활용)
-- [ ] InlineDBParser 제거 또는 파이프라인 연결
-- [ ] block-converter.ts unsafe cast → 타입 가드 정리
-- [ ] Obsidian 플러그인 테스트 추가 (현재 0개)
-
----
-
-## v0.3.0 — Performance
-
-### Tasks
-
-- [ ] Incremental sync: last_edited_time 커서 기반 변경 감지
-- [ ] Block-level diff: 페이지 전체 교체 → 블록 단위 변경
-- [ ] Lazy loading: 대규모 볼트에서 메모리 최적화
-- [ ] 벤치마크: 100/500/1000 노트 동기화 성능 측정
+- [x] Notion Views API 연동 (Gallery/Board/Table/Calendar)
+- [x] Board DnD + 캘린더 이벤트 생성 + EntryEditor
+- [x] 파일 첨부 다운로드 (file:// → 로컬)
+- [x] 자식 페이지 탐색 확장 (모든 has_children 블록)
+- [x] 링크 해결 범위 확대 (전체 synced 파일)
+- [x] 커버/아이콘 추출
+- [x] 554 테스트
 
 ---
 
@@ -109,11 +79,13 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 
 ### Tasks
 
-- [ ] sql.js(WASM) DB 어댑터 (better-sqlite3 제거)
-- [ ] 플러그인 실전 테스트 (10+ 노트 볼트)
-- [ ] obsidianmd/obsidian-releases PR 제출
-- [ ] BRAT 베타 채널 선공개
-- [ ] manifest.json / versions.json 검증
+- [ ] `IStateDB` 인터페이스 분리 (better-sqlite3 ↔ sql.js 어댑터)
+- [ ] sql.js(WASM) DB 어댑터 구현
+- [ ] 사이드바 대시보드 (Push/Pull/진행률/충돌 표시)
+- [ ] 리본 아이콘 (원클릭 동기화)
+- [ ] 커뮤니티 플러그인 심사 요건 충족
+- [ ] 플러그인 테스트 50+
+- [ ] BRAT 베타 → obsidianmd/obsidian-releases PR 제출
 
 ---
 
@@ -122,7 +94,8 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 ### Tasks
 
 - [ ] Database view sync (필터/정렬/릴레이션)
-- [ ] Notion API 파일 업로드 대응 (API 지원 시)
+- [ ] 뷰 고급 기능 (Filter/Sort/Search 도구바, 인라인 편집)
+- [ ] List/Timeline 뷰 추가
 - [ ] Multi-workspace 지원
 - [ ] 성능: 1000+ 노트 5분 이내
 - [ ] Obsidian 커뮤니티 플러그인 공식 등록 완료
@@ -140,19 +113,13 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 | Obsidian Importer  | One-way (→Obsidian)    | Official, migration only   |
 | **Im-Nobsidian**   | **True bidirectional** | **Library + CLI + Plugin** |
 
-### Why Blue Ocean
+### Differentiation
 
-1. No real bidirectional competitor exists
-2. Only project offering programmatic API (library)
-3. Only project with conflict resolution
-4. Only project with CLI + Plugin + Library triple deployment
-
-### Differentiation Strategy
-
-- Ship fast, iterate with user feedback
-- Prioritize data safety (never lose user content)
-- Library-first architecture enables ecosystem growth
-- Bilingual docs (EN/KO) for global + Korean community
+1. 전세계 유일한 진정한 양방향 동기화
+2. 유일한 프로그래밍 API (라이브러리)
+3. 유일한 충돌 해결 내장
+4. CLI + Plugin + Library 트리플 배포
+5. Notion Views API 활용 DB 뷰 렌더링 (경쟁사 없음)
 
 ---
 
@@ -161,8 +128,6 @@ v1.0.0  ─── 안정 릴리스 (3-4개월)
 | Risk                            | Impact                          | Mitigation                         |
 | ------------------------------- | ------------------------------- | ---------------------------------- |
 | Notion API rate limit (3 req/s) | Slow for large vaults           | Incremental sync + batching        |
-| Notion API no file upload       | Can't push images               | Placeholder preservation           |
-| martian library abandoned       | Security CVEs, stale conversion | Fork in v0.2.0                     |
+| martian library abandoned       | Security CVEs, stale conversion | Fork planned                       |
 | Obsidian plugin review delay    | Plugin release delayed          | BRAT + GitHub direct install       |
 | Notion API breaking changes     | Conversion breaks               | Pin SDK version, monitor changelog |
-| Competitor emerges              | Market share loss               | Ship v0.1.0 immediately            |
