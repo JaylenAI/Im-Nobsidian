@@ -22,6 +22,7 @@ export interface NotionClientOptions {
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
+  private readonly token: string;
   private readonly propertyMapper = new PropertyMapper();
 
   constructor(options: NotionClientOptions) {
@@ -29,6 +30,7 @@ export class NotionClient {
       auth: options.token,
       timeoutMs: options.timeoutMs ?? 30000,
     });
+    this.token = options.token;
     this.sema = new Sema(options.concurrency ?? 3);
   }
 
@@ -174,15 +176,35 @@ export class NotionClient {
 
   // ─── Database / DataSource ───
 
+  private async fetchDatabaseLegacy(databaseId: string): Promise<Record<string, unknown>> {
+    const cleanId = databaseId.replace(/-/g, "");
+    const formatted = `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20)}`;
+    const resp = await this.withRateLimit(async () => {
+      const r = await fetch(`https://api.notion.com/v1/databases/${formatted}`, {
+        headers: {
+          Authorization: `Bearer ${this.token}`,
+          "Notion-Version": "2022-06-28",
+          "Content-Type": "application/json",
+        },
+      });
+      if (!r.ok) throw new Error(`Database fetch failed: ${r.status}`);
+      return (await r.json()) as Record<string, unknown>;
+    });
+    return resp;
+  }
+
+  async getDatabaseTitle(databaseId: string): Promise<string> {
+    const db = await this.fetchDatabaseLegacy(databaseId);
+    const titleArr = db.title as Array<{ plain_text: string }> | undefined;
+    return titleArr?.[0]?.plain_text ?? "";
+  }
+
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.withRateLimit(() =>
-      this.client.databases.retrieve({ database_id: databaseId }),
-    );
-    const properties = (
-      db as unknown as { properties: Record<string, { id: string; type: string }> }
-    ).properties;
+    const db = await this.fetchDatabaseLegacy(databaseId);
+    const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
+    if (!properties) return {};
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -194,9 +216,10 @@ export class NotionClient {
     databaseId: string,
     options?: { startCursor?: string; pageSize?: number; filter?: unknown },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    const dsId = await this.getDataSourceId(databaseId);
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
-        data_source_id: databaseId,
+        data_source_id: dsId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? 100,
         filter: options?.filter as never,
@@ -237,6 +260,32 @@ export class NotionClient {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
 
+  async getFileBlockUrl(blockId: string): Promise<string | null> {
+    try {
+      const block = await this.withRateLimit(() =>
+        this.client.blocks.retrieve({ block_id: blockId }),
+      );
+      const b = block as unknown as {
+        type: string;
+        file?: { file?: { url: string }; external?: { url: string } };
+        pdf?: { file?: { url: string }; external?: { url: string } };
+        video?: { file?: { url: string }; external?: { url: string } };
+        audio?: { file?: { url: string }; external?: { url: string } };
+        image?: { file?: { url: string }; external?: { url: string } };
+      };
+      const media = b.file ?? b.pdf ?? b.video ?? b.audio ?? b.image;
+      return media?.file?.url ?? media?.external?.url ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  async getBlock(blockId: string): Promise<BlockObjectResponse> {
+    return this.withRateLimit(() =>
+      this.client.blocks.retrieve({ block_id: blockId }),
+    ) as Promise<BlockObjectResponse>;
+  }
+
   // ─── Block CRUD ───
 
   async listChildren(
@@ -270,6 +319,41 @@ export class NotionClient {
     } while (cursor);
 
     return blocks;
+  }
+
+  private static readonly CONTAINER_BLOCK_TYPES = new Set([
+    "column_list",
+    "column",
+    "callout",
+    "toggle",
+    "quote",
+  ]);
+
+  async fetchAllChildrenDeep(blockId: string): Promise<BlockObjectResponse[]> {
+    const directChildren = await this.fetchAllChildren(blockId);
+    const allBlocks: BlockObjectResponse[] = [...directChildren];
+
+    const toExpand = directChildren.filter((b) => {
+      if (!b.has_children) return false;
+      if (b.type === "child_page" || b.type === "child_database") return false;
+      if (NotionClient.CONTAINER_BLOCK_TYPES.has(b.type)) return true;
+      if (b.type === "synced_block") {
+        const sb = b as unknown as { synced_block: { synced_from: { block_id: string } | null } };
+        return sb.synced_block?.synced_from === null;
+      }
+      return true;
+    });
+
+    for (const container of toExpand) {
+      try {
+        const nested = await this.fetchAllChildrenDeep(container.id);
+        allBlocks.push(...nested);
+      } catch {
+        // 접근 권한 없는 블록 무시
+      }
+    }
+
+    return allBlocks;
   }
 
   async appendChildren(blockId: string, children: unknown[]): Promise<void> {
@@ -338,7 +422,7 @@ export class NotionClient {
   }
 
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
-    const blocks = await this.fetchAllChildren(parentId);
+    const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
 
     if (childPageBlocks.length === 0) return [];
@@ -347,15 +431,20 @@ export class NotionClient {
     return pages;
   }
 
+  async getChildDatabaseIds(parentId: string): Promise<string[]> {
+    const blocks = await this.fetchAllChildrenDeep(parentId);
+    return blocks.filter((b) => b.type === "child_database").map((b) => b.id);
+  }
+
   async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
 
     while (currentLevel.length > 0) {
-      const childArrays = await Promise.all(currentLevel.map((id) => this.getChildPages(id)));
       const nextLevel: string[] = [];
 
-      for (const children of childArrays) {
+      for (const id of currentLevel) {
+        const children = await this.getChildPages(id);
         for (const child of children) {
           all.push(child);
           nextLevel.push(child.id);
@@ -490,9 +579,18 @@ export class NotionClient {
 
   // ─── Internal ───
 
+  private lastRequestTime = 0;
+  private readonly minRequestInterval = 350;
+
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
     await this.sema.acquire();
     try {
+      const now = Date.now();
+      const elapsed = now - this.lastRequestTime;
+      if (elapsed < this.minRequestInterval) {
+        await sleep(this.minRequestInterval - elapsed);
+      }
+      this.lastRequestTime = Date.now();
       return await this.executeWithRetry(fn);
     } finally {
       this.sema.release();

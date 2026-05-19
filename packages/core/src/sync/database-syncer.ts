@@ -98,7 +98,7 @@ export class DatabaseSyncer {
     return { created, updated, failed };
   }
 
-  private async pullDatabase(dbConfig: DatabaseSyncConfig): Promise<DatabaseSyncResult> {
+  async pullDatabase(dbConfig: DatabaseSyncConfig): Promise<DatabaseSyncResult> {
     const schema = await this.notionClient.getDatabaseSchema(dbConfig.databaseId);
     this.propertyMapper.loadSchema(schema);
 
@@ -211,6 +211,11 @@ export class DatabaseSyncer {
     if (this.config.conversion.imageDownload === "immediate" && markdown) {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
       markdown = imageResult.content;
+    }
+
+    if (markdown) {
+      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+      markdown = fileResult.content;
     }
 
     const existingRecord = this.stateDb.getByNotionId(page.id);

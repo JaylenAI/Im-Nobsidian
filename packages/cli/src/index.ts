@@ -13,7 +13,7 @@ const program = new Command();
 program
   .name("im-nobsidian")
   .description("Im-Nobsidian: Obsidian ↔ Notion 양방향 동기화 CLI")
-  .version("0.1.0")
+  .version("0.1.1")
   .option("--verbose", "상세 로그 출력")
   .option("--quiet", "최소 출력");
 

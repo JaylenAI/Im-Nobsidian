@@ -90,11 +90,19 @@ export class SyncOrchestrator {
     const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
     const eligible = options?.force ? changes : changes.filter((c) => !conflictPaths.has(c.path));
 
-    const filtered = options?.paths
-      ? eligible.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
-      : eligible;
+    const dbFolders = (this.config.notion.databases ?? []).map((d) =>
+      d.localFolder.endsWith("/") ? d.localFolder : d.localFolder + "/",
+    );
+    const isDbPath = (path: string) => dbFolders.some((prefix) => path.startsWith(prefix));
 
-    if (filtered.length === 0) {
+    const filtered = (
+      options?.paths
+        ? eligible.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
+        : eligible
+    ).filter((c) => !isDbPath(c.path));
+
+    const hasDbConfigs = (this.config.notion.databases?.length ?? 0) > 0;
+    if (filtered.length === 0 && !hasDbConfigs) {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
     }
 
@@ -174,6 +182,48 @@ export class SyncOrchestrator {
     });
 
     await Promise.all(tasks.map((t) => t()));
+
+    if (failed.length > 0) {
+      const retryTargets = failed.splice(0, failed.length);
+      getLogger().info(`[Im-Nobsidian] Push ${retryTargets.length}건 재시도 (2초 후)`);
+      await new Promise((r) => setTimeout(r, 2000));
+
+      for (const target of retryTargets) {
+        const change = filtered.find((c) => c.path === target.path);
+        if (!change) {
+          failed.push(target);
+          continue;
+        }
+        try {
+          switch (change.type) {
+            case "created":
+              await this.pushCreate(change.path);
+              created++;
+              break;
+            case "modified":
+              await this.pushUpdate(change.path);
+              updated++;
+              break;
+            case "moved":
+              await this.pushMove(change.path);
+              updated++;
+              break;
+            case "deleted":
+              await this.pushDelete(change.path);
+              deleted++;
+              break;
+          }
+          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
+        } catch (error) {
+          failed.push({
+            path: change.path,
+            operation: target.operation,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
+        }
+      }
+    }
 
     if (this.config.sync.syncFiles !== false) {
       try {
@@ -308,6 +358,56 @@ export class SyncOrchestrator {
 
     await Promise.all(tasks.map((t) => t()));
 
+    if (failed.length > 0) {
+      const retryTargets = failed.splice(0, failed.length);
+      getLogger().info(`[Im-Nobsidian] Pull ${retryTargets.length}건 재시도 (2초 후)`);
+      await new Promise((r) => setTimeout(r, 2000));
+
+      for (const target of retryTargets) {
+        const change = filtered.find((c) => {
+          const record = this.stateDb.getByNotionId(c.pageId);
+          return (record?.obsidianPath ?? c.pageId) === target.path;
+        });
+        if (!change) {
+          failed.push(target);
+          continue;
+        }
+        try {
+          switch (change.type) {
+            case "created": {
+              const path = await this.pullCreate(change.pageId);
+              writtenPaths.push(path);
+              created++;
+              break;
+            }
+            case "modified": {
+              const result = await this.pullUpdate(change);
+              if (result.conflict) {
+                conflicts.push(result.conflict);
+              } else if (result.path) {
+                writtenPaths.push(result.path);
+                updated++;
+              }
+              break;
+            }
+            case "deleted": {
+              const path = await this.pullDelete(change.pageId);
+              if (path) deleted++;
+              break;
+            }
+          }
+          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${target.path}`);
+        } catch (error) {
+          failed.push({
+            path: target.path,
+            operation: target.operation,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${target.path}`);
+        }
+      }
+    }
+
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
         const dbResult = await this.databaseSyncer.pullAll();
@@ -325,6 +425,51 @@ export class SyncOrchestrator {
         getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
       }
     }
+
+    if (!this.isDatabaseMode) {
+      try {
+        const discoveredDbs = await this.discoverChildDatabases();
+        const configuredIds = new Set(
+          (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
+        );
+        const newDbs = discoveredDbs.filter((db) => !configuredIds.has(db.dbId.replace(/-/g, "")));
+        for (const { dbId, parentPageId } of newDbs) {
+          try {
+            const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
+            const safeName = (dbTitle || dbId.slice(0, 8))
+              .replace(/[^a-zA-Z0-9가-힣\s_-]/g, "")
+              .replace(/\s+/g, "-");
+            const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
+            let parentFolder = "databases";
+            if (parentEntry?.obsidianPath) {
+              const parts = parentEntry.obsidianPath.split("/");
+              parts.pop();
+              parentFolder = parts.length > 0 ? parts.join("/") : "databases";
+            }
+            const folderName = `${parentFolder}/${safeName}`;
+            const dbConfig = {
+              databaseId: dbId,
+              localFolder: folderName,
+              titleProperty: "Name",
+            };
+            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig);
+            created += dbResult.created;
+            updated += dbResult.updated;
+            failed.push(...dbResult.failed);
+          } catch (error) {
+            getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 동기화 실패:`, error);
+          }
+        }
+      } catch (error) {
+        getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
+      }
+    }
+
+    const allSyncedMdPaths = this.stateDb
+      .getAll()
+      .filter((r) => r.obsidianPath?.endsWith(".md"))
+      .map((r) => r.obsidianPath!);
+    await this.resolveNotionLinks(allSyncedMdPaths);
 
     this.stateDb.setMeta("last_pull_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
@@ -433,6 +578,82 @@ export class SyncOrchestrator {
 
   private get isDatabaseMode(): boolean {
     return this.config.notion.parentMode === "database" && !!this.config.notion.databaseId;
+  }
+
+  private async discoverChildDatabases(): Promise<Array<{ dbId: string; parentPageId: string }>> {
+    const rootId = this.config.notion.rootPageId;
+    const allDbs: Array<{ dbId: string; parentPageId: string }> = [];
+    let currentLevel: string[] = [rootId];
+
+    while (currentLevel.length > 0) {
+      const nextLevel: string[] = [];
+      for (const parentId of currentLevel) {
+        try {
+          const dbIds = await this.notionClient.getChildDatabaseIds(parentId);
+          for (const dbId of dbIds) {
+            allDbs.push({ dbId, parentPageId: parentId });
+          }
+          const childPages = await this.notionClient.getChildPages(parentId);
+          nextLevel.push(...childPages.map((p) => p.id));
+        } catch {
+          // 접근 권한 없는 블록 무시
+        }
+      }
+      currentLevel = nextLevel;
+    }
+
+    return allDbs;
+  }
+
+  private async resolveNotionLinks(paths: string[]): Promise<void> {
+    const allRecords = this.stateDb.getAll();
+    const idToTitle = new Map<string, string>();
+    for (const r of allRecords) {
+      if (r.notionPageId && r.obsidianPath) {
+        const title = r.obsidianPath.replace(/\.md$/, "").split("/").pop() ?? "";
+        const cleanId = r.notionPageId.replace(/-/g, "");
+        idToTitle.set(cleanId, title);
+        idToTitle.set(r.notionPageId, title);
+      }
+    }
+    if (idToTitle.size === 0) return;
+
+    for (const filePath of paths) {
+      if (!filePath.endsWith(".md")) continue;
+      try {
+        let content = await this.vaultFs.readFile(filePath);
+        let changed = false;
+
+        const resolved = content.replace(/\[\[notion:([a-f0-9-]+)\]\]/g, (_match, id: string) => {
+          const title = idToTitle.get(id.replace(/-/g, ""));
+          if (title) {
+            changed = true;
+            return `[[${title}]]`;
+          }
+          return _match;
+        });
+        content = resolved;
+
+        const resolved2 = content.replace(
+          /\[([^\]]+)\]\(\/([a-f0-9]{32})\?pvs=\d+\)/g,
+          (_match, text: string, id: string) => {
+            const title = idToTitle.get(id);
+            if (title) {
+              changed = true;
+              return `[[${title}|${text}]]`;
+            }
+            return _match;
+          },
+        );
+        content = resolved2;
+
+        if (changed) {
+          await this.vaultFs.writeFile(filePath, content);
+        }
+      } catch {
+        // 파일 읽기/쓰기 실패 무시
+      }
+    }
   }
 
   private async ensureDbSchema(): Promise<void> {
@@ -670,7 +891,7 @@ export class SyncOrchestrator {
 
     const parentPath = await this.resolveParentPath(page);
 
-    const allChildren = await this.notionClient.fetchAllChildren(pageId);
+    const allChildren = await this.notionClient.fetchAllChildrenDeep(pageId);
     const hasChildPages = allChildren.some((b) => "type" in b && b.type === "child_page");
 
     const markdown = await this.fetchPageMarkdown(pageId);
@@ -712,6 +933,9 @@ export class SyncOrchestrator {
       processedMarkdown = imageResult.content;
     }
 
+    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
+    processedMarkdown = fileResult.content;
+
     const finalContent = this.pipeline.convertToMarkdown(
       processedMarkdown,
       {
@@ -726,11 +950,12 @@ export class SyncOrchestrator {
     await this.vaultFs.writeFile(filePath, finalContent);
 
     const hash = computeHash(finalContent);
+    const resolvedParentId = await this.extractParentId(page);
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: filePath,
         notionPageId: pageId,
-        notionParentId: this.extractParentId(page),
+        notionParentId: resolvedParentId,
         contentHash: hash,
         notionLastEdited: page.last_edited_time,
         localLastModified: new Date().toISOString(),
@@ -776,6 +1001,9 @@ export class SyncOrchestrator {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
       markdown = imageResult.content;
     }
+
+    const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+    markdown = fileResult.content;
 
     const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
     const remoteContent = this.pipeline.convertToMarkdown(
@@ -933,7 +1161,7 @@ export class SyncOrchestrator {
   }
 
   private async resolveParentPath(page: PageObjectResponse): Promise<string> {
-    const parentId = this.extractParentId(page);
+    const parentId = await this.extractParentId(page);
     if (!parentId || notionIdsEqual(parentId, this.config.notion.rootPageId)) return "";
 
     const parentRecord = this.stateDb.getByNotionId(parentId);
@@ -1113,10 +1341,38 @@ export class SyncOrchestrator {
     return this.blockConverter.notionBlocksToMarkdown(pageId);
   }
 
-  private extractParentId(page: PageObjectResponse): string | null {
-    const parent = page.parent as { type: string; page_id?: string; database_id?: string };
+  private async extractParentId(page: PageObjectResponse): Promise<string | null> {
+    const parent = page.parent as {
+      type: string;
+      page_id?: string;
+      database_id?: string;
+      block_id?: string;
+    };
     if (parent.type === "page_id") return parent.page_id ?? null;
     if (parent.type === "database_id") return parent.database_id ?? null;
+    if (parent.type === "block_id" && parent.block_id) {
+      return this.resolveBlockToPageId(parent.block_id);
+    }
+    return null;
+  }
+
+  private async resolveBlockToPageId(blockId: string): Promise<string | null> {
+    for (let i = 0; i < 10; i++) {
+      try {
+        const block = await this.notionClient.getBlock(blockId);
+        const bp = (
+          block as unknown as { parent: { type: string; page_id?: string; block_id?: string } }
+        ).parent;
+        if (bp.type === "page_id") return bp.page_id ?? null;
+        if (bp.type === "block_id" && bp.block_id) {
+          blockId = bp.block_id;
+          continue;
+        }
+        return null;
+      } catch {
+        return null;
+      }
+    }
     return null;
   }
 

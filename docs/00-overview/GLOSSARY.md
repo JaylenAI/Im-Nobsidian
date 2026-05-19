@@ -68,8 +68,8 @@
 
 ## 패키지명
 
-| 패키지          | npm 이름                | 역할               |
-| --------------- | ----------------------- | ------------------ |
-| core            | `@im-nobsidian/core`    | 변환 + 동기화 엔진 |
-| cli             | `nobsi`                 | CLI 도구           |
-| obsidian-plugin | `obsidian-im-nobsidian` | Obsidian 플러그인  |
+| 패키지          | npm 이름                | 역할                    |
+| --------------- | ----------------------- | ----------------------- |
+| core            | `@im-nobsidian/core`    | 변환 + 동기화 엔진      |
+| cli             | `im-nobsidian`          | CLI 도구 (`nobsi` 명령) |
+| obsidian-plugin | `obsidian-im-nobsidian` | Obsidian 플러그인       |
