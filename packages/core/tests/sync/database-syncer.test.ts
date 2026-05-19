@@ -87,7 +87,11 @@ function createMockImageHandler() {
   return {
     downloadAllImages: vi.fn().mockImplementation(async (md: string) => ({
       content: md,
-      downloaded: [],
+      downloads: [],
+    })),
+    downloadAllFiles: vi.fn().mockImplementation(async (md: string) => ({
+      content: md,
+      downloads: [],
     })),
     uploadAndAppendImages: vi.fn().mockResolvedValue(undefined),
   };
