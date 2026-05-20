@@ -99,8 +99,6 @@ nobsi init
 
 대화형 설정이 토큰을 묻고, 사용 가능한 페이지를 보여줍니다. 선택하면 끝입니다.
 
-<img src="assets/demo/init.gif" alt="nobsi init" width="600" />
-
 ### 4. 동기화
 
 ```bash
@@ -116,36 +114,36 @@ nobsi watch    # 파일 변경 감시 + 자동 동기화
 
 <table>
 <tr>
+<td align="center"><strong>nobsi init</strong></td>
 <td align="center"><strong>nobsi pull</strong></td>
-<td align="center"><strong>nobsi push</strong></td>
 </tr>
 <tr>
+<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
 <td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
-<td><img src="assets/demo/push.gif" alt="nobsi push" width="400" /></td>
 </tr>
 <tr>
+<td align="center"><strong>nobsi push</strong></td>
 <td align="center"><strong>nobsi sync</strong></td>
-<td align="center"><strong>nobsi status</strong></td>
 </tr>
 <tr>
+<td><img src="assets/demo/push.gif" alt="nobsi push" width="400" /></td>
 <td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
-<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
 </tr>
 <tr>
+<td align="center"><strong>nobsi status</strong></td>
 <td align="center"><strong>nobsi diff</strong></td>
-<td align="center"><strong>nobsi resolve</strong></td>
 </tr>
 <tr>
+<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
 <td><img src="assets/demo/diff.gif" alt="nobsi diff" width="400" /></td>
-<td><img src="assets/demo/resolve.gif" alt="nobsi resolve" width="400" /></td>
 </tr>
 <tr>
+<td align="center"><strong>nobsi resolve</strong></td>
 <td align="center"><strong>nobsi watch</strong></td>
-<td></td>
 </tr>
 <tr>
+<td><img src="assets/demo/resolve.gif" alt="nobsi resolve" width="400" /></td>
 <td><img src="assets/demo/watch.gif" alt="nobsi watch" width="400" /></td>
-<td></td>
 </tr>
 </table>
 
