@@ -6,7 +6,17 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
 } from "@im-nobsidian/core";
-import ora from "ora";
+import chalk from "chalk";
+import {
+  header,
+  separator,
+  operationIcon,
+  operationLabel,
+  summary,
+  duration,
+  icons,
+  dimText,
+} from "../utils/format.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
@@ -26,26 +36,56 @@ export const syncCommand = new Command("sync")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      const spinner = ora("동기화 중...").start();
-      const result = await orchestrator.sync({
+      console.log(`\n${header("  Bidirectional Sync")}`);
+      console.log(`  ${separator()}`);
+      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+
+      // Pull phase
+      console.log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
+
+      const pullResult = await orchestrator.pull({
         dryRun: options.dryRun,
-        onProgress: (current, total, _item) => {
-          spinner.text = `동기화 중... [${current}/${total}]`;
+        onProgress: (_current, _total, item) => {
+          const icon = operationIcon(item.operation);
+          const label = operationLabel(item.operation);
+          console.log(`    ${icon} ${item.path} ${label}`);
         },
       });
-      spinner.stop();
 
-      console.log(`\n✓ 동기화 완료 (${(result.duration / 1000).toFixed(1)}s)`);
+      if (pullResult.imageCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
+      }
+      if (pullResult.linkCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
+      }
+
+      // Push phase
+      console.log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
+
+      const pushResult = await orchestrator.push({
+        dryRun: options.dryRun,
+        onProgress: (_current, _total, item) => {
+          const icon = operationIcon(item.operation);
+          const label = operationLabel(item.operation);
+          console.log(`    ${icon} ${item.path} ${label}`);
+        },
+      });
+
+      // Summary
+      const totalDuration = pullResult.duration + pushResult.duration;
+      console.log(`\n  ${header(chalk.green("Sync complete"))}`);
       console.log(
-        `  Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`,
+        `  ${chalk.blue("Pull:")} ${summary(pullResult.created, pullResult.updated, pullResult.deleted)}`,
       );
       console.log(
-        `  Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`,
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted)}`,
       );
+      console.log(`  ${duration(totalDuration)}`);
 
-      if (result.conflicts.length > 0) {
-        console.log(`\n  ⚠ 충돌 ${result.conflicts.length}건`);
-        console.log('  "nobsi resolve"로 충돌을 해결하세요.');
+      if (pullResult.conflicts.length > 0) {
+        console.log(
+          `\n  ${icons.conflict} ${chalk.magenta(`${pullResult.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
+        );
       }
     } finally {
       stateDb.close();

@@ -110,6 +110,27 @@ nobsi watch    # Auto-sync on file changes
 
 That's it. Your vault and Notion workspace are now linked.
 
+## Demo
+
+<table>
+<tr>
+<td align="center"><strong>nobsi pull</strong></td>
+<td align="center"><strong>nobsi sync</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
+<td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi status</strong></td>
+<td align="center"><strong>nobsi init</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
+<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
+</tr>
+</table>
+
 ## CLI Reference
 
 | Command             | Description                                  |
@@ -290,7 +311,7 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.5  ✅ Current — DB view rendering, file attachments, deep page discovery (554 tests)
+v0.1.6  ✅ Current — Beautiful CLI output, DB view rendering, file attachments (555 tests)
 v0.5.0  → Obsidian community plugin (sql.js WASM + sidebar UI)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
@@ -304,7 +325,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 554 tests
+pnpm test          # 555 tests
 pnpm lint
 pnpm typecheck
 

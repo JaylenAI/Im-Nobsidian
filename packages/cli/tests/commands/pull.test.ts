@@ -9,6 +9,9 @@ const mockPull = vi.fn().mockResolvedValue({
   writtenPaths: ["a.md", "b.md", "c.md", "d.md"],
   failed: [],
   duration: 2000,
+  imageCount: 0,
+  fileCount: 0,
+  linkCount: 0,
 });
 
 vi.mock("@im-nobsidian/core", () => ({
@@ -25,6 +28,21 @@ vi.mock("@im-nobsidian/core", () => ({
   SyncOrchestrator: vi.fn().mockImplementation(() => ({ pull: mockPull })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));
+
+vi.mock("chalk", () => {
+  const passthrough = (s: string) => s;
+  const fn = Object.assign(passthrough, {
+    green: passthrough,
+    yellow: passthrough,
+    red: passthrough,
+    blue: passthrough,
+    cyan: passthrough,
+    magenta: passthrough,
+    dim: passthrough,
+    bold: passthrough,
+  });
+  return { default: fn };
+});
 
 vi.mock("ora", () => ({
   default: vi.fn().mockReturnValue({
@@ -47,8 +65,8 @@ describe("pull command", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull();
     expect(mockPull).toHaveBeenCalled();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Pull 완료"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("생성: 3"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Pull complete"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 created"));
     spy.mockRestore();
   });
 
@@ -68,11 +86,14 @@ describe("pull command", () => {
       writtenPaths: [],
       failed: [],
       duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("충돌: 1"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("resolve"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("1 conflicts"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("nobsi resolve"));
     spy.mockRestore();
   });
 
@@ -85,10 +106,34 @@ describe("pull command", () => {
       writtenPaths: [],
       failed: [{ path: "bad.md", operation: "create", error: "timeout" }],
       duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("실패: 1"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("1 failed"));
+    spy.mockRestore();
+  });
+
+  it("이미지/파일/링크 카운트 출력", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 1,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: ["a.md"],
+      failed: [],
+      duration: 500,
+      imageCount: 5,
+      fileCount: 2,
+      linkCount: 3,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
     spy.mockRestore();
   });
 });

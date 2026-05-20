@@ -110,6 +110,27 @@ nobsi watch    # 파일 변경 감시 + 자동 동기화
 
 이제 볼트와 Notion 워크스페이스가 연결되었습니다.
 
+## 데모
+
+<table>
+<tr>
+<td align="center"><strong>nobsi pull</strong></td>
+<td align="center"><strong>nobsi sync</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
+<td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi status</strong></td>
+<td align="center"><strong>nobsi init</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
+<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
+</tr>
+</table>
+
 ## CLI 명령어
 
 | 명령어              | 설명                                    |
@@ -274,7 +295,7 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.1.5  ✅ 현재 — DB 뷰 렌더링, 파일 첨부, 깊은 페이지 탐색 (554개 테스트)
+v0.1.6  ✅ 현재 — Beautiful CLI 출력, DB 뷰 렌더링, 파일 첨부 (555개 테스트)
 v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM + 사이드바 UI)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```
@@ -288,7 +309,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 554개 테스트
+pnpm test          # 555개 테스트
 pnpm lint
 pnpm typecheck
 ```

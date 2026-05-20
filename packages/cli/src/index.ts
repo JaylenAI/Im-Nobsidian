@@ -26,4 +26,6 @@ program.addCommand(diffCommand);
 program.addCommand(resolveCommand);
 program.addCommand(watchCommand);
 
-program.parse();
+program.parseAsync().then(() => {
+  setTimeout(() => process.exit(0), 100);
+});

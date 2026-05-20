@@ -46,7 +46,12 @@ export interface Conflict {
   readonly remoteContent: string;
 }
 
-export type ProgressCallback = (current: number, total: number, path: string) => void;
+export interface ProgressItem {
+  readonly path: string;
+  readonly operation: "create" | "update" | "delete";
+}
+
+export type ProgressCallback = (current: number, total: number, item: ProgressItem) => void;
 
 export interface PushOptions {
   readonly paths?: string[];
@@ -85,6 +90,9 @@ export interface PullResult {
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];
   readonly duration: number;
+  readonly imageCount: number;
+  readonly fileCount: number;
+  readonly linkCount: number;
 }
 
 export interface SyncResult {

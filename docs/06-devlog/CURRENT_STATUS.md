@@ -1,16 +1,16 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-19
-> 버전: v0.1.5 (dev)
+> 마지막 업데이트: 2026-05-20
+> 버전: v0.1.6 (dev)
 
 ## 전체 상태
 
-**v0.1.5 개발 완료.** 동기화 품질 대폭 개선 — 파일 첨부 다운로드, 자식 페이지 완전 탐색, DB 뷰 렌더링 엔진 구축.
+**v0.1.6 개발 완료.** CLI UIUX 전면 개선 — chalk 기반 컬러풀 터미널 출력, 파일별 실시간 진행률, dry-run 개선.
 
 | 항목                     | 상태                                                |
 | ------------------------ | --------------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.1.0 published (v0.1.5 dev)                       |
-| npm `im-nobsidian` (CLI) | v0.1.0 published (v0.1.5 dev)                       |
+| npm `@im-nobsidian/core` | v0.1.0 published (v0.1.6 dev)                       |
+| npm `im-nobsidian` (CLI) | v0.1.0 published (v0.1.6 dev)                       |
 | GitHub Release           | v0.1.0 tagged                                       |
 | Obsidian Plugin          | v0.5.0 예정 (sql.js 전환 필요, 뷰 렌더링 구현 완료) |
 
@@ -57,11 +57,19 @@
 - 링크 해결 범위 확대 (전체 synced 파일)
 - 커버/아이콘 추출
 
+### v0.1.6 — Beautiful CLI 출력 (2026-05-20)
+
+- chalk 기반 컬러풀 터미널 UI (push/pull/sync/status/init)
+- 파일별 실시간 진행률 (create/update/delete 아이콘 + [n/N] 카운터)
+- dry-run 모드 개선 (파일별 미리보기 출력)
+- status 날짜 포맷 ISO 통일
+- CLI 데모 GIF 4종 생성 (asciinema → agg)
+
 ## 테스트 현황
 
 - **Core 테스트**: 524개 통과 (32 파일)
-- **CLI 테스트**: 30개 통과 (8 파일)
-- **총 554개 테스트**
+- **CLI 테스트**: 31개 통과 (8 파일)
+- **총 555개 테스트**
 
 ## 지원 기능
 

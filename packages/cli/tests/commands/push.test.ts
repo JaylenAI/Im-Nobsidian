@@ -24,6 +24,21 @@ vi.mock("@im-nobsidian/core", () => ({
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));
 
+vi.mock("chalk", () => {
+  const passthrough = (s: string) => s;
+  const fn = Object.assign(passthrough, {
+    green: passthrough,
+    yellow: passthrough,
+    red: passthrough,
+    blue: passthrough,
+    cyan: passthrough,
+    magenta: passthrough,
+    dim: passthrough,
+    bold: passthrough,
+  });
+  return { default: fn };
+});
+
 vi.mock("ora", () => ({
   default: vi.fn().mockReturnValue({
     start: vi.fn().mockReturnThis(),
@@ -45,9 +60,9 @@ describe("push command", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPush();
     expect(mockPush).toHaveBeenCalled();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Push 완료"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("생성: 2"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("수정: 1"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Push complete"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 created"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("1 updated"));
     spy.mockRestore();
   });
 
@@ -75,7 +90,7 @@ describe("push command", () => {
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPush();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("삭제: 3"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 deleted"));
     spy.mockRestore();
   });
 
@@ -89,7 +104,7 @@ describe("push command", () => {
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPush();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("실패: 1"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("1 failed"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("API error"));
     spy.mockRestore();
   });

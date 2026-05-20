@@ -44,6 +44,8 @@ export class SyncOrchestrator {
   private readonly databaseSyncer: DatabaseSyncer;
   private readonly propertyMapper: PropertyMapper;
   private dbSchemaLoaded = false;
+  private _pullImageCount = 0;
+  private _pullFileCount = 0;
 
   constructor(
     private readonly config: Config,
@@ -110,6 +112,17 @@ export class SyncOrchestrator {
       const dryCreated = filtered.filter((c) => c.type === "created").length;
       const dryUpdated = filtered.filter((c) => c.type === "modified" || c.type === "moved").length;
       const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
+      let dryProgress = 0;
+      const dryTotal = filtered.length;
+      for (const change of filtered) {
+        const op =
+          change.type === "created"
+            ? ("create" as const)
+            : change.type === "deleted"
+              ? ("delete" as const)
+              : ("update" as const);
+        options?.onProgress?.(++dryProgress, dryTotal, { path: change.path, operation: op });
+      }
       return {
         created: dryCreated,
         updated: dryUpdated,
@@ -150,7 +163,13 @@ export class SyncOrchestrator {
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
-        options?.onProgress?.(++completed, total, change.path);
+        const op =
+          change.type === "created"
+            ? ("create" as const)
+            : change.type === "deleted"
+              ? ("delete" as const)
+              : ("update" as const);
+        options?.onProgress?.(++completed, total, { path: change.path, operation: op });
         switch (change.type) {
           case "created":
             await this.pushCreate(change.path);
@@ -264,6 +283,9 @@ export class SyncOrchestrator {
       writtenPaths: [],
       failed: [],
       duration: Date.now() - startTime,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
     };
 
     if (this.config.sync.direction === "push") {
@@ -275,6 +297,8 @@ export class SyncOrchestrator {
     let created = 0;
     let updated = 0;
     let deleted = 0;
+    this._pullImageCount = 0;
+    this._pullFileCount = 0;
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
@@ -296,6 +320,19 @@ export class SyncOrchestrator {
       const dryCreated = filtered.filter((c) => c.type === "created").length;
       const dryUpdated = filtered.filter((c) => c.type === "modified").length;
       const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
+      let dryProgress = 0;
+      const dryTotal = filtered.length;
+      for (const change of filtered) {
+        const op =
+          change.type === "created"
+            ? ("create" as const)
+            : change.type === "deleted"
+              ? ("delete" as const)
+              : ("update" as const);
+        const record = this.stateDb.getByNotionId(change.pageId);
+        const displayPath = record?.obsidianPath ?? change.pageId;
+        options?.onProgress?.(++dryProgress, dryTotal, { path: displayPath, operation: op });
+      }
       return {
         created: dryCreated,
         updated: dryUpdated,
@@ -304,6 +341,9 @@ export class SyncOrchestrator {
         writtenPaths: [],
         failed: [],
         duration: Date.now() - startTime,
+        imageCount: 0,
+        fileCount: 0,
+        linkCount: 0,
       };
     }
 
@@ -317,7 +357,15 @@ export class SyncOrchestrator {
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
-        options?.onProgress?.(++pullCompleted, pullTotal, change.pageId);
+        const record = this.stateDb.getByNotionId(change.pageId);
+        const displayPath = record?.obsidianPath ?? change.pageId;
+        const op =
+          change.type === "created"
+            ? ("create" as const)
+            : change.type === "deleted"
+              ? ("delete" as const)
+              : ("update" as const);
+        options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
         switch (change.type) {
           case "created": {
             const path = await this.pullCreate(change.pageId);
@@ -469,7 +517,7 @@ export class SyncOrchestrator {
       .getAll()
       .filter((r) => r.obsidianPath?.endsWith(".md"))
       .map((r) => r.obsidianPath!);
-    await this.resolveNotionLinks(allSyncedMdPaths);
+    const linkCount = await this.resolveNotionLinks(allSyncedMdPaths);
 
     this.stateDb.setMeta("last_pull_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
@@ -483,6 +531,9 @@ export class SyncOrchestrator {
       writtenPaths,
       failed,
       duration: Date.now() - startTime,
+      imageCount: this._pullImageCount,
+      fileCount: this._pullFileCount,
+      linkCount,
     };
   }
 
@@ -605,7 +656,8 @@ export class SyncOrchestrator {
     return allDbs;
   }
 
-  private async resolveNotionLinks(paths: string[]): Promise<void> {
+  private async resolveNotionLinks(paths: string[]): Promise<number> {
+    let totalResolved = 0;
     const allRecords = this.stateDb.getAll();
     const idToTitle = new Map<string, string>();
     for (const r of allRecords) {
@@ -616,7 +668,7 @@ export class SyncOrchestrator {
         idToTitle.set(r.notionPageId, title);
       }
     }
-    if (idToTitle.size === 0) return;
+    if (idToTitle.size === 0) return 0;
 
     for (const filePath of paths) {
       if (!filePath.endsWith(".md")) continue;
@@ -627,6 +679,7 @@ export class SyncOrchestrator {
         const resolved = content.replace(/\[\[notion:([a-f0-9-]+)\]\]/g, (_match, id: string) => {
           const title = idToTitle.get(id.replace(/-/g, ""));
           if (title) {
+            totalResolved++;
             changed = true;
             return `[[${title}]]`;
           }
@@ -639,6 +692,7 @@ export class SyncOrchestrator {
           (_match, text: string, id: string) => {
             const title = idToTitle.get(id);
             if (title) {
+              totalResolved++;
               changed = true;
               return `[[${title}|${text}]]`;
             }
@@ -654,6 +708,7 @@ export class SyncOrchestrator {
         // 파일 읽기/쓰기 실패 무시
       }
     }
+    return totalResolved;
   }
 
   private async ensureDbSchema(): Promise<void> {
@@ -931,10 +986,12 @@ export class SyncOrchestrator {
     if (this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
       processedMarkdown = imageResult.content;
+      this._pullImageCount += imageResult.downloads.length;
     }
 
     const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
     processedMarkdown = fileResult.content;
+    this._pullFileCount += fileResult.downloads.length;
 
     const finalContent = this.pipeline.convertToMarkdown(
       processedMarkdown,
@@ -1000,10 +1057,12 @@ export class SyncOrchestrator {
     if (this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
       markdown = imageResult.content;
+      this._pullImageCount += imageResult.downloads.length;
     }
 
     const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
     markdown = fileResult.content;
+    this._pullFileCount += fileResult.downloads.length;
 
     const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
     const remoteContent = this.pipeline.convertToMarkdown(

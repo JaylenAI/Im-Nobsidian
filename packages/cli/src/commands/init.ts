@@ -2,6 +2,8 @@ import { Command } from "commander";
 import { ConfigManager, NotionClient } from "@im-nobsidian/core";
 import { input, confirm } from "@inquirer/prompts";
 import ora from "ora";
+import chalk from "chalk";
+import { header, separator, icons, dimText } from "../utils/format.js";
 
 export const initCommand = new Command("init")
   .description("Im-Nobsidian 초기 설정")
@@ -11,6 +13,9 @@ export const initCommand = new Command("init")
   .action(async (options: { token?: string; rootPageId?: string; nonInteractive?: boolean }) => {
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
+
+    console.log(`\n${header(chalk.cyan("  Im-Nobsidian Setup"))}`);
+    console.log(`  ${separator()}`);
 
     if (options.nonInteractive) {
       if (!options.token || !options.rootPageId) {
@@ -29,12 +34,15 @@ export const initCommand = new Command("init")
       try {
         const client = new NotionClient({ token: options.token });
         await client.search({ pageSize: 1, filter: { property: "object", value: "page" } });
-        spinner.succeed("Notion 연결 성공");
+        spinner.stop();
+        console.log(`  ${icons.success} Token validated`);
 
         await configManager.init({ token: options.token, rootPageId: options.rootPageId });
-        console.log("\n✓ Im-Nobsidian 초기화 완료!");
-        console.log(`  설정: ${configManager.configPath}`);
-        console.log(`  DB: ${configManager.dbPath}`);
+        console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
+        console.log(`  ${icons.success} State DB initialized`);
+        console.log(
+          `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
+        );
       } catch (error) {
         spinner.fail("Notion 연결 실패");
         console.error(error instanceof Error ? error.message : error);
@@ -53,7 +61,7 @@ export const initCommand = new Command("init")
     }
 
     const token = await input({
-      message: "Notion Internal Integration Token:",
+      message: "Notion Integration Token:",
       validate: (v) => v.startsWith("ntn_") || "ntn_으로 시작하는 토큰을 입력하세요",
     });
 
@@ -65,17 +73,20 @@ export const initCommand = new Command("init")
         pageSize: 10,
         filter: { property: "object", value: "page" },
       });
-      spinner.succeed("Notion 연결 성공");
+      spinner.stop();
+      console.log(`  ${icons.success} Token validated`);
 
       if (result.results.length === 0) {
-        spinner.warn("접근 가능한 페이지가 없습니다. Integration에 페이지를 공유해주세요.");
+        console.log(
+          `\n  ${chalk.yellow("⚠")} 접근 가능한 페이지가 없습니다. Integration에 페이지를 공유해주세요.`,
+        );
         return;
       }
 
-      console.log("\n사용 가능한 루트 페이지:");
+      console.log(`\n  Select root page:`);
       for (const [i, page] of result.results.entries()) {
         const title = extractPageTitle(page);
-        console.log(`  [${i + 1}] ${title}`);
+        console.log(`    ${dimText(`${i + 1}.`)} ${title}`);
       }
 
       const rootPageId = await input({
@@ -84,13 +95,11 @@ export const initCommand = new Command("init")
       });
 
       await configManager.init({ token, rootPageId });
-      console.log("\n✓ Im-Nobsidian 초기화 완료!");
-      console.log(`  설정: ${configManager.configPath}`);
-      console.log(`  DB: ${configManager.dbPath}`);
-      console.log("\n다음 명령으로 동기화를 시작하세요:");
-      console.log("  nobsi pull   — Notion → 로컬");
-      console.log("  nobsi push   — 로컬 → Notion");
-      console.log("  nobsi sync   — 양방향");
+      console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
+      console.log(`  ${icons.success} State DB initialized`);
+      console.log(
+        `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
+      );
     } catch (error) {
       spinner.fail("Notion 연결 실패");
       console.error(error instanceof Error ? error.message : error);

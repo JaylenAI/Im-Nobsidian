@@ -61,6 +61,9 @@ importers:
       "@inquirer/prompts":
         specifier: ^7.0.0
         version: 7.10.1(@types/node@22.19.18)
+      chalk:
+        specifier: ^5.6.2
+        version: 5.6.2
       commander:
         specifier: ^12.0.0
         version: 12.1.0

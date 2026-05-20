@@ -18,8 +18,9 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@inquirer/prompts": "^7.0.0",
     "@im-nobsidian/core": "workspace:*",
+    "@inquirer/prompts": "^7.0.0",
+    "chalk": "^5.6.2",
     "commander": "^12.0.0",
     "diff": "^9.0.0",
     "ora": "^8.0.0"

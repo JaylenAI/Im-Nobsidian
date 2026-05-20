@@ -16,6 +16,21 @@ vi.mock("@im-nobsidian/core", () => ({
   })),
 }));
 
+vi.mock("chalk", () => {
+  const passthrough = (s: string) => s;
+  const fn = Object.assign(passthrough, {
+    green: passthrough,
+    yellow: passthrough,
+    red: passthrough,
+    blue: passthrough,
+    cyan: passthrough,
+    magenta: passthrough,
+    dim: passthrough,
+    bold: passthrough,
+  });
+  return { default: fn };
+});
+
 vi.mock("ora", () => ({
   default: vi.fn().mockReturnValue({
     start: vi.fn().mockReturnThis(),
@@ -62,7 +77,9 @@ describe("init command", () => {
   it("비대화형 모드 — 성공", async () => {
     const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runInit("--non-interactive", "--token", "ntn_valid", "--root-page-id", "pg123");
-    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("초기화 완료"));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Token validated"));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Config saved"));
+    expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Ready!"));
     expect(mockInit).toHaveBeenCalled();
     consoleSpy.mockRestore();
   });

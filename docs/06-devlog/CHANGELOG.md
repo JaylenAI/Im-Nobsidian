@@ -3,6 +3,27 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.6] - 2026-05-20
+
+### Added
+
+- **Beautiful CLI 출력** — chalk 기반 컬러풀한 터미널 UI (push/pull/sync/status/init 전 명령어)
+- **실시간 진행률 표시** — 파일별 create/update/delete 아이콘 + [n/N] 카운터
+- **dry-run 파일별 출력** — `--dry-run` 모드에서도 개별 파일 진행률 표시
+- **CLI 데모 GIF** — asciinema .cast → agg 변환 (init, pull, sync, status 4종)
+- **format 유틸리티** — `header()`, `separator()`, `icons`, `dimText()` 공유 모듈
+
+### Fixed
+
+- **dry-run onProgress 미호출** — orchestrator의 push/pull dry-run 경로에서 onProgress 콜백 누락 수정
+- **status 날짜 로케일 의존** — `toLocaleString()` → ISO 수동 포맷으로 교체 (한국어 로케일 불일치 방지)
+- **CLI 프로세스 미종료** — `parseAsync()` 후 `setTimeout(() => process.exit(0), 100)` 추가
+
+### Changed
+
+- 테스트: 555개 통과 (core 524 + CLI 31)
+- README/README.ko.md: 데모 GIF 섹션 추가, 로드맵 v0.1.6 업데이트
+
 ## [0.1.5] - 2026-05-19
 
 ### Added

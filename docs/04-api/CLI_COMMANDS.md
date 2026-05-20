@@ -91,18 +91,30 @@ nobsi status
 출력 예시:
 
 ```
-📊 Sync Status
-  Modified: 3 files
-  New: 1 file
-  Conflicts: 1 file
+  Sync Status
+  ──────────────────────────────────────────────────
+  Root page:  35a13b18...
+  Direction:  bidirectional
+  Last sync:  2026-05-19 23:45:12
 
-📁 Modified
-  notes/plan.md
-  notes/ideas.md
-  projects/roadmap.md
+  Tracked files: 42
+  ● synced     38
+  ● modified   2
+  ● new        1
+  ● conflict   1
 
-⚠️  Conflicts
-  meeting.md (both sides modified)
+  Modified files:
+    ~ Project Proposal.md       (local changed)
+    ~ Dev Notes/API Guide.md    (local changed)
+
+  New files:
+    + Meeting Notes/2026-05-20.md (untracked)
+
+  Conflicts:
+    ! README.md                 (both sides changed)
+
+  Run nobsi resolve to resolve conflicts
+  Run nobsi sync to push/pull changes
 ```
 
 ---

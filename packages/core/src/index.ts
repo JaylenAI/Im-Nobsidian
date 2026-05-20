@@ -19,6 +19,7 @@ export type {
   OperationType,
   ConflictStrategy,
   ProgressCallback,
+  ProgressItem,
   ConversionPath,
   Processor,
   ProcessorInput,
