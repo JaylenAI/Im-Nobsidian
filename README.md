@@ -99,37 +99,75 @@ nobsi init
 
 The interactive setup will ask for your token and show available pages. Pick one. Done.
 
-### 4. Sync
+<img src="assets/demo/init.gif" alt="nobsi init" width="600" />
+
+### 4. Pull from Notion
 
 ```bash
-nobsi sync     # Bidirectional — pull then push
-nobsi push     # Obsidian → Notion only
-nobsi pull     # Notion → Obsidian only
+nobsi pull     # Notion → Obsidian
+```
+
+Fetch all pages under your root page, convert to markdown, download images and file attachments.
+
+<img src="assets/demo/pull.gif" alt="nobsi pull" width="600" />
+
+### 5. Push to Notion
+
+```bash
+nobsi push     # Obsidian → Notion
+```
+
+Detect changed `.md` files via SHA-256 hash, convert to Notion blocks, create or update pages.
+
+<img src="assets/demo/push.gif" alt="nobsi push" width="600" />
+
+### 6. Bidirectional Sync
+
+```bash
+nobsi sync     # Pull first, then push
+```
+
+The full round-trip: pull remote changes, then push local changes. Conflicts are detected automatically.
+
+<img src="assets/demo/sync.gif" alt="nobsi sync" width="600" />
+
+### 7. Check Status
+
+```bash
+nobsi status   # See what changed
+```
+
+<img src="assets/demo/status.gif" alt="nobsi status" width="600" />
+
+### 8. View Differences
+
+```bash
+nobsi diff [path]   # Git-style diff between local and Notion
+```
+
+<img src="assets/demo/diff.gif" alt="nobsi diff" width="600" />
+
+### 9. Resolve Conflicts
+
+When both sides change the same file, Im-Nobsidian detects it and walks you through resolution interactively.
+
+```bash
+nobsi resolve   # Interactive conflict resolution
+```
+
+<img src="assets/demo/resolve.gif" alt="nobsi resolve" width="600" />
+
+### 10. Watch Mode
+
+```bash
 nobsi watch    # Auto-sync on file changes
 ```
 
+File changes are detected in real-time and synced automatically. Press `Ctrl+C` to stop.
+
+<img src="assets/demo/watch.gif" alt="nobsi watch" width="600" />
+
 That's it. Your vault and Notion workspace are now linked.
-
-## Demo
-
-<table>
-<tr>
-<td align="center"><strong>nobsi pull</strong></td>
-<td align="center"><strong>nobsi sync</strong></td>
-</tr>
-<tr>
-<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
-<td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
-</tr>
-<tr>
-<td align="center"><strong>nobsi status</strong></td>
-<td align="center"><strong>nobsi init</strong></td>
-</tr>
-<tr>
-<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
-<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
-</tr>
-</table>
 
 ## CLI Reference
 

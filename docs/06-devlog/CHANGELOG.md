@@ -10,7 +10,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Beautiful CLI 출력** — chalk 기반 컬러풀한 터미널 UI (push/pull/sync/status/init 전 명령어)
 - **실시간 진행률 표시** — 파일별 create/update/delete 아이콘 + [n/N] 카운터
 - **dry-run 파일별 출력** — `--dry-run` 모드에서도 개별 파일 진행률 표시
-- **CLI 데모 GIF** — asciinema .cast → agg 변환 (init, pull, sync, status 4종)
+- **CLI 데모 GIF 8종** — asciinema .cast → agg 변환 (init, pull, push, sync, status, diff, resolve, watch)
 - **format 유틸리티** — `header()`, `separator()`, `icons`, `dimText()` 공유 모듈
 
 ### Fixed
@@ -22,7 +22,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Changed
 
 - 테스트: 555개 통과 (core 524 + CLI 31)
-- README/README.ko.md: 데모 GIF 섹션 추가, 로드맵 v0.1.6 업데이트
+- README/README.ko.md: 워크플로우 흐름에 GIF 8종 배치, 로드맵 v0.1.6 업데이트
 
 ## [0.1.5] - 2026-05-19
 

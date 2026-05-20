@@ -63,7 +63,8 @@
 - 파일별 실시간 진행률 (create/update/delete 아이콘 + [n/N] 카운터)
 - dry-run 모드 개선 (파일별 미리보기 출력)
 - status 날짜 포맷 ISO 통일
-- CLI 데모 GIF 4종 생성 (asciinema → agg)
+- CLI 데모 GIF 8종 생성 (init/pull/push/sync/status/diff/resolve/watch)
+- README 워크플로우 흐름에 GIF 자연스럽게 배치
 
 ## 테스트 현황
 
