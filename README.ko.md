@@ -101,73 +101,53 @@ nobsi init
 
 <img src="assets/demo/init.gif" alt="nobsi init" width="600" />
 
-### 4. Notion에서 가져오기
+### 4. 동기화
 
 ```bash
-nobsi pull     # Notion → Obsidian
-```
-
-루트 페이지 하위의 모든 페이지를 가져와서 마크다운으로 변환하고, 이미지와 파일 첨부를 다운로드합니다.
-
-<img src="assets/demo/pull.gif" alt="nobsi pull" width="600" />
-
-### 5. Notion에 보내기
-
-```bash
-nobsi push     # Obsidian → Notion
-```
-
-SHA-256 해시로 변경된 `.md` 파일을 감지하고, Notion 블록으로 변환하여 페이지를 생성하거나 수정합니다.
-
-<img src="assets/demo/push.gif" alt="nobsi push" width="600" />
-
-### 6. 양방향 동기화
-
-```bash
-nobsi sync     # Pull 후 Push
-```
-
-원격 변경사항을 먼저 가져오고, 로컬 변경사항을 보냅니다. 충돌은 자동으로 감지됩니다.
-
-<img src="assets/demo/sync.gif" alt="nobsi sync" width="600" />
-
-### 7. 상태 확인
-
-```bash
-nobsi status   # 변경사항 확인
-```
-
-<img src="assets/demo/status.gif" alt="nobsi status" width="600" />
-
-### 8. 차이 비교
-
-```bash
-nobsi diff [경로]   # 로컬과 Notion 간 Git 스타일 diff
-```
-
-<img src="assets/demo/diff.gif" alt="nobsi diff" width="600" />
-
-### 9. 충돌 해결
-
-양쪽에서 같은 파일을 수정하면 Im-Nobsidian이 감지하고, 대화형으로 해결을 안내합니다.
-
-```bash
-nobsi resolve   # 대화형 충돌 해결
-```
-
-<img src="assets/demo/resolve.gif" alt="nobsi resolve" width="600" />
-
-### 10. 감시 모드
-
-```bash
+nobsi sync     # 양방향 — pull 후 push
+nobsi push     # Obsidian → Notion만
+nobsi pull     # Notion → Obsidian만
 nobsi watch    # 파일 변경 감시 + 자동 동기화
 ```
 
-파일 변경이 실시간으로 감지되어 자동 동기화됩니다. `Ctrl+C`로 종료합니다.
-
-<img src="assets/demo/watch.gif" alt="nobsi watch" width="600" />
-
 이제 볼트와 Notion 워크스페이스가 연결되었습니다.
+
+## 실제 동작
+
+<table>
+<tr>
+<td align="center"><strong>nobsi pull</strong></td>
+<td align="center"><strong>nobsi push</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
+<td><img src="assets/demo/push.gif" alt="nobsi push" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi sync</strong></td>
+<td align="center"><strong>nobsi status</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
+<td><img src="assets/demo/status.gif" alt="nobsi status" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi diff</strong></td>
+<td align="center"><strong>nobsi resolve</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/diff.gif" alt="nobsi diff" width="400" /></td>
+<td><img src="assets/demo/resolve.gif" alt="nobsi resolve" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi watch</strong></td>
+<td></td>
+</tr>
+<tr>
+<td><img src="assets/demo/watch.gif" alt="nobsi watch" width="400" /></td>
+<td></td>
+</tr>
+</table>
 
 ## CLI 명령어
 
