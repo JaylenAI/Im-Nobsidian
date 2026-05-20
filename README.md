@@ -115,19 +115,19 @@ That's it. Your vault and Notion workspace are now linked.
 <table>
 <tr>
 <td align="center"><strong>nobsi init</strong></td>
-<td align="center"><strong>nobsi pull</strong></td>
-</tr>
-<tr>
-<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
-<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
-</tr>
-<tr>
-<td align="center"><strong>nobsi push</strong></td>
 <td align="center"><strong>nobsi sync</strong></td>
 </tr>
 <tr>
-<td><img src="assets/demo/push.gif" alt="nobsi push" width="400" /></td>
+<td><img src="assets/demo/init.gif" alt="nobsi init" width="400" /></td>
 <td><img src="assets/demo/sync.gif" alt="nobsi sync" width="400" /></td>
+</tr>
+<tr>
+<td align="center"><strong>nobsi push</strong></td>
+<td align="center"><strong>nobsi pull</strong></td>
+</tr>
+<tr>
+<td><img src="assets/demo/push.gif" alt="nobsi push" width="400" /></td>
+<td><img src="assets/demo/pull.gif" alt="nobsi pull" width="400" /></td>
 </tr>
 <tr>
 <td align="center"><strong>nobsi status</strong></td>
