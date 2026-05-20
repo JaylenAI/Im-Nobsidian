@@ -1,16 +1,16 @@
 # 현재 진행 상황
 
 > 마지막 업데이트: 2026-05-20
-> 버전: v0.1.6 (dev)
+> 버전: v0.1.7
 
 ## 전체 상태
 
-**v0.1.6 개발 완료.** CLI UIUX 전면 개선 — chalk 기반 컬러풀 터미널 출력, 파일별 실시간 진행률, dry-run 개선.
+**v0.1.7 릴리스.** CLI UIUX 전면 개선 + 데모 GIF 8종 완성 — 모든 CLI 명령어의 실제 동작을 시각적으로 보여주는 README 구성.
 
 | 항목                     | 상태                                                |
 | ------------------------ | --------------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.1.0 published (v0.1.6 dev)                       |
-| npm `im-nobsidian` (CLI) | v0.1.0 published (v0.1.6 dev)                       |
+| npm `@im-nobsidian/core` | v0.1.7 (릴리스 준비)                                |
+| npm `im-nobsidian` (CLI) | v0.1.7 (릴리스 준비)                                |
 | GitHub Release           | v0.1.0 tagged                                       |
 | Obsidian Plugin          | v0.5.0 예정 (sql.js 전환 필요, 뷰 렌더링 구현 완료) |
 

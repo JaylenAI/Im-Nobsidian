@@ -311,7 +311,7 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.1.6  ✅ 현재 — Beautiful CLI 출력, DB 뷰 렌더링, 파일 첨부 (555개 테스트)
+v0.1.7  ✅ 현재 — Beautiful CLI 출력, 데모 GIF 8종, DB 뷰 렌더링, 파일 첨부 (555개 테스트)
 v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM + 사이드바 UI)
 v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
 ```

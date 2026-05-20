@@ -3,6 +3,19 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.7] - 2026-05-20
+
+### Added
+
+- **CLI 데모 GIF 8종** — init, pull, push, sync, status, diff, resolve, watch 전 명령어 데모
+- **In Action 섹션** — README에 4x2 그리드로 모든 CLI 데모 한눈에 배치
+
+### Changed
+
+- README 레이아웃 개선 — Getting Started 간결화 + In Action 그리드
+- 불필요한 SVG 데모 파일 제거 (GIF로 대체)
+- 버전 0.1.7 업데이트 (core, cli, obsidian-plugin)
+
 ## [0.1.6] - 2026-05-20
 
 ### Added

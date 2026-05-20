@@ -327,7 +327,7 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.6  ✅ Current — Beautiful CLI output, DB view rendering, file attachments (555 tests)
+v0.1.7  ✅ Current — Beautiful CLI output, demo GIFs, DB view rendering, file attachments (555 tests)
 v0.5.0  → Obsidian community plugin (sql.js WASM + sidebar UI)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
