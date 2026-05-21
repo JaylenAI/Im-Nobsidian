@@ -27,7 +27,6 @@ esbuild
       "@lezer/lr",
       ...builtins,
       ...nodeBuiltinsWithPrefix,
-      "better-sqlite3",
     ],
     plugins: [
       sveltePlugin({
@@ -46,5 +45,12 @@ esbuild
   })
   .then(() => {
     copyFileSync("src/styles/main.css", "styles.css");
+    try {
+      const wasmSrc = new URL("../node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
+      copyFileSync(wasmSrc, "sql-wasm.wasm");
+    } catch {
+      const pnpmPath = new URL("../../node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
+      copyFileSync(pnpmPath, "sql-wasm.wasm");
+    }
   })
   .catch(() => process.exit(1));

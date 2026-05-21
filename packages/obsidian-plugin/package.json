@@ -12,7 +12,8 @@
     "clean": "rm -f main.js main.js.map"
   },
   "dependencies": {
-    "@im-nobsidian/core": "workspace:*"
+    "@im-nobsidian/core": "workspace:*",
+    "sql.js": "^1.14.1"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

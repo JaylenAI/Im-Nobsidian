@@ -126,6 +126,9 @@ importers:
       "@im-nobsidian/core":
         specifier: workspace:*
         version: link:../core
+      sql.js:
+        specifier: ^1.14.1
+        version: 1.14.1
     devDependencies:
       "@types/node":
         specifier: ^22.0.0
@@ -4164,6 +4167,12 @@ packages:
         integrity: sha512-D9cPgkvLlV3t3IzL0D0YLvGA9Ahk4PcvVwUbN0dSGr1aP0Nrt4AEnTUbuGvquEC0mA64Gqt1fzirlRs5ibXx8g==,
       }
 
+  sql.js@1.14.1:
+    resolution:
+      {
+        integrity: sha512-gcj8zBWU5cFsi9WUP+4bFNXAyF1iRpA3LLyS/DP5xlrNzGmPIizUeBggKa8DbDwdqaKwUcTEnChtd2grWo/x/A==,
+      }
+
   stackback@0.0.2:
     resolution:
       {
@@ -7029,6 +7038,8 @@ snapshots:
       signal-exit: 4.1.0
 
   sprintf-js@1.0.3: {}
+
+  sql.js@1.14.1: {}
 
   stackback@0.0.2: {}
 

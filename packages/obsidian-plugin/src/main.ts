@@ -1,6 +1,5 @@
 import { Plugin, Notice, MarkdownRenderChild, type TFile } from "obsidian";
 import {
-  StateDB,
   NotionClient,
   SyncOrchestrator,
   ConflictResolver,
@@ -9,6 +8,7 @@ import {
   EntryEditor,
 } from "@im-nobsidian/core";
 import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
@@ -103,7 +103,7 @@ export default class ImNobsidianPlugin extends Plugin {
     this.updateStatusBar("ready");
 
     if (this.settings.token && this.settings.rootPageId) {
-      this.initOrchestrator();
+      await this.initOrchestrator();
     }
 
     if (this.settings.autoSync) {
@@ -117,6 +117,9 @@ export default class ImNobsidianPlugin extends Plugin {
   onunload(): void {
     this.stopAutoSync();
     this.clearVaultDebounce();
+    if (this.stateDb && "flush" in this.stateDb) {
+      void (this.stateDb as SqlJsStateDB).flush();
+    }
     this.stateDb?.close();
     this.app.workspace.detachLeavesOfType(DATABASE_VIEW_TYPE);
   }
@@ -130,14 +133,37 @@ export default class ImNobsidianPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  initOrchestrator(): void {
+  async initOrchestrator(): Promise<void> {
     if (!this.settings.token || !this.settings.rootPageId) return;
 
     try {
       this.stateDb?.close();
 
-      const dbPath = `${(this.app.vault.adapter as unknown as { basePath: string }).basePath}/.im-nobsidian/sync.db`;
-      this.stateDb = StateDB.open(dbPath);
+      const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
+      const wasmPath = `${basePath}/.obsidian/plugins/im-nobsidian/sql-wasm.wasm`;
+
+      let existingData: Uint8Array | null = null;
+      try {
+        const adapter = this.app.vault.adapter;
+        if (await adapter.exists(".im-nobsidian/sync.db")) {
+          const buf = await adapter.readBinary(".im-nobsidian/sync.db");
+          existingData = new Uint8Array(buf);
+        }
+      } catch {
+        // first run — no DB yet
+      }
+
+      this.stateDb = await SqlJsStateDB.open(
+        existingData,
+        async (data: Uint8Array) => {
+          const adapter = this.app.vault.adapter;
+          if (!(await adapter.exists(".im-nobsidian"))) {
+            await adapter.mkdir(".im-nobsidian");
+          }
+          await adapter.writeBinary(".im-nobsidian/sync.db", data.buffer as ArrayBuffer);
+        },
+        wasmPath,
+      );
 
       const client = new NotionClient({
         token: this.settings.token,
