@@ -152,7 +152,6 @@ export default class ImNobsidianPlugin extends Plugin {
       void (this.stateDb as SqlJsStateDB).flush();
     }
     this.stateDb?.close();
-    this.app.workspace.detachLeavesOfType(DATABASE_VIEW_TYPE);
   }
 
   async loadSettings(): Promise<void> {
@@ -179,7 +178,7 @@ export default class ImNobsidianPlugin extends Plugin {
         basePath,
         ".obsidian",
         "plugins",
-        "im-nobsidian",
+        "im-notion-sync",
         "sql-wasm.wasm",
       );
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;

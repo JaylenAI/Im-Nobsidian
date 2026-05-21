@@ -13,7 +13,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
   display(): void {
     const { containerEl } = this;
     containerEl.empty();
-    containerEl.createEl("h2", { text: "Im-Nobsidian 설정" });
+    new Setting(containerEl).setName("Im-Nobsidian 설정").setHeading();
 
     new Setting(containerEl)
       .setName("Notion Integration Token")

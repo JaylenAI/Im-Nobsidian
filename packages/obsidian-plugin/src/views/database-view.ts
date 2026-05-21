@@ -64,7 +64,7 @@ export class DatabaseItemView extends ItemView {
   private renderView() {
     if (!this.viewData) return;
 
-    const container = this.containerEl.children[1];
+    const container = this.contentEl;
     if (!container) return;
 
     if (this.component) {
