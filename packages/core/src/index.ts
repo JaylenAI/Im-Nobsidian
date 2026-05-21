@@ -74,6 +74,7 @@ export {
 export type {
   VaultFS,
   FileInfo,
+  FileStatInfo,
   NonMdFileInfo,
   ImageDownloadResult,
   PathFilterConfig,

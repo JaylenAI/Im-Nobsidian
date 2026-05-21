@@ -4,7 +4,7 @@ export { NodeVaultFS } from "./node-vault-fs.js";
 export { ImageHandler } from "./image-handler.js";
 export { FileHandler } from "./file-handler.js";
 export { DatabaseSyncer } from "./database-syncer.js";
-export type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
+export type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 export type { FileInfo } from "./change-detector.js";
 export type { ImageDownloadResult } from "./image-handler.js";
 export type { FileUploadResult, FileDownloadResult } from "./file-handler.js";

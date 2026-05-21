@@ -1,6 +1,6 @@
 import type { Vault } from "obsidian";
 import { TFile, TFolder, normalizePath } from "obsidian";
-import type { VaultFS, FileInfo, NonMdFileInfo } from "@im-nobsidian/core";
+import type { VaultFS, FileInfo, FileStatInfo, NonMdFileInfo } from "@im-nobsidian/core";
 
 export class ObsidianVaultAdapter implements VaultFS {
   constructor(private readonly vault: Vault) {}
@@ -109,6 +109,32 @@ export class ObsidianVaultAdapter implements VaultFS {
     }
 
     return result;
+  }
+
+  async listMarkdownFileStats(): Promise<FileStatInfo[]> {
+    const files = this.vault.getMarkdownFiles();
+    const result: FileStatInfo[] = [];
+
+    for (const file of files) {
+      if (file.path.startsWith(".im-nobsidian/")) continue;
+      result.push({
+        path: file.path,
+        mtime: new Date(file.stat.mtime).toISOString(),
+        size: file.stat.size,
+      });
+    }
+
+    return result;
+  }
+
+  async getFileStat(path: string): Promise<FileStatInfo | null> {
+    const file = this.vault.getAbstractFileByPath(normalizePath(path));
+    if (!file || !(file instanceof TFile)) return null;
+    return {
+      path: file.path,
+      mtime: new Date(file.stat.mtime).toISOString(),
+      size: file.stat.size,
+    };
   }
 
   async listNonMarkdownFiles(): Promise<NonMdFileInfo[]> {

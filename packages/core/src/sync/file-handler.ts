@@ -142,13 +142,12 @@ export class FileHandler {
     const results: FileUploadResult[] = [];
 
     for (const file of folderFiles) {
-      if (this.stateDb.isFileRegistered(file.path)) {
-        const existing = this.stateDb.getFileRegistry(file.path);
-        if (existing) {
-          const buffer = await this.vaultFs.readBinary(file.path);
-          const currentHash = createHash("sha256").update(buffer).digest("hex");
-          if (existing.fileHash === currentHash) continue;
-        }
+      const existing = this.stateDb.getFileRegistry(file.path);
+      if (existing) {
+        if (existing.fileSize === file.size) continue;
+        const buffer = await this.vaultFs.readBinary(file.path);
+        const currentHash = createHash("sha256").update(buffer).digest("hex");
+        if (existing.fileHash === currentHash) continue;
       }
 
       await this.sema.acquire();
@@ -186,20 +185,21 @@ export class FileHandler {
 
       const folderPageId = folderRecord?.notionPageId;
       if (!folderPageId) {
-        getLogger().warn(
-          `폴더 페이지 없음, 파일 스킵: ${folderPath || "(루트)"} (${files.length}개)`,
-        );
+        if (files.length > 0) {
+          getLogger().debug(
+            `폴더 페이지 없음, 파일 스킵: ${folderPath || "(루트)"} (${files.length}개)`,
+          );
+        }
         continue;
       }
 
       for (const file of files) {
-        if (this.stateDb.isFileRegistered(file.path)) {
-          const existing = this.stateDb.getFileRegistry(file.path);
-          if (existing) {
-            const buffer = await this.vaultFs.readBinary(file.path);
-            const currentHash = createHash("sha256").update(buffer).digest("hex");
-            if (existing.fileHash === currentHash) continue;
-          }
+        const existing = this.stateDb.getFileRegistry(file.path);
+        if (existing) {
+          if (existing.fileSize === file.size) continue;
+          const buffer = await this.vaultFs.readBinary(file.path);
+          const currentHash = createHash("sha256").update(buffer).digest("hex");
+          if (existing.fileHash === currentHash) continue;
         }
 
         await this.sema.acquire();

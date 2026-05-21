@@ -5,6 +5,7 @@ import { pullCommand } from "./commands/pull.js";
 import { syncCommand } from "./commands/sync.js";
 import { statusCommand } from "./commands/status.js";
 import { diffCommand } from "./commands/diff.js";
+import { fetchCommand } from "./commands/fetch.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { watchCommand } from "./commands/watch.js";
 
@@ -23,6 +24,7 @@ program.addCommand(pullCommand);
 program.addCommand(syncCommand);
 program.addCommand(statusCommand);
 program.addCommand(diffCommand);
+program.addCommand(fetchCommand);
 program.addCommand(resolveCommand);
 program.addCommand(watchCommand);
 

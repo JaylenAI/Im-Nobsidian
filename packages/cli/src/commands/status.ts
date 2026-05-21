@@ -25,7 +25,7 @@ export const statusCommand = new Command("status")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      const status = await orchestrator.status();
+      const status = await orchestrator.statusLocal();
 
       console.log(`\n${header("  Sync Status")}`);
       console.log(`  ${separator(50)}`);

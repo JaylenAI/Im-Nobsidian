@@ -257,6 +257,7 @@ export class ImageHandler {
         const url = match[2]!;
         const caption = match[1]?.trim() || "file";
         const download = await this.downloadFile(url, pageTitle, caption);
+        if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `[[${download.localPath}|${caption}]]`;
         result = result.replace(match[0]!, obsidianLink);
@@ -281,6 +282,7 @@ export class ImageHandler {
 
         const caption = fileName || match[1]?.trim() || "file";
         const download = await this.downloadFile(realUrl, pageTitle, caption);
+        if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `[[${download.localPath}|${caption}]]`;
         result = result.replace(match[0]!, obsidianLink);
@@ -297,6 +299,7 @@ export class ImageHandler {
         const url = match[1]!;
         const caption = match[2]?.trim() || "file";
         const download = await this.downloadFile(url, pageTitle, caption);
+        if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `[[${download.localPath}|${caption}]]`;
         result = result.replace(match[0]!, obsidianLink);
@@ -321,6 +324,7 @@ export class ImageHandler {
 
         const caption = fileName || match[2]?.trim() || "file";
         const download = await this.downloadFile(realUrl, pageTitle, caption);
+        if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `[[${download.localPath}|${caption}]]`;
         result = result.replace(match[0]!, obsidianLink);
@@ -370,6 +374,14 @@ export class ImageHandler {
         const response = await fetch(url);
         if (!response.ok) {
           throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
+        }
+
+        const contentLength = response.headers.get("content-length");
+        const MAX_FILE_SIZE = 100 * 1024 * 1024;
+        if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
+          const sizeMB = Math.round(parseInt(contentLength, 10) / 1024 / 1024);
+          getLogger().debug(`[Im-Nobsidian] 파일 스킵 — 너무 큼 (${sizeMB}MB): ${caption}`);
+          return { originalUrl: url, localPath: "", hash: "", size: 0 };
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());

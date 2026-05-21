@@ -26,7 +26,7 @@ vi.mock("@im-nobsidian/core", () => ({
     }),
   },
   NotionClient: vi.fn().mockImplementation(() => ({})),
-  SyncOrchestrator: vi.fn().mockImplementation(() => ({ status: mockStatus })),
+  SyncOrchestrator: vi.fn().mockImplementation(() => ({ statusLocal: mockStatus })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({
     readFile: vi.fn().mockResolvedValue("# New\n\nContent"),
   })),

@@ -15,6 +15,8 @@ function createMockVaultFs(): VaultFS {
     exists: vi.fn().mockResolvedValue(false),
     ensureFolder: vi.fn().mockResolvedValue(undefined),
     listMarkdownFiles: vi.fn().mockResolvedValue([]),
+    listMarkdownFileStats: vi.fn().mockResolvedValue([]),
+    getFileStat: vi.fn().mockResolvedValue(null),
     listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
   };
 }
@@ -30,6 +32,7 @@ function createMockStateDb() {
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
+    updateStatCache: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
@@ -138,11 +141,11 @@ describe("SyncOrchestrator", () => {
     });
 
     it("새 파일 생성 시 Notion에 페이지 생성", async () => {
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "new-note.md", content: "# Hello\n\nWorld", mtime: new Date().toISOString() },
-        ]);
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new-note.md", mtime: now, size: 100 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Hello\n\nWorld");
 
       const result = await orchestrator.push();
 
@@ -153,20 +156,22 @@ describe("SyncOrchestrator", () => {
     });
 
     it("수정된 파일 Notion에 업데이트", async () => {
+      const now = new Date().toISOString();
       mockStateDb.getByPath.mockReturnValue({
         id: 1,
         obsidianPath: "existing.md",
         notionPageId: "page-123",
         contentHash: "old-hash",
+        localMtime: "2020-01-01T00:00:00.000Z",
+        localFileSize: 50,
       });
 
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        {
-          path: "existing.md",
-          content: "# Updated\n\nNew content",
-          mtime: new Date().toISOString(),
-        },
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "existing.md", mtime: now, size: 100 },
       ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+        "# Updated\n\nNew content",
+      );
 
       const result = await orchestrator.push();
 
@@ -193,7 +198,7 @@ describe("SyncOrchestrator", () => {
         status === "synced" ? [deletedRecord] : [],
       );
 
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([]);
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([]);
 
       config = createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: true } });
       orchestrator = new SyncOrchestrator(
@@ -210,11 +215,11 @@ describe("SyncOrchestrator", () => {
     });
 
     it("dryRun 모드에서는 실제 작업 안 하고 예정 수량 반환", async () => {
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "new.md", content: "# Test", mtime: new Date().toISOString() },
-        ]);
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new.md", mtime: now, size: 50 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Test");
 
       const result = await orchestrator.push({ dryRun: true });
 
@@ -223,10 +228,14 @@ describe("SyncOrchestrator", () => {
     });
 
     it("paths 필터링 동작", async () => {
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        { path: "notes/a.md", content: "# A", mtime: new Date().toISOString() },
-        { path: "other/b.md", content: "# B", mtime: new Date().toISOString() },
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "notes/a.md", mtime: now, size: 30 },
+        { path: "other/b.md", mtime: now, size: 30 },
       ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) =>
+        p === "notes/a.md" ? "# A" : "# B",
+      );
 
       const result = await orchestrator.push({ paths: ["notes/"] });
 
@@ -234,9 +243,11 @@ describe("SyncOrchestrator", () => {
     });
 
     it("API 오류 시 failed에 기록", async () => {
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([{ path: "bad.md", content: "# Bad", mtime: new Date().toISOString() }]);
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "bad.md", mtime: now, size: 40 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Bad");
       mockNotionClient.createPageWithMarkdown.mockRejectedValue(new Error("API limit"));
       mockNotionClient.createPage.mockRejectedValue(new Error("API limit"));
 
@@ -453,13 +464,11 @@ describe("SyncOrchestrator", () => {
 
   describe("push - 폴더 계층", () => {
     it("하위 폴더 파일 push 시 폴더 페이지 생성", async () => {
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        {
-          path: "projects/deep/note.md",
-          content: "# Deep Note",
-          mtime: new Date().toISOString(),
-        },
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "projects/deep/note.md", mtime: now, size: 80 },
       ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Deep Note");
 
       mockNotionClient.listChildren.mockResolvedValue({ results: [] });
 
@@ -470,11 +479,16 @@ describe("SyncOrchestrator", () => {
     });
 
     it("다중 파일 동시 push", async () => {
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        { path: "a.md", content: "# A", mtime: new Date().toISOString() },
-        { path: "b.md", content: "# B", mtime: new Date().toISOString() },
-        { path: "c.md", content: "# C", mtime: new Date().toISOString() },
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "a.md", mtime: now, size: 30 },
+        { path: "b.md", mtime: now, size: 30 },
+        { path: "c.md", mtime: now, size: 30 },
       ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) => {
+        const map: Record<string, string> = { "a.md": "# A", "b.md": "# B", "c.md": "# C" };
+        return map[p] ?? "";
+      });
 
       const result = await orchestrator.push();
 
@@ -498,9 +512,11 @@ describe("SyncOrchestrator", () => {
         mockVaultFs,
       );
 
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([{ path: "new.md", content: "# New", mtime: new Date().toISOString() }]);
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new.md", mtime: now, size: 30 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# New");
 
       const result = await pullOnlyOrchestrator.push();
 
@@ -541,11 +557,11 @@ describe("SyncOrchestrator", () => {
         { obsidianPath: "conflict.md", notionPageId: "page-c", id: "rec-c", status: "conflict" },
       ]);
 
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "conflict.md", content: "# Conflict", mtime: new Date().toISOString() },
-        ]);
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "conflict.md", mtime: now, size: 60 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Conflict");
 
       const result = await orchestrator.push({ force: true });
 
@@ -555,10 +571,14 @@ describe("SyncOrchestrator", () => {
 
   describe("dryRun 실제 수량", () => {
     it("push dryRun — created/updated/deleted 수량 반환", async () => {
-      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        { path: "new1.md", content: "# New1", mtime: new Date().toISOString() },
-        { path: "new2.md", content: "# New2", mtime: new Date().toISOString() },
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new1.md", mtime: now, size: 40 },
+        { path: "new2.md", mtime: now, size: 40 },
       ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) =>
+        p === "new1.md" ? "# New1" : "# New2",
+      );
 
       const result = await orchestrator.push({ dryRun: true });
 

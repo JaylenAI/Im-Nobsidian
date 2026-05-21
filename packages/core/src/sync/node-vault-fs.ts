@@ -1,7 +1,7 @@
 import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
-import type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
+import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 
 export interface PathFilterConfig {
@@ -89,6 +89,22 @@ export class NodeVaultFS implements VaultFS {
     return files;
   }
 
+  async listMarkdownFileStats(): Promise<FileStatInfo[]> {
+    const stats: FileStatInfo[] = [];
+    await this.walkDirStats(this.rootPath, stats);
+    return stats;
+  }
+
+  async getFileStat(path: string): Promise<FileStatInfo | null> {
+    try {
+      const fullPath = join(this.rootPath, path);
+      const fileStat = await stat(fullPath);
+      return { path, mtime: fileStat.mtime.toISOString(), size: fileStat.size };
+    } catch {
+      return null;
+    }
+  }
+
   async listNonMarkdownFiles(): Promise<NonMdFileInfo[]> {
     const files: NonMdFileInfo[] = [];
     await this.walkDirNonMd(this.rootPath, files);
@@ -145,6 +161,31 @@ export class NodeVaultFS implements VaultFS {
           path: relativePath,
           size: fileStat.size,
           mtime: fileStat.mtime.toISOString(),
+        });
+      }
+    }
+  }
+
+  private async walkDirStats(dir: string, result: FileStatInfo[]): Promise<void> {
+    const entries = await readdir(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      const fullPath = join(dir, entry.name);
+
+      if (entry.name.startsWith(".")) continue;
+
+      const relativePath = relative(this.rootPath, fullPath);
+
+      if (this.isExcluded(relativePath)) continue;
+
+      if (entry.isDirectory()) {
+        await this.walkDirStats(fullPath, result);
+      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+        const fileStat = await stat(fullPath);
+        result.push({
+          path: relativePath,
+          mtime: fileStat.mtime.toISOString(),
+          size: fileStat.size,
         });
       }
     }

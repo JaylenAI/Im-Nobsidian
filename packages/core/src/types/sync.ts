@@ -16,6 +16,8 @@ export interface SyncRecord {
   readonly fileType: FileType;
   readonly status: SyncStatus;
   readonly baseSnapshot: Buffer | null;
+  readonly localMtime: string | null;
+  readonly localFileSize: number | null;
   readonly version: number;
   readonly createdAt: string;
   readonly updatedAt: string;
@@ -55,6 +57,7 @@ export type ProgressCallback = (current: number, total: number, item: ProgressIt
 
 export interface PushOptions {
   readonly paths?: string[];
+  readonly excludePaths?: string[];
   readonly force?: boolean;
   readonly dryRun?: boolean;
   readonly onProgress?: ProgressCallback;

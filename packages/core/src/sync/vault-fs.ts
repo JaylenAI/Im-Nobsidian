@@ -6,6 +6,12 @@ export interface NonMdFileInfo {
   readonly mtime: string;
 }
 
+export interface FileStatInfo {
+  readonly path: string;
+  readonly mtime: string;
+  readonly size: number;
+}
+
 export interface VaultFS {
   readFile(path: string): Promise<string>;
   readBinary(path: string): Promise<Buffer>;
@@ -16,5 +22,7 @@ export interface VaultFS {
   exists(path: string): Promise<boolean>;
   ensureFolder(path: string): Promise<void>;
   listMarkdownFiles(): Promise<FileInfo[]>;
+  listMarkdownFileStats(): Promise<FileStatInfo[]>;
   listNonMarkdownFiles(): Promise<NonMdFileInfo[]>;
+  getFileStat(path: string): Promise<FileStatInfo | null>;
 }

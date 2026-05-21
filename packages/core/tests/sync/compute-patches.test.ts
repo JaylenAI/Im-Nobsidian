@@ -15,6 +15,8 @@ function createMockVaultFs(): VaultFS {
     exists: vi.fn().mockResolvedValue(false),
     ensureFolder: vi.fn().mockResolvedValue(undefined),
     listMarkdownFiles: vi.fn().mockResolvedValue([]),
+    listMarkdownFileStats: vi.fn().mockResolvedValue([]),
+    getFileStat: vi.fn().mockResolvedValue(null),
     listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
   };
 }
@@ -30,6 +32,7 @@ function createMockStateDb() {
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
+    updateStatCache: vi.fn(),
     setNotionParentId: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
@@ -89,7 +92,7 @@ function createMockNotionClient() {
   };
 }
 
-describe("computePatches (부분 업데이트)", () => {
+describe("pushUpdatePage (full replace)", () => {
   let orchestrator: SyncOrchestrator;
   let mockVaultFs: ReturnType<typeof createMockVaultFs>;
   let mockStateDb: ReturnType<typeof createMockStateDb>;
@@ -113,20 +116,22 @@ describe("computePatches (부분 업데이트)", () => {
     );
   });
 
-  it("baseSnapshot 있으면 updatePageMarkdownPartial 호출", async () => {
+  it("baseSnapshot 있어도 항상 replacePageMarkdown 호출", async () => {
     const oldContent = "# Title\n\nOld paragraph";
     const newContent = "# Title\n\nNew paragraph";
 
     mockVaultFs.readFile = vi.fn().mockResolvedValue(newContent);
-    mockVaultFs.listMarkdownFiles = vi
-      .fn()
-      .mockResolvedValue([{ path: "test.md", content: newContent, mtime: "2026-01-01T00:00:00Z" }]);
+    (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: "test.md", mtime: "2026-02-01T00:00:00Z", size: 100 },
+    ]);
     mockStateDb.getByPath.mockReturnValue({
       id: "rec-1",
       obsidianPath: "test.md",
       notionPageId: "page-1",
       contentHash: "old-hash",
       notionLastEdited: "2026-01-01T00:00:00Z",
+      localMtime: "2026-01-01T00:00:00Z",
+      localFileSize: 80,
       baseSnapshot: Buffer.from(oldContent, "utf-8"),
       status: "synced",
       syncDirection: "both",
@@ -143,23 +148,25 @@ describe("computePatches (부분 업데이트)", () => {
 
     await orchestrator.push();
 
-    expect(mockNotionClient.updatePageMarkdownPartial).toHaveBeenCalled();
-    expect(mockNotionClient.replacePageMarkdown).not.toHaveBeenCalled();
+    expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalled();
+    expect(mockNotionClient.updatePageMarkdownPartial).not.toHaveBeenCalled();
   });
 
-  it("baseSnapshot 없으면 replacePageMarkdown 호출", async () => {
+  it("baseSnapshot 없어도 replacePageMarkdown 호출", async () => {
     const newContent = "# Title\n\nNew content";
 
     mockVaultFs.readFile = vi.fn().mockResolvedValue(newContent);
-    mockVaultFs.listMarkdownFiles = vi
-      .fn()
-      .mockResolvedValue([{ path: "test.md", content: newContent, mtime: "2026-01-01T00:00:00Z" }]);
+    (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: "test.md", mtime: "2026-02-01T00:00:00Z", size: 100 },
+    ]);
     mockStateDb.getByPath.mockReturnValue({
       id: "rec-1",
       obsidianPath: "test.md",
       notionPageId: "page-1",
       contentHash: "old-hash",
       notionLastEdited: "2026-01-01T00:00:00Z",
+      localMtime: "2026-01-01T00:00:00Z",
+      localFileSize: 80,
       baseSnapshot: null,
       status: "synced",
       syncDirection: "both",
@@ -186,15 +193,17 @@ describe("computePatches (부분 업데이트)", () => {
     const hash = computeHash(content);
 
     mockVaultFs.readFile = vi.fn().mockResolvedValue(content);
-    mockVaultFs.listMarkdownFiles = vi
-      .fn()
-      .mockResolvedValue([{ path: "test.md", content, mtime: "2026-01-01T00:00:00Z" }]);
+    (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path: "test.md", mtime: "2026-02-01T00:00:00Z", size: 100 },
+    ]);
     mockStateDb.getByPath.mockReturnValue({
       id: "rec-1",
       obsidianPath: "test.md",
       notionPageId: "page-1",
       contentHash: hash,
       notionLastEdited: "2026-01-01T00:00:00Z",
+      localMtime: "2026-01-01T00:00:00Z",
+      localFileSize: 80,
       baseSnapshot: Buffer.from(content, "utf-8"),
       status: "synced",
       syncDirection: "both",
@@ -207,43 +216,5 @@ describe("computePatches (부분 업데이트)", () => {
     expect(result.updated).toBe(0);
     expect(mockNotionClient.updatePageMarkdownPartial).not.toHaveBeenCalled();
     expect(mockNotionClient.replacePageMarkdown).not.toHaveBeenCalled();
-  });
-
-  it("updatePageMarkdownPartial 실패 시 replacePageMarkdown 폴백", async () => {
-    const oldContent = "# Title\n\nOld text";
-    const newContent = "# Title\n\nNew text";
-
-    mockVaultFs.readFile = vi.fn().mockResolvedValue(newContent);
-    mockVaultFs.listMarkdownFiles = vi
-      .fn()
-      .mockResolvedValue([{ path: "test.md", content: newContent, mtime: "2026-01-01T00:00:00Z" }]);
-    mockStateDb.getByPath.mockReturnValue({
-      id: "rec-1",
-      obsidianPath: "test.md",
-      notionPageId: "page-1",
-      contentHash: "old-hash",
-      notionLastEdited: "2026-01-01T00:00:00Z",
-      baseSnapshot: Buffer.from(oldContent, "utf-8"),
-      status: "synced",
-      syncDirection: "both",
-      fileType: "file",
-    });
-    mockStateDb.getAll.mockReturnValue([
-      {
-        id: "rec-1",
-        obsidianPath: "test.md",
-        notionPageId: "page-1",
-        contentHash: "old-hash",
-      },
-    ]);
-
-    mockNotionClient.updatePageMarkdownPartial.mockRejectedValueOnce(
-      new Error("Partial update failed"),
-    );
-
-    await orchestrator.push();
-
-    expect(mockNotionClient.updatePageMarkdownPartial).toHaveBeenCalled();
-    expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalled();
   });
 });

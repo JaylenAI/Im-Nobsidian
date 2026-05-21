@@ -1,4 +1,4 @@
-import { Client } from "@notionhq/client";
+import { Client, LogLevel } from "@notionhq/client";
 import { Sema } from "async-sema";
 import type {
   BlockObjectResponse,
@@ -29,6 +29,7 @@ export class NotionClient {
     this.client = new Client({
       auth: options.token,
       timeoutMs: options.timeoutMs ?? 30000,
+      logLevel: LogLevel.ERROR,
     });
     this.token = options.token;
     this.sema = new Sema(options.concurrency ?? 3);
@@ -421,6 +422,35 @@ export class NotionClient {
     };
   }
 
+  async searchRecentPages(since: string): Promise<Array<{ id: string; last_edited_time: string }>> {
+    const results: Array<{ id: string; last_edited_time: string }> = [];
+    let cursor: string | undefined;
+    const sinceDate = new Date(since);
+
+    outer: do {
+      const response = await this.withRateLimit(() =>
+        this.client.search({
+          filter: { property: "object", value: "page" },
+          sort: { direction: "descending", timestamp: "last_edited_time" },
+          start_cursor: cursor,
+          page_size: 100,
+        }),
+      );
+
+      for (const page of response.results) {
+        const p = page as PageObjectResponse;
+        if (new Date(p.last_edited_time) <= sinceDate) {
+          break outer;
+        }
+        results.push({ id: p.id, last_edited_time: p.last_edited_time });
+      }
+
+      cursor = response.next_cursor ?? undefined;
+    } while (cursor);
+
+    return results;
+  }
+
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
     const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
@@ -432,8 +462,8 @@ export class NotionClient {
   }
 
   async getChildDatabaseIds(parentId: string): Promise<string[]> {
-    const blocks = await this.fetchAllChildrenDeep(parentId);
-    return blocks.filter((b) => b.type === "child_database").map((b) => b.id);
+    const children = await this.fetchAllChildren(parentId);
+    return children.filter((b) => b.type === "child_database").map((b) => b.id);
   }
 
   async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {

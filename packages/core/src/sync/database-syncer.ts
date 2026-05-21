@@ -136,14 +136,25 @@ export class DatabaseSyncer {
       }
     }
 
-    getLogger().info(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
+    getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
     return { created, updated, failed };
   }
 
-  private async pullDatabaseViews(dbConfig: DatabaseSyncConfig): Promise<void> {
+  private async pullDatabaseViews(dbConfig: DatabaseSyncConfig, force = false): Promise<void> {
     try {
-      const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
       const configPath = ".im-nobsidian/db-views.json";
+
+      if (!force) {
+        try {
+          const existing = await this.vaultFs.readFile(configPath);
+          const parsed = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
+          if (parsed[dbConfig.databaseId]) return;
+        } catch {
+          // 파일 없으면 계속 진행
+        }
+      }
+
+      const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
       await this.vaultFs.ensureFolder(".im-nobsidian");
 
       let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
@@ -156,7 +167,7 @@ export class DatabaseSyncer {
 
       allViewsConfigs[dbConfig.databaseId] = viewsConfig;
       await this.vaultFs.writeFile(configPath, JSON.stringify(allViewsConfigs, null, 2));
-      getLogger().info(
+      getLogger().debug(
         `[DB Sync] 뷰 설정 ${viewsConfig.views.length}개 저장: ${dbConfig.databaseId}`,
       );
     } catch (error) {
@@ -209,17 +220,34 @@ export class DatabaseSyncer {
     }
 
     if (this.config.conversion.imageDownload === "immediate" && markdown) {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
-      markdown = imageResult.content;
+      try {
+        const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
+        markdown = imageResult.content;
+      } catch (error) {
+        getLogger().warn(`[DB Sync] 이미지 다운로드 실패 (${title}):`, error);
+      }
     }
 
     if (markdown) {
-      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
-      markdown = fileResult.content;
+      try {
+        const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+        markdown = fileResult.content;
+      } catch (error) {
+        getLogger().warn(`[DB Sync] 파일 다운로드 실패 (${title}):`, error);
+      }
     }
 
     const existingRecord = this.stateDb.getByNotionId(page.id);
-    const filePath = existingRecord?.obsidianPath ?? `${dbConfig.localFolder}/${safeName}.md`;
+    let filePath: string;
+    if (existingRecord?.obsidianPath) {
+      filePath = existingRecord.obsidianPath;
+    } else {
+      filePath = `${dbConfig.localFolder}/${safeName}.md`;
+      const existingByPath = this.stateDb.getByPath(filePath);
+      if (existingByPath && existingByPath.notionPageId !== page.id) {
+        filePath = `${dbConfig.localFolder}/${safeName} (${page.id.slice(0, 8)}).md`;
+      }
+    }
 
     const finalContent = this.pipeline.convertToMarkdown(
       markdown,
@@ -350,7 +378,7 @@ export class DatabaseSyncer {
       }
     }
 
-    getLogger().info(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
+    getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
     return { created, updated, failed };
   }
 }

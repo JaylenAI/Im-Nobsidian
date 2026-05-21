@@ -3,6 +3,7 @@ import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../t
 import { generateId } from "../utils/id.js";
 import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
 import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
+import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
 
 export class StateDB {
   private readonly db: Database.Database;
@@ -27,6 +28,9 @@ export class StateDB {
     }
     if (version < 2) {
       this.db.exec(FILE_REGISTRY_MIGRATION);
+    }
+    if (version < 3) {
+      this.db.exec(STAT_CACHE_MIGRATION);
     }
   }
 
@@ -83,8 +87,8 @@ export class StateDB {
             notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
             notion_last_edited = ?, local_last_modified = ?,
             sync_direction = ?, file_type = ?, status = ?,
-            base_snapshot = ?, version = version + 1,
-            updated_at = datetime('now')
+            base_snapshot = ?, local_mtime = ?, local_file_size = ?,
+            version = version + 1, updated_at = datetime('now')
           WHERE id = ?`,
         )
         .run(
@@ -97,6 +101,8 @@ export class StateDB {
           record.fileType,
           record.status,
           record.baseSnapshot ?? null,
+          record.localMtime ?? null,
+          record.localFileSize ?? null,
           existing.id,
         );
       return this.getByPath(record.obsidianPath)!;
@@ -108,8 +114,8 @@ export class StateDB {
         `INSERT INTO sync_state
           (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
            notion_last_edited, local_last_modified, sync_direction, file_type,
-           status, base_snapshot, version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+           status, base_snapshot, local_mtime, local_file_size, version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       )
       .run(
         id,
@@ -123,6 +129,8 @@ export class StateDB {
         record.fileType,
         record.status,
         record.baseSnapshot ?? null,
+        record.localMtime ?? null,
+        record.localFileSize ?? null,
       );
     return this.getByPath(record.obsidianPath)!;
   }
@@ -155,6 +163,14 @@ export class StateDB {
         "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
       )
       .run(lastEdited, id);
+  }
+
+  updateStatCache(id: string, mtime: string, fileSize: number): void {
+    this.db
+      .prepare(
+        "UPDATE sync_state SET local_mtime = ?, local_file_size = ?, updated_at = datetime('now') WHERE id = ?",
+      )
+      .run(mtime, fileSize, id);
   }
 
   setNotionParentId(id: string, parentId: string): void {
@@ -319,6 +335,8 @@ export class StateDB {
       fileType: row.file_type as SyncRecord["fileType"],
       status: row.status as SyncRecord["status"],
       baseSnapshot: row.base_snapshot,
+      localMtime: row.local_mtime,
+      localFileSize: row.local_file_size,
       version: row.version,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -346,6 +364,8 @@ export interface UpsertSyncRecord {
   readonly fileType: SyncRecord["fileType"];
   readonly status: SyncRecord["status"];
   readonly baseSnapshot?: Buffer | null;
+  readonly localMtime?: string | null;
+  readonly localFileSize?: number | null;
 }
 
 interface RawSyncRow {
@@ -360,6 +380,8 @@ interface RawSyncRow {
   file_type: string;
   status: string;
   base_snapshot: Buffer | null;
+  local_mtime: string | null;
+  local_file_size: number | null;
   version: number;
   created_at: string;
   updated_at: string;

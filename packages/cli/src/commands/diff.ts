@@ -27,7 +27,7 @@ export const diffCommand = new Command("diff")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      const status = await orchestrator.status();
+      const status = await orchestrator.statusLocal();
 
       const changes = targetPath
         ? status.localChanges.filter((c) => c.path === targetPath || c.path.startsWith(targetPath))
@@ -43,13 +43,13 @@ export const diffCommand = new Command("diff")
 
         if (change.type === "created") {
           const content = await vaultFs.readFile(change.path);
-          const patch = createTwoFilesPatch(`/dev/null`, `b/${change.path}`, "", content);
-          printPatch(patch, options.color);
+          const patch = createTwoFilesPatch("/dev/null", `b/${change.path}`, "", content);
+          printPatch(patch, options.color, "/dev/null", `b/${change.path}`);
         } else if (change.type === "deleted") {
           if (record?.baseSnapshot) {
             const oldContent = record.baseSnapshot.toString("utf-8");
-            const patch = createTwoFilesPatch(`a/${change.path}`, `/dev/null`, oldContent, "");
-            printPatch(patch, options.color);
+            const patch = createTwoFilesPatch(`a/${change.path}`, "/dev/null", oldContent, "");
+            printPatch(patch, options.color, `a/${change.path}`, "/dev/null");
           } else {
             console.log(`--- a/${change.path}`);
             console.log(`+++ /dev/null`);
@@ -64,7 +64,7 @@ export const diffCommand = new Command("diff")
             baseContent,
             currentContent,
           );
-          printPatch(patch, options.color);
+          printPatch(patch, options.color, `a/${change.path}`, `b/${change.path}`);
         }
 
         console.log("");
@@ -74,23 +74,32 @@ export const diffCommand = new Command("diff")
     }
   });
 
-function printPatch(patch: string, color: boolean): void {
+function printPatch(patch: string, color: boolean, oldPath: string, newPath: string): void {
   for (const line of patch.split("\n")) {
+    let output = line;
+    if (line.startsWith("===")) {
+      output = "===================================================================";
+    } else if (line.startsWith("--- ")) {
+      output = `--- ${oldPath}`;
+    } else if (line.startsWith("+++ ")) {
+      output = `+++ ${newPath}`;
+    }
+
     if (!color) {
-      console.log(line);
+      console.log(output);
       continue;
     }
 
-    if (line.startsWith("+++") || line.startsWith("---")) {
-      console.log(`\x1b[1m${line}\x1b[0m`);
-    } else if (line.startsWith("+")) {
-      console.log(`\x1b[32m${line}\x1b[0m`);
-    } else if (line.startsWith("-")) {
-      console.log(`\x1b[31m${line}\x1b[0m`);
-    } else if (line.startsWith("@@")) {
-      console.log(`\x1b[36m${line}\x1b[0m`);
+    if (output.startsWith("+++") || output.startsWith("---")) {
+      console.log(`\x1b[1m${output}\x1b[0m`);
+    } else if (output.startsWith("+")) {
+      console.log(`\x1b[32m${output}\x1b[0m`);
+    } else if (output.startsWith("-")) {
+      console.log(`\x1b[31m${output}\x1b[0m`);
+    } else if (output.startsWith("@@")) {
+      console.log(`\x1b[36m${output}\x1b[0m`);
     } else {
-      console.log(line);
+      console.log(output);
     }
   }
 }

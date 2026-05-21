@@ -1,5 +1,6 @@
 import type { LocalChange } from "../types/sync.js";
 import type { StateDB } from "../state/state-db.js";
+import type { FileStatInfo } from "./vault-fs.js";
 import { computeHash } from "../utils/hash.js";
 
 export interface FileInfo {
@@ -10,6 +11,62 @@ export interface FileInfo {
 
 export class ChangeDetector {
   constructor(private readonly stateDb: StateDB) {}
+
+  async detectLocalChangesFast(
+    stats: FileStatInfo[],
+    readFile: (path: string) => Promise<string>,
+  ): Promise<LocalChange[]> {
+    const changes: LocalChange[] = [];
+    const existingPaths = new Set<string>();
+
+    for (const file of stats) {
+      existingPaths.add(file.path);
+      const record = this.stateDb.getByPath(file.path);
+
+      if (!record) {
+        const content = await readFile(file.path);
+        changes.push({
+          path: file.path,
+          type: "created",
+          currentHash: computeHash(content),
+          previousHash: null,
+        });
+        continue;
+      }
+
+      if (record.localMtime === file.mtime && record.localFileSize === file.size) {
+        continue;
+      }
+
+      const content = await readFile(file.path);
+      const currentHash = computeHash(content);
+      if (record.contentHash !== currentHash) {
+        changes.push({
+          path: file.path,
+          type: "modified",
+          currentHash,
+          previousHash: record.contentHash,
+        });
+      }
+    }
+
+    const syncedRecords = this.stateDb.getByStatus("synced");
+    for (const record of syncedRecords) {
+      if (!existingPaths.has(record.obsidianPath)) {
+        if (record.fileType === "folder-note" || record.fileType === "folder-only") {
+          if (!record.obsidianPath.endsWith(".md")) continue;
+        }
+        changes.push({
+          path: record.obsidianPath,
+          type: "deleted",
+          currentHash: "",
+          previousHash: record.contentHash,
+        });
+      }
+    }
+
+    return this.detectMoves(changes);
+  }
 
   detectLocalChanges(currentFiles: FileInfo[]): LocalChange[] {
     const changes: LocalChange[] = [];
@@ -29,7 +86,7 @@ export class ChangeDetector {
         continue;
       }
 
-      if (record.localLastModified && file.mtime === record.localLastModified) {
+      if (record.localMtime && record.localMtime === file.mtime) {
         continue;
       }
 
