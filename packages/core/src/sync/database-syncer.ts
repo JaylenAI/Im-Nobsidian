@@ -1,5 +1,5 @@
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
-import type { StateDB } from "../state/state-db.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import type { VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
@@ -28,7 +28,7 @@ export class DatabaseSyncer {
 
   constructor(
     private readonly config: Config,
-    private readonly stateDb: StateDB,
+    private readonly stateDb: IStateDB,
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
     private readonly pipeline: ConversionPipeline,

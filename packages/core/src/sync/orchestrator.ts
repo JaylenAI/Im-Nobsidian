@@ -13,7 +13,7 @@ import type {
   FailedOperation,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
-import type { StateDB } from "../state/state-db.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
@@ -49,7 +49,7 @@ export class SyncOrchestrator {
 
   constructor(
     private readonly config: Config,
-    private readonly stateDb: StateDB,
+    private readonly stateDb: IStateDB,
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
   ) {

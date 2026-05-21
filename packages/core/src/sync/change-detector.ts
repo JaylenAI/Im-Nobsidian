@@ -1,5 +1,5 @@
 import type { LocalChange } from "../types/sync.js";
-import type { StateDB } from "../state/state-db.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { FileStatInfo } from "./vault-fs.js";
 import { computeHash } from "../utils/hash.js";
 
@@ -10,7 +10,7 @@ export interface FileInfo {
 }
 
 export class ChangeDetector {
-  constructor(private readonly stateDb: StateDB) {}
+  constructor(private readonly stateDb: IStateDB) {}
 
   async detectLocalChangesFast(
     stats: FileStatInfo[],

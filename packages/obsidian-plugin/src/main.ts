@@ -8,7 +8,7 @@ import {
   ViewDataProvider,
   EntryEditor,
 } from "@im-nobsidian/core";
-import type { Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
@@ -43,7 +43,7 @@ const DEFAULT_SETTINGS: ImNobsidianSettings = {
 export default class ImNobsidianPlugin extends Plugin {
   settings: ImNobsidianSettings = DEFAULT_SETTINGS;
   private orchestrator: SyncOrchestrator | null = null;
-  private stateDb: StateDB | null = null;
+  private stateDb: IStateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;

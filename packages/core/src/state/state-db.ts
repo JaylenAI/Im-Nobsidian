@@ -4,8 +4,9 @@ import { generateId } from "../utils/id.js";
 import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
 import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
 import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
+import type { IStateDB } from "./state-db-interface.js";
 
-export class StateDB {
+export class StateDB implements IStateDB {
   private readonly db: Database.Database;
 
   private constructor(db: Database.Database) {

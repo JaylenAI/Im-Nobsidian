@@ -1,5 +1,5 @@
 import type { Conflict, ConflictStrategy } from "../types/sync.js";
-import type { StateDB } from "../state/state-db.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { VaultFS } from "../sync/vault-fs.js";
 import { threeWayMerge } from "./merger.js";
 import { computeHash } from "../utils/hash.js";
@@ -15,7 +15,7 @@ export interface ResolutionResult {
 
 export class ConflictResolver {
   constructor(
-    private readonly stateDb: StateDB,
+    private readonly stateDb: IStateDB,
     private readonly vaultFs: VaultFS,
   ) {}
 

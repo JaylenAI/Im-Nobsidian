@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { Sema } from "async-sema";
 import type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
-import type { StateDB } from "../state/state-db.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import { getLogger } from "../utils/logger.js";
 
 export type NotionBlockType = "image" | "pdf" | "video" | "audio" | "file";
@@ -130,7 +130,7 @@ export class FileHandler {
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
-    private readonly stateDb: StateDB,
+    private readonly stateDb: IStateDB,
   ) {}
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
