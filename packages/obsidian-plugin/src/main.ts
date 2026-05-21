@@ -1,4 +1,4 @@
-import { Plugin, Notice, MarkdownRenderChild, type TFile } from "obsidian";
+import { Plugin, Notice, MarkdownRenderChild, requestUrl, type TFile } from "obsidian";
 import {
   NotionClient,
   SyncOrchestrator,
@@ -13,6 +13,37 @@ import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
+
+function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const url =
+    typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+  const method = init?.method ?? "GET";
+  const headers: Record<string, string> = {};
+  if (init?.headers) {
+    if (init.headers instanceof Headers) {
+      init.headers.forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(init.headers)) {
+      for (const [k, v] of init.headers) headers[k] = v;
+    } else {
+      Object.assign(headers, init.headers);
+    }
+  }
+
+  let body: string | ArrayBuffer | undefined;
+  if (init?.body) {
+    body = typeof init.body === "string" ? init.body : (init.body as ArrayBuffer);
+  }
+
+  return requestUrl({ url, method, headers, body, throw: false }).then(
+    (resp) =>
+      new Response(JSON.stringify(resp.json), {
+        status: resp.status,
+        headers: new Headers(resp.headers),
+      }),
+  );
+}
 
 interface DatabaseConfig {
   databaseId: string;
@@ -140,7 +171,18 @@ export default class ImNobsidianPlugin extends Plugin {
       this.stateDb?.close();
 
       const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
-      const wasmPath = `${basePath}/.obsidian/plugins/im-nobsidian/sql-wasm.wasm`;
+      /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
+      const nodePath: typeof import("path") = require("path");
+      const nodeFs: typeof import("fs") = require("fs");
+      /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
+      const wasmPath = nodePath.join(
+        basePath,
+        ".obsidian",
+        "plugins",
+        "im-nobsidian",
+        "sql-wasm.wasm",
+      );
+      const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
       let existingData: Uint8Array | null = null;
       try {
@@ -162,13 +204,14 @@ export default class ImNobsidianPlugin extends Plugin {
           }
           await adapter.writeBinary(".im-nobsidian/sync.db", data.buffer as ArrayBuffer);
         },
-        wasmPath,
+        wasmBinary,
       );
 
       const client = new NotionClient({
         token: this.settings.token,
         concurrency: 3,
         timeoutMs: 30000,
+        fetch: obsidianFetch as typeof globalThis.fetch,
       });
 
       const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
@@ -192,7 +235,13 @@ export default class ImNobsidianPlugin extends Plugin {
         },
       };
 
-      this.orchestrator = new SyncOrchestrator(config, this.stateDb, client, vaultAdapter);
+      this.orchestrator = new SyncOrchestrator(
+        config,
+        this.stateDb,
+        client,
+        vaultAdapter,
+        obsidianFetch as typeof globalThis.fetch,
+      );
       this.viewProvider = new ViewDataProvider(vaultAdapter);
       this.entryEditor = new EntryEditor(vaultAdapter);
       this.updateStatusBar("ready");

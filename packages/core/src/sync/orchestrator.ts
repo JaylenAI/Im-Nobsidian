@@ -52,13 +52,19 @@ export class SyncOrchestrator {
     private readonly stateDb: IStateDB,
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
+    customFetch?: typeof globalThis.fetch,
   ) {
     this.changeDetector = new ChangeDetector(stateDb);
     this.pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
     this.blockConverter = new BlockConverter();
-    this.imageHandler = new ImageHandler(vaultFs, config.paths.attachments, notionClient);
+    this.imageHandler = new ImageHandler(
+      vaultFs,
+      config.paths.attachments,
+      notionClient,
+      customFetch,
+    );
     this.fileHandler = new FileHandler(vaultFs, notionClient, stateDb);
     this.propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(

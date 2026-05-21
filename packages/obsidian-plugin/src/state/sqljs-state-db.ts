@@ -157,11 +157,13 @@ export class SqlJsStateDB implements IStateDB {
   static async open(
     existingData?: Uint8Array | null,
     flushFn?: (data: Uint8Array) => Promise<void>,
-    wasmUrl?: string,
+    wasmBinary?: ArrayBuffer,
   ): Promise<SqlJsStateDB> {
-    const SQL = await initSqlJs({
-      locateFile: () => wasmUrl ?? "sql-wasm.wasm",
-    });
+    const opts: Record<string, unknown> = {};
+    if (wasmBinary) {
+      opts.wasmBinary = wasmBinary;
+    }
+    const SQL = await initSqlJs(opts);
 
     const db = existingData ? new SQL.Database(existingData) : new SQL.Database();
     db.run("PRAGMA foreign_keys = ON");

@@ -18,15 +18,17 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("Notion Integration Token")
       .setDesc("Notion Internal Integration의 토큰 (ntn_으로 시작)")
-      .addText((text) =>
+      .addText((text) => {
         text
           .setPlaceholder("ntn_...")
           .setValue(this.plugin.settings.token)
           .onChange(async (value) => {
             this.plugin.settings.token = value;
             await this.plugin.saveSettings();
-          }),
-      );
+            await this.plugin.initOrchestrator();
+          });
+        text.inputEl.type = "password";
+      });
 
     new Setting(containerEl)
       .setName("루트 페이지 ID")
@@ -38,6 +40,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
           .onChange(async (value) => {
             this.plugin.settings.rootPageId = value;
             await this.plugin.saveSettings();
+            await this.plugin.initOrchestrator();
           }),
       );
 

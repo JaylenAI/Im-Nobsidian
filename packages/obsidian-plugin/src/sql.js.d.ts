@@ -25,7 +25,10 @@ declare module "sql.js" {
 
   export interface InitSqlJsOptions {
     locateFile?: (file: string) => string;
+    wasmBinary?: ArrayBuffer;
   }
 
-  export default function initSqlJs(options?: InitSqlJsOptions): Promise<SqlJsStatic>;
+  export default function initSqlJs(
+    options?: InitSqlJsOptions | Record<string, unknown>,
+  ): Promise<SqlJsStatic>;
 }

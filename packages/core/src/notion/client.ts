@@ -17,6 +17,7 @@ export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
   readonly timeoutMs?: number;
+  readonly fetch?: typeof globalThis.fetch;
 }
 
 export class NotionClient {
@@ -25,13 +26,17 @@ export class NotionClient {
   private readonly token: string;
   private readonly propertyMapper = new PropertyMapper();
 
+  private readonly customFetch?: typeof globalThis.fetch;
+
   constructor(options: NotionClientOptions) {
     this.client = new Client({
       auth: options.token,
       timeoutMs: options.timeoutMs ?? 30000,
       logLevel: LogLevel.ERROR,
+      ...(options.fetch ? { fetch: options.fetch } : {}),
     });
     this.token = options.token;
+    this.customFetch = options.fetch;
     this.sema = new Sema(options.concurrency ?? 3);
   }
 
@@ -181,7 +186,8 @@ export class NotionClient {
     const cleanId = databaseId.replace(/-/g, "");
     const formatted = `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20)}`;
     const resp = await this.withRateLimit(async () => {
-      const r = await fetch(`https://api.notion.com/v1/databases/${formatted}`, {
+      const doFetch = this.customFetch ?? globalThis.fetch;
+      const r = await doFetch(`https://api.notion.com/v1/databases/${formatted}`, {
         headers: {
           Authorization: `Bearer ${this.token}`,
           "Notion-Version": "2022-06-28",

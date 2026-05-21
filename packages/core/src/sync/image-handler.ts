@@ -40,11 +40,20 @@ const EXTENSION_TO_MIME: Record<string, string> = {
 };
 
 export class ImageHandler {
+  private readonly customFetch?: typeof globalThis.fetch;
+
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly attachmentFolder: string = "attachments",
     private readonly notionClient?: NotionClient,
-  ) {}
+    customFetch?: typeof globalThis.fetch,
+  ) {
+    this.customFetch = customFetch;
+  }
+
+  private get fetchFn(): typeof globalThis.fetch {
+    return this.customFetch ?? globalThis.fetch;
+  }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
     const maxRetries = 3;
@@ -58,7 +67,7 @@ export class ImageHandler {
             `[Im-Nobsidian] 이미지 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${pageTitle}`,
           );
         }
-        const response = await fetch(url);
+        const response = await this.fetchFn(url);
         if (!response.ok) {
           throw new Error(`이미지 다운로드 실패: ${response.status} ${response.statusText}`);
         }
@@ -371,7 +380,7 @@ export class ImageHandler {
             `[Im-Nobsidian] 파일 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${caption}`,
           );
         }
-        const response = await fetch(url);
+        const response = await this.fetchFn(url);
         if (!response.ok) {
           throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
         }
