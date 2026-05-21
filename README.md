@@ -327,7 +327,8 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.7  ✅ Current — Beautiful CLI output, demo GIFs, DB view rendering, file attachments (555 tests)
+v0.1.8  ✅ Current — Critical push bug fix, DB auto-discovery, stat cache optimization (554 tests)
+v0.1.7  Beautiful CLI output, demo GIFs, DB view rendering, file attachments
 v0.5.0  → Obsidian community plugin (sql.js WASM + sidebar UI)
 v1.0.0  → Database view sync, multi-workspace, 1000+ notes
 ```
@@ -341,7 +342,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 555 tests
+pnpm test          # 554 tests
 pnpm lint
 pnpm typecheck
 

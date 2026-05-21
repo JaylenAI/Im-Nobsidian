@@ -1,6 +1,6 @@
 {
   "name": "obsidian-im-nobsidian",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "private": true,
   "description": "Obsidian plugin for bidirectional Notion sync",
   "main": "main.js",

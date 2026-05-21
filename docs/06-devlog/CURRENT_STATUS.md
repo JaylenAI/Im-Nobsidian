@@ -1,17 +1,17 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-20
-> 버전: v0.1.7
+> 마지막 업데이트: 2026-05-21
+> 버전: v0.1.8
 
 ## 전체 상태
 
-**v0.1.7 릴리스.** CLI UIUX 전면 개선 + 데모 GIF 8종 완성 — 모든 CLI 명령어의 실제 동작을 시각적으로 보여주는 README 구성.
+**v0.1.8 릴리스.** Push가 Notion에 실제 반영 안 되던 치명적 버그 수정 + DB 자동발견 + stat cache 변경 감지 최적화.
 
 | 항목                     | 상태                                                |
 | ------------------------ | --------------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.1.7 (릴리스 준비)                                |
-| npm `im-nobsidian` (CLI) | v0.1.7 (릴리스 준비)                                |
-| GitHub Release           | v0.1.0 tagged                                       |
+| npm `@im-nobsidian/core` | v0.1.8 (릴리스 준비)                                |
+| npm `im-nobsidian` (CLI) | v0.1.8 (릴리스 준비)                                |
+| GitHub Release           | v0.1.8 tagged                                       |
 | Obsidian Plugin          | v0.5.0 예정 (sql.js 전환 필요, 뷰 렌더링 구현 완료) |
 
 ## Phase 진행률
@@ -66,11 +66,21 @@
 - CLI 데모 GIF 8종 생성 (init/pull/push/sync/status/diff/resolve/watch)
 - README 워크플로우 흐름에 GIF 자연스럽게 배치
 
+### v0.1.8 — 치명적 Push 버그 수정 + DB 자동발견 (2026-05-21)
+
+- **Push 버그 수정**: `updatePageMarkdownPartial` old_str 매칭 실패 시 silent no-op → `replacePageMarkdown` 전체 교체로 전환
+- **Silent catch 제거**: pushCreatePage/pushUpdatePage에서 Markdown API 에러 삼키던 try/catch 제거
+- **DB 자동발견**: 수동 DB ID 설정 없이 자식 데이터베이스 자동 탐지 + 캐싱
+- **Stat cache 최적화**: mtime/size 기반 빠른 변경 감지 (해시 재계산 최소화)
+- **CLI UX 개선**: Notion SDK 502 warn 숨김 (LogLevel.ERROR), 파일 스킵 메시지 debug로 변경
+- **대용량 파일 보호**: 100MB 이상 파일 다운로드 스킵 (OOM 방지)
+- **중복 제목 처리**: DB 페이지 제목 충돌 시 page ID 접미사 자동 부여
+
 ## 테스트 현황
 
-- **Core 테스트**: 524개 통과 (32 파일)
+- **Core 테스트**: 523개 통과 (32 파일)
 - **CLI 테스트**: 31개 통과 (8 파일)
-- **총 555개 테스트**
+- **총 554개 테스트**
 
 ## 지원 기능
 
