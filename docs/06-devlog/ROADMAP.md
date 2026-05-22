@@ -2,11 +2,11 @@
 
 > Last updated: 2026-05-22
 
-## Current State (v0.1.9)
+## Current State (v0.1.10)
 
-v0.1.9 릴리스. Obsidian 플러그인 프로덕션 레디.
-sql.js WASM 어댑터, 동기화 사이드바, 양방향 변경 감지, DB 뷰 6종.
-CLI 8 commands + `--full` 옵션. 523 tests.
+v0.1.10 릴리스. Notion DB → Obsidian Bases 갤러리 커버 이미지 동기화 완료.
+sql.js WASM 어댑터, 동기화 사이드바, 양방향 변경 감지, DB 뷰 6종, .base 자동 생성.
+CLI 8 commands + `--full` 옵션. 581 tests.
 25+ block types bidirectional, 21 property read / 15 write types.
 
 ---
@@ -25,8 +25,11 @@ v0.1.8  ─── ✅ Push 버그 수정 + DB 자동발견 (2026-05-21)
 v0.1.9  ─── ✅ Obsidian 플러그인 프로덕션 레디 (2026-05-22)
             sql.js WASM, 사이드바, 양방향 감지, DB 뷰 6종, 523 tests
 
-v0.2.0  ─── Notion DB → Obsidian Bases 연동 (예정)
-            .base 파일 자동 생성, 네이티브 뷰 렌더링
+v0.1.10 ─── ✅ Bases 갤러리 커버 이미지 동기화 (2026-05-22)
+            .base formulas 자동 생성, 커버 위키링크, 581 tests
+
+v0.2.0  ─── 플러그인 테스트 강화 + 커뮤니티 제출 (예정)
+            50+ 플러그인 테스트, BRAT 베타, 커뮤니티 플러그인 등록
 
 v1.0.0  ─── 안정 릴리스 (예정)
             커뮤니티 플러그인 등록, multi-workspace, 1000+ notes
@@ -35,6 +38,14 @@ v1.0.0  ─── 안정 릴리스 (예정)
 ---
 
 ## Completed Releases
+
+### v0.1.10 — Bases Gallery Cover Image Sync (2026-05-22)
+
+- [x] `page_content`/`page_content_first` 커버 → Bases `formulas(file.embeds[0])` 매핑
+- [x] `page_cover` 프론트매터 위키링크 형식 변환
+- [x] `.base` 파일 Notion 업로드 방지
+- [x] 빈 DB 제목 fallback 수정
+- [x] 단위 테스트 4건 추가 (base-file-generator 23건)
 
 ### v0.1.9 — Obsidian Plugin Production Ready (2026-05-22)
 
@@ -81,17 +92,13 @@ v1.0.0  ─── 안정 릴리스 (예정)
 
 ---
 
-## v0.2.0 — Notion DB → Obsidian Bases
+## v0.2.0 — 플러그인 테스트 강화 + 커뮤니티 제출
 
 ### Tasks
 
-- [ ] `NotionToBaseConverter` — Notion DB 스키마 → `.base` YAML 변환
-- [ ] Pull 시 `.base` 파일 자동 생성/업데이트
-- [ ] 속성 타입 매핑 (Notion → frontmatter → Bases)
-- [ ] 뷰 매핑 (Gallery→cards, Table→table, List→list)
-- [ ] 커스텀 Svelte 뷰 → Bases fallback 전환
-- [ ] 플러그인 테스트 50+
+- [ ] 플러그인 테스트 50+ (SqlJsStateDB, VaultAdapter, Svelte 컴포넌트)
 - [ ] BRAT 베타 릴리스
+- [ ] Obsidian 커뮤니티 플러그인 공식 제출
 
 ---
 
@@ -124,4 +131,4 @@ v1.0.0  ─── 안정 릴리스 (예정)
 3. 유일한 충돌 해결 내장
 4. CLI + Plugin + Library 트리플 배포
 5. Notion Views API 활용 DB 뷰 렌더링 (경쟁사 없음)
-6. Obsidian Bases 네이티브 연동 예정 (v0.2.0)
+6. Obsidian Bases 네이티브 연동 — `.base` 자동 생성 + 갤러리 커버 (v0.1.10)

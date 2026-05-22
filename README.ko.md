@@ -48,7 +48,9 @@ Obsidian에서 편집하면 Notion에 반영됩니다. Notion에서 편집하면
 
 **설정 없는 상태 관리** &nbsp; 데이터베이스 설치도, 서버 실행도 필요 없습니다. `.im-nobsidian/` 폴더의 로컬 SQLite 파일로 자동 관리되며, 유저가 만질 일은 없습니다.
 
-**라이브러리 + CLI + 플러그인** &nbsp; CLI 도구로 사용하거나, Node.js 라이브러리로 커스텀 연동을 만들거나, (곧 출시) Obsidian 커뮤니티 플러그인으로 설치할 수 있습니다.
+**Notion DB → Obsidian Bases** &nbsp; Notion 데이터베이스가 자동으로 Obsidian Bases `.base` 파일로 변환됩니다. 갤러리 뷰는 `file.embeds[0]` formula로 커버 이미지가 자동 표시됩니다. 테이블, 카드, 리스트 뷰와 정렬/그룹핑/속성 순서가 Notion Views API에서 매핑됩니다.
+
+**라이브러리 + CLI + 플러그인** &nbsp; CLI 도구로 사용하거나, Node.js 라이브러리로 커스텀 연동을 만들거나, Obsidian 플러그인으로 설치할 수 있습니다.
 
 ## 빠른 설치
 
@@ -273,11 +275,11 @@ due: 2026-06-30 # → Date 속성
 
 ## 패키지
 
-| 패키지                                              | 설명                                | npm                                                                                                         |
-| --------------------------------------------------- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결 | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
-| [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 커뮤니티 플러그인          | v0.5.0 예정                                                                                                 |
+| 패키지                                              | 설명                                 | npm                                                                                                         |
+| --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
+| [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.1.10 (BRAT 설치 가능)                                                                                    |
 
 ### 라이브러리로 사용하기
 
@@ -311,10 +313,10 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.1.8  ✅ 현재 — 치명적 Push 버그 수정, DB 자동발견, stat cache 최적화 (554개 테스트)
-v0.1.7  Beautiful CLI 출력, 데모 GIF 8종, DB 뷰 렌더링, 파일 첨부
-v0.5.0  → Obsidian 커뮤니티 플러그인 (sql.js WASM + 사이드바 UI)
-v1.0.0  → 데이터베이스 뷰 동기화, 멀티 워크스페이스, 1000+ 노트
+v0.1.10 ✅ 현재 — Bases 갤러리 커버 이미지 동기화, formulas 자동 생성, 581개 테스트
+v0.1.9  Obsidian 플러그인 프로덕션 레디 (Phase 1-5), DB 뷰 6종, 사이드바
+v0.2.0  → 플러그인 테스트 50+, BRAT 베타, 커뮤니티 플러그인 등록
+v1.0.0  → 멀티 워크스페이스, 1000+ 노트, 안정 릴리스
 ```
 
 전체 계획은 [ROADMAP.md](docs/06-devlog/ROADMAP.md)를 참고하세요.
@@ -326,7 +328,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 554개 테스트
+pnpm test          # 581개 테스트
 pnpm lint
 pnpm typecheck
 ```
@@ -341,12 +343,12 @@ packages/
 │   │   ├── notion/        # Notion API 클라이언트 + 속성 매퍼
 │   │   ├── state/         # SQLite 상태 데이터베이스
 │   │   ├── sync/          # 오케스트레이터, 변경 감지, 볼트 FS
-│   │   ├── view/          # DB 뷰 렌더링 엔진 (필터, 색상, 편집기)
+│   │   ├── view/          # DB 뷰 렌더링 + Bases .base 파일 생성기
 │   │   └── utils/         # 해시, 로거, 파일명 정제
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi 명령어)
-└── obsidian-plugin/   # Obsidian 커뮤니티 플러그인 (개발 중)
-    └── src/views/         # Svelte 뷰 컴포넌트 (Gallery/Board/Table/Calendar)
+└── obsidian-plugin/   # Obsidian 플러그인 (사이드바 + DB 뷰)
+    └── src/views/         # Svelte 5 컴포넌트 (Gallery/Board/Table/Calendar/List/Timeline + 사이드바)
 ```
 
 ## 기여

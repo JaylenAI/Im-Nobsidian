@@ -48,6 +48,8 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Zero configuration sync state** &nbsp; No database to set up. No server to run. State tracking is fully automatic via a local SQLite file in `.im-nobsidian/` — you never touch it.
 
+**Notion DB → Obsidian Bases** &nbsp; Notion databases are automatically converted to Obsidian Bases `.base` files. Gallery views get cover images via `file.embeds[0]` formulas. Table, cards, list views with sorting, grouping, and property ordering — all mapped from Notion's Views API.
+
 **Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, bidirectional change detection, cancel button), 6 DB view types, and ribbon icons for one-click sync.
 
 **Library + CLI + Plugin** &nbsp; Use it as a CLI tool, import it as a Node.js library for custom integrations, or install it as an Obsidian plugin.
@@ -286,7 +288,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.1.9 (BRAT install)                                                                                       |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.1.10 (BRAT install)                                                                                      |
 
 ### Using as a Library
 
@@ -329,10 +331,10 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.9  ✅ Current — Obsidian plugin production ready (Phase 1-5), 6 DB views, sync sidebar, bidirectional detection
-v0.1.8  Critical push bug fix, DB auto-discovery, stat cache optimization
-v0.2.0  → Notion DB → Obsidian Bases (.base file) auto-generation
-v1.0.0  → Community plugin submission, multi-workspace, 1000+ notes
+v0.1.10 ✅ Current — Bases gallery cover image sync, formulas auto-generation, 581 tests
+v0.1.9  Obsidian plugin production ready (Phase 1-5), 6 DB views, sync sidebar
+v0.2.0  → Plugin test suite 50+, BRAT beta, community plugin submission
+v1.0.0  → Multi-workspace, 1000+ notes, stable release
 ```
 
 See [ROADMAP.md](docs/06-devlog/ROADMAP.md) for the full plan.
@@ -344,7 +346,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 523+ tests
+pnpm test          # 581+ tests
 pnpm lint
 pnpm typecheck
 
@@ -363,7 +365,7 @@ packages/
 │   │   ├── notion/        # Notion API client + property mapper
 │   │   ├── state/         # SQLite state database
 │   │   ├── sync/          # Orchestrator, change detection, vault FS
-│   │   ├── view/          # DB view rendering engine (filter, color, editor)
+│   │   ├── view/          # DB view rendering + Bases .base file generator
 │   │   └── utils/         # Hash, logger, sanitize
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi command)
