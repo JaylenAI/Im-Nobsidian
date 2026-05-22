@@ -139,6 +139,7 @@ export {
   extractCalendarEntries,
   filterByMonth,
   getVisibleProperties,
+  filterEntries,
   getNotionColor,
   getNotionBgColor,
   generateColorCSS,
@@ -152,6 +153,7 @@ export type {
   ViewRenderData,
   PropertySchema,
   PropertyOption,
+  FilterCondition,
 } from "./view/index.js";
 
 // Utils

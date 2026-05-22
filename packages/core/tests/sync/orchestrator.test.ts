@@ -94,6 +94,7 @@ function createMockNotionClient() {
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     movePage: vi.fn().mockResolvedValue({}),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
+    searchRecentPages: vi.fn().mockResolvedValue([]),
   };
 }
 

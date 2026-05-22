@@ -1,10 +1,14 @@
 <script lang="ts">
-  import type { ViewRenderData, DBEntry } from "@im-nobsidian/core";
+  import type { ViewRenderData, DBEntry, PropertyValue } from "@im-nobsidian/core";
   import type { ViewConfig } from "@im-nobsidian/core";
+  import { filterEntries, sortEntries } from "@im-nobsidian/core";
   import GalleryView from "./GalleryView.svelte";
   import BoardView from "./BoardView.svelte";
   import TableView from "./TableView.svelte";
   import CalendarView from "./CalendarView.svelte";
+  import ListView from "./ListView.svelte";
+  import TimelineView from "./TimelineView.svelte";
+  import ViewToolbar from "./ViewToolbar.svelte";
 
   interface Props {
     data: ViewRenderData;
@@ -13,6 +17,8 @@
     onEntryClick?: (entry: DBEntry) => void;
     onEntryMove?: (entry: DBEntry, newGroup: string) => void;
     onDateClick?: (date: string) => void;
+    onPropertyEdit?: (entryPath: string, propertyName: string, newValue: PropertyValue) => void;
+    onAddEntry?: () => void;
   }
 
   let {
@@ -22,10 +28,39 @@
     onEntryClick,
     onEntryMove,
     onDateClick,
+    onPropertyEdit,
+    onAddEntry,
   }: Props = $props();
 
   const viewType = $derived(data.viewConfig.type);
   const activeViewId = $derived(data.viewConfig.id);
+
+  let searchQuery = $state("");
+  let toolbarSortProp = $state("");
+  let toolbarSortDir: "ascending" | "descending" = $state("ascending");
+
+  const filteredData = $derived.by(() => {
+    let entries = data.entries;
+
+    if (searchQuery.trim()) {
+      entries = filterEntries(entries, searchQuery);
+    }
+
+    if (toolbarSortProp) {
+      entries = sortEntries(entries, [{ property: toolbarSortProp, direction: toolbarSortDir }]);
+    }
+
+    return { ...data, entries };
+  });
+
+  function handleSearchChange(query: string) {
+    searchQuery = query;
+  }
+
+  function handleSortChange(property: string, direction: "ascending" | "descending") {
+    toolbarSortProp = property;
+    toolbarSortDir = direction;
+  }
 
   const viewIcons: Record<string, string> = {
     gallery: "🖼",
@@ -57,15 +92,30 @@
     </div>
   </div>
 
+  <ViewToolbar
+    {searchQuery}
+    sortProperty={toolbarSortProp}
+    sortDirection={toolbarSortDir}
+    propertyNames={data.propertyNames}
+    schema={data.schema}
+    onSearchChange={handleSearchChange}
+    onSortChange={handleSortChange}
+    {onAddEntry}
+  />
+
   <div class="im-view-body">
     {#if viewType === "gallery"}
-      <GalleryView {data} {onEntryClick} />
+      <GalleryView data={filteredData} {onEntryClick} />
     {:else if viewType === "board"}
-      <BoardView {data} {onEntryClick} {onEntryMove} />
+      <BoardView data={filteredData} {onEntryClick} {onEntryMove} />
     {:else if viewType === "table"}
-      <TableView {data} {onEntryClick} />
+      <TableView data={filteredData} {onEntryClick} {onPropertyEdit} />
     {:else if viewType === "calendar"}
-      <CalendarView {data} {onEntryClick} {onDateClick} />
+      <CalendarView data={filteredData} {onEntryClick} {onDateClick} />
+    {:else if viewType === "list"}
+      <ListView data={filteredData} {onEntryClick} />
+    {:else if viewType === "timeline"}
+      <TimelineView data={filteredData} {onEntryClick} />
     {:else}
       <div class="im-view-unsupported">
         <p>'{viewType}' 뷰 타입은 아직 지원하지 않습니다.</p>

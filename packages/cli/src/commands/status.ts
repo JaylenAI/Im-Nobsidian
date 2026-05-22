@@ -10,8 +10,9 @@ import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
 
 export const statusCommand = new Command("status")
-  .description("동기화 상태 확인")
-  .action(async () => {
+  .description("동기화 상태 확인 (--full: 원격 변경 포함)")
+  .option("--full", "Notion 원격 변경까지 양방향 확인 (API 호출, 느림)")
+  .action(async (opts: { full?: boolean }) => {
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -25,7 +26,7 @@ export const statusCommand = new Command("status")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      const status = await orchestrator.statusLocal();
+      const status = opts.full ? await orchestrator.status() : await orchestrator.statusLocal();
 
       console.log(`\n${header("  Sync Status")}`);
       console.log(`  ${separator(50)}`);
@@ -60,6 +61,9 @@ export const statusCommand = new Command("status")
       const conflictCount = status.conflictRecords.length;
       const createdChanges = status.localChanges.filter((c) => c.type === "created");
       const modifiedChanges = status.localChanges.filter((c) => c.type === "modified");
+      const remoteCreated = status.remoteChanges.filter((c) => c.type === "created");
+      const remoteModified = status.remoteChanges.filter((c) => c.type === "modified");
+      const remoteDeleted = status.remoteChanges.filter((c) => c.type === "deleted");
 
       console.log(`\n  ${header(`Tracked files: ${total}`)}`);
       console.log(`  ${icons.synced} ${chalk.green("synced")}     ${synced}`);
@@ -97,6 +101,34 @@ export const statusCommand = new Command("status")
         }
       }
 
+      // Remote changes (Notion-side)
+      if (status.remoteChanges.length > 0) {
+        console.log(`\n  ${header(`Remote changes (Notion): ${status.remoteChanges.length}`)}`);
+        if (remoteCreated.length > 0) {
+          console.log(`    ${chalk.cyan("+")} ${chalk.cyan("new")}        ${remoteCreated.length}`);
+        }
+        if (remoteModified.length > 0) {
+          console.log(
+            `    ${chalk.yellow("~")} ${chalk.yellow("modified")}   ${remoteModified.length}`,
+          );
+        }
+        if (remoteDeleted.length > 0) {
+          console.log(`    ${chalk.red("-")} ${chalk.red("deleted")}    ${remoteDeleted.length}`);
+        }
+        for (const c of status.remoteChanges.slice(0, 10)) {
+          const icon =
+            c.type === "created"
+              ? chalk.cyan("+")
+              : c.type === "modified"
+                ? chalk.yellow("~")
+                : chalk.red("-");
+          console.log(`    ${icon} ${c.pageId.slice(0, 8)}... ${dimText(`(${c.type})`)}`);
+        }
+        if (status.remoteChanges.length > 10) {
+          console.log(dimText(`    ... and ${status.remoteChanges.length - 10} more`));
+        }
+      }
+
       // Conflicts
       if (conflictCount > 0) {
         console.log(`\n  ${header(chalk.magenta("Conflicts:"))}`);
@@ -108,7 +140,9 @@ export const statusCommand = new Command("status")
       }
 
       // Helpful commands
-      if (status.localChanges.length > 0 || conflictCount > 0) {
+      const hasChanges =
+        status.localChanges.length > 0 || status.remoteChanges.length > 0 || conflictCount > 0;
+      if (hasChanges) {
         console.log("");
         if (conflictCount > 0) {
           console.log(
@@ -120,6 +154,11 @@ export const statusCommand = new Command("status")
         );
       } else {
         console.log(`\n  ${chalk.green("Everything up to date")} ✓`);
+      }
+      if (!opts.full) {
+        console.log(
+          `\n  ${dimText("Run")} ${chalk.cyan("nobsi status --full")} ${dimText("to check Notion remote changes")}`,
+        );
       }
     } finally {
       stateDb.close();

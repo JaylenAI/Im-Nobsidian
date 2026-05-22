@@ -61,6 +61,7 @@ export interface PushOptions {
   readonly force?: boolean;
   readonly dryRun?: boolean;
   readonly onProgress?: ProgressCallback;
+  readonly signal?: AbortSignal;
 }
 
 export interface PullOptions {
@@ -68,6 +69,7 @@ export interface PullOptions {
   readonly force?: boolean;
   readonly dryRun?: boolean;
   readonly onProgress?: ProgressCallback;
+  readonly signal?: AbortSignal;
 }
 
 export interface SyncOptions {
@@ -75,6 +77,7 @@ export interface SyncOptions {
   readonly force?: boolean;
   readonly dryRun?: boolean;
   readonly onProgress?: ProgressCallback;
+  readonly signal?: AbortSignal;
 }
 
 export interface PushResult {

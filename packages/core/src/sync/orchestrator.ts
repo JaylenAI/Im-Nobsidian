@@ -173,6 +173,7 @@ export class SyncOrchestrator {
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
+        if (options?.signal?.aborted) return;
         const op =
           change.type === "created"
             ? ("create" as const)
@@ -396,6 +397,7 @@ export class SyncOrchestrator {
     const tasks = filtered.map((change) => async () => {
       await sema.acquire();
       try {
+        if (options?.signal?.aborted) return;
         let resultPath: string | undefined;
         switch (change.type) {
           case "created": {
@@ -567,9 +569,11 @@ export class SyncOrchestrator {
   async status(): Promise<StatusResult> {
     const files = await this.vaultFs.listMarkdownFiles();
     const localChanges = this.changeDetector.detectLocalChanges(files);
-    const remoteChanges = await this.detectRemoteChanges();
-    const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
+    const remoteChanges = lastSyncAt
+      ? await this.detectRemoteChangesIncremental(lastSyncAt)
+      : await this.detectRemoteChanges();
+    const conflictRecords = this.stateDb.getByStatus("conflict");
 
     const conflicts: Conflict[] = await this.buildConflictsFromRecords(
       conflictRecords,

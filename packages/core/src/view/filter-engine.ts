@@ -147,6 +147,95 @@ function extractGroupName(val: PropertyValue): string | null {
   return null;
 }
 
+export interface FilterCondition {
+  property: string;
+  operator:
+    | "equals"
+    | "contains"
+    | "startsWith"
+    | "isEmpty"
+    | "isNotEmpty"
+    | "gt"
+    | "lt"
+    | "between";
+  value?: string | number | boolean;
+  valueTo?: string | number;
+}
+
+export function filterEntries(
+  entries: DBEntry[],
+  searchQuery?: string,
+  filters?: FilterCondition[],
+): DBEntry[] {
+  let result = entries;
+
+  if (searchQuery && searchQuery.trim()) {
+    const q = searchQuery.trim().toLowerCase();
+    result = result.filter((entry) => {
+      if (entry.title.toLowerCase().includes(q)) return true;
+      return Object.values(entry.properties).some((val) => {
+        if (val === null || val === undefined) return false;
+        if (typeof val === "string") return val.toLowerCase().includes(q);
+        if (Array.isArray(val)) return val.some((v) => v.toLowerCase().includes(q));
+        if (typeof val === "object" && "start" in val) return val.start.includes(q);
+        return String(val).toLowerCase().includes(q);
+      });
+    });
+  }
+
+  if (filters && filters.length > 0) {
+    for (const filter of filters) {
+      result = result.filter((entry) => matchFilter(entry, filter));
+    }
+  }
+
+  return result;
+}
+
+function matchFilter(entry: DBEntry, filter: FilterCondition): boolean {
+  const val =
+    filter.property === "title" ? entry.title : (entry.properties[filter.property] ?? null);
+
+  switch (filter.operator) {
+    case "isEmpty":
+      return (
+        val === null || val === undefined || val === "" || (Array.isArray(val) && val.length === 0)
+      );
+    case "isNotEmpty":
+      return (
+        val !== null && val !== undefined && val !== "" && !(Array.isArray(val) && val.length === 0)
+      );
+    case "equals":
+      if (typeof val === "boolean") return val === filter.value;
+      return String(val ?? "") === String(filter.value ?? "");
+    case "contains": {
+      const needle = String(filter.value ?? "").toLowerCase();
+      if (typeof val === "string") return val.toLowerCase().includes(needle);
+      if (Array.isArray(val)) return val.some((v) => v.toLowerCase().includes(needle));
+      return String(val ?? "")
+        .toLowerCase()
+        .includes(needle);
+    }
+    case "startsWith":
+      return String(val ?? "").startsWith(String(filter.value ?? ""));
+    case "gt":
+      return typeof val === "number" && typeof filter.value === "number" && val > filter.value;
+    case "lt":
+      return typeof val === "number" && typeof filter.value === "number" && val < filter.value;
+    case "between": {
+      if (
+        typeof val !== "number" ||
+        typeof filter.value !== "number" ||
+        typeof filter.valueTo !== "number"
+      )
+        return false;
+      return val >= filter.value && val <= filter.valueTo;
+    }
+    default:
+      return true;
+  }
+}
+
 function parseDate(value: string): string | null {
   const match = /^(\d{4}-\d{2}-\d{2})/.exec(value);
   return match?.[1] ?? null;

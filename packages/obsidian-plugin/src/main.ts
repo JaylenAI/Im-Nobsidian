@@ -43,13 +43,23 @@ function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Re
     body = typeof init.body === "string" ? init.body : (init.body as ArrayBuffer);
   }
 
-  return requestUrl({ url, method, headers, body, throw: false }).then(
-    (resp) =>
-      new Response(JSON.stringify(resp.json), {
+  return requestUrl({ url, method, headers, body, throw: false }).then((resp) => {
+    const contentType = (
+      resp.headers["content-type"] ??
+      resp.headers["Content-Type"] ??
+      ""
+    ).toLowerCase();
+    if (contentType.includes("application/json") || contentType.includes("text/")) {
+      return new Response(JSON.stringify(resp.json), {
         status: resp.status,
         headers: new Headers(resp.headers),
-      }),
-  );
+      });
+    }
+    return new Response(resp.arrayBuffer, {
+      status: resp.status,
+      headers: new Headers(resp.headers),
+    });
+  });
 }
 
 interface DatabaseConfig {
@@ -88,6 +98,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private vaultEventSyncing = false;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
+  private syncAbortController: AbortController | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -137,8 +148,9 @@ export default class ImNobsidianPlugin extends Plugin {
         onPull: () => this.executePull(),
         onPush: () => this.executePush(),
         onSync: () => this.executeSync(),
-        onRefresh: () => this.refreshSidebarStatus(),
+        onRefresh: () => this.refreshSidebarStatus(true),
         onResolveConflict: () => this.resolveConflicts(),
+        onCancel: () => this.cancelSync(),
         onOpenFile: (path: string) => {
           const file = this.app.vault.getAbstractFileByPath(path);
           if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
@@ -309,20 +321,41 @@ export default class ImNobsidianPlugin extends Plugin {
     };
   }
 
-  private async refreshSidebarStatus(): Promise<void> {
+  private async refreshSidebarStatus(fullCheck = false): Promise<void> {
     if (!this.orchestrator) return;
     try {
-      const status = await this.orchestrator.statusLocal();
-      const syncState =
-        status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
-      this.updateSidebar({
-        lastSyncAt: status.lastSyncAt,
-        localChanges: status.localChanges,
-        conflicts: status.conflicts,
-        syncState,
-        progress: null,
-        errorMessage: null,
-      });
+      if (fullCheck) {
+        this.updateSidebar({
+          syncState: "syncing",
+          operationType: null,
+          progress: null,
+          errorMessage: null,
+        });
+        const status = await this.orchestrator.status();
+        const syncState =
+          status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
+        this.updateSidebar({
+          lastSyncAt: status.lastSyncAt,
+          localChanges: status.localChanges,
+          remoteChanges: status.remoteChanges,
+          conflicts: status.conflicts,
+          syncState,
+          progress: null,
+          errorMessage: null,
+        });
+      } else {
+        const status = await this.orchestrator.statusLocal();
+        const syncState =
+          status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
+        this.updateSidebar({
+          lastSyncAt: status.lastSyncAt,
+          localChanges: status.localChanges,
+          conflicts: status.conflicts,
+          syncState,
+          progress: null,
+          errorMessage: null,
+        });
+      }
     } catch {
       // sidebar refresh is best-effort
     }
@@ -454,36 +487,63 @@ export default class ImNobsidianPlugin extends Plugin {
     }
   }
 
+  private cancelSync(): void {
+    if (this.syncAbortController) {
+      this.syncAbortController.abort();
+      this.syncAbortController = null;
+      new Notice("Im-Nobsidian: 동기화 취소됨");
+      this.updateStatusBar("ready");
+      this.updateSidebar({
+        syncState: "ready",
+        operationType: null,
+        progress: null,
+        errorMessage: null,
+        completionSummary: "동기화가 취소되었습니다",
+      });
+    }
+  }
+
   private async executePush(): Promise<void> {
     if (!this.orchestrator) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
+    this.syncAbortController = new AbortController();
     this.updateStatusBar("syncing");
-    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
+    this.updateSidebar({
+      syncState: "syncing",
+      operationType: "push",
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+    });
     new Notice("Im-Nobsidian: Push 시작...");
 
     try {
-      const result = await this.orchestrator.push({ onProgress: this.makeProgressCallback() });
+      const result = await this.orchestrator.push({
+        onProgress: this.makeProgressCallback(),
+        signal: this.syncAbortController.signal,
+      });
+      this.syncAbortController = null;
 
-      const message = [
-        `Push 완료 (${(result.duration / 1000).toFixed(1)}s)`,
-        `생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}`,
-      ];
+      const summary = `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
 
-      if (result.failed.length > 0) {
-        message.push(`실패 ${result.failed.length}건`);
-      }
-
-      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
       this.updateStatusBar("ready");
+      this.updateSidebar({ completionSummary: summary, operationType: null });
       await this.refreshSidebarStatus();
     } catch (error) {
+      this.syncAbortController = null;
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Push 실패: ${msg}`);
       this.updateStatusBar("error");
-      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
+      this.updateSidebar({
+        syncState: "error",
+        operationType: null,
+        progress: null,
+        errorMessage: msg,
+      });
     }
   }
 
@@ -493,34 +553,41 @@ export default class ImNobsidianPlugin extends Plugin {
       return;
     }
 
+    this.syncAbortController = new AbortController();
     this.updateStatusBar("syncing");
-    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
+    this.updateSidebar({
+      syncState: "syncing",
+      operationType: "pull",
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+    });
     new Notice("Im-Nobsidian: Pull 시작...");
 
     try {
-      const result = await this.orchestrator.pull({ onProgress: this.makeProgressCallback() });
+      const result = await this.orchestrator.pull({
+        onProgress: this.makeProgressCallback(),
+        signal: this.syncAbortController.signal,
+      });
+      this.syncAbortController = null;
 
-      const message = [
-        `Pull 완료 (${(result.duration / 1000).toFixed(1)}s)`,
-        `생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}`,
-      ];
+      const summary = `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
 
-      if (result.conflicts.length > 0) {
-        message.push(`충돌 ${result.conflicts.length}건 — 수동 해결 필요`);
-      }
-
-      if (result.failed.length > 0) {
-        message.push(`실패 ${result.failed.length}건`);
-      }
-
-      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+      this.updateSidebar({ completionSummary: summary, operationType: null });
       await this.refreshSidebarStatus();
     } catch (error) {
+      this.syncAbortController = null;
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Pull 실패: ${msg}`);
       this.updateStatusBar("error");
-      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
+      this.updateSidebar({
+        syncState: "error",
+        operationType: null,
+        progress: null,
+        errorMessage: msg,
+      });
     }
   }
 
@@ -530,30 +597,41 @@ export default class ImNobsidianPlugin extends Plugin {
       return;
     }
 
+    this.syncAbortController = new AbortController();
     this.updateStatusBar("syncing");
-    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
+    this.updateSidebar({
+      syncState: "syncing",
+      operationType: "sync",
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+    });
     new Notice("Im-Nobsidian: Sync 시작...");
 
     try {
-      const result = await this.orchestrator.sync({ onProgress: this.makeProgressCallback() });
+      const result = await this.orchestrator.sync({
+        onProgress: this.makeProgressCallback(),
+        signal: this.syncAbortController.signal,
+      });
+      this.syncAbortController = null;
 
-      const pullInfo = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
-      const pushInfo = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`;
+      const summary = `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`;
 
-      const message = [`Sync 완료 (${(result.duration / 1000).toFixed(1)}s)`, pullInfo, pushInfo];
-
-      if (result.conflicts.length > 0) {
-        message.push(`충돌 ${result.conflicts.length}건`);
-      }
-
-      new Notice(`Im-Nobsidian: ${message.join("\n")}`);
+      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+      this.updateSidebar({ completionSummary: summary, operationType: null });
       await this.refreshSidebarStatus();
     } catch (error) {
+      this.syncAbortController = null;
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Sync 실패: ${msg}`);
       this.updateStatusBar("error");
-      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
+      this.updateSidebar({
+        syncState: "error",
+        operationType: null,
+        progress: null,
+        errorMessage: msg,
+      });
     }
   }
 
@@ -578,7 +656,7 @@ export default class ImNobsidianPlugin extends Plugin {
       lines.push(`원격 변경: ${status.remoteChanges.length}건`);
 
       if (status.pendingOperations > 0) {
-        lines.push(`대기 중: ${status.pendingOperations}건`);
+        lines.push(`충돌/대기: ${status.pendingOperations}건`);
       }
 
       new Notice(`Im-Nobsidian 상태:\n${lines.join("\n")}`, 5000);

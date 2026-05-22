@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ViewRenderData, DBEntry } from "@im-nobsidian/core";
+  import type { ViewRenderData, DBEntry, PropertyValue } from "@im-nobsidian/core";
   import { getVisibleProperties, sortEntries } from "@im-nobsidian/core";
   import IconDisplay from "./components/IconDisplay.svelte";
   import PropertyBadge from "./components/PropertyBadge.svelte";
@@ -7,14 +7,18 @@
   interface Props {
     data: ViewRenderData;
     onEntryClick?: (entry: DBEntry) => void;
+    onPropertyEdit?: (entryPath: string, propertyName: string, newValue: PropertyValue) => void;
   }
 
-  let { data, onEntryClick }: Props = $props();
+  let { data, onEntryClick, onPropertyEdit }: Props = $props();
 
   const columns = $derived(getVisibleProperties(data.viewConfig));
 
   let sortColumn: string | null = $state(null);
   let sortDir: "ascending" | "descending" = $state("ascending");
+
+  let editingCell: { path: string; prop: string } | null = $state(null);
+  let editValue: string = $state("");
 
   const sortedEntries = $derived.by(() => {
     if (!sortColumn) return data.entries;
@@ -46,6 +50,45 @@
   function isSelectLike(propName: string): boolean {
     const schema = data.schema?.[propName];
     return schema?.type === "select" || schema?.type === "status" || schema?.type === "multi_select";
+  }
+
+  function isEditable(propName: string): boolean {
+    if (!onPropertyEdit) return false;
+    const schema = data.schema?.[propName];
+    if (!schema) return true;
+    return ["title", "rich_text", "number", "checkbox", "url", "email", "phone_number"].includes(schema.type);
+  }
+
+  function startEdit(path: string, prop: string, value: unknown) {
+    if (!isEditable(prop)) return;
+    editingCell = { path, prop };
+    editValue = value == null ? "" : String(value);
+  }
+
+  function commitEdit() {
+    if (!editingCell || !onPropertyEdit) return;
+    const schema = data.schema?.[editingCell.prop];
+    let newValue: PropertyValue;
+
+    if (schema?.type === "number") {
+      newValue = editValue === "" ? null : Number(editValue);
+    } else if (schema?.type === "checkbox") {
+      newValue = editValue === "true" || editValue === "✓";
+    } else {
+      newValue = editValue;
+    }
+
+    onPropertyEdit(editingCell.path, editingCell.prop, newValue);
+    editingCell = null;
+  }
+
+  function cancelEdit() {
+    editingCell = null;
+  }
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") { commitEdit(); }
+    else if (e.key === "Escape") { cancelEdit(); }
   }
 </script>
 
@@ -85,8 +128,21 @@
           </td>
           {#each columns as col (col.id)}
             {@const value = entry.properties[col.name]}
-            <td class="im-table-td">
-              {#if isSelectLike(col.name) && typeof value === "string"}
+            <td
+              class="im-table-td"
+              class:im-table-td-editable={isEditable(col.name)}
+              ondblclick={() => startEdit(entry.path, col.name, value)}
+            >
+              {#if editingCell?.path === entry.path && editingCell?.prop === col.name}
+                <input
+                  class="im-table-edit-input"
+                  type={data.schema?.[col.name]?.type === "number" ? "number" : "text"}
+                  bind:value={editValue}
+                  onblur={commitEdit}
+                  onkeydown={handleKeydown}
+                  autofocus
+                />
+              {:else if isSelectLike(col.name) && typeof value === "string"}
                 <PropertyBadge
                   {value}
                   color={data.schema?.[col.name]?.options?.find(o => o.name === value)?.color}
@@ -168,5 +224,21 @@
     display: flex;
     gap: 4px;
     flex-wrap: wrap;
+  }
+  .im-table-td-editable {
+    cursor: text;
+  }
+  .im-table-td-editable:hover {
+    background: var(--background-modifier-hover);
+  }
+  .im-table-edit-input {
+    all: unset;
+    width: 100%;
+    font-size: 13px;
+    padding: 2px 4px;
+    border: 1px solid var(--interactive-accent);
+    border-radius: 3px;
+    background: var(--background-primary);
+    box-sizing: border-box;
   }
 </style>

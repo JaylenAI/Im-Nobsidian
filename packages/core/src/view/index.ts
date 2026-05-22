@@ -6,7 +6,9 @@ export {
   extractCalendarEntries,
   filterByMonth,
   getVisibleProperties,
+  filterEntries,
 } from "./filter-engine.js";
+export type { FilterCondition } from "./filter-engine.js";
 export { getNotionColor, getNotionBgColor, generateColorCSS } from "./color-map.js";
 export type {
   DBEntry,
