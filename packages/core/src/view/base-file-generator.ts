@@ -39,6 +39,7 @@ export class BaseFileGenerator {
     lines.push("");
 
     this.writeFilters(lines, options.folderPath);
+    this.writeFormulas(lines, options.viewsConfig.views);
     this.writePropertyDisplayNames(lines, options.schema);
     this.writeViews(lines, options.viewsConfig.views, options.schema);
 
@@ -49,6 +50,23 @@ export class BaseFileGenerator {
     lines.push("filters:");
     lines.push("  and:");
     lines.push(`    - file.inFolder("${folderPath}")`);
+    lines.push("");
+  }
+
+  private needsContentCoverFormula(views: ViewConfig[]): boolean {
+    return views.some(
+      (v) =>
+        v.type === "gallery" &&
+        v.cover &&
+        (v.cover.type === "page_content" || v.cover.type === "page_content_first"),
+    );
+  }
+
+  private writeFormulas(lines: string[], views: ViewConfig[]): void {
+    if (!this.needsContentCoverFormula(views)) return;
+
+    lines.push("formulas:");
+    lines.push("  coverImage: file.embeds[0]");
     lines.push("");
   }
 
@@ -199,6 +217,8 @@ export class BaseFileGenerator {
         if (propName) result.image = this.toNoteRef(propName);
       } else if (view.cover.type === "page_cover") {
         result.image = "note.cover";
+      } else if (view.cover.type === "page_content" || view.cover.type === "page_content_first") {
+        result.image = "formula.coverImage";
       }
     }
 

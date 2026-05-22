@@ -190,9 +190,9 @@ export class DatabaseSyncer {
     try {
       const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId);
       const dbName =
-        viewsConfig?.databaseName ??
-        (await this.notionClient.getDatabaseTitle(dbConfig.databaseId)) ??
-        dbConfig.localFolder.split("/").pop() ??
+        viewsConfig?.databaseName ||
+        (await this.notionClient.getDatabaseTitle(dbConfig.databaseId)) ||
+        dbConfig.localFolder.split("/").pop() ||
         "Database";
 
       const baseContent = this.baseFileGenerator.generate({
@@ -239,7 +239,7 @@ export class DatabaseSyncer {
         );
         const localUrlMatch = coverResult.content.match(/!\[cover\]\((.+?)\)/);
         if (localUrlMatch?.[1]) {
-          properties.cover = localUrlMatch[1];
+          properties.cover = `[[${localUrlMatch[1]}]]`;
         } else {
           properties.cover = cover.url;
         }

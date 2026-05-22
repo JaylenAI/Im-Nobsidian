@@ -352,6 +352,75 @@ describe("BaseFileGenerator", () => {
     expect(result).not.toContain("direction:");
   });
 
+  it("gallery의 page_content 커버를 formula.coverImage로 변환하고 formulas 섹션을 생성한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v2",
+              name: "Gallery",
+              type: "gallery",
+              cover: { type: "page_content" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("formulas:");
+    expect(result).toContain("  coverImage: file.embeds[0]");
+    expect(result).toContain("image: formula.coverImage");
+  });
+
+  it("gallery의 page_content_first 커버를 formula.coverImage로 변환한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v2",
+              name: "Gallery",
+              type: "gallery",
+              cover: { type: "page_content_first" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("image: formula.coverImage");
+  });
+
+  it("page_cover 갤러리에는 formulas 섹션을 생성하지 않는다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v2",
+              name: "Gallery",
+              type: "gallery",
+              cover: { type: "page_cover" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).not.toContain("formulas:");
+    expect(result).toContain("image: note.cover");
+  });
+
   it("created_time 정렬을 file.ctime으로 변환한다", () => {
     const result = generator.generate(
       makeOptions({

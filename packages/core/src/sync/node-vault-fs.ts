@@ -155,7 +155,7 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.isDirectory()) {
         await this.walkDirNonMd(fullPath, result);
-      } else if (entry.isFile() && !entry.name.endsWith(".md")) {
+      } else if (entry.isFile() && !entry.name.endsWith(".md") && !entry.name.endsWith(".base")) {
         const fileStat = await stat(fullPath);
         result.push({
           path: relativePath,
