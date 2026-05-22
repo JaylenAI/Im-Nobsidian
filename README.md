@@ -48,7 +48,9 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Zero configuration sync state** &nbsp; No database to set up. No server to run. State tracking is fully automatic via a local SQLite file in `.im-nobsidian/` — you never touch it.
 
-**Library + CLI + Plugin** &nbsp; Use it as a CLI tool, import it as a Node.js library for custom integrations, or (coming soon) install it as an Obsidian community plugin.
+**Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, bidirectional change detection, cancel button), 6 DB view types, and ribbon icons for one-click sync.
+
+**Library + CLI + Plugin** &nbsp; Use it as a CLI tool, import it as a Node.js library for custom integrations, or install it as an Obsidian plugin.
 
 ## Quick Install
 
@@ -149,16 +151,16 @@ That's it. Your vault and Notion workspace are now linked.
 
 ## CLI Reference
 
-| Command             | Description                                  |
-| ------------------- | -------------------------------------------- |
-| `nobsi init`        | Interactive setup — Notion token + root page |
-| `nobsi push`        | Push local changes to Notion                 |
-| `nobsi pull`        | Pull Notion changes to local                 |
-| `nobsi sync`        | Bidirectional sync (pull → push)             |
-| `nobsi status`      | Show sync status + conflicts                 |
-| `nobsi diff [path]` | Show diff between local and Notion           |
-| `nobsi resolve`     | Resolve sync conflicts                       |
-| `nobsi watch`       | Watch for changes + auto-sync                |
+| Command             | Description                                                   |
+| ------------------- | ------------------------------------------------------------- |
+| `nobsi init`        | Interactive setup — Notion token + root page                  |
+| `nobsi push`        | Push local changes to Notion                                  |
+| `nobsi pull`        | Pull Notion changes to local                                  |
+| `nobsi sync`        | Bidirectional sync (pull → push)                              |
+| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional) |
+| `nobsi diff [path]` | Show diff between local and Notion                            |
+| `nobsi resolve`     | Resolve sync conflicts                                        |
+| `nobsi watch`       | Watch for changes + auto-sync                                 |
 
 All commands support `--dry-run` to preview changes without applying them.
 
@@ -284,7 +286,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian community plugin (WIP)                      | Coming in v0.5.0                                                                                            |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.1.9 (BRAT install)                                                                                       |
 
 ### Using as a Library
 
@@ -327,10 +329,10 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.8  ✅ Current — Critical push bug fix, DB auto-discovery, stat cache optimization (554 tests)
-v0.1.7  Beautiful CLI output, demo GIFs, DB view rendering, file attachments
-v0.5.0  → Obsidian community plugin (sql.js WASM + sidebar UI)
-v1.0.0  → Database view sync, multi-workspace, 1000+ notes
+v0.1.9  ✅ Current — Obsidian plugin production ready (Phase 1-5), 6 DB views, sync sidebar, bidirectional detection
+v0.1.8  Critical push bug fix, DB auto-discovery, stat cache optimization
+v0.2.0  → Notion DB → Obsidian Bases (.base file) auto-generation
+v1.0.0  → Community plugin submission, multi-workspace, 1000+ notes
 ```
 
 See [ROADMAP.md](docs/06-devlog/ROADMAP.md) for the full plan.
@@ -342,7 +344,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 554 tests
+pnpm test          # 523+ tests
 pnpm lint
 pnpm typecheck
 
@@ -365,8 +367,8 @@ packages/
 │   │   └── utils/         # Hash, logger, sanitize
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi command)
-└── obsidian-plugin/   # Obsidian community plugin (WIP)
-    └── src/views/         # Svelte view components (Gallery/Board/Table/Calendar)
+└── obsidian-plugin/   # Obsidian plugin (sync sidebar + DB views)
+    └── src/views/         # Svelte 5 components (Gallery/Board/Table/Calendar/List/Timeline + Sidebar)
 ```
 
 ## Contributing

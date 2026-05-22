@@ -3,6 +3,59 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.9] - 2026-05-22
+
+### Fixed
+
+- **바이너리 파일 다운로드 깨짐 (치명적)** — `obsidianFetch`가 이미지/PDF/동영상에 `JSON.stringify()` 호출하여 무한 재시도 + Pull 수분간 멈춤. Content-Type 헤더 확인 후 바이너리는 `resp.arrayBuffer` 사용
+- **사이드바 상태 업데이트 미표시** — Svelte 5 `mount()` + CustomEvent 패턴이 Obsidian에서 동작 안 함. 직접 콜백 패턴 (`onReady` → `applyUpdate`)으로 전환
+- **진행률 바 깜빡임** — `remount()`가 매 업데이트마다 Svelte 컴포넌트를 파괴/재생성. mount-once + 콜백 기반으로 변경
+- **커뮤니티 플러그인 심사 요건 6건 수정** — manifest ID, `contentEl`, Setting API, `detachLeavesOfType` 제거, 토큰 패스워드, `minAppVersion`
+
+### Added
+
+- **sql.js WASM 어댑터** — `better-sqlite3` 네이티브 모듈 대체, Obsidian에서 플러그인 정상 로드
+- **`IStateDB` 인터페이스** — SQLite 구현체 분리 (CLI: better-sqlite3, Plugin: sql.js)
+- **동기화 사이드바 대시보드** — Push/Pull/Sync 버튼, % 진행률 바, 작업 종류 표시, 완료 요약 (5초 자동 사라짐), 취소 버튼
+- **양방향 변경 감지** — ↻ 새로고침 시 로컬 + Notion 원격 변경 모두 확인. "원격 변경 (Notion)" 별도 섹션 표시
+- **DB 뷰 6종** — Gallery, Board, Table, Calendar, List, Timeline (Svelte 5)
+- **뷰 도구바** — 검색, 정렬, "+ 새 항목" 버튼
+- **`filterEntries()` 엔진** — 8개 연산자 + 텍스트 전체 검색
+- **TableView 인라인 편집** — 더블클릭으로 text/number/checkbox/url 셀 편집
+- **`AbortController` 동기화 취소** — 사이드바 취소 버튼으로 진행 중인 동기화 중단
+- **CLI `nobsi status --full`** — 기본은 빠른 로컬 체크, `--full`로 Notion API 양방향 확인
+- **리본 아이콘** — 원클릭 동기화 + 사이드바 토글
+
+### Changed
+
+- `status()` incremental 최적화 — `lastSyncAt` 존재 시 `searchRecentPages()` 사용 (120초+ → 2-5초)
+- 테스트: 523개 통과 (core 523 + CLI 31)
+- 플러그인 빌드: 632KB main.js (sql.js WASM은 별도)
+
+## [0.1.8] - 2026-05-21
+
+### Fixed
+
+- **Push가 Notion에 반영 안 되던 치명적 버그** — `updatePageMarkdownPartial` old_str 매칭 실패 시 silent no-op → `replacePageMarkdown` 전체 교체로 전환
+- **Silent catch 제거** — pushCreatePage/pushUpdatePage에서 Markdown API 에러 삼키던 try/catch 제거
+- **Notion SDK warn 숨김** — `logLevel: LogLevel.ERROR`로 502/503 재시도 경고 숨김
+- **파일 스킵 메시지** — `warn` → `debug` 레벨로 변경 (CLI 출력 정리)
+
+### Added
+
+- **DB 자동발견** — 수동 DB ID 설정 없이 자식 데이터베이스 자동 탐지 + `sync_metadata` 캐싱
+- **Stat cache 최적화** — mtime/size 기반 빠른 변경 감지 (해시 재계산 최소화)
+- **100MB 파일 크기 제한** — 대용량 파일 다운로드 스킵 (OOM 방지)
+- **중복 제목 처리** — DB 페이지 제목 충돌 시 page ID 접미사 자동 부여
+- **`nobsi fetch` 명령** — 원격 상태 확인 (로컬 파일 쓰기 없이)
+
+### Changed
+
+- `pushUpdatePage`가 더 이상 partial update API 사용 안 함 — 항상 full replace
+- `computePatches` 메서드 제거 (partial update 제거 후 불필요)
+- DB view configs `db-views.json`에 캐싱 — 재pull 시 재조회 스킵
+- 테스트: 554개 통과 (core 523 + CLI 31)
+
 ## [0.1.7] - 2026-05-20
 
 ### Added
