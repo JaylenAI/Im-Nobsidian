@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BaseFileGenerator } from "../../src/view/base-file-generator.js";
 import type { BaseFileOptions } from "../../src/view/base-file-generator.js";
-import type { DatabaseViewsConfig } from "../../src/types/view.js";
 
 function makeOptions(overrides?: Partial<BaseFileOptions>): BaseFileOptions {
   return {
@@ -64,84 +63,67 @@ function makeOptions(overrides?: Partial<BaseFileOptions>): BaseFileOptions {
 describe("BaseFileGenerator", () => {
   const generator = new BaseFileGenerator();
 
-  it("기본 .base YAML을 올바르게 생성한다", () => {
+  it("file.inFolder 필터로 데이터 소스를 지정한다", () => {
     const result = generator.generate(makeOptions());
 
-    expect(result).toContain("---");
-    expect(result).toContain("source: folder");
-    expect(result).toContain("folder: databases/Tasks");
-    expect(result).toContain("properties:");
-    expect(result).toContain("views:");
+    expect(result).toContain("filters:");
+    expect(result).toContain('file.inFolder("databases/Tasks")');
   });
 
-  it("Notion 속성 타입을 Bases 타입으로 변환한다", () => {
+  it("properties 섹션에 displayName을 출력한다", () => {
     const result = generator.generate(makeOptions());
 
-    expect(result).toContain("Status:");
-    expect(result).toContain("type: text");
-    expect(result).toContain("Priority:");
-    expect(result).toContain("type: number");
-    expect(result).toContain("Due:");
-    expect(result).toContain("type: date");
-    expect(result).toContain("Done:");
-    expect(result).toContain("type: checkbox");
+    expect(result).toContain("properties:");
+    expect(result).toContain("displayName: Status");
+    expect(result).toContain("displayName: Priority");
   });
 
   it("title 속성은 properties 섹션에서 제외한다", () => {
     const result = generator.generate(makeOptions());
-    const lines = result.split("\n");
 
+    const lines = result.split("\n");
     const propSection = lines.slice(
       lines.findIndex((l) => l === "properties:"),
-      lines.findIndex((l) => l === "source: folder"),
+      lines.findIndex((l) => l === "views:"),
     );
-
     const nameEntry = propSection.find((l) => l.trim().startsWith("Name:"));
     expect(nameEntry).toBeUndefined();
   });
 
-  it("select/multi_select의 options을 출력한다", () => {
+  it("views 섹션에 뷰를 올바르게 출력한다", () => {
     const result = generator.generate(makeOptions());
 
-    expect(result).toContain("options:");
-    expect(result).toContain('- "To Do"');
-    expect(result).toContain('- "In Progress"');
-    expect(result).toContain("- Done");
-    expect(result).toContain("- bug");
-    expect(result).toContain("- feature");
-  });
-
-  it("table 뷰를 올바르게 변환한다", () => {
-    const result = generator.generate(makeOptions());
-
+    expect(result).toContain("views:");
     expect(result).toContain("- type: table");
     expect(result).toContain('name: "All Tasks"');
   });
 
-  it("gallery 뷰를 cards로 변환한다", () => {
+  it("gallery 뷰를 cards 타입으로 변환한다", () => {
     const result = generator.generate(makeOptions());
 
     expect(result).toContain("- type: cards");
     expect(result).toContain("name: Gallery");
   });
 
-  it("visible: true 속성만 포함한다", () => {
+  it("order에 visible 속성만 file.name과 함께 포함한다", () => {
     const result = generator.generate(makeOptions());
 
+    expect(result).toContain("order:");
+    expect(result).toContain("- file.name");
     expect(result).toContain("- Status");
     expect(result).toContain("- Tags");
     expect(result).toContain("- Priority");
-    expect(result).not.toMatch(/properties:[\s\S]*?- Due[\s\S]*?- type:/);
   });
 
-  it("정렬 설정을 변환한다", () => {
+  it("sort를 column/direction 형식으로 변환한다", () => {
     const result = generator.generate(makeOptions());
 
-    expect(result).toContain("sortBy: Priority");
-    expect(result).toContain("sortOrder: descending");
+    expect(result).toContain("sort:");
+    expect(result).toContain("column: Priority");
+    expect(result).toContain("direction: DESC");
   });
 
-  it("board 뷰를 cards로 변환하고 groupBy를 포함한다", () => {
+  it("board 뷰를 cards로 변환하고 groupBy를 올바른 형식으로 출력한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -153,7 +135,12 @@ describe("BaseFileGenerator", () => {
               id: "v3",
               name: "Board",
               type: "board",
-              groupBy: { type: "select", propertyId: "s1", propertyName: "Status" },
+              groupBy: {
+                type: "select",
+                propertyId: "s1",
+                propertyName: "Status",
+                sort: "ascending",
+              },
             },
           ],
         },
@@ -162,10 +149,12 @@ describe("BaseFileGenerator", () => {
 
     expect(result).toContain("- type: cards");
     expect(result).toContain("name: Board");
-    expect(result).toContain("groupBy: Status");
+    expect(result).toContain("groupBy:");
+    expect(result).toContain("property: Status");
+    expect(result).toContain("direction: ASC");
   });
 
-  it("calendar/timeline 등 지원 안 되는 뷰는 건너뛴다", () => {
+  it("calendar/timeline 등 미지원 뷰는 건너뛰고 기본 table로 대체한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -198,6 +187,7 @@ describe("BaseFileGenerator", () => {
     );
 
     expect(result).toContain("- type: table");
+    expect(result).toContain("name: Table");
   });
 
   it("DB 이름과 ID를 주석으로 포함한다", () => {
@@ -213,45 +203,16 @@ describe("BaseFileGenerator", () => {
         schema: {
           Name: { id: "title", type: "title" },
           "My Property": { id: "mp1", type: "rich_text" },
-          "할 일": { id: "td1", type: "select", options: [{ name: "긴급", color: "red" }] },
+          simple: { id: "s1", type: "select" },
         },
       }),
     );
 
     expect(result).toContain('"My Property":');
-    expect(result).toContain('"할 일":');
+    expect(result).toContain('displayName: "My Property"');
   });
 
-  it("status 속성의 options을 출력한다", () => {
-    const result = generator.generate(
-      makeOptions({
-        schema: {
-          Name: { id: "title", type: "title" },
-          Status: {
-            id: "s1",
-            type: "status",
-            options: [
-              { name: "Not started", color: "default" },
-              { name: "In progress", color: "blue" },
-              { name: "Done", color: "green" },
-            ],
-            groups: [
-              { name: "To-do", color: "gray" },
-              { name: "In progress", color: "blue" },
-              { name: "Complete", color: "green" },
-            ],
-          },
-        },
-      }),
-    );
-
-    expect(result).toContain("options:");
-    expect(result).toContain('"Not started"');
-    expect(result).toContain('"In progress"');
-    expect(result).toContain("- Done");
-  });
-
-  it("propertyId로 propertyName을 resolve한다", () => {
+  it("propertyId로 propertyName을 resolve하여 sort에 사용한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -270,10 +231,33 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("sortBy: Priority");
+    expect(result).toContain("column: Priority");
+    expect(result).toContain("direction: ASC");
   });
 
-  it("gallery cover property를 포함한다", () => {
+  it("gallery의 page_cover를 note.cover로 변환한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v2",
+              name: "Gallery",
+              type: "gallery",
+              cover: { type: "page_cover" },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("image: note.cover");
+  });
+
+  it("gallery의 property cover를 property명으로 변환한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -292,10 +276,10 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("coverProperty: URL");
+    expect(result).toContain("image: URL");
   });
 
-  it("timestamp 정렬을 올바르게 처리한다", () => {
+  it("timestamp 정렬을 file.ctime/file.mtime으로 변환한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -314,16 +298,14 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("sortBy: last_edited_time");
-    expect(result).toContain("sortOrder: descending");
+    expect(result).toContain("column: file.mtime");
+    expect(result).toContain("direction: DESC");
   });
 
-  it("--- 프론트매터 래퍼로 감싼다", () => {
+  it("--- 프론트매터 래퍼를 사용하지 않는다 (Bases는 순수 YAML)", () => {
     const result = generator.generate(makeOptions());
-    const lines = result.split("\n");
 
-    expect(lines[0]).toBe("---");
-    expect(lines[lines.length - 1]).toBe("---");
+    expect(result).not.toMatch(/^---/);
   });
 
   it("list 뷰를 올바르게 변환한다", () => {
@@ -340,5 +322,56 @@ describe("BaseFileGenerator", () => {
 
     expect(result).toContain("- type: list");
     expect(result).toContain('name: "Simple List"');
+  });
+
+  it("groupBy에 direction이 없으면 생략한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v3",
+              name: "Board",
+              type: "board",
+              groupBy: {
+                type: "select",
+                propertyId: "s1",
+                propertyName: "Status",
+                sort: "manual",
+              },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("property: Status");
+    expect(result).not.toContain("direction:");
+  });
+
+  it("created_time 정렬을 file.ctime으로 변환한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v1",
+              name: "Oldest",
+              type: "table",
+              sorts: [{ timestamp: "created_time", direction: "ascending" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("column: file.ctime");
+    expect(result).toContain("direction: ASC");
   });
 });

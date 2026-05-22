@@ -569,8 +569,8 @@ describe("DatabaseSyncer", () => {
       const baseFileCall = writeFileCalls.find((c: any[]) => c[0].endsWith(".base"));
       expect(baseFileCall).toBeDefined();
       expect(baseFileCall[0]).toBe("databases/tasks/Tasks.base");
-      expect(baseFileCall[1]).toContain("source: folder");
-      expect(baseFileCall[1]).toContain("folder: databases/tasks");
+      expect(baseFileCall[1]).toContain("filters:");
+      expect(baseFileCall[1]).toContain('file.inFolder("databases/tasks")');
     });
 
     it(".base 파일에 스키마 속성이 포함된다", async () => {
@@ -584,8 +584,8 @@ describe("DatabaseSyncer", () => {
 
       const content = baseFileCall[1] as string;
       expect(content).toContain("properties:");
-      expect(content).toContain("Status:");
-      expect(content).toContain("Tags:");
+      expect(content).toContain("displayName: Status");
+      expect(content).toContain("displayName: Tags");
     });
 
     it(".base 파일에 뷰 설정이 포함된다", async () => {
