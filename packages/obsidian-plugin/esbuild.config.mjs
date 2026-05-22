@@ -41,7 +41,8 @@ esbuild
     outfile: "main.js",
     minify: prod,
     platform: "node",
-    mainFields: ["module", "main"],
+    mainFields: ["svelte", "browser", "module", "main"],
+    conditions: ["svelte", "browser"],
   })
   .then(() => {
     copyFileSync("src/styles/main.css", "styles.css");

@@ -7,12 +7,19 @@ import {
   ViewDataProvider,
   EntryEditor,
 } from "@im-nobsidian/core";
-import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import type {
+  IStateDB,
+  Config,
+  Conflict,
+  ResolutionChoice,
+  ProgressCallback,
+} from "@im-nobsidian/core";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
+import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
 
 function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url =
@@ -124,6 +131,36 @@ export default class ImNobsidianPlugin extends Plugin {
 
     this.registerView(DATABASE_VIEW_TYPE, (leaf) => new DatabaseItemView(leaf));
 
+    this.registerView(SYNC_SIDEBAR_TYPE, (leaf) => {
+      const view = new SyncSidebarView(leaf);
+      view.setActions({
+        onPull: () => this.executePull(),
+        onPush: () => this.executePush(),
+        onSync: () => this.executeSync(),
+        onRefresh: () => this.refreshSidebarStatus(),
+        onResolveConflict: () => this.resolveConflicts(),
+        onOpenFile: (path: string) => {
+          const file = this.app.vault.getAbstractFileByPath(path);
+          if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
+        },
+      });
+      return view;
+    });
+
+    this.addRibbonIcon("refresh-cw", "Im-Notion Sync", () => {
+      void this.executeSync();
+    });
+
+    this.addRibbonIcon("layout-sidebar-left", "동기화 사이드바 열기", () => {
+      void this.toggleSidebar();
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-toggle-sidebar",
+      name: "사이드바 토글",
+      callback: () => this.toggleSidebar(),
+    });
+
     this.registerMarkdownCodeBlockProcessor("im-nobsidian-view", (source, el, ctx) => {
       const child = new MarkdownRenderChild(el);
       ctx.addChild(child);
@@ -227,6 +264,7 @@ export default class ImNobsidianPlugin extends Plugin {
           ...DEFAULT_CONFIG.sync,
           direction: this.settings.syncDirection,
           conflictStrategy: this.settings.conflictStrategy,
+          deleteSync: true,
         },
         paths: {
           ...DEFAULT_CONFIG.paths,
@@ -244,11 +282,63 @@ export default class ImNobsidianPlugin extends Plugin {
       this.viewProvider = new ViewDataProvider(vaultAdapter);
       this.entryEditor = new EntryEditor(vaultAdapter);
       this.updateStatusBar("ready");
+      await this.refreshSidebarStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian 초기화 실패: ${message}`);
       this.updateStatusBar("error");
     }
+  }
+
+  private getSidebarView(): SyncSidebarView | null {
+    const leaves = this.app.workspace.getLeavesOfType(SYNC_SIDEBAR_TYPE);
+    if (leaves.length === 0) return null;
+    return leaves[0]!.view as SyncSidebarView;
+  }
+
+  private updateSidebar(partial: Record<string, unknown>): void {
+    this.getSidebarView()?.updateState(partial);
+  }
+
+  private makeProgressCallback(): ProgressCallback {
+    return (current, total, item) => {
+      this.updateSidebar({
+        syncState: "syncing",
+        progress: { current, total, currentPath: item.path },
+      });
+    };
+  }
+
+  private async refreshSidebarStatus(): Promise<void> {
+    if (!this.orchestrator) return;
+    try {
+      const status = await this.orchestrator.statusLocal();
+      const syncState =
+        status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
+      this.updateSidebar({
+        lastSyncAt: status.lastSyncAt,
+        localChanges: status.localChanges,
+        conflicts: status.conflicts,
+        syncState,
+        progress: null,
+        errorMessage: null,
+      });
+    } catch {
+      // sidebar refresh is best-effort
+    }
+  }
+
+  private async toggleSidebar(): Promise<void> {
+    const existing = this.app.workspace.getLeavesOfType(SYNC_SIDEBAR_TYPE);
+    if (existing.length > 0) {
+      existing[0]!.detach();
+      return;
+    }
+    const leaf = this.app.workspace.getLeftLeaf(false);
+    if (!leaf) return;
+    await leaf.setViewState({ type: SYNC_SIDEBAR_TYPE, active: true });
+    this.app.workspace.revealLeaf(leaf);
+    await this.refreshSidebarStatus();
   }
 
   startAutoSync(): void {
@@ -310,26 +400,25 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   private registerVaultEvents(): void {
-    this.registerEvent(
-      this.app.vault.on("modify", (file) => {
-        if (file.path.endsWith(".md")) this.scheduleVaultSync();
-      }),
-    );
-    this.registerEvent(
-      this.app.vault.on("create", (file) => {
-        if (file.path.endsWith(".md")) this.scheduleVaultSync();
-      }),
-    );
-    this.registerEvent(
-      this.app.vault.on("delete", (file) => {
-        if (file.path.endsWith(".md")) this.scheduleVaultSync();
-      }),
-    );
-    this.registerEvent(
-      this.app.vault.on("rename", (file) => {
-        if (file.path.endsWith(".md")) this.scheduleVaultSync();
-      }),
-    );
+    const onVaultChange = (file: { path: string }) => {
+      if (!file.path.endsWith(".md")) return;
+      this.scheduleVaultSync();
+      this.scheduleSidebarRefresh();
+    };
+    this.registerEvent(this.app.vault.on("modify", onVaultChange));
+    this.registerEvent(this.app.vault.on("create", onVaultChange));
+    this.registerEvent(this.app.vault.on("delete", onVaultChange));
+    this.registerEvent(this.app.vault.on("rename", onVaultChange));
+  }
+
+  private sidebarRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+  private scheduleSidebarRefresh(): void {
+    if (this.sidebarRefreshTimer) clearTimeout(this.sidebarRefreshTimer);
+    this.sidebarRefreshTimer = setTimeout(() => {
+      this.sidebarRefreshTimer = null;
+      void this.refreshSidebarStatus();
+    }, 500);
   }
 
   private scheduleVaultSync(): void {
@@ -372,10 +461,11 @@ export default class ImNobsidianPlugin extends Plugin {
     }
 
     this.updateStatusBar("syncing");
+    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
     new Notice("Im-Nobsidian: Push 시작...");
 
     try {
-      const result = await this.orchestrator.push();
+      const result = await this.orchestrator.push({ onProgress: this.makeProgressCallback() });
 
       const message = [
         `Push 완료 (${(result.duration / 1000).toFixed(1)}s)`,
@@ -388,10 +478,12 @@ export default class ImNobsidianPlugin extends Plugin {
 
       new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar("ready");
+      await this.refreshSidebarStatus();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Push 실패: ${msg}`);
       this.updateStatusBar("error");
+      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
     }
   }
 
@@ -402,10 +494,11 @@ export default class ImNobsidianPlugin extends Plugin {
     }
 
     this.updateStatusBar("syncing");
+    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
     new Notice("Im-Nobsidian: Pull 시작...");
 
     try {
-      const result = await this.orchestrator.pull();
+      const result = await this.orchestrator.pull({ onProgress: this.makeProgressCallback() });
 
       const message = [
         `Pull 완료 (${(result.duration / 1000).toFixed(1)}s)`,
@@ -422,10 +515,12 @@ export default class ImNobsidianPlugin extends Plugin {
 
       new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+      await this.refreshSidebarStatus();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Pull 실패: ${msg}`);
       this.updateStatusBar("error");
+      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
     }
   }
 
@@ -436,10 +531,11 @@ export default class ImNobsidianPlugin extends Plugin {
     }
 
     this.updateStatusBar("syncing");
+    this.updateSidebar({ syncState: "syncing", progress: null, errorMessage: null });
     new Notice("Im-Nobsidian: Sync 시작...");
 
     try {
-      const result = await this.orchestrator.sync();
+      const result = await this.orchestrator.sync({ onProgress: this.makeProgressCallback() });
 
       const pullInfo = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
       const pushInfo = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`;
@@ -452,10 +548,12 @@ export default class ImNobsidianPlugin extends Plugin {
 
       new Notice(`Im-Nobsidian: ${message.join("\n")}`);
       this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
+      await this.refreshSidebarStatus();
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`Im-Nobsidian Sync 실패: ${msg}`);
       this.updateStatusBar("error");
+      this.updateSidebar({ syncState: "error", progress: null, errorMessage: msg });
     }
   }
 

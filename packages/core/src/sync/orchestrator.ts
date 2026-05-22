@@ -997,7 +997,16 @@ export class SyncOrchestrator {
     if (!record?.notionPageId) return;
 
     if (this.config.sync.deleteSync) {
-      await this.notionClient.archivePage(record.notionPageId);
+      try {
+        await this.notionClient.archivePage(record.notionPageId);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes("archived ancestor")) {
+          // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
+        } else {
+          throw error;
+        }
+      }
       this.stateDb.delete(record.id);
     } else {
       this.stateDb.updateStatus(record.id, "pending");
