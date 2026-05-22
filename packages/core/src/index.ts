@@ -134,6 +134,7 @@ export type { WatchSyncOptions } from "./watcher/index.js";
 export {
   ViewDataProvider,
   EntryEditor,
+  BaseFileGenerator,
   sortEntries,
   groupEntries,
   extractCalendarEntries,
@@ -154,6 +155,8 @@ export type {
   PropertySchema,
   PropertyOption,
   FilterCondition,
+  BasePropertySchema,
+  BaseFileOptions,
 } from "./view/index.js";
 
 // Utils

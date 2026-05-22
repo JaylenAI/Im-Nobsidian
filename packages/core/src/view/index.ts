@@ -1,5 +1,7 @@
 export { ViewDataProvider } from "./view-data-provider.js";
 export { EntryEditor } from "./entry-editor.js";
+export { BaseFileGenerator } from "./base-file-generator.js";
+export type { BasePropertySchema, BaseFileOptions } from "./base-file-generator.js";
 export {
   sortEntries,
   groupEntries,

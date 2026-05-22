@@ -11,6 +11,7 @@ import type { ImageHandler } from "./image-handler.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { getLogger } from "../utils/logger.js";
+import { BaseFileGenerator } from "../view/base-file-generator.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -25,6 +26,7 @@ export interface DatabaseSyncResult {
 
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
+  private readonly baseFileGenerator = new BaseFileGenerator();
 
   constructor(
     private readonly config: Config,
@@ -104,7 +106,8 @@ export class DatabaseSyncer {
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
 
-    await this.pullDatabaseViews(dbConfig);
+    const viewsConfig = await this.pullDatabaseViews(dbConfig);
+    await this.generateBaseFile(dbConfig, viewsConfig);
 
     const pages = await this.notionClient.queryAllDatabasePages(
       dbConfig.databaseId,
@@ -140,7 +143,10 @@ export class DatabaseSyncer {
     return { created, updated, failed };
   }
 
-  private async pullDatabaseViews(dbConfig: DatabaseSyncConfig, force = false): Promise<void> {
+  private async pullDatabaseViews(
+    dbConfig: DatabaseSyncConfig,
+    force = false,
+  ): Promise<DatabaseViewsConfig | null> {
     try {
       const configPath = ".im-nobsidian/db-views.json";
 
@@ -148,7 +154,7 @@ export class DatabaseSyncer {
         try {
           const existing = await this.vaultFs.readFile(configPath);
           const parsed = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
-          if (parsed[dbConfig.databaseId]) return;
+          if (parsed[dbConfig.databaseId]) return parsed[dbConfig.databaseId]!;
         } catch {
           // 파일 없으면 계속 진행
         }
@@ -170,8 +176,43 @@ export class DatabaseSyncer {
       getLogger().debug(
         `[DB Sync] 뷰 설정 ${viewsConfig.views.length}개 저장: ${dbConfig.databaseId}`,
       );
+      return viewsConfig;
     } catch (error) {
       getLogger().warn(`[DB Sync] 뷰 설정 Pull 실패 (계속 진행):`, error);
+      return null;
+    }
+  }
+
+  private async generateBaseFile(
+    dbConfig: DatabaseSyncConfig,
+    viewsConfig: DatabaseViewsConfig | null,
+  ): Promise<void> {
+    try {
+      const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId);
+      const dbName =
+        viewsConfig?.databaseName ??
+        (await this.notionClient.getDatabaseTitle(dbConfig.databaseId)) ??
+        dbConfig.localFolder.split("/").pop() ??
+        "Database";
+
+      const baseContent = this.baseFileGenerator.generate({
+        databaseId: dbConfig.databaseId,
+        databaseName: dbName,
+        schema: schemaFull,
+        viewsConfig: viewsConfig ?? {
+          databaseId: dbConfig.databaseId,
+          databaseName: dbName,
+          lastSynced: new Date().toISOString(),
+          views: [{ id: "default", name: "Table", type: "table" }],
+        },
+        folderPath: dbConfig.localFolder,
+      });
+
+      const basePath = `${dbConfig.localFolder}/${sanitizeFileName(dbName)}.base`;
+      await this.vaultFs.writeFile(basePath, baseContent);
+      getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
+    } catch (error) {
+      getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
   }
 

@@ -219,6 +219,78 @@ export class NotionClient {
     return schema;
   }
 
+  async getDatabaseSchemaFull(databaseId: string): Promise<
+    Record<
+      string,
+      {
+        id: string;
+        type: string;
+        options?: Array<{ name: string; color?: string }>;
+        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
+      }
+    >
+  > {
+    const db = await this.fetchDatabaseLegacy(databaseId);
+    const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
+    if (!properties) return {};
+
+    const schema: Record<
+      string,
+      {
+        id: string;
+        type: string;
+        options?: Array<{ name: string; color?: string }>;
+        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
+      }
+    > = {};
+
+    for (const [name, prop] of Object.entries(properties)) {
+      const entry: {
+        id: string;
+        type: string;
+        options?: Array<{ name: string; color?: string }>;
+        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
+      } = {
+        id: prop.id as string,
+        type: prop.type as string,
+      };
+
+      if (prop.type === "select" || prop.type === "multi_select") {
+        const typeData = prop[prop.type as string] as
+          | {
+              options?: Array<{ name: string; color?: string }>;
+            }
+          | undefined;
+        if (typeData?.options) {
+          entry.options = typeData.options.map((o) => ({ name: o.name, color: o.color }));
+        }
+      }
+
+      if (prop.type === "status") {
+        const statusData = prop.status as
+          | {
+              options?: Array<{ name: string; color?: string }>;
+              groups?: Array<{ name: string; color?: string; option_ids?: string[] }>;
+            }
+          | undefined;
+        if (statusData?.options) {
+          entry.options = statusData.options.map((o) => ({ name: o.name, color: o.color }));
+        }
+        if (statusData?.groups) {
+          entry.groups = statusData.groups.map((g) => ({
+            name: g.name,
+            color: g.color,
+            optionIds: g.option_ids,
+          }));
+        }
+      }
+
+      schema[name] = entry;
+    }
+
+    return schema;
+  }
+
   async queryDatabase(
     databaseId: string,
     options?: { startCursor?: string; pageSize?: number; filter?: unknown },

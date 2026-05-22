@@ -80,6 +80,20 @@ function createMockNotionClient() {
       lastSynced: "2026-05-18T00:00:00.000Z",
       views: [],
     }),
+    getDatabaseSchemaFull: vi.fn().mockResolvedValue({
+      Name: { id: "title", type: "title" },
+      Status: {
+        id: "prop1",
+        type: "select",
+        options: [{ name: "Done", color: "green" }],
+      },
+      Tags: {
+        id: "prop2",
+        type: "multi_select",
+        options: [{ name: "tag1", color: "blue" }],
+      },
+    }),
+    getDatabaseTitle: vi.fn().mockResolvedValue("Tasks"),
   };
 }
 
@@ -214,10 +228,10 @@ describe("DatabaseSyncer", () => {
 
       expect(result.created).toBe(0);
       expect(result.updated).toBe(0);
-      expect(mockVaultFs.writeFile).not.toHaveBeenCalledWith(
-        expect.stringContaining("databases/tasks/"),
-        expect.any(String),
+      const mdWriteCalls = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
       );
+      expect(mdWriteCalls).toHaveLength(0);
     });
 
     it("lastEdited가 다르면 업데이트", async () => {
@@ -536,6 +550,82 @@ describe("DatabaseSyncer", () => {
 
       expect(result.failed).toHaveLength(1);
       expect(result.failed[0]!.path).toBe("databases/fail");
+    });
+  });
+
+  describe(".base 파일 자동 생성", () => {
+    it("Pull 시 .base 파일이 생성된다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue({
+        databaseId: "db-123",
+        databaseName: "Tasks",
+        lastSynced: "2026-05-18T00:00:00.000Z",
+        views: [{ id: "v1", name: "Table", type: "table" }],
+      });
+
+      await syncer.pullAll();
+
+      const writeFileCalls = (mockVaultFs.writeFile as any).mock.calls;
+      const baseFileCall = writeFileCalls.find((c: any[]) => c[0].endsWith(".base"));
+      expect(baseFileCall).toBeDefined();
+      expect(baseFileCall[0]).toBe("databases/tasks/Tasks.base");
+      expect(baseFileCall[1]).toContain("source: folder");
+      expect(baseFileCall[1]).toContain("folder: databases/tasks");
+    });
+
+    it(".base 파일에 스키마 속성이 포함된다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+
+      await syncer.pullAll();
+
+      const writeFileCalls = (mockVaultFs.writeFile as any).mock.calls;
+      const baseFileCall = writeFileCalls.find((c: any[]) => c[0].endsWith(".base"));
+      expect(baseFileCall).toBeDefined();
+
+      const content = baseFileCall[1] as string;
+      expect(content).toContain("properties:");
+      expect(content).toContain("Status:");
+      expect(content).toContain("Tags:");
+    });
+
+    it(".base 파일에 뷰 설정이 포함된다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue({
+        databaseId: "db-123",
+        databaseName: "Tasks",
+        lastSynced: "2026-05-18T00:00:00.000Z",
+        views: [
+          { id: "v1", name: "Table", type: "table" },
+          { id: "v2", name: "Cards", type: "gallery" },
+        ],
+      });
+
+      await syncer.pullAll();
+
+      const writeFileCalls = (mockVaultFs.writeFile as any).mock.calls;
+      const baseFileCall = writeFileCalls.find((c: any[]) => c[0].endsWith(".base"));
+      const content = baseFileCall[1] as string;
+      expect(content).toContain("views:");
+      expect(content).toContain("- type: table");
+      expect(content).toContain("- type: cards");
+    });
+
+    it(".base 생성 실패해도 Pull은 계속 진행된다", async () => {
+      mockNotionClient.getDatabaseSchemaFull.mockRejectedValue(new Error("Schema fetch failed"));
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Test" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Test");
+
+      const result = await syncer.pullAll();
+
+      expect(result.created).toBe(1);
     });
   });
 
