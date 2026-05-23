@@ -33,6 +33,9 @@ esbuild
         compilerOptions: { css: "injected" },
       }),
     ],
+    alias: {
+      "better-sqlite3": "./src/stubs/better-sqlite3.ts",
+    },
     format: "cjs",
     target: "es2022",
     logLevel: "info",
@@ -47,11 +50,15 @@ esbuild
   .then(() => {
     copyFileSync("src/styles/main.css", "styles.css");
     try {
-      const wasmSrc = new URL("../node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
+      const wasmSrc = new URL("node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
       copyFileSync(wasmSrc, "sql-wasm.wasm");
     } catch {
-      const pnpmPath = new URL("../../node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
-      copyFileSync(pnpmPath, "sql-wasm.wasm");
+      try {
+        const pnpmPath = new URL("../../node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
+        copyFileSync(pnpmPath, "sql-wasm.wasm");
+      } catch {
+        console.warn("sql-wasm.wasm not found — WASM must be provided manually");
+      }
     }
   })
   .catch(() => process.exit(1));
