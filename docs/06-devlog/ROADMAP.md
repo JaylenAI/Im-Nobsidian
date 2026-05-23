@@ -1,12 +1,12 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-22
+> Last updated: 2026-05-23
 
-## Current State (v0.1.10)
+## Current State (v0.1.11)
 
-v0.1.10 릴리스. Notion DB → Obsidian Bases 갤러리 커버 이미지 동기화 완료.
+v0.1.11 릴리스. 플러그인 테스트 115개 추가, better-sqlite3 완전 제거, push 버그 수정.
 sql.js WASM 어댑터, 동기화 사이드바, 양방향 변경 감지, DB 뷰 6종, .base 자동 생성.
-CLI 8 commands + `--full` 옵션. 581 tests.
+CLI 8 commands + `--full` 옵션. 696 tests (Core 550 + CLI 31 + Plugin 115).
 25+ block types bidirectional, 21 property read / 15 write types.
 
 ---
@@ -28,11 +28,14 @@ v0.1.9  ─── ✅ Obsidian 플러그인 프로덕션 레디 (2026-05-22)
 v0.1.10 ─── ✅ Bases 갤러리 커버 이미지 동기화 (2026-05-22)
             .base formulas 자동 생성, 커버 위키링크, 581 tests
 
-v0.2.0  ─── 플러그인 테스트 강화 + 커뮤니티 제출 (예정)
-            50+ 플러그인 테스트, BRAT 베타, 커뮤니티 플러그인 등록
+v0.1.11 ─── ✅ 플러그인 테스트 + 빌드 최적화 (2026-05-23)
+            115 플러그인 테스트, better-sqlite3 제거, push 버그 수정, 696 tests
+
+v0.2.0  ─── 커뮤니티 플러그인 등록 + npm 배포 (예정)
+            obsidianmd/obsidian-releases PR, BRAT 베타
 
 v1.0.0  ─── 안정 릴리스 (예정)
-            커뮤니티 플러그인 등록, multi-workspace, 1000+ notes
+            multi-workspace, 1000+ notes, 성능 최적화
 ```
 
 ---
