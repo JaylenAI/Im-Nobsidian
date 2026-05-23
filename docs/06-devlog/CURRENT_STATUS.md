@@ -1,18 +1,18 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-05-22
-> 버전: v0.1.10
+> 마지막 업데이트: 2026-05-23
+> 버전: v0.1.11
 
 ## 전체 상태
 
-**v0.1.10 릴리스.** Obsidian Bases 갤러리 커버 이미지 동기화 (Phase 6 완료). Notion 갤러리 뷰의 커버 이미지가 Obsidian Bases cards에서 자동 표시.
+**v0.1.11 릴리스.** 플러그인 테스트 115개 추가, better-sqlite3 완전 제거, push 버그 수정, styles.css 테마 호환 개선.
 
 | 항목                     | 상태                                         |
 | ------------------------ | -------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.1.10                                      |
-| npm `im-nobsidian` (CLI) | v0.1.10                                      |
-| GitHub Release           | v0.1.10 tagged                               |
-| Obsidian Plugin          | v0.1.10 (BRAT 설치 가능, 커뮤니티 제출 예정) |
+| npm `@im-nobsidian/core` | v0.1.11                                      |
+| npm `im-nobsidian` (CLI) | v0.1.11                                      |
+| GitHub Release           | v0.1.11 tagged                               |
+| Obsidian Plugin          | v0.1.11 (BRAT 설치 가능, 커뮤니티 제출 예정) |
 
 ## Phase 진행률
 
@@ -24,10 +24,20 @@
 | Phase 4 | 사이드바 + 리본 + UI        | ✅ 완료 | 100%   |
 | Phase 5 | DB 뷰 고급 + 양방향 감지    | ✅ 완료 | 100%   |
 | Phase 6 | Notion DB → .base 자동 생성 | ✅ 완료 | 100%   |
-| Phase 7 | 테스트 강화 50+             | 📋 예정 | 0%     |
-| Phase 8 | 문서 + BRAT + 커뮤니티 제출 | 📋 예정 | 0%     |
+| Phase 7 | 테스트 강화 115개           | ✅ 완료 | 100%   |
+| Phase 8 | 빌드 최적화 + E2E + 릴리스  | ✅ 완료 | 100%   |
 
 ## 버전별 주요 성과
+
+### v0.1.11 — 플러그인 테스트 115개 + 빌드 최적화 + Push 버그 수정 (2026-05-23)
+
+- **플러그인 테스트 115개** — SqlJsStateDB 30+11, VaultAdapter 18, Views 17, Settings 6, Main 7, Integration 9, ConflictModal 5
+- **better-sqlite3 완전 제거** — esbuild alias로 shim 대체, main.js 620KB (네이티브 참조 0건)
+- **WASM 번들링 정상화** — sql-wasm.wasm 644KB 자동 복사, pnpm 호이스팅 대응
+- **push 실패 수정** — `<unknown url="..."/>` 태그 보존 마커 변환 추가, 블록 변환 실패 방지
+- **styles.css 테마 호환** — 하드코딩 rgba → CSS 변수, 사이드바/DB뷰/스테이터스바 스타일 추가
+- **CLI E2E 실제 데이터** — 204개 파일 init→pull→push→sync→resolve 전체 플로우 검증
+- 696 테스트 (Core 550 + CLI 31 + Plugin 115)
 
 ### v0.1.10 — Obsidian Bases 갤러리 커버 이미지 동기화 (2026-05-22)
 
@@ -73,8 +83,10 @@
 
 - **Core 테스트**: 550개 통과
 - **CLI 테스트**: 31개 통과
+- **Plugin 테스트**: 115개 통과
+- **전체**: 696개 통과 (0 실패)
 - **TypeScript 타입 체크**: 클린 (에러 0)
-- **플러그인 빌드**: 637KB (sql.js WASM 별도)
+- **플러그인 빌드**: 620KB (better-sqlite3 제거), sql-wasm.wasm 644KB 별도
 
 ## Obsidian 플러그인 기능
 
@@ -96,5 +108,6 @@
 
 ## 다음 목표
 
-1. **Phase 7** — 테스트 강화 (플러그인 50+ 테스트)
-2. **Phase 8** — 문서 + BRAT 베타 + 커뮤니티 플러그인 제출
+1. **npm publish** — `@im-nobsidian/core` + `im-nobsidian` CLI npm 배포
+2. **GitHub Release** — v0.1.11 태그 + BRAT 설치 가능 아티팩트
+3. **커뮤니티 플러그인 제출** — `obsidianmd/obsidian-releases` PR
