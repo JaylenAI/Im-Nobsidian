@@ -465,6 +465,7 @@ export class BlockConverter {
     let processed = this.extractToggleBlocks(markdown);
     processed = this.extractColumnBlocks(processed);
     processed = this.replaceDividers(processed);
+    processed = processed.replace(/<unknown[^>]*\/>/g, "");
     return processed;
   }
 

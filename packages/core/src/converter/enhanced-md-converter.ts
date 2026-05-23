@@ -5,6 +5,7 @@ const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-
 const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
 const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
 const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
+const NOTION_UNKNOWN_URL_RE = /<unknown url="([^"]*)"([^>]*)\/>/g;
 
 const NOTION_AUDIO_RE = /[\t ]*<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
 const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
@@ -145,12 +146,18 @@ function convertDateMentions(content: string): string {
 
 // 2D: <unknown> → 보존 마커 (삭제 대신 보존)
 function preserveUnknownBlocks(content: string): string {
-  return content.replace(NOTION_UNKNOWN_RE, (_match, id: string, attrs: string) => {
+  let result = content.replace(NOTION_UNKNOWN_RE, (_match, id: string, attrs: string) => {
     const typeMatch = /type="([^"]*)"/.exec(attrs);
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? typeMatch?.[1] ?? "unknown";
     return `%%im-nobsidian:unknown:id=${id}&type=${blockType}%%`;
   });
+  result = result.replace(NOTION_UNKNOWN_URL_RE, (_match, url: string, attrs: string) => {
+    const altMatch = /alt="([^"]*)"/.exec(attrs);
+    const blockType = altMatch?.[1] ?? "bookmark";
+    return `%%im-nobsidian:unknown:id=${encodeURIComponent(url)}&type=${blockType}%%`;
+  });
+  return result;
 }
 
 function convertSyncedBlockRef(content: string): string {
@@ -506,6 +513,10 @@ const OBSIDIAN_UNKNOWN_RE = /%%im-nobsidian:unknown:id=([^&]+)&type=([^%]+)%%/g;
 
 function restoreUnknownBlocks(content: string): string {
   return content.replace(OBSIDIAN_UNKNOWN_RE, (_match, id: string, type: string) => {
+    const decoded = decodeURIComponent(id);
+    if (decoded.startsWith("http")) {
+      return `<unknown url="${decoded}" alt="${type}"/>`;
+    }
     return `<unknown id="${id}" type="${type}"/>`;
   });
 }
