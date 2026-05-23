@@ -22,7 +22,8 @@
     "esbuild-svelte": "^0.9.5",
     "obsidian": "^1.12.3",
     "svelte": "^5.55.7",
-    "typescript": "^5.6.0"
+    "typescript": "^5.6.0",
+    "vitest": "^2.0.0"
   },
   "author": "hanseungheon",
   "repository": {
