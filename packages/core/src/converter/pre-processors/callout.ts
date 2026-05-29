@@ -1,4 +1,5 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { spacedMarker } from "../../constants/markers.js";
 
 const CALLOUT_REGEX = /^> \[!(\w+)\]([+-])?\s*(.*)?$/gm;
 
@@ -40,8 +41,8 @@ export class CalloutTransformer implements Processor {
         const emoji = CALLOUT_EMOJI_MAP[type.toLowerCase()] ?? "\u{1F4DD}";
         const titleText = title?.trim() || type;
         const foldMeta = foldable
-          ? `\n%% im-nobsidian:callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"} %%`
-          : `\n%% im-nobsidian:callout:type=${type} %%`;
+          ? `\n${spacedMarker(`callout:type=${type}&foldable=${foldable === "+" ? "open" : "closed"}`)}`
+          : `\n${spacedMarker(`callout:type=${type}`)}`;
 
         return `> ${emoji} **${titleText}**${foldMeta}`;
       },

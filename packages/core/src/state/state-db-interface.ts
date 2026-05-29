@@ -15,12 +15,16 @@ export interface IStateDB {
   setNotionLastEdited(id: string, lastEdited: string): void;
   updateStatCache(id: string, mtime: string, fileSize: number): void;
   setNotionParentId(id: string, parentId: string): void;
+  /** 레코드의 로컬 경로를 갱신한다 (파일 rename/move 추적용). */
+  updatePath(id: string, newPath: string): void;
   delete(id: string): void;
 
   // wikilink_map
   resolveWikilink(text: string): WikilinkEntry | null;
   resolvePageId(pageId: string): WikilinkEntry | null;
   upsertWikilink(entry: WikilinkEntry): void;
+  /** 레코드 삭제 시 해당 경로의 wikilink 항목을 제거한다 (stale 링크 방지). */
+  deleteWikilink(obsidianPath: string): void;
 
   // sync_metadata
   getMeta(key: string): string | null;

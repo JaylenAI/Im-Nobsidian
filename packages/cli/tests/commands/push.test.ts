@@ -19,7 +19,10 @@ vi.mock("@im-nobsidian/core", () => ({
     }),
   })),
   StateDB: { open: vi.fn().mockReturnValue({ close: vi.fn() }) },
-  NotionClient: vi.fn().mockImplementation(() => ({})),
+  NotionClient: Object.assign(
+    vi.fn().mockImplementation(() => ({})),
+    { fromConfig: vi.fn().mockReturnValue({}) },
+  ),
   SyncOrchestrator: vi.fn().mockImplementation(() => ({ push: mockPush })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));

@@ -7,19 +7,17 @@ import {
   ViewDataProvider,
   EntryEditor,
 } from "@im-nobsidian/core";
-import type {
-  IStateDB,
-  Config,
-  Conflict,
-  ResolutionChoice,
-  ProgressCallback,
-} from "@im-nobsidian/core";
+import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
+import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
+import { SyncController } from "./sync/sync-controller.js";
+import type { SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
 
 function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const url =
@@ -90,15 +88,13 @@ const DEFAULT_SETTINGS: ImNobsidianSettings = {
 
 export default class ImNobsidianPlugin extends Plugin {
   settings: ImNobsidianSettings = DEFAULT_SETTINGS;
-  private orchestrator: SyncOrchestrator | null = null;
+  private syncController: SyncController | null = null;
   private stateDb: IStateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private vaultEventSyncing = false;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
-  private syncAbortController: AbortController | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -223,20 +219,14 @@ export default class ImNobsidianPlugin extends Plugin {
       const nodePath: typeof import("path") = require("path");
       const nodeFs: typeof import("fs") = require("fs");
       /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
-      const wasmPath = nodePath.join(
-        basePath,
-        ".obsidian",
-        "plugins",
-        "im-notion-sync",
-        "sql-wasm.wasm",
-      );
+      const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
       let existingData: Uint8Array | null = null;
       try {
         const adapter = this.app.vault.adapter;
-        if (await adapter.exists(".im-nobsidian/sync.db")) {
-          const buf = await adapter.readBinary(".im-nobsidian/sync.db");
+        if (await adapter.exists(STATE_DB_PATH)) {
+          const buf = await adapter.readBinary(STATE_DB_PATH);
           existingData = new Uint8Array(buf);
         }
       } catch {
@@ -247,20 +237,13 @@ export default class ImNobsidianPlugin extends Plugin {
         existingData,
         async (data: Uint8Array) => {
           const adapter = this.app.vault.adapter;
-          if (!(await adapter.exists(".im-nobsidian"))) {
-            await adapter.mkdir(".im-nobsidian");
+          if (!(await adapter.exists(INTERNAL_DIR))) {
+            await adapter.mkdir(INTERNAL_DIR);
           }
-          await adapter.writeBinary(".im-nobsidian/sync.db", data.buffer as ArrayBuffer);
+          await adapter.writeBinary(STATE_DB_PATH, data.buffer as ArrayBuffer);
         },
         wasmBinary,
       );
-
-      const client = new NotionClient({
-        token: this.settings.token,
-        concurrency: 3,
-        timeoutMs: 30000,
-        fetch: obsidianFetch as typeof globalThis.fetch,
-      });
 
       const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
 
@@ -284,13 +267,22 @@ export default class ImNobsidianPlugin extends Plugin {
         },
       };
 
-      this.orchestrator = new SyncOrchestrator(
+      const client = NotionClient.fromConfig(config, obsidianFetch as typeof globalThis.fetch);
+
+      const orchestrator = new SyncOrchestrator(
         config,
         this.stateDb,
         client,
         vaultAdapter,
         obsidianFetch as typeof globalThis.fetch,
       );
+      // 동기화 실행은 전부 SyncController 가 담당한다. 플러그인은 Notice/사이드바/상태바
+      // 표시만 훅으로 넘겨 배선하므로, sync 로직과 Obsidian UI 가 분리된다.
+      this.syncController = new SyncController(orchestrator, {
+        onState: (patch) => this.updateSidebar(patch),
+        onNotice: (message, durationMs) => new Notice(message, durationMs),
+        onStatusBar: (state) => this.updateStatusBar(state),
+      });
       this.viewProvider = new ViewDataProvider(vaultAdapter);
       this.entryEditor = new EntryEditor(vaultAdapter);
       this.updateStatusBar("ready");
@@ -308,57 +300,12 @@ export default class ImNobsidianPlugin extends Plugin {
     return leaves[0]!.view as SyncSidebarView;
   }
 
-  private updateSidebar(partial: Record<string, unknown>): void {
+  private updateSidebar(partial: SyncStatePatch): void {
     this.getSidebarView()?.updateState(partial);
   }
 
-  private makeProgressCallback(): ProgressCallback {
-    return (current, total, item) => {
-      this.updateSidebar({
-        syncState: "syncing",
-        progress: { current, total, currentPath: item.path },
-      });
-    };
-  }
-
   private async refreshSidebarStatus(fullCheck = false): Promise<void> {
-    if (!this.orchestrator) return;
-    try {
-      if (fullCheck) {
-        this.updateSidebar({
-          syncState: "syncing",
-          operationType: null,
-          progress: null,
-          errorMessage: null,
-        });
-        const status = await this.orchestrator.status();
-        const syncState =
-          status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
-        this.updateSidebar({
-          lastSyncAt: status.lastSyncAt,
-          localChanges: status.localChanges,
-          remoteChanges: status.remoteChanges,
-          conflicts: status.conflicts,
-          syncState,
-          progress: null,
-          errorMessage: null,
-        });
-      } else {
-        const status = await this.orchestrator.statusLocal();
-        const syncState =
-          status.conflictRecords.length > 0 ? ("conflict" as const) : ("ready" as const);
-        this.updateSidebar({
-          lastSyncAt: status.lastSyncAt,
-          localChanges: status.localChanges,
-          conflicts: status.conflicts,
-          syncState,
-          progress: null,
-          errorMessage: null,
-        });
-      }
-    } catch {
-      // sidebar refresh is best-effort
-    }
+    await this.syncController?.refreshStatus(fullCheck);
   }
 
   private async toggleSidebar(): Promise<void> {
@@ -376,7 +323,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   startAutoSync(): void {
     this.stopAutoSync();
-    if (!this.settings.autoSync || !this.orchestrator) return;
+    if (!this.settings.autoSync || !this.syncController) return;
 
     this.autoSyncTimer = setInterval(
       () => this.executeSync(),
@@ -394,13 +341,17 @@ export default class ImNobsidianPlugin extends Plugin {
   private registerColorPostProcessor(): void {
     this.registerMarkdownPostProcessor((el) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      const colorRegex = /%%im-nobsidian:color:(\w+)%%([\s\S]*?)%%\/color%%/g;
+      const colorProbe = `%%${MARKER_BRAND}:color:`;
+      const colorRegex = new RegExp(
+        `%%${MARKER_BRAND}:color:(\\w+)%%([\\s\\S]*?)%%\\/color%%`,
+        "g",
+      );
       const nodesToReplace: { node: Text; fragments: DocumentFragment }[] = [];
 
       let textNode: Text | null;
       while ((textNode = walker.nextNode() as Text | null)) {
         const text = textNode.textContent ?? "";
-        if (!text.includes("%%im-nobsidian:color:")) continue;
+        if (!text.includes(colorProbe)) continue;
 
         const fragment = document.createDocumentFragment();
         let lastIndex = 0;
@@ -455,12 +406,12 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   private scheduleVaultSync(): void {
-    if (!this.settings.autoSync || !this.orchestrator) return;
+    if (!this.settings.autoSync || !this.syncController) return;
 
     this.clearVaultDebounce();
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
-      void this.executeVaultSync();
+      void this.syncController?.vaultSync();
     }, 2000);
   }
 
@@ -471,178 +422,42 @@ export default class ImNobsidianPlugin extends Plugin {
     }
   }
 
-  private async executeVaultSync(): Promise<void> {
-    if (!this.orchestrator || this.vaultEventSyncing) return;
-
-    this.vaultEventSyncing = true;
-    this.updateStatusBar("syncing");
-
-    try {
-      const result = await this.orchestrator.sync();
-      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
-    } catch {
-      this.updateStatusBar("error");
-    } finally {
-      this.vaultEventSyncing = false;
-    }
-  }
-
   private cancelSync(): void {
-    if (this.syncAbortController) {
-      this.syncAbortController.abort();
-      this.syncAbortController = null;
-      new Notice("Im-Nobsidian: 동기화 취소됨");
-      this.updateStatusBar("ready");
-      this.updateSidebar({
-        syncState: "ready",
-        operationType: null,
-        progress: null,
-        errorMessage: null,
-        completionSummary: "동기화가 취소되었습니다",
-      });
-    }
+    this.syncController?.cancel();
   }
 
   private async executePush(): Promise<void> {
-    if (!this.orchestrator) {
+    if (!this.syncController) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
-
-    this.syncAbortController = new AbortController();
-    this.updateStatusBar("syncing");
-    this.updateSidebar({
-      syncState: "syncing",
-      operationType: "push",
-      progress: null,
-      errorMessage: null,
-      completionSummary: null,
-    });
-    new Notice("Im-Nobsidian: Push 시작...");
-
-    try {
-      const result = await this.orchestrator.push({
-        onProgress: this.makeProgressCallback(),
-        signal: this.syncAbortController.signal,
-      });
-      this.syncAbortController = null;
-
-      const summary = `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
-
-      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.updateStatusBar("ready");
-      this.updateSidebar({ completionSummary: summary, operationType: null });
-      await this.refreshSidebarStatus();
-    } catch (error) {
-      this.syncAbortController = null;
-      const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`Im-Nobsidian Push 실패: ${msg}`);
-      this.updateStatusBar("error");
-      this.updateSidebar({
-        syncState: "error",
-        operationType: null,
-        progress: null,
-        errorMessage: msg,
-      });
-    }
+    await this.syncController.push();
   }
 
   private async executePull(): Promise<void> {
-    if (!this.orchestrator) {
+    if (!this.syncController) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
-
-    this.syncAbortController = new AbortController();
-    this.updateStatusBar("syncing");
-    this.updateSidebar({
-      syncState: "syncing",
-      operationType: "pull",
-      progress: null,
-      errorMessage: null,
-      completionSummary: null,
-    });
-    new Notice("Im-Nobsidian: Pull 시작...");
-
-    try {
-      const result = await this.orchestrator.pull({
-        onProgress: this.makeProgressCallback(),
-        signal: this.syncAbortController.signal,
-      });
-      this.syncAbortController = null;
-
-      const summary = `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
-
-      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
-      this.updateSidebar({ completionSummary: summary, operationType: null });
-      await this.refreshSidebarStatus();
-    } catch (error) {
-      this.syncAbortController = null;
-      const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`Im-Nobsidian Pull 실패: ${msg}`);
-      this.updateStatusBar("error");
-      this.updateSidebar({
-        syncState: "error",
-        operationType: null,
-        progress: null,
-        errorMessage: msg,
-      });
-    }
+    await this.syncController.pull();
   }
 
   private async executeSync(): Promise<void> {
-    if (!this.orchestrator) {
+    if (!this.syncController) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
-
-    this.syncAbortController = new AbortController();
-    this.updateStatusBar("syncing");
-    this.updateSidebar({
-      syncState: "syncing",
-      operationType: "sync",
-      progress: null,
-      errorMessage: null,
-      completionSummary: null,
-    });
-    new Notice("Im-Nobsidian: Sync 시작...");
-
-    try {
-      const result = await this.orchestrator.sync({
-        onProgress: this.makeProgressCallback(),
-        signal: this.syncAbortController.signal,
-      });
-      this.syncAbortController = null;
-
-      const summary = `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`;
-
-      new Notice(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.updateStatusBar(result.conflicts.length > 0 ? "conflict" : "ready");
-      this.updateSidebar({ completionSummary: summary, operationType: null });
-      await this.refreshSidebarStatus();
-    } catch (error) {
-      this.syncAbortController = null;
-      const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`Im-Nobsidian Sync 실패: ${msg}`);
-      this.updateStatusBar("error");
-      this.updateSidebar({
-        syncState: "error",
-        operationType: null,
-        progress: null,
-        errorMessage: msg,
-      });
-    }
+    await this.syncController.sync();
   }
 
   private async showStatus(): Promise<void> {
-    if (!this.orchestrator) {
+    if (!this.syncController) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
 
     try {
-      const status = await this.orchestrator.status();
+      const status = await this.syncController.getStatus();
 
       const lines = [];
 
@@ -667,7 +482,7 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   private async resolveConflicts(): Promise<void> {
-    if (!this.orchestrator || !this.stateDb) {
+    if (!this.syncController || !this.stateDb) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
@@ -679,7 +494,7 @@ export default class ImNobsidianPlugin extends Plugin {
     }
 
     try {
-      const pullResult = await this.orchestrator.pull();
+      const pullResult = await this.syncController.pullForResolve();
 
       if (pullResult.conflicts.length === 0) {
         new Notice("Im-Nobsidian: 해결할 충돌이 없습니다.");
@@ -719,7 +534,7 @@ export default class ImNobsidianPlugin extends Plugin {
     });
   }
 
-  private updateStatusBar(state: "ready" | "syncing" | "error" | "conflict"): void {
+  private updateStatusBar(state: SyncPhase): void {
     if (!this.statusBarEl) return;
 
     const labels: Record<string, string> = {

@@ -24,11 +24,13 @@ import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
+import { resolvePullConflict } from "./conflict-detector.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
-import { notionIdsEqual } from "../utils/id.js";
+import { notionIdsEqual, normalizeNotionId } from "../utils/id.js";
+import { runPool } from "../utils/pool.js";
 import type { VaultFS } from "./vault-fs.js";
 import {
   notionEnhancedToObsidian,
@@ -46,6 +48,11 @@ export class SyncOrchestrator {
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
+  // pull 중 각 페이지 markdown(<database url=.../>)에서 추출한 인라인 DB 참조.
+  // key: 하이픈 제거 databaseId, value: 그 DB가 박힌 부모 페이지 id.
+  // 블록 트리 재귀 없이 markdown 신호만으로 컬럼/synced_block 등 깊이 중첩된
+  // child_database 까지 발견해 폴더+.base 동기화 대상으로 등록한다.
+  private _inlineDbRefs = new Map<string, string>();
 
   constructor(
     private readonly config: Config,
@@ -64,8 +71,19 @@ export class SyncOrchestrator {
       config.paths.attachments,
       notionClient,
       customFetch,
+      {
+        concurrency: config.advanced.mediaConcurrency,
+        maxRetries: config.advanced.mediaMaxRetries,
+        retryBaseMs: config.advanced.mediaRetryBaseMs,
+        maxFileSizeBytes: config.advanced.maxFileSizeBytes,
+      },
     );
-    this.fileHandler = new FileHandler(vaultFs, notionClient, stateDb);
+    this.fileHandler = new FileHandler(
+      vaultFs,
+      notionClient,
+      stateDb,
+      config.advanced.fileConcurrency,
+    );
     this.propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(
       config,
@@ -161,98 +179,79 @@ export class SyncOrchestrator {
       await this.ensureFolderPage(folderPath);
     }
 
-    const sema = new Sema(this.config.advanced.concurrency);
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
+    const counts = { created: 0, updated: 0, deleted: 0 };
     const failed: FailedOperation[] = [];
 
     let completed = 0;
     const total = filtered.length;
 
-    const tasks = filtered.map((change) => async () => {
-      await sema.acquire();
-      try {
+    const opOf = (change: LocalChange): "create" | "update" | "delete" =>
+      change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update";
+
+    // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
+    const applyPushChange = async (change: LocalChange): Promise<void> => {
+      switch (change.type) {
+        case "created":
+          await this.pushCreate(change.path);
+          counts.created++;
+          break;
+        case "modified":
+          await this.pushUpdate(change.path);
+          counts.updated++;
+          break;
+        case "moved":
+          await this.pushMove(change.path);
+          counts.updated++;
+          break;
+        case "deleted":
+          await this.pushDelete(change.path);
+          counts.deleted++;
+          break;
+      }
+    };
+
+    // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패분은 변경 객체째 재시도 큐로.
+    const retryQueue: LocalChange[] = [];
+    await runPool(
+      filtered,
+      async (change) => {
         if (options?.signal?.aborted) return;
-        const op =
-          change.type === "created"
-            ? ("create" as const)
-            : change.type === "deleted"
-              ? ("delete" as const)
-              : ("update" as const);
-        options?.onProgress?.(++completed, total, { path: change.path, operation: op });
-        switch (change.type) {
-          case "created":
-            await this.pushCreate(change.path);
-            created++;
-            break;
-          case "modified":
-            await this.pushUpdate(change.path);
-            updated++;
-            break;
-          case "moved":
-            await this.pushMove(change.path);
-            updated++;
-            break;
-          case "deleted":
-            await this.pushDelete(change.path);
-            deleted++;
-            break;
-        }
-      } catch (error) {
-        failed.push({
-          path: change.path,
-          operation:
-            change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        sema.release();
-      }
-    });
-
-    await Promise.all(tasks.map((t) => t()));
-
-    if (failed.length > 0) {
-      const retryTargets = failed.splice(0, failed.length);
-      getLogger().info(`[Im-Nobsidian] Push ${retryTargets.length}건 재시도 (2초 후)`);
-      await new Promise((r) => setTimeout(r, 2000));
-
-      for (const target of retryTargets) {
-        const change = filtered.find((c) => c.path === target.path);
-        if (!change) {
-          failed.push(target);
-          continue;
-        }
+        options?.onProgress?.(++completed, total, { path: change.path, operation: opOf(change) });
         try {
-          switch (change.type) {
-            case "created":
-              await this.pushCreate(change.path);
-              created++;
-              break;
-            case "modified":
-              await this.pushUpdate(change.path);
-              updated++;
-              break;
-            case "moved":
-              await this.pushMove(change.path);
-              updated++;
-              break;
-            case "deleted":
-              await this.pushDelete(change.path);
-              deleted++;
-              break;
-          }
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
-        } catch (error) {
-          failed.push({
-            path: change.path,
-            operation: target.operation,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
+          await applyPushChange(change);
+        } catch {
+          retryQueue.push(change);
         }
-      }
+      },
+      { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+    );
+
+    // 재시도 — 워커 풀 병렬(기존엔 순차). 변경 객체를 그대로 들고 있어 경로 역매칭
+    // 취약함이 없다. pushCreate 는 멱등하므로 부분 성공분을 다시 만들지 않는다.
+    if (retryQueue.length > 0) {
+      const retryWaitMs = this.config.advanced.retryWaitMs;
+      getLogger().info(
+        `[Im-Nobsidian] Push ${retryQueue.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+      );
+      await new Promise((r) => setTimeout(r, retryWaitMs));
+
+      await runPool(
+        retryQueue,
+        async (change) => {
+          try {
+            await applyPushChange(change);
+            getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
+          } catch (error) {
+            failed.push({
+              path: change.path,
+              operation: opOf(change),
+              error: error instanceof Error ? error.message : String(error),
+            });
+            getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
+          }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
     }
 
     if (this.config.sync.syncFiles !== false) {
@@ -269,8 +268,8 @@ export class SyncOrchestrator {
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
         const dbResult = await this.databaseSyncer.pushAll();
-        created += dbResult.created;
-        updated += dbResult.updated;
+        counts.created += dbResult.created;
+        counts.updated += dbResult.updated;
         failed.push(...dbResult.failed);
       } catch (error) {
         getLogger().warn("[Im-Nobsidian] DB Push 중 오류:", error);
@@ -281,7 +280,13 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
     this.stateDb.setMeta("push_in_progress", "");
 
-    return { created, updated, deleted, failed, duration: Date.now() - startTime };
+    return {
+      created: counts.created,
+      updated: counts.updated,
+      deleted: counts.deleted,
+      failed,
+      duration: Date.now() - startTime,
+    };
   }
 
   async pull(options?: PullOptions): Promise<PullResult> {
@@ -305,11 +310,10 @@ export class SyncOrchestrator {
 
     this.cleanupInterruptedSync();
 
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
+    const counts = { created: 0, updated: 0, deleted: 0 };
     this._pullImageCount = 0;
     this._pullFileCount = 0;
+    this._inlineDbRefs.clear();
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
@@ -329,7 +333,7 @@ export class SyncOrchestrator {
       : remoteChanges;
 
     if (filtered.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
-      const hasDbResults = await this.pullDiscoveredDatabases(writtenPaths, failed);
+      const hasDbResults = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
       if (!hasDbResults.created && !hasDbResults.updated) {
         this.stateDb.setMeta("last_pull_at", new Date().toISOString());
         this.stateDb.setMeta("last_sync_at", new Date().toISOString());
@@ -343,7 +347,7 @@ export class SyncOrchestrator {
         created: hasDbResults.created,
         updated: hasDbResults.updated,
         deleted: 0,
-        conflicts: [],
+        conflicts,
         writtenPaths,
         failed,
         duration: Date.now() - startTime,
@@ -389,125 +393,111 @@ export class SyncOrchestrator {
 
     this.stateDb.setMeta("pull_in_progress", "true");
 
-    const sema = new Sema(this.config.advanced.concurrency);
-
-    let pullCompleted = 0;
     const pullTotal = filtered.length;
+    let pullCompleted = 0;
 
-    const tasks = filtered.map((change) => async () => {
-      await sema.acquire();
-      try {
+    // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
+    const toFailure = (change: RemoteChange, error: unknown): FailedOperation => {
+      const record = this.stateDb.getByNotionId(change.pageId);
+      return {
+        path: record?.obsidianPath ?? change.pageId,
+        operation:
+          change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    };
+
+    // 단일 변경을 적용하고 진행률 표시용 경로를 돌려준다. 실패는 throw 로 호출자에 위임.
+    const applyChange = async (change: RemoteChange): Promise<string | undefined> => {
+      switch (change.type) {
+        case "created": {
+          const path = await this.pullCreate(change.pageId);
+          writtenPaths.push(path);
+          counts.created++;
+          return path;
+        }
+        case "modified": {
+          const result = await this.pullUpdate(change);
+          if (result.conflict) {
+            conflicts.push(result.conflict);
+          } else if (result.path) {
+            writtenPaths.push(result.path);
+            counts.updated++;
+          }
+          return result.path;
+        }
+        case "deleted": {
+          const record = this.stateDb.getByNotionId(change.pageId);
+          const path = await this.pullDelete(change.pageId);
+          if (path) {
+            counts.deleted++;
+            return path;
+          }
+          return record?.obsidianPath;
+        }
+        default:
+          return undefined;
+      }
+    };
+
+    // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패한 변경은 재시도 큐로 모은다.
+    const retryQueue: RemoteChange[] = [];
+    await runPool(
+      filtered,
+      async (change) => {
         if (options?.signal?.aborted) return;
-        let resultPath: string | undefined;
-        switch (change.type) {
-          case "created": {
-            const path = await this.pullCreate(change.pageId);
-            writtenPaths.push(path);
-            created++;
-            resultPath = path;
-            break;
-          }
-          case "modified": {
-            const result = await this.pullUpdate(change);
-            if (result.conflict) {
-              conflicts.push(result.conflict);
-            } else if (result.path) {
-              writtenPaths.push(result.path);
-              updated++;
-            }
-            resultPath = result.path;
-            break;
-          }
-          case "deleted": {
-            const record = this.stateDb.getByNotionId(change.pageId);
-            resultPath = record?.obsidianPath;
-            const path = await this.pullDelete(change.pageId);
-            if (path) {
-              deleted++;
-              resultPath = path;
-            }
-            break;
-          }
-        }
-        const record = this.stateDb.getByNotionId(change.pageId);
-        const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
-        const op =
-          change.type === "created"
-            ? ("create" as const)
-            : change.type === "deleted"
-              ? ("delete" as const)
-              : ("update" as const);
-        options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
-      } catch (error) {
-        const record = this.stateDb.getByNotionId(change.pageId);
-        failed.push({
-          path: record?.obsidianPath ?? change.pageId,
-          operation:
-            change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        sema.release();
-      }
-    });
-
-    await Promise.all(tasks.map((t) => t()));
-
-    if (failed.length > 0) {
-      const retryTargets = failed.splice(0, failed.length);
-      getLogger().info(`[Im-Nobsidian] Pull ${retryTargets.length}건 재시도 (2초 후)`);
-      await new Promise((r) => setTimeout(r, 2000));
-
-      for (const target of retryTargets) {
-        const change = filtered.find((c) => {
-          const record = this.stateDb.getByNotionId(c.pageId);
-          return (record?.obsidianPath ?? c.pageId) === target.path;
-        });
-        if (!change) {
-          failed.push(target);
-          continue;
-        }
         try {
-          switch (change.type) {
-            case "created": {
-              const path = await this.pullCreate(change.pageId);
-              writtenPaths.push(path);
-              created++;
-              break;
-            }
-            case "modified": {
-              const result = await this.pullUpdate(change);
-              if (result.conflict) {
-                conflicts.push(result.conflict);
-              } else if (result.path) {
-                writtenPaths.push(result.path);
-                updated++;
-              }
-              break;
-            }
-            case "deleted": {
-              const path = await this.pullDelete(change.pageId);
-              if (path) deleted++;
-              break;
-            }
-          }
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${target.path}`);
-        } catch (error) {
-          failed.push({
-            path: target.path,
-            operation: target.operation,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${target.path}`);
+          const resultPath = await applyChange(change);
+          const record = this.stateDb.getByNotionId(change.pageId);
+          const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
+          const op =
+            change.type === "created"
+              ? ("create" as const)
+              : change.type === "deleted"
+                ? ("delete" as const)
+                : ("update" as const);
+          options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
+        } catch {
+          retryQueue.push(change);
         }
-      }
+      },
+      { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+    );
+
+    // 재시도 — 1차와 동일하게 워커 풀로 병렬 실행(기존엔 순차였다). 변경 객체를
+    // 그대로 들고 있으므로 경로 문자열로 역매칭하던 취약함이 사라진다.
+    if (retryQueue.length > 0) {
+      const retryWaitMs = this.config.advanced.retryWaitMs;
+      getLogger().info(
+        `[Im-Nobsidian] Pull ${retryQueue.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+      );
+      await new Promise((r) => setTimeout(r, retryWaitMs));
+
+      await runPool(
+        retryQueue,
+        async (change) => {
+          try {
+            await applyChange(change);
+            const record = this.stateDb.getByNotionId(change.pageId);
+            getLogger().info(
+              `[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`,
+            );
+          } catch (error) {
+            const failure = toFailure(change, error);
+            failed.push(failure);
+            getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
+          }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
     }
 
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
         const dbResult = await this.databaseSyncer.pullAll();
-        created += dbResult.created;
-        updated += dbResult.updated;
+        counts.created += dbResult.created;
+        counts.updated += dbResult.updated;
+        conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
         if (dbResult.created + dbResult.updated > 0) {
           const dbPaths = this.stateDb
@@ -522,9 +512,9 @@ export class SyncOrchestrator {
     }
 
     {
-      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed);
-      created += dbDiscovery.created;
-      updated += dbDiscovery.updated;
+      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
+      counts.created += dbDiscovery.created;
+      counts.updated += dbDiscovery.updated;
     }
 
     const linkTargetPaths = writtenPaths.length > 0 ? writtenPaths : [];
@@ -536,9 +526,9 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("pull_in_progress", "");
 
     return {
-      created,
-      updated,
-      deleted,
+      created: counts.created,
+      updated: counts.updated,
+      deleted: counts.deleted,
       conflicts,
       writtenPaths,
       failed,
@@ -703,9 +693,55 @@ export class SyncOrchestrator {
     return allDbs;
   }
 
+  /**
+   * 자동 발견된 child_database 1개를 DatabaseSyncer 설정으로 변환한다.
+   * 블록 스캔/markdown 양쪽 발견 경로에서 공통으로 사용한다.
+   * - localFolder: 부모 페이지의 obsidianPath 기준으로 폴더를 잡아 원본 중첩 구조를 보존
+   *   (예: 부모 "AI Engineer (1).md" + DB "Minirecord Project" → "AI Engineer (1)/Minirecord-Project")
+   * - 제목 취득 실패 시 부모 폴더명 기반 안전 이름으로 폴백
+   */
+  private async buildDiscoveredDbConfig(
+    dbId: string,
+    parentPageId: string,
+  ): Promise<{ databaseId: string; localFolder: string; titleProperty: string } | null> {
+    try {
+      const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
+      const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
+      let parentFolder = "";
+      if (parentEntry?.obsidianPath) {
+        const obsPath = parentEntry.obsidianPath;
+        if (obsPath.endsWith(".md")) {
+          const parts = obsPath.split("/");
+          parts.pop();
+          parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
+        } else {
+          parentFolder = obsPath;
+        }
+      }
+      let safeName: string;
+      if (dbTitle) {
+        safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
+      } else {
+        const parentName = parentFolder.split("/").pop() || "";
+        safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+      }
+      if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+      if (!parentFolder) parentFolder = "databases";
+      return {
+        databaseId: dbId,
+        localFolder: `${parentFolder}/${safeName}`,
+        titleProperty: "Name",
+      };
+    } catch (error) {
+      getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
+      return null;
+    }
+  }
+
   private async pullDiscoveredDatabases(
     writtenPaths: string[],
     failed: FailedOperation[],
+    conflicts: Conflict[],
   ): Promise<{ created: number; updated: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0 };
 
@@ -724,47 +760,46 @@ export class SyncOrchestrator {
         }
       }
 
+      const configuredIds = new Set(
+        (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
+      );
+      const knownIds = new Set<string>([
+        ...configuredIds,
+        ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
+      ]);
+      let changed = false;
+
+      // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
+      //     캐시가 비었을 때(최초 full pull)만 수행한다.
       if (dbConfigs.length === 0) {
-        const discoveredDbs = await this.discoverChildDatabases();
-        const configuredIds = new Set(
-          (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
-        );
-        const newDbs = discoveredDbs.filter((db) => !configuredIds.has(db.dbId.replace(/-/g, "")));
-        for (const { dbId, parentPageId } of newDbs) {
-          try {
-            const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
-            const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
-            let parentFolder = "";
-            if (parentEntry?.obsidianPath) {
-              const obsPath = parentEntry.obsidianPath;
-              if (obsPath.endsWith(".md")) {
-                const parts = obsPath.split("/");
-                parts.pop();
-                parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
-              } else {
-                parentFolder = obsPath;
-              }
-            }
-            let safeName: string;
-            if (dbTitle) {
-              safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
-            } else {
-              const parentName = parentFolder.split("/").pop() || "";
-              safeName = parentName ? `${parentName}-DB` : `db-${dbId.slice(0, 8)}`;
-            }
-            if (!parentFolder) parentFolder = "databases";
-            dbConfigs.push({
-              databaseId: dbId,
-              localFolder: `${parentFolder}/${safeName}`,
-              titleProperty: "Name",
-            });
-          } catch (error) {
-            getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 동기화 실패:`, error);
+        const discovered = await this.discoverChildDatabases();
+        for (const { dbId, parentPageId } of discovered) {
+          const nohyph = dbId.replace(/-/g, "");
+          if (knownIds.has(nohyph)) continue;
+          const cfg = await this.buildDiscoveredDbConfig(dbId, parentPageId);
+          if (cfg) {
+            dbConfigs.push(cfg);
+            knownIds.add(nohyph);
+            changed = true;
           }
         }
-        if (dbConfigs.length > 0) {
-          this.stateDb.setMeta("discovered_dbs", JSON.stringify(dbConfigs));
+      }
+
+      // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
+      //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
+      //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
+      for (const [nohyph, parentPageId] of this._inlineDbRefs) {
+        if (knownIds.has(nohyph)) continue;
+        const cfg = await this.buildDiscoveredDbConfig(normalizeNotionId(nohyph), parentPageId);
+        if (cfg) {
+          dbConfigs.push(cfg);
+          knownIds.add(nohyph);
+          changed = true;
         }
+      }
+
+      if (changed && dbConfigs.length > 0) {
+        this.stateDb.setMeta("discovered_dbs", JSON.stringify(dbConfigs));
       }
 
       for (const dbConfig of dbConfigs) {
@@ -772,6 +807,7 @@ export class SyncOrchestrator {
           const dbResult = await this.databaseSyncer.pullDatabase(dbConfig);
           created += dbResult.created;
           updated += dbResult.updated;
+          conflicts.push(...dbResult.conflicts);
           failed.push(...dbResult.failed);
           if (dbResult.created + dbResult.updated > 0) {
             const dbPaths = this.stateDb
@@ -822,8 +858,10 @@ export class SyncOrchestrator {
         });
         content = resolved;
 
+        // Notion 내부 페이지 링크는 `/<id>?pvs=N` 또는 `/p/<id>?...`(신형) 형태로 온다.
+        // 선택적 `p/` 접두사와 임의 쿼리스트링(또는 쿼리 없음)을 모두 허용한다.
         const resolved2 = content.replace(
-          /\[([^\]]+)\]\(\/([a-f0-9]{32})\?pvs=\d+\)/g,
+          /\[([^\]]+)\]\(\/(?:p\/)?([a-f0-9]{32})(?:\?[^)]*)?\)/g,
           (_match, text: string, id: string) => {
             const title = idToTitle.get(id);
             if (title) {
@@ -854,6 +892,15 @@ export class SyncOrchestrator {
   }
 
   private async pushCreate(path: string): Promise<void> {
+    // 멱등성/원자성: 이전 시도가 페이지 생성까지는 성공해 notionPageId 가 이미
+    // 매핑돼 있으면(이미지 업로드 실패·크래시·인-런 재시도 등) 새 페이지를 또
+    // 만들지 않고 업데이트 경로로 위임한다 → 고아 페이지·중복 생성 방지.
+    const existingRecord = this.stateDb.getByPath(path);
+    if (existingRecord?.notionPageId) {
+      await this.pushUpdate(path);
+      return;
+    }
+
     const content = await this.vaultFs.readFile(path);
     const title = extractTitle(path);
     const parentId = await this.resolveNotionParent(path);
@@ -893,6 +940,24 @@ export class SyncOrchestrator {
       conversionResult.content,
       effectiveProperties,
     );
+
+    // 페이지 생성 직후 매핑을 먼저 기록(전이 상태 pending). 이후 이미지 업로드 등이
+    // 실패해도 이 레코드 덕에 다음 시도는 pushCreate(중복) 가 아니라 pushUpdate 로
+    // 이어진다. contentHash 를 비워 변경감지가 "미완료 → 재푸시 필요"로 인식하게 한다.
+    this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: page.id,
+      notionParentId: parentId,
+      contentHash: "",
+      notionLastEdited: page.last_edited_time,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: this.isFolderNote(path) ? "folder-note" : "file",
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
 
     await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images);
 
@@ -1011,7 +1076,10 @@ export class SyncOrchestrator {
           throw error;
         }
       }
-      this.stateDb.delete(record.id);
+      this.stateDb.transaction(() => {
+        this.stateDb.delete(record.id);
+        this.stateDb.deleteWikilink(record.obsidianPath);
+      });
     } else {
       this.stateDb.updateStatus(record.id, "pending");
     }
@@ -1060,7 +1128,12 @@ export class SyncOrchestrator {
       } while (cursor);
       remotePages = allPages;
     } else {
-      remotePages = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId);
+      // search API로 접근 가능한 전체 페이지를 일괄 조회한 뒤 root subtree만 ancestry 필터링.
+      // 블록 트리를 페이지별로 직렬 재귀하던 getChildPagesRecursive(호출 수가 페이지 수의
+      // 수십 배) 대비 API 호출 수를 페이지 수/100 수준으로 줄여 첫 pull/전체 스캔을 가속한다.
+      const allAccessible = await this.notionClient.searchAllPages();
+      const underRoot = await this.filterPagesUnderRoot(allAccessible);
+      remotePages = underRoot.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     }
 
     for (const page of remotePages) {
@@ -1143,6 +1216,88 @@ export class SyncOrchestrator {
     return !!this.stateDb.getByNotionId(parentId);
   }
 
+  /**
+   * search API로 받은 전체 접근 가능 페이지 중 rootPageId 하위(자손)만 남긴다.
+   * 각 페이지의 parent 체인을 root에 닿을 때까지 거슬러 올라가며 판정한다.
+   * - 부모가 이미 받은 페이지면 추가 API 호출 없이 메모리에서 해석(공통 경로)
+   * - 부모가 검색 결과에 없으면(데이터베이스·미공유 조상 등) getPage로 1회 조회 후 캐시
+   * - 조회 불가/순환/깊이 초과 시 보수적으로 root 하위가 아님으로 판정
+   * 판정 결과는 체인 전체에 메모이즈해 형제 페이지 처리 시 재사용한다.
+   */
+  private async filterPagesUnderRoot(
+    allPages: PageObjectResponse[],
+  ): Promise<PageObjectResponse[]> {
+    const root = normalizeNotionId(this.config.notion.rootPageId);
+    const byId = new Map<string, PageObjectResponse>();
+    for (const p of allPages) byId.set(normalizeNotionId(p.id), p);
+
+    const verdict = new Map<string, boolean>();
+
+    const isUnderRoot = async (start: PageObjectResponse): Promise<boolean> => {
+      const chain: string[] = [];
+      let current: PageObjectResponse | null = start;
+      let result = false;
+
+      while (current) {
+        const id = normalizeNotionId(current.id);
+        if (id === root) {
+          result = true;
+          break;
+        }
+        const memo = verdict.get(id);
+        if (memo !== undefined) {
+          result = memo;
+          break;
+        }
+        if (chain.includes(id)) {
+          result = false; // 순환 방지
+          break;
+        }
+        chain.push(id);
+
+        const parentId = await this.extractParentId(current);
+        if (!parentId) {
+          result = false;
+          break;
+        }
+        const pid = normalizeNotionId(parentId);
+        if (pid === root) {
+          result = true;
+          break;
+        }
+        const memoParent = verdict.get(pid);
+        if (memoParent !== undefined) {
+          result = memoParent;
+          break;
+        }
+
+        let parentPage = byId.get(pid) ?? null;
+        if (!parentPage) {
+          try {
+            parentPage = await this.notionClient.getPage(parentId);
+            byId.set(pid, parentPage);
+          } catch {
+            // 부모가 데이터베이스이거나 미공유 → root 도달 불가로 간주(보수적)
+            result = false;
+            break;
+          }
+        }
+        current = parentPage;
+      }
+
+      for (const id of chain) verdict.set(id, result);
+      return result;
+    };
+
+    const out: PageObjectResponse[] = [];
+    for (const p of allPages) {
+      // 루트 페이지 자체는 볼트 컨테이너이므로 콘텐츠 파일로 동기화하지 않는다(자손만 대상).
+      if (normalizeNotionId(p.id) === root) continue;
+      if (await isUnderRoot(p)) out.push(p);
+    }
+    return out;
+  }
+
   private async pullCreate(pageId: string): Promise<string> {
     const page = await this.notionClient.getPage(pageId);
     const title = this.notionClient.extractTitle(page);
@@ -1150,7 +1305,9 @@ export class SyncOrchestrator {
 
     const parentPath = await this.resolveParentPath(page);
 
-    const firstChildren = await this.notionClient.listChildren(pageId, { pageSize: 100 });
+    const firstChildren = await this.notionClient.listChildren(pageId, {
+      pageSize: this.config.advanced.pageSize,
+    });
     const hasChildPages = firstChildren.results.some((b) => "type" in b && b.type === "child_page");
 
     const markdown = await this.fetchPageMarkdown(pageId);
@@ -1290,53 +1447,50 @@ export class SyncOrchestrator {
       localContent = "";
     }
 
-    const localHash = computeHash(localContent);
-    const localModified = localHash !== record.contentHash;
+    const resolution = resolvePullConflict({
+      record,
+      localContent,
+      remoteContent,
+      remoteChange: change,
+      strategy: this.config.sync.conflictStrategy,
+    });
 
-    if (localModified) {
-      const strategy = this.config.sync.conflictStrategy;
-
-      if (strategy === "remote-first") {
-        // 리모트 우선: 로컬 변경 무시, 리모트 내용으로 덮어쓰기
-      } else if (strategy === "local-first") {
-        return { path: record.obsidianPath };
-      } else {
-        const conflict: Conflict = {
-          syncRecord: record,
-          localChange: {
-            path: record.obsidianPath,
-            type: "modified",
-            currentHash: localHash,
-            previousHash: record.contentHash,
-          },
-          remoteChange: change,
-          baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
-          localContent,
-          remoteContent,
-        };
-
-        this.stateDb.updateStatus(record.id, "conflict");
-        return { conflict };
-      }
+    if (resolution.action === "skip") {
+      // local-first: 로컬 보존, 리모트 변경 무시
+      return { path: record.obsidianPath };
+    }
+    if (resolution.action === "conflict") {
+      this.stateDb.updateStatus(record.id, "conflict");
+      return { conflict: resolution.conflict };
     }
 
     await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
 
     const updateStat = await this.vaultFs.getFileStat(record.obsidianPath);
     const newHash = computeHash(remoteContent);
-    this.stateDb.upsert({
-      obsidianPath: record.obsidianPath,
-      notionPageId: change.pageId,
-      notionParentId: record.notionParentId,
-      contentHash: newHash,
-      notionLastEdited: page.last_edited_time,
-      localLastModified: new Date().toISOString(),
-      syncDirection: record.syncDirection,
-      fileType: record.fileType,
-      status: "synced",
-      baseSnapshot: Buffer.from(remoteContent, "utf-8"),
-      localMtime: updateStat?.mtime ?? null,
-      localFileSize: updateStat?.size ?? null,
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        notionParentId: record.notionParentId,
+        contentHash: newHash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: record.syncDirection,
+        fileType: record.fileType,
+        status: "synced",
+        baseSnapshot: Buffer.from(remoteContent, "utf-8"),
+        localMtime: updateStat?.mtime ?? null,
+        localFileSize: updateStat?.size ?? null,
+      });
+
+      const aliases = extractAliases(properties);
+      this.stateDb.upsertWikilink({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        title,
+        aliases,
+      });
     });
 
     return { path: record.obsidianPath };
@@ -1354,7 +1508,10 @@ export class SyncOrchestrator {
       }
     }
 
-    this.stateDb.delete(record.id);
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(record.obsidianPath);
+    });
     return record.obsidianPath;
   }
 
@@ -1364,7 +1521,12 @@ export class SyncOrchestrator {
 
     if (folderNoteRecord?.notionPageId) {
       const existing = this.stateDb.getByPath(folderPath);
-      if (existing) this.stateDb.delete(existing.id);
+      if (existing) {
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(existing.id);
+          this.stateDb.deleteWikilink(existing.obsidianPath);
+        });
+      }
       return;
     }
 
@@ -1433,7 +1595,10 @@ export class SyncOrchestrator {
       const folderNotePath = `${folder.obsidianPath}/${folderName}.md`;
       const noteRecord = this.stateDb.getByPath(folderNotePath);
       if (noteRecord?.notionPageId) {
-        this.stateDb.delete(folder.id);
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(folder.id);
+          this.stateDb.deleteWikilink(folder.obsidianPath);
+        });
       }
     }
   }
@@ -1542,12 +1707,40 @@ export class SyncOrchestrator {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
-        return notionEnhancedToObsidian(result.markdown);
+        this.collectInlineDbRefs(pageId, result.markdown);
+        return this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown));
       } catch {
         // Markdown API 실패 시 blocks API fallback
       }
     }
     return this.blockConverter.notionBlocksToMarkdown(pageId);
+  }
+
+  // Markdown API는 인라인 데이터베이스를 다음처럼 렌더한다(컬럼/synced_block 내부 포함):
+  //   <database url="https://www.notion.so/<id-nohyph>" inline="true"
+  //             data-source-url="collection://<ds-id>">Title</database>
+  // url 안의 32자리 hex 가 databaseId 이므로, 별도 블록 트리 재귀 없이 이 태그만 파싱해
+  // 깊이 중첩된 child_database 까지 폴더+.base 동기화 대상으로 등록한다.
+  private collectInlineDbRefs(parentPageId: string, rawMarkdown: string): void {
+    const re = /<database\b[^>]*\burl="https:\/\/www\.notion\.so\/([a-f0-9]{32})"[^>]*>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(rawMarkdown)) !== null) {
+      const dbId = m[1];
+      if (dbId) this._inlineDbRefs.set(dbId, parentPageId);
+    }
+  }
+
+  // pull 시 url 기반 page mention 은 `[[notion:<id>]]` 로 1차 변환된다(notionEnhancedToObsidian).
+  // 이를 state DB 역조회로 원래 `[[제목]]` 위키링크로 복원해 push↔pull 라운드트립을 수렴시킨다.
+  // 볼트 밖/미추적 페이지면 `[[notion:<id>]]` 를 그대로 두어 정보 손실을 막는다.
+  private resolveNotionIdWikilinks(markdown: string): string {
+    return markdown.replace(/\[\[notion:([a-f0-9]{32})\]\]/g, (match, id: string) => {
+      const record = this.stateDb.getByNotionId(normalizeNotionId(id));
+      if (!record?.obsidianPath) return match;
+      const base = record.obsidianPath.split("/").pop() ?? record.obsidianPath;
+      const title = base.replace(/\.md$/, "");
+      return `[[${title}]]`;
+    });
   }
 
   private async extractParentId(page: PageObjectResponse): Promise<string | null> {

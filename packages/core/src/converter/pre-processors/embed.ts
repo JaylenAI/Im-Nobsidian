@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import type { ImageReference } from "../../types/convert.js";
+import { EMBED_PROTOCOL, spacedMarker } from "../../constants/markers.js";
 
 const OBSIDIAN_EMBED_REGEX = /!\[\[([^\]]+)\]\]/g;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
@@ -19,17 +20,17 @@ export class EmbedResolver implements Processor {
         images.push({ url: target, localPath: target, isExternal: false });
         if (isPush && !isExternalUrl(target)) {
           const fileName = target.split("/").pop() ?? target;
-          return `> 📎 ${fileName}\n> %% im-nobsidian:local-image:${target} %%`;
+          return `> 📎 ${fileName}\n> ${spacedMarker(`local-image:${target}`)}`;
         }
         return `![${target}](${encodeURI(target)})`;
       }
       const encoded = encodeURIComponent(target);
-      return `[${target}](im-nobsidian://embed/${encoded})`;
+      return `[${target}](${EMBED_PROTOCOL}${encoded})`;
     });
 
     content = content.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
       if (isVideoUrl(url)) {
-        return `%% im-nobsidian:embed:type=video&url=${encodeURIComponent(url)} %%\n[${alt || "Video"}](${url})`;
+        return `${spacedMarker(`embed:type=video&url=${encodeURIComponent(url)}`)}\n[${alt || "Video"}](${url})`;
       }
       if (isExternalUrl(url)) {
         images.push({ url, isExternal: true });

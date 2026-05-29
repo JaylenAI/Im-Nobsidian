@@ -42,10 +42,31 @@ export const ConfigSchema = z.object({
     imageDownload: z.enum(["immediate", "lazy", "skip"]).default("immediate"),
   }),
   advanced: z.object({
+    // Notion API 클라이언트 동시성/타임아웃
     concurrency: z.number().min(1).max(10).default(3),
-    maxRetries: z.number().min(0).max(10).default(5),
     timeoutMs: z.number().min(5000).max(60000).default(30000),
-    batchSize: z.number().min(1).max(100).default(50),
+    // 페이지네이션/블록 배치 (Notion API children append 상한 = 100)
+    pageSize: z.number().min(1).max(100).default(100),
+    batchSize: z.number().min(1).max(100).default(100),
+    // Rate limit 게이트 (요청 간 최소 간격, ms)
+    rateLimitIntervalMs: z.number().min(0).max(5000).default(350),
+    // API 재시도 (지수 백오프: retryBaseDelayMs * retryBackoffFactor^attempt)
+    maxRetries: z.number().min(0).max(10).default(5),
+    retryBaseDelayMs: z.number().min(100).max(10000).default(1000),
+    retryBackoffFactor: z.number().min(1).max(10).default(2),
+    // 오케스트레이터 단계 간 재시도 대기 (ms)
+    retryWaitMs: z.number().min(0).max(30000).default(2000),
+    // 미디어(이미지/파일) 다운로드 동시성/재시도
+    mediaConcurrency: z.number().min(1).max(10).default(3),
+    mediaMaxRetries: z.number().min(0).max(10).default(3),
+    mediaRetryBaseMs: z.number().min(100).max(10000).default(1000),
+    // 비마크다운 파일(첨부) 업로드/다운로드 동시성
+    fileConcurrency: z.number().min(1).max(10).default(2),
+    // 다운로드 파일 크기 상한 (bytes, 기본 100MB)
+    maxFileSizeBytes: z
+      .number()
+      .min(1024)
+      .default(100 * 1024 * 1024),
   }),
 });
 
@@ -80,8 +101,18 @@ export const DEFAULT_CONFIG: Config = {
   },
   advanced: {
     concurrency: 3,
-    maxRetries: 5,
     timeoutMs: 30000,
-    batchSize: 50,
+    pageSize: 100,
+    batchSize: 100,
+    rateLimitIntervalMs: 350,
+    maxRetries: 5,
+    retryBaseDelayMs: 1000,
+    retryBackoffFactor: 2,
+    retryWaitMs: 2000,
+    mediaConcurrency: 3,
+    mediaMaxRetries: 3,
+    mediaRetryBaseMs: 1000,
+    fileConcurrency: 2,
+    maxFileSizeBytes: 100 * 1024 * 1024,
   },
 };

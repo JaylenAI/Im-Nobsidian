@@ -115,12 +115,14 @@ describe("BaseFileGenerator", () => {
     expect(result).toContain("- Priority");
   });
 
-  it("sort를 column/direction 형식으로 변환한다", () => {
+  it("sort를 property/direction 형식으로 변환한다 (Bases 키는 property, column 아님)", () => {
     const result = generator.generate(makeOptions());
 
     expect(result).toContain("sort:");
-    expect(result).toContain("column: Priority");
+    expect(result).toContain("property: Priority");
     expect(result).toContain("direction: DESC");
+    // column: 은 Obsidian Bases가 인식하지 못하는 무효 키 — 절대 출력하면 안 됨
+    expect(result).not.toContain("column:");
   });
 
   it("board 뷰를 cards로 변환하고 groupBy를 올바른 형식으로 출력한다", () => {
@@ -231,7 +233,7 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("column: Priority");
+    expect(result).toContain("property: Priority");
     expect(result).toContain("direction: ASC");
   });
 
@@ -298,7 +300,7 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("column: file.mtime");
+    expect(result).toContain("property: file.mtime");
     expect(result).toContain("direction: DESC");
   });
 
@@ -440,7 +442,75 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("column: file.ctime");
+    expect(result).toContain("property: file.ctime");
     expect(result).toContain("direction: ASC");
+  });
+
+  it("YAML 메타문자가 든 속성 참조는 sort/order에서 인용한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        schema: {
+          Name: { id: "title", type: "title" },
+          "A: B": { id: "p1", type: "number" },
+        },
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v1",
+              name: "T",
+              type: "table",
+              properties: [{ propertyId: "p1", propertyName: "A: B", visible: true }],
+              sorts: [{ property: "p1", direction: "ascending" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain('- "A: B"');
+    expect(result).toContain('property: "A: B"');
+  });
+
+  it("공백 포함 속성명은 평문 스칼라로 출력한다(과인용 금지)", () => {
+    const result = generator.generate(
+      makeOptions({
+        schema: {
+          Name: { id: "title", type: "title" },
+          "Due Date": { id: "d1", type: "date" },
+        },
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v1",
+              name: "T",
+              type: "table",
+              sorts: [{ property: "d1", direction: "ascending" }],
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain("property: Due Date");
+    expect(result).not.toContain('property: "Due Date"');
+  });
+
+  it("file.* 참조는 인용하지 않는다", () => {
+    const result = generator.generate(makeOptions());
+
+    expect(result).toContain("- file.name");
+    expect(result).not.toContain('"file.name"');
+  });
+
+  it("출력은 말미 개행으로 끝난다", () => {
+    const result = generator.generate(makeOptions());
+
+    expect(result.endsWith("\n")).toBe(true);
   });
 });

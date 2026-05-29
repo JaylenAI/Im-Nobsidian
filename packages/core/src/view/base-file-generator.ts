@@ -43,13 +43,16 @@ export class BaseFileGenerator {
     this.writePropertyDisplayNames(lines, options.schema);
     this.writeViews(lines, options.viewsConfig.views, options.schema);
 
-    return lines.join("\n");
+    // YAML 파일은 말미 개행으로 끝낸다(POSIX 텍스트 관례·diff 안정성).
+    return lines.join("\n") + "\n";
   }
 
   private writeFilters(lines: string[], folderPath: string): void {
     lines.push("filters:");
     lines.push("  and:");
     lines.push(`    - file.inFolder("${folderPath}")`);
+    // `.base` 파일 자신도 폴더에 있어 카드로 잡히므로(빈 카드) markdown 노트만 남긴다.
+    lines.push(`    - file.ext == "md"`);
     lines.push("");
   }
 
@@ -109,28 +112,29 @@ export class BaseFileGenerator {
       if (view.order && view.order.length > 0) {
         lines.push("    order:");
         for (const col of view.order) {
-          lines.push(`      - ${col}`);
+          lines.push(`      - ${this.propRef(col)}`);
         }
       }
 
       if (view.sort && view.sort.length > 0) {
         lines.push("    sort:");
         for (const s of view.sort) {
-          lines.push(`      - column: ${s.column}`);
+          // Bases 정렬 항목의 키는 `property`다(`column` 아님 — Obsidian이 무시함).
+          lines.push(`      - property: ${this.propRef(s.property)}`);
           lines.push(`        direction: ${s.direction}`);
         }
       }
 
       if (view.groupBy) {
         lines.push("    groupBy:");
-        lines.push(`      property: ${view.groupBy.property}`);
+        lines.push(`      property: ${this.propRef(view.groupBy.property)}`);
         if (view.groupBy.direction) {
           lines.push(`      direction: ${view.groupBy.direction}`);
         }
       }
 
       if (view.image) {
-        lines.push(`    image: ${view.image}`);
+        lines.push(`    image: ${this.propRef(view.image)}`);
       }
     }
   }
@@ -142,7 +146,7 @@ export class BaseFileGenerator {
     type: BasesViewType;
     name: string;
     order?: string[];
-    sort?: Array<{ column: string; direction: string }>;
+    sort?: Array<{ property: string; direction: string }>;
     groupBy?: { property: string; direction?: string };
     image?: string;
   } | null {
@@ -153,7 +157,7 @@ export class BaseFileGenerator {
       type: BasesViewType;
       name: string;
       order?: string[];
-      sort?: Array<{ column: string; direction: string }>;
+      sort?: Array<{ property: string; direction: string }>;
       groupBy?: { property: string; direction?: string };
       image?: string;
     } = {
@@ -166,7 +170,11 @@ export class BaseFileGenerator {
         .filter((p) => p.visible !== false)
         .map((p) => {
           const name = p.propertyName ?? this.resolvePropertyName(p.propertyId, schema);
-          return name ? this.toNoteRef(name) : null;
+          if (!name) return null;
+          // title 타입 속성은 카드/표 제목(file.name)과 중복되고, 프론트매터엔
+          // title 키가 없어(본문 H1·파일명으로 보존) 빈 컬럼으로 표시되므로 제외한다.
+          if (schema[name]?.type === "title") return null;
+          return this.toNoteRef(name);
         })
         .filter((name): name is string => !!name);
 
@@ -178,17 +186,17 @@ export class BaseFileGenerator {
     if (view.sorts && view.sorts.length > 0) {
       result.sort = view.sorts
         .map((s) => {
-          let column: string;
+          let property: string;
           if (s.property) {
             const propName = this.resolvePropertyName(s.property, schema) ?? s.property;
-            column = this.toNoteRef(propName);
+            property = this.toNoteRef(propName);
           } else if (s.timestamp) {
-            column = s.timestamp === "created_time" ? "file.ctime" : "file.mtime";
+            property = s.timestamp === "created_time" ? "file.ctime" : "file.mtime";
           } else {
             return null;
           }
           return {
-            column,
+            property,
             direction: s.direction === "ascending" ? "ASC" : "DESC",
           };
         })
@@ -229,14 +237,37 @@ export class BaseFileGenerator {
     return propertyName;
   }
 
+  /**
+   * 속성 참조(order/sort/groupBy/image)를 YAML로 안전하게 출력한다.
+   * `file.name`·`formula.coverImage`·`note.cover` 같은 접두사 식별자와 공백 포함 일반 속성명은
+   * 평문 스칼라로 안전하므로 그대로 두고, 콜론·해시·따옴표 등 YAML 메타문자가 있을 때만 인용한다.
+   */
+  private propRef(ref: string): string {
+    if (/^[A-Za-z0-9_][A-Za-z0-9_. ]*$/.test(ref) && !ref.endsWith(" ")) return ref;
+    return `"${ref.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  }
+
   private resolvePropertyName(
     propertyId: string,
     schema: Record<string, BasePropertySchema>,
   ): string | undefined {
+    // Notion `views.retrieve` 는 RAW 속성 id(예: `[jiM`)를 주지만
+    // `databases.retrieve` 스키마는 URL-인코딩된 id(예: `%5BjiM`)를 준다.
+    // 디코드 후 비교하지 않으면 "title" 외 모든 속성(cover/order/sort/groupBy)이
+    // 매칭에 실패해 갤러리 커버·표시 컬럼이 통째로 사라진다.
+    const target = this.decodeId(propertyId);
     for (const [name, prop] of Object.entries(schema)) {
-      if (prop.id === propertyId) return name;
+      if (this.decodeId(prop.id) === target) return name;
     }
     return undefined;
+  }
+
+  private decodeId(id: string): string {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return id;
+    }
   }
 
   private yamlKey(key: string): string {

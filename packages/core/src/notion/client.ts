@@ -12,11 +12,19 @@ import type {
 } from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
+import type { Config } from "../types/config.js";
+import { getLogger } from "../utils/logger.js";
 
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
   readonly timeoutMs?: number;
+  readonly rateLimitIntervalMs?: number;
+  readonly maxRetries?: number;
+  readonly retryBaseDelayMs?: number;
+  readonly retryBackoffFactor?: number;
+  readonly pageSize?: number;
+  readonly batchSize?: number;
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -28,6 +36,13 @@ export class NotionClient {
 
   private readonly customFetch?: typeof globalThis.fetch;
 
+  private readonly minRequestInterval: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryBackoffFactor: number;
+  private readonly defaultPageSize: number;
+  private readonly batchSize: number;
+
   constructor(options: NotionClientOptions) {
     this.client = new Client({
       auth: options.token,
@@ -38,6 +53,29 @@ export class NotionClient {
     this.token = options.token;
     this.customFetch = options.fetch;
     this.sema = new Sema(options.concurrency ?? 3);
+    this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
+    this.maxRetries = options.maxRetries ?? 5;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1000;
+    this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
+    this.defaultPageSize = options.pageSize ?? 100;
+    this.batchSize = options.batchSize ?? 100;
+  }
+
+  /** config.advanced 의 운영 튜닝값으로 클라이언트를 생성한다 (매직넘버 단일 진실원). */
+  static fromConfig(config: Config, fetch?: typeof globalThis.fetch): NotionClient {
+    const a = config.advanced;
+    return new NotionClient({
+      token: config.notion.token,
+      concurrency: a.concurrency,
+      timeoutMs: a.timeoutMs,
+      rateLimitIntervalMs: a.rateLimitIntervalMs,
+      maxRetries: a.maxRetries,
+      retryBaseDelayMs: a.retryBaseDelayMs,
+      retryBackoffFactor: a.retryBackoffFactor,
+      pageSize: a.pageSize,
+      batchSize: a.batchSize,
+      ...(fetch ? { fetch } : {}),
+    });
   }
 
   getInternalClient(): Client {
@@ -300,7 +338,7 @@ export class NotionClient {
       this.client.dataSources.query({
         data_source_id: dsId,
         start_cursor: options?.startCursor,
-        page_size: options?.pageSize ?? 100,
+        page_size: options?.pageSize ?? this.defaultPageSize,
         filter: options?.filter as never,
       }),
     );
@@ -317,7 +355,7 @@ export class NotionClient {
     do {
       const response = await this.queryDatabase(databaseId, {
         startCursor: cursor,
-        pageSize: 100,
+        pageSize: this.defaultPageSize,
         filter,
       });
       all.push(...response.results);
@@ -378,7 +416,7 @@ export class NotionClient {
       this.client.blocks.children.list({
         block_id: blockId,
         start_cursor: options?.startCursor,
-        page_size: options?.pageSize ?? 100,
+        page_size: options?.pageSize ?? this.defaultPageSize,
       }),
     );
     return {
@@ -436,9 +474,9 @@ export class NotionClient {
   }
 
   async appendChildren(blockId: string, children: unknown[]): Promise<void> {
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < children.length; i += BATCH_SIZE) {
-      const batch = children.slice(i, i + BATCH_SIZE);
+    const batchSize = this.batchSize;
+    for (let i = 0; i < children.length; i += batchSize) {
+      const batch = children.slice(i, i + batchSize);
       await this.withRateLimit(() =>
         this.client.blocks.children.append({
           block_id: blockId,
@@ -491,7 +529,7 @@ export class NotionClient {
         query: params.query,
         filter: params.filter,
         start_cursor: params.startCursor,
-        page_size: params.pageSize ?? 100,
+        page_size: params.pageSize ?? this.defaultPageSize,
       }),
     );
     return {
@@ -511,7 +549,7 @@ export class NotionClient {
           filter: { property: "object", value: "page" },
           sort: { direction: "descending", timestamp: "last_edited_time" },
           start_cursor: cursor,
-          page_size: 100,
+          page_size: this.defaultPageSize,
         }),
       );
 
@@ -529,6 +567,36 @@ export class NotionClient {
     return results;
   }
 
+  /**
+   * 통합이 접근 가능한 모든 페이지를 search API로 일괄 조회한다(요청당 최대 100건).
+   * 블록 트리를 페이지별로 재귀 순회하는 getChildPagesRecursive 대비 API 호출 수가
+   * 페이지 수의 수십분의 1로 줄어든다. search API는 휴지통(in_trash) 페이지를 반환하지 않는다.
+   * 반환 객체에는 parent 정보가 포함되어 호출 측에서 root subtree ancestry 필터링이 가능하다.
+   */
+  async searchAllPages(): Promise<PageObjectResponse[]> {
+    const results: PageObjectResponse[] = [];
+    let cursor: string | undefined;
+
+    do {
+      const response = await this.withRateLimit(() =>
+        this.client.search({
+          filter: { property: "object", value: "page" },
+          start_cursor: cursor,
+          page_size: this.defaultPageSize,
+        }),
+      );
+      for (const page of response.results) {
+        // 부분 응답(properties 없는 객체) 제외 — 완전한 PageObjectResponse만 수집
+        if ("properties" in page) {
+          results.push(page as PageObjectResponse);
+        }
+      }
+      cursor = response.next_cursor ?? undefined;
+    } while (cursor);
+
+    return results;
+  }
+
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
     const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
@@ -536,7 +604,17 @@ export class NotionClient {
     if (childPageBlocks.length === 0) return [];
 
     const pages = await Promise.all(childPageBlocks.map((b) => this.getPage(b.id)));
-    return pages;
+    // 휴지통/아카이브된 페이지 제외: 부모 블록에는 child_page 참조가 남아 있어도
+    // 대상 페이지가 삭제(in_trash)·보관(archived)된 경우 블록 조회 시 object_not_found가
+    // 발생하므로 동기화 대상에서 사전 제거한다. (재귀 스캔의 무한·실패 전파 차단)
+    return pages.filter((p) => !NotionClient.isTrashedOrArchived(p));
+  }
+
+  /** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
+  private static isTrashedOrArchived(page: PageObjectResponse): boolean {
+    // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
+    const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+    return inTrash || page.archived === true;
   }
 
   async getChildDatabaseIds(parentId: string): Promise<string[]> {
@@ -552,7 +630,19 @@ export class NotionClient {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
-        const children = await this.getChildPages(id);
+        let children: PageObjectResponse[];
+        try {
+          children = await this.getChildPages(id);
+        } catch (error) {
+          // 한 서브트리가 접근 불가(공유 해제·삭제 등)여도 전체 스캔이 중단되지 않도록
+          // 해당 노드만 건너뛴다. 형제·다른 가지의 페이지 손실을 방지한다.
+          getLogger().warn(
+            `[Im-Nobsidian] 하위 페이지 스캔 건너뜀 (${id}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          continue;
+        }
         for (const child of children) {
           all.push(child);
           nextLevel.push(child.id);
@@ -576,7 +666,7 @@ export class NotionClient {
         this.client.views.list({
           database_id: databaseId,
           start_cursor: cursor,
-          page_size: 100,
+          page_size: this.defaultPageSize,
         }),
       );
 
@@ -688,7 +778,6 @@ export class NotionClient {
   // ─── Internal ───
 
   private lastRequestTime = 0;
-  private readonly minRequestInterval = 350;
 
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
     await this.sema.acquire();
@@ -709,8 +798,10 @@ export class NotionClient {
     try {
       return await fn();
     } catch (error: unknown) {
-      if (isRetryable(error) && attempt < 5) {
-        const baseDelay = extractRetryAfter(error) ?? 1000 * Math.pow(2, attempt);
+      if (isRetryable(error) && attempt < this.maxRetries) {
+        const baseDelay =
+          extractRetryAfter(error) ??
+          this.retryBaseDelayMs * Math.pow(this.retryBackoffFactor, attempt);
         const jitter = baseDelay * (0.5 + Math.random() * 0.5);
         await sleep(jitter);
         return this.executeWithRetry(fn, attempt + 1);

@@ -1,4 +1,5 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
 const EMOJI_TYPE_MAP: Record<string, string> = {
   "\u{1F4DD}": "note",
@@ -15,7 +16,10 @@ const EMOJI_TYPE_MAP: Record<string, string> = {
   "\u{1F4AC}": "quote",
 };
 
-const CALLOUT_PRESERVE_REGEX = /%% im-nobsidian:callout:type=(\w+)(?:&foldable=(open|closed))? %%/g;
+const CALLOUT_PRESERVE_REGEX = new RegExp(
+  `%% ${MARKER_BRAND_RE}:callout:type=(\\w+)(?:&foldable=(open|closed))? %%`,
+  "g",
+);
 
 export class CalloutRestorer implements Processor {
   readonly name = "CalloutRestorer";

@@ -20,11 +20,7 @@ export const resolveCommand = new Command("resolve")
     try {
       const config = await configManager.load();
       const stateDb = StateDB.open(configManager.dbPath);
-      const client = new NotionClient({
-        token: config.notion.token,
-        concurrency: 3,
-        timeoutMs: 30000,
-      });
+      const client = NotionClient.fromConfig(config);
       const vaultFs = new NodeVaultFS(cwd, config.paths);
 
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);

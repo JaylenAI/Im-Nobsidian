@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join, relative, dirname } from "node:path";
 import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
+import { IGNORE_FILE } from "../constants/paths.js";
 
 export interface PathFilterConfig {
   readonly include?: string[];
@@ -25,7 +26,7 @@ export class NodeVaultFS implements VaultFS {
 
   private loadImNobsidianIgnore(): string[] {
     try {
-      const ignorePath = join(this.rootPath, ".im-nobsidian-ignore");
+      const ignorePath = join(this.rootPath, IGNORE_FILE);
       const content = readFileSync(ignorePath, "utf-8");
       return content
         .split("\n")

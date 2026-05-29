@@ -5,6 +5,7 @@ export type {
   LocalChange,
   RemoteChange,
   Conflict,
+  BaseSyncOptions,
   PushOptions,
   PullOptions,
   SyncOptions,
@@ -168,3 +169,21 @@ export type { Logger } from "./utils/logger.js";
 
 // Factory
 export { createDefaultPipeline } from "./converter/pipeline-factory.js";
+
+// Constants — 경로 단일 진실원(SSOT).
+export {
+  INTERNAL_DIR,
+  CONFIG_FILE,
+  STATE_DB_FILE,
+  DB_VIEWS_FILE,
+  IGNORE_FILE,
+  GITIGNORE_ENTRY,
+  DB_VIEWS_PATH,
+  STATE_DB_PATH,
+  INTERNAL_DIR_GLOB,
+  isInternalPath,
+} from "./constants/paths.js";
+
+// 마커 포맷 세부는 core 내부 전용이지만, 브랜드 토큰만은 플러그인 미리보기 렌더링 등
+// 패키지 외부 소비자도 마커를 식별해야 하므로 단일 진실원으로 공개한다.
+export { MARKER_BRAND } from "./constants/markers.js";

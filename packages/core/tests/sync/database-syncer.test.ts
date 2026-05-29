@@ -4,6 +4,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
+import { computeHash } from "../../src/utils/hash.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -28,9 +29,11 @@ function createMockStateDb() {
     getByStatus: vi.fn().mockReturnValue([]),
     upsert: vi.fn(),
     upsertWikilink: vi.fn(),
+    deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
+    updatePath: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
@@ -234,7 +237,9 @@ describe("DatabaseSyncer", () => {
       expect(mdWriteCalls).toHaveLength(0);
     });
 
-    it("lastEdited가 다르면 업데이트", async () => {
+    it("lastEdited가 다르고 로컬 미수정이면 업데이트(덮어쓰기)", async () => {
+      // 로컬 파일이 마지막 동기화 이후 변경되지 않은 경우(해시 일치) → 안전하게 덮어쓰기
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
           id: "page-1",
@@ -250,16 +255,93 @@ describe("DatabaseSyncer", () => {
         obsidianPath: "databases/tasks/Updated Task.md",
         notionPageId: "page-1",
         notionLastEdited: "2026-05-16T00:00:00.000Z",
-        contentHash: "old-hash",
+        contentHash: computeHash("LOCAL UNCHANGED"),
       });
 
       const result = await syncer.pullAll();
 
       expect(result.updated).toBe(1);
+      expect(result.conflicts).toHaveLength(0);
       expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
         "databases/tasks/Updated Task.md",
         expect.any(String),
       );
+    });
+
+    it("로컬·리모트 동시 수정이면 충돌로 보존 (manual 전략, 데이터 손실 방지)", async () => {
+      // 로컬이 마지막 동기화 이후 수정됨(해시 불일치) + 리모트도 변경 → 충돌
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED — 사용자 변경분");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Updated Task" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "stored-hash-at-last-sync",
+        baseSnapshot: Buffer.from("BASE SNAPSHOT", "utf-8"),
+      });
+
+      const result = await syncer.pullAll();
+
+      // 업데이트 카운트 0, 충돌 1건, 로컬 .md 덮어쓰기 없음
+      expect(result.updated).toBe(0);
+      expect(result.conflicts).toHaveLength(1);
+      expect(result.conflicts[0]?.localContent).toBe("LOCALLY EDITED — 사용자 변경분");
+      expect(mockStateDb.updateStatus).toHaveBeenCalledWith("rec-1", "conflict");
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
+    });
+
+    it("local-first 전략이면 로컬 수정 시 리모트 변경 스킵", async () => {
+      const localFirstConfig = createConfig([createDbConfig()]);
+      (localFirstConfig.sync as any).conflictStrategy = "local-first";
+      const localSyncer = new DatabaseSyncer(
+        localFirstConfig,
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+        pipeline,
+        mockImageHandler as any,
+      );
+
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Updated Task" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "stored-hash-at-last-sync",
+      });
+
+      const result = await localSyncer.pullAll();
+
+      expect(result.updated).toBe(0);
+      expect(result.conflicts).toHaveLength(0);
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
     });
 
     it("속성을 프론트매터로 변환하여 포함", async () => {
@@ -429,6 +511,119 @@ describe("DatabaseSyncer", () => {
         "existing-page-id",
         expect.any(String),
       );
+      // 업데이트 시에도 제목/별칭 변경 반영을 위해 wikilink 를 갱신한다
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "databases/tasks/Updated Task.md",
+          notionPageId: "existing-page-id",
+          title: "Updated Task",
+        }),
+      );
+    });
+
+    it("본문 push 실패 시 synced 미표시·해시 미전진 (거짓 synced 방지)", async () => {
+      const updatedContent = "---\ntitle: Updated Task\n---\n\n# Updated\n\nNew body.";
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Updated Task.md",
+          content: updatedContent,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(updatedContent);
+      mockStateDb.getByPath.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "existing-page-id",
+        contentHash: "old-hash",
+      });
+      // Markdown 본문 push 가 실패하는 상황 시뮬레이션
+      mockNotionClient.replacePageMarkdown.mockRejectedValueOnce(new Error("Markdown API 500"));
+
+      const result = await syncer.pushAll();
+
+      // 업데이트 카운트 0, 실패 1건(operation=update)
+      expect(result.updated).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]?.operation).toBe("update");
+      // 해시를 전진시키지 않고 synced 로 표시하지 않으며 error 로 표시
+      expect(mockStateDb.updateHash).not.toHaveBeenCalled();
+      expect(mockStateDb.updateStatus).toHaveBeenCalledWith("rec-1", "error");
+      expect(mockStateDb.updateStatus).not.toHaveBeenCalledWith("rec-1", "synced");
+    });
+
+    it("로컬 rename 시 중복 페이지 생성 대신 기존 페이지 재매핑", async () => {
+      const content = "---\ntitle: Renamed Task\n---\n\nUnchanged body.";
+      const hash = computeHash(content);
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Renamed Task.md",
+          content,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(content);
+      // 새 경로엔 추적 레코드 없음(rename 직후)
+      mockStateDb.getByPath.mockReturnValue(null);
+      // 고아 레코드: 같은 DB·같은 내용 해시·사라진 이전 경로
+      mockStateDb.getAll.mockReturnValue([
+        {
+          id: "rec-old",
+          obsidianPath: "databases/tasks/Old Name.md",
+          notionPageId: "existing-page-id",
+          notionParentId: "db-123",
+          contentHash: hash,
+          fileType: "db-row",
+        },
+      ]);
+
+      const result = await syncer.pushAll();
+
+      // 신규 페이지 생성하지 않고 업데이트(이동)로 집계
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      expect(result.created).toBe(0);
+      expect(result.updated).toBe(1);
+      // 레코드 경로 재매핑 + wikilink 새 경로 갱신(pageId 유지)
+      expect(mockStateDb.updatePath).toHaveBeenCalledWith(
+        "rec-old",
+        "databases/tasks/Renamed Task.md",
+      );
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "databases/tasks/Renamed Task.md",
+          notionPageId: "existing-page-id",
+        }),
+      );
+    });
+
+    it("내용이 다르면 rename 으로 보지 않고 신규 생성", async () => {
+      const content = "---\ntitle: Brand New\n---\n\nCompletely different.";
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Brand New.md",
+          content,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(content);
+      mockStateDb.getByPath.mockReturnValue(null);
+      // 고아는 있으나 해시가 다름 → rename 아님
+      mockStateDb.getAll.mockReturnValue([
+        {
+          id: "rec-old",
+          obsidianPath: "databases/tasks/Old Name.md",
+          notionPageId: "existing-page-id",
+          notionParentId: "db-123",
+          contentHash: "different-hash",
+          fileType: "db-row",
+        },
+      ]);
+
+      const result = await syncer.pushAll();
+
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(1);
+      expect(result.created).toBe(1);
+      expect(mockStateDb.updatePath).not.toHaveBeenCalled();
     });
 
     it("해시가 같으면 스킵", async () => {

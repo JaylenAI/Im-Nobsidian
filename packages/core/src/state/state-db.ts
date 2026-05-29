@@ -182,6 +182,12 @@ export class StateDB implements IStateDB {
       .run(parentId, id);
   }
 
+  updatePath(id: string, newPath: string): void {
+    this.db
+      .prepare("UPDATE sync_state SET obsidian_path = ?, updated_at = datetime('now') WHERE id = ?")
+      .run(newPath, id);
+  }
+
   delete(id: string): void {
     this.db.prepare("DELETE FROM sync_state WHERE id = ?").run(id);
   }
@@ -222,6 +228,10 @@ export class StateDB implements IStateDB {
         VALUES (?, ?, ?, ?, datetime('now'))`,
       )
       .run(entry.obsidianPath, entry.notionPageId, entry.title, JSON.stringify(entry.aliases));
+  }
+
+  deleteWikilink(obsidianPath: string): void {
+    this.db.prepare("DELETE FROM wikilink_map WHERE obsidian_path = ?").run(obsidianPath);
   }
 
   // --- sync_metadata ---

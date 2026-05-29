@@ -1,3 +1,11 @@
+import {
+  MARKER_BRAND_RE,
+  compactMarker,
+  TOGGLE_START,
+  TOGGLE_END,
+  WIKILINK_PROTOCOL,
+} from "../constants/markers.js";
+
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_CALLOUT_TAG_RE = /<callout[^>]*>\n?([\s\S]*?)<\/callout>/g;
 const NOTION_TOGGLE_RE = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
@@ -13,9 +21,6 @@ const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
 const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 const NOTION_UNDERLINE_RE = /<span underline="true">([\s\S]*?)<\/span>/g;
-
-const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
-const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
 
 export function notionEnhancedToObsidian(enhanced: string): string {
   let result = enhanced;
@@ -41,9 +46,17 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
+  result = unescapeWikilinkBrackets(result);
   result = ensureCalloutContinuity(result);
 
   return result;
+}
+
+// Notion markdown API 는 평문 위키링크 `[[..]]` 를 `\[\[..\]\]` 로 escape 저장한다.
+// (resolved 위키링크는 mention 이 되어 이 경로를 타지 않고, unresolved 만 평문으로 보존됨)
+// pull 시 escape 를 해제해 Obsidian 위키링크 기능과 push↔pull 수렴을 보장한다.
+function unescapeWikilinkBrackets(content: string): string {
+  return content.replace(/\\\[\\\[([\s\S]*?)\\\]\\\]/g, "[[$1]]");
 }
 
 export function obsidianToNotionEnhanced(obsidian: string): string {
@@ -56,8 +69,46 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreUnknownBlocks(result);
   result = restoreColorSpans(result);
   result = restoreUnderlineSpans(result);
+  result = convertMentionPageIdToUrl(result);
+  result = restoreWikilinkPreserveLinks(result);
 
   return result;
+}
+
+// ─── Push 방향: 위키링크 → Notion markdown API 호환 표현 ───
+//
+// 배경: Notion 공식 markdown API(`pages.create({markdown})`, `updateMarkdown`)는
+//   - `<mention-page id="X">label</mention-page>` 를 **통째로 삭제**한다(레이블까지 소실).
+//   - `<mention-page url="https://www.notion.so/<id>"/>` 만 진짜 page mention 으로 인식한다.
+//   - 커스텀 스킴 링크(`[label](im-nobsidian://wikilink/..)`)는 링크를 버리고 텍스트만 남긴다.
+//   - 평문 `[[target]]` 는 텍스트로 escape 보존되어 round-trip 시 정확히 복원된다.
+// 따라서 파이프라인(WikilinkResolver)이 만든 표현을 위 규칙에 맞게 한 번 더 변환한다.
+
+const MENTION_PAGE_ID_RE = /<mention-page id="([^"]+)">[\s\S]*?<\/mention-page>/g;
+const WIKILINK_PRESERVE_LINK_RE = new RegExp(
+  `\\[([^\\]]+)\\]\\(${WIKILINK_PROTOCOL}([^)]+)\\)`,
+  "g",
+);
+
+// resolved 위키링크: id 기반 mention → Notion 이 수용하는 url 기반 mention 으로 변환
+function convertMentionPageIdToUrl(content: string): string {
+  return content.replace(MENTION_PAGE_ID_RE, (_match, id: string) => {
+    const nohyph = id.replace(/-/g, "");
+    return `<mention-page url="https://www.notion.so/${nohyph}"/>`;
+  });
+}
+
+// unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
+function restoreWikilinkPreserveLinks(content: string): string {
+  return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
+    let target = enc;
+    try {
+      target = decodeURIComponent(enc);
+    } catch {
+      // 잘못 인코딩된 경우 원문 유지
+    }
+    return target === label ? `[[${target}]]` : `[[${target}|${label}]]`;
+  });
 }
 
 function normalizeCodeBlockToggles(content: string): string {
@@ -150,12 +201,23 @@ function preserveUnknownBlocks(content: string): string {
     const typeMatch = /type="([^"]*)"/.exec(attrs);
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? typeMatch?.[1] ?? "unknown";
-    return `%%im-nobsidian:unknown:id=${id}&type=${blockType}%%`;
+    return compactMarker(`unknown:id=${id}&type=${blockType}`);
   });
   result = result.replace(NOTION_UNKNOWN_URL_RE, (_match, url: string, attrs: string) => {
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? "bookmark";
-    return `%%im-nobsidian:unknown:id=${encodeURIComponent(url)}&type=${blockType}%%`;
+    const marker = compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
+    // URL 을 가진 임베드/북마크는 읽기뷰에서 보이지 않는 주석 마커만 남기면
+    // 사용자가 "왜 빈 줄이지?" 하고 혼란스럽다. 클릭 가능한 링크를 앞에 붙이되,
+    // round-trip 권위는 뒤따르는 마커(인코딩된 원본 URL)가 갖는다. 링크와 마커는
+    // 공백 없이 즉시 인접시켜, 역변환 시 한 쌍으로 같이 제거 → Notion drift 방지.
+    const label =
+      blockType === "embed"
+        ? "🔗 Embed"
+        : blockType === "bookmark"
+          ? "🔖 Bookmark"
+          : `🔗 ${blockType}`;
+    return `[${label}](${url})${marker}`;
   });
   return result;
 }
@@ -223,7 +285,7 @@ function convertTabBlocks(content: string): string {
 // 2C: <span underline> → 보존 마커
 function convertUnderlineSpans(content: string): string {
   return content.replace(NOTION_UNDERLINE_RE, (_match, text: string) => {
-    return `%%im-nobsidian:underline%%${text}%%/underline%%`;
+    return `${compactMarker("underline")}${text}%%/underline%%`;
   });
 }
 
@@ -376,7 +438,7 @@ function convertPageLinks(content: string): string {
 function convertColorSpans(content: string): string {
   return content.replace(
     NOTION_COLOR_SPAN_RE,
-    (_match, color: string, text: string) => `%%im-nobsidian:color:${color}%%${text}%%/color%%`,
+    (_match, color: string, text: string) => `${compactMarker(`color:${color}`)}${text}%%/color%%`,
   );
 }
 
@@ -509,7 +571,13 @@ function restoreTabBlocks(content: string): string {
   });
 }
 
-const OBSIDIAN_UNKNOWN_RE = /%%im-nobsidian:unknown:id=([^&]+)&type=([^%]+)%%/g;
+// 앞에 즉시 인접(공백 없음)한 가시 링크 `[label](url)` 가 있으면 마커와 함께 소비한다.
+// 이는 forward 에서 URL 임베드/북마크를 "[🔗 Embed](url)%%...%%" 로 렌더한 쌍을 통째로
+// <unknown.../> 로 복원하기 위함이다. 공백 없는 인접만 매칭하므로 사용자 일반 링크는 영향 없음.
+const OBSIDIAN_UNKNOWN_RE = new RegExp(
+  `(?:\\[[^\\]]*\\]\\([^)]*\\))?%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
+  "g",
+);
 
 function restoreUnknownBlocks(content: string): string {
   return content.replace(OBSIDIAN_UNKNOWN_RE, (_match, id: string, type: string) => {
@@ -521,7 +589,10 @@ function restoreUnknownBlocks(content: string): string {
   });
 }
 
-const OBSIDIAN_COLOR_RE = /%%im-nobsidian:color:([^%]+)%%([\s\S]*?)%%\/color%%/g;
+const OBSIDIAN_COLOR_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:color:([^%]+)%%([\\s\\S]*?)%%\\/color%%`,
+  "g",
+);
 
 function restoreColorSpans(content: string): string {
   return content.replace(OBSIDIAN_COLOR_RE, (_match, color: string, text: string) => {
@@ -529,7 +600,10 @@ function restoreColorSpans(content: string): string {
   });
 }
 
-const OBSIDIAN_UNDERLINE_RE = /%%im-nobsidian:underline%%([\s\S]*?)%%\/underline%%/g;
+const OBSIDIAN_UNDERLINE_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:underline%%([\\s\\S]*?)%%\\/underline%%`,
+  "g",
+);
 
 function restoreUnderlineSpans(content: string): string {
   return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {

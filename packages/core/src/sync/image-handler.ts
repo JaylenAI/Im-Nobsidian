@@ -5,6 +5,14 @@ import type { NotionClient } from "../notion/client.js";
 import type { ImageReference } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
 
+/** 미디어(이미지/파일) 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
+export interface MediaOptions {
+  readonly concurrency?: number;
+  readonly maxRetries?: number;
+  readonly retryBaseMs?: number;
+  readonly maxFileSizeBytes?: number;
+}
+
 export interface ImageDownloadResult {
   readonly originalUrl: string;
   readonly localPath: string;
@@ -41,14 +49,23 @@ const EXTENSION_TO_MIME: Record<string, string> = {
 
 export class ImageHandler {
   private readonly customFetch?: typeof globalThis.fetch;
+  private readonly concurrency: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseMs: number;
+  private readonly maxFileSizeBytes: number;
 
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly attachmentFolder: string = "attachments",
     private readonly notionClient?: NotionClient,
     customFetch?: typeof globalThis.fetch,
+    options?: MediaOptions,
   ) {
     this.customFetch = customFetch;
+    this.concurrency = options?.concurrency ?? 3;
+    this.maxRetries = options?.maxRetries ?? 3;
+    this.retryBaseMs = options?.retryBaseMs ?? 1000;
+    this.maxFileSizeBytes = options?.maxFileSizeBytes ?? 100 * 1024 * 1024;
   }
 
   private get fetchFn(): typeof globalThis.fetch {
@@ -56,13 +73,13 @@ export class ImageHandler {
   }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
-    const maxRetries = 3;
+    const maxRetries = this.maxRetries;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         if (attempt > 0) {
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
+          await new Promise((r) => setTimeout(r, this.retryBaseMs * attempt));
           getLogger().info(
             `[Im-Nobsidian] 이미지 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${pageTitle}`,
           );
@@ -111,7 +128,7 @@ export class ImageHandler {
       return { content: markdown, downloads: [] };
     }
 
-    const sema = new Sema(3);
+    const sema = new Sema(this.concurrency);
     const downloads: ImageDownloadResult[] = [];
     let result = markdown;
 
@@ -256,7 +273,7 @@ export class ImageHandler {
       return { content: markdown, downloads: [] };
     }
 
-    const sema = new Sema(3);
+    const sema = new Sema(this.concurrency);
     const downloads: ImageDownloadResult[] = [];
     let result = markdown;
 
@@ -369,13 +386,13 @@ export class ImageHandler {
     _pageTitle: string,
     caption: string,
   ): Promise<ImageDownloadResult> {
-    const maxRetries = 3;
+    const maxRetries = this.maxRetries;
     let lastError: Error | null = null;
 
     for (let attempt = 0; attempt < maxRetries; attempt++) {
       try {
         if (attempt > 0) {
-          await new Promise((r) => setTimeout(r, 1000 * attempt));
+          await new Promise((r) => setTimeout(r, this.retryBaseMs * attempt));
           getLogger().info(
             `[Im-Nobsidian] 파일 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${caption}`,
           );
@@ -386,7 +403,7 @@ export class ImageHandler {
         }
 
         const contentLength = response.headers.get("content-length");
-        const MAX_FILE_SIZE = 100 * 1024 * 1024;
+        const MAX_FILE_SIZE = this.maxFileSizeBytes;
         if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
           const sizeMB = Math.round(parseInt(contentLength, 10) / 1024 / 1024);
           getLogger().debug(`[Im-Nobsidian] 파일 스킵 — 너무 큼 (${sizeMB}MB): ${caption}`);
