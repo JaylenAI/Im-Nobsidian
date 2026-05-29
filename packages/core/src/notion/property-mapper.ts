@@ -13,6 +13,17 @@ const DATE_REGEX =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
 
+/**
+ * Notion 은 비어 있는 배열형 속성값을 문서화된 `[]` 가 아니라 빈 객체 `{}` 로
+ * 돌려주는 경우가 있다(특히 data source 분리 모델의 일부 행). `as Array<…>` 캐스트는
+ * 이 불일치를 숨기고, 뒤따르는 `.map` 호출이 "X.map is not a function" 으로 그 행
+ * 전체를 pull 실패시켜 **영구 데이터 손실 + 멱등성(churn) 위반**을 만든다.
+ * 모든 배열 추출은 이 가드를 통과시켜, 배열이 아니면 안전하게 빈 배열로 강등한다.
+ */
+function asArray<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value as T[]) : [];
+}
+
 export interface WikilinkResolver {
   resolve(title: string): string | null;
   resolvePageId(pageId: string): string | null;
@@ -221,8 +232,8 @@ export class PropertyMapper {
   private extractValue(prop: { type: string; [k: string]: unknown }): unknown {
     switch (prop.type) {
       case "rich_text": {
-        const arr = prop.rich_text as Array<{ plain_text: string }> | undefined;
-        return arr?.map((t) => t.plain_text).join("") || null;
+        const arr = asArray<{ plain_text: string }>(prop.rich_text);
+        return arr.map((t) => t.plain_text).join("") || null;
       }
       case "number":
         return prop.number;
@@ -231,8 +242,7 @@ export class PropertyMapper {
         return sel?.name ?? null;
       }
       case "multi_select": {
-        const items = prop.multi_select as Array<{ name: string }> | undefined;
-        return items?.map((s) => s.name) ?? [];
+        return asArray<{ name: string }>(prop.multi_select).map((s) => s.name);
       }
       case "checkbox":
         return prop.checkbox;
@@ -257,23 +267,20 @@ export class PropertyMapper {
       case "last_edited_time":
         return prop.last_edited_time;
       case "people": {
-        const people = prop.people as Array<{ name?: string; id: string }> | undefined;
-        return people?.map((p) => p.name ?? p.id) ?? [];
+        return asArray<{ name?: string; id: string }>(prop.people).map((p) => p.name ?? p.id);
       }
       case "files": {
-        const files = prop.files as
-          | Array<{
-              name: string;
-              type: string;
-              file?: { url: string };
-              external?: { url: string };
-            }>
-          | undefined;
+        const files = asArray<{
+          name: string;
+          type: string;
+          file?: { url: string };
+          external?: { url: string };
+        }>(prop.files);
         // Obsidian Bases 의 카드 `image:` 는 스칼라 문자열(외부 URL 또는 [[wikilink]])만
         // 렌더한다 — [{name,url}] 객체 배열은 표시되지 않는다. 따라서 URL 문자열로 직렬화한다.
         // 단일 파일 → 스칼라(갤러리 커버 렌더), 복수 → URL 배열(데이터 보존).
         // toNotionProperties 의 files 케이스가 문자열/문자열배열을 모두 받으므로 라운드트립 안전.
-        const urls = (files ?? [])
+        const urls = files
           .map((f) => (f.type === "file" ? f.file?.url : f.external?.url))
           .filter((u): u is string => typeof u === "string" && u.length > 0);
         if (urls.length === 0) return [];
@@ -285,8 +292,8 @@ export class PropertyMapper {
         return formula[formula.type];
       }
       case "relation": {
-        const rel = prop.relation as Array<{ id: string }> | undefined;
-        if (!rel || rel.length === 0) return [];
+        const rel = asArray<{ id: string }>(prop.relation);
+        if (rel.length === 0) return [];
         return rel.map((r) => {
           if (this.wikilinkResolver) {
             const title = this.wikilinkResolver.resolvePageId(r.id);
@@ -299,14 +306,15 @@ export class PropertyMapper {
         const rollup = prop.rollup as { type: string; [k: string]: unknown } | undefined;
         if (!rollup) return null;
         if (rollup.type === "array") {
-          const arr = rollup.array as Array<{ type: string; [k: string]: unknown }>;
+          const arr = asArray<{ type: string; [k: string]: unknown }>(rollup.array);
           return arr.map((item) => this.extractValue(item));
         }
         return rollup[rollup.type] ?? null;
       }
       case "unique_id": {
-        const uid = prop.unique_id as { prefix?: string; number: number } | undefined;
-        if (!uid) return null;
+        const uid = prop.unique_id as { prefix?: string; number?: number } | undefined;
+        // number 가 없으면(빈 객체 등) "undefined" 문자열이 새는 것을 막는다.
+        if (!uid || typeof uid.number !== "number") return null;
         return uid.prefix ? `${uid.prefix}-${uid.number}` : String(uid.number);
       }
       case "created_by":

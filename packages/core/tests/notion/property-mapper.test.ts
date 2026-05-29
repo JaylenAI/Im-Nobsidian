@@ -325,6 +325,75 @@ describe("PropertyMapper", () => {
     });
   });
 
+  // 결함10: Notion 이 빈 배열형 속성을 문서화된 `[]` 가 아니라 빈 객체 `{}` 로 돌려주는
+  // 행이 실제로 존재한다(data source 분리 모델). 가드가 없으면 `{}.map` → "X.map is not
+  // a function" 으로 그 행 전체가 pull 실패 → 영구 손실 + repull churn. 모든 배열 추출이
+  // 어떤 형태에도 크래시 없이 안전한 빈/스칼라 값으로 강등돼야 한다.
+  describe("fromNotionProperties — 비배열 속성값 하드닝 (결함10)", () => {
+    it("multi_select 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const call = () =>
+        mapper.fromNotionProperties({ tags: { type: "multi_select", multi_select: {} } });
+      expect(call).not.toThrow();
+      expect(call().tags).toEqual([]);
+    });
+
+    it("rich_text 가 빈 객체 {} 여도 크래시 없이 null", () => {
+      const result = mapper.fromNotionProperties({
+        note: { type: "rich_text", rich_text: {} },
+      });
+      expect(result.note).toBeNull(); // 빈 rich_text 의 기존 동작과 동일
+    });
+
+    it("people 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        assignee: { type: "people", people: {} },
+      });
+      expect(result.assignee).toEqual([]);
+    });
+
+    it("relation 이 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        rel: { type: "relation", relation: {} },
+      });
+      expect(result.rel).toEqual([]);
+    });
+
+    it("files 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        docs: { type: "files", files: {} },
+      });
+      expect(result.docs).toEqual([]);
+    });
+
+    it("rollup.array 가 비배열이어도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        sum: { type: "rollup", rollup: { type: "array", array: {} } },
+      });
+      expect(result.sum).toEqual([]);
+    });
+
+    it("unique_id 가 빈 객체 {} 면 'undefined' 문자열이 새지 않고 null", () => {
+      const result = mapper.fromNotionProperties({
+        id: { type: "unique_id", unique_id: {} },
+      });
+      expect(result.id).toBeNull(); // "undefined" 문자열이 아니라 null 이어야 한다
+    });
+
+    it("여러 비배열 속성이 섞인 행 전체가 크래시 없이 매핑된다(실Notion 프로덕트위키 케이스)", () => {
+      const call = () =>
+        mapper.fromNotionProperties({
+          tags: { type: "multi_select", multi_select: {} },
+          note: { type: "rich_text", rich_text: {} },
+          assignee: { type: "people", people: {} },
+          done: { type: "checkbox", checkbox: false },
+        });
+      expect(call).not.toThrow();
+      const r = call();
+      expect(r.tags).toEqual([]);
+      expect(r.done).toBe(false); // 정상 속성은 그대로 보존
+    });
+  });
+
   describe("toNotionProperties — 입력 검증/하드닝 (Phase 2b)", () => {
     beforeEach(() => {
       mapper.loadSchema({
