@@ -31,10 +31,7 @@ export interface NotionClientOptions {
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
-  private readonly token: string;
   private readonly propertyMapper = new PropertyMapper();
-
-  private readonly customFetch?: typeof globalThis.fetch;
 
   private readonly minRequestInterval: number;
   private readonly maxRetries: number;
@@ -50,8 +47,6 @@ export class NotionClient {
       logLevel: LogLevel.ERROR,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-    this.token = options.token;
-    this.customFetch = options.fetch;
     this.sema = new Sema(options.concurrency ?? 3);
     this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
     this.maxRetries = options.maxRetries ?? 5;
@@ -220,26 +215,45 @@ export class NotionClient {
 
   // ─── Database / DataSource ───
 
-  private async fetchDatabaseLegacy(databaseId: string): Promise<Record<string, unknown>> {
-    const cleanId = databaseId.replace(/-/g, "");
-    const formatted = `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20)}`;
-    const resp = await this.withRateLimit(async () => {
-      const doFetch = this.customFetch ?? globalThis.fetch;
-      const r = await doFetch(`https://api.notion.com/v1/databases/${formatted}`, {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          "Notion-Version": "2022-06-28",
-          "Content-Type": "application/json",
-        },
-      });
-      if (!r.ok) throw new Error(`Database fetch failed: ${r.status}`);
-      return (await r.json()) as Record<string, unknown>;
-    });
-    return resp;
+  /**
+   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다.
+   * - title: database 객체에 그대로 존재한다.
+   * - properties(스키마): 신 모델에선 data source 에 있으므로 1차 data source 를 조회해 채운다.
+   *   data source 접근 불가(링크드 DB 등)면 database 객체의 properties 로 폴백한다(제목은 보존).
+   *
+   * 폐기한 레거시 raw fetch(`GET /v1/databases/{id}`, Notion-Version 2022-06-28)는 신 모델로
+   * 업그레이드된 다수 DB에 400 을 반환해 자동 발견 DB 가 통째 드롭(내용 손실)되던 원인이었다.
+   * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
+   */
+  private async fetchDatabaseModern(databaseId: string): Promise<Record<string, unknown>> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      title?: unknown;
+      properties?: Record<string, unknown>;
+      data_sources?: Array<{ id: string }>;
+    };
+
+    let properties: Record<string, unknown> = db.properties ?? {};
+    const dataSourceId = db.data_sources?.[0]?.id;
+    if (dataSourceId) {
+      try {
+        const ds = (await this.withRateLimit(() =>
+          this.client.dataSources.retrieve({ data_source_id: dataSourceId }),
+        )) as unknown as { properties?: Record<string, unknown> };
+        if (ds.properties && Object.keys(ds.properties).length > 0) {
+          properties = ds.properties;
+        }
+      } catch {
+        // data source 접근 불가 → database 객체 properties 로 폴백(제목은 이미 확보)
+      }
+    }
+
+    return { title: db.title, properties };
   }
 
   async getDatabaseTitle(databaseId: string): Promise<string> {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const titleArr = db.title as Array<{ plain_text: string }> | undefined;
     return titleArr?.[0]?.plain_text ?? "";
   }
@@ -247,7 +261,7 @@ export class NotionClient {
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
     if (!properties) return {};
     const schema: Record<string, { id: string; type: string }> = {};
@@ -268,7 +282,7 @@ export class NotionClient {
       }
     >
   > {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
     if (!properties) return {};
 
@@ -763,7 +777,10 @@ export class NotionClient {
       { type: string; title?: Array<{ plain_text?: string }> }
     >;
     for (const prop of Object.values(props)) {
-      if (prop.type === "title" && prop.title) {
+      // 빈 제목 행은 Notion 이 title 을 배열이 아닌 빈 객체({})로 돌려주기도 한다.
+      // Array.isArray 가드 없이 .map 을 호출하면 "title.map is not a function" 으로
+      // 그 행 전체가 pull 실패→손실되고 매 pull 마다 churn 이 남는다(멱등성 위반).
+      if (prop.type === "title" && Array.isArray(prop.title)) {
         const joined = prop.title.map((t) => t.plain_text ?? "").join("");
         if (joined) return joined;
       }

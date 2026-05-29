@@ -46,6 +46,26 @@ describe("NotionClient - extractTitle", () => {
 
     expect(client.extractTitle(page)).toBe("제목 없음");
   });
+
+  it("빈 제목 행: title이 배열 아닌 빈 객체({})여도 크래시 없이 기본값(결함7)", () => {
+    // Notion 은 제목이 빈 DB 행에서 title 을 빈 객체로 돌려주기도 한다.
+    // 가드 없이 .map 을 호출하면 "title.map is not a function" 으로 행이 통째 손실됐다.
+    const page = createMockPage({
+      Category: { type: "title", title: {} },
+    });
+
+    expect(() => client.extractTitle(page)).not.toThrow();
+    expect(client.extractTitle(page)).toBe("제목 없음");
+  });
+
+  it("비배열 title 이어도 뒤따르는 정상 title 속성을 찾아낸다(결함7)", () => {
+    const page = createMockPage({
+      Broken: { type: "title", title: {} },
+      Name: { type: "title", title: [{ plain_text: "복구된 제목" }] },
+    });
+
+    expect(client.extractTitle(page)).toBe("복구된 제목");
+  });
 });
 
 describe("NotionClient - extractProperties", () => {
