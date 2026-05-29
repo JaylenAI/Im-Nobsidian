@@ -405,3 +405,89 @@ describe("NotionClient - getInternalClient", () => {
     expect(typeof internal.pages).toBe("object");
   });
 });
+
+describe("NotionClient - getChildPages: 휴지통/아카이브 페이지 필터링", () => {
+  function makeChildPageBlock(id: string) {
+    return { id, type: "child_page", has_children: true } as any;
+  }
+  function makePage(id: string, opts: { archived?: boolean; in_trash?: boolean } = {}) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root" },
+      archived: opts.archived ?? false,
+      in_trash: opts.in_trash ?? false,
+      properties: {},
+    } as any;
+  }
+
+  it("in_trash=true 페이지는 결과에서 제외", async () => {
+    const client = createClient();
+    vi.spyOn(client as any, "fetchAllChildrenDeep").mockResolvedValue([
+      makeChildPageBlock("live-1"),
+      makeChildPageBlock("trashed-1"),
+      makeChildPageBlock("live-2"),
+    ]);
+    vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
+      if (id === "trashed-1") return makePage(id, { in_trash: true });
+      return makePage(id);
+    });
+
+    const pages = await client.getChildPages("root");
+    expect(pages.map((p) => p.id)).toEqual(["live-1", "live-2"]);
+  });
+
+  it("archived=true 페이지는 결과에서 제외", async () => {
+    const client = createClient();
+    vi.spyOn(client as any, "fetchAllChildrenDeep").mockResolvedValue([
+      makeChildPageBlock("live-1"),
+      makeChildPageBlock("archived-1"),
+    ]);
+    vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
+      if (id === "archived-1") return makePage(id, { archived: true });
+      return makePage(id);
+    });
+
+    const pages = await client.getChildPages("root");
+    expect(pages.map((p) => p.id)).toEqual(["live-1"]);
+  });
+
+  it("정상 페이지만 있으면 전부 반환", async () => {
+    const client = createClient();
+    vi.spyOn(client as any, "fetchAllChildrenDeep").mockResolvedValue([
+      makeChildPageBlock("a"),
+      makeChildPageBlock("b"),
+    ]);
+    vi.spyOn(client, "getPage").mockImplementation(async (id: string) => makePage(id));
+
+    const pages = await client.getChildPages("root");
+    expect(pages.map((p) => p.id)).toEqual(["a", "b"]);
+  });
+});
+
+describe("NotionClient - getChildPagesRecursive: 접근 불가 서브트리 graceful skip", () => {
+  function makePage(id: string) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root" },
+      archived: false,
+      in_trash: false,
+      properties: {},
+    } as any;
+  }
+
+  it("한 노드가 throw해도 전체 스캔이 중단되지 않고 형제는 보존", async () => {
+    const client = createClient();
+    // root → [ok-1, bad-1, ok-2]; bad-1의 하위 스캔은 object_not_found로 throw
+    vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) => {
+      if (id === "root") return [makePage("ok-1"), makePage("bad-1"), makePage("ok-2")];
+      if (id === "bad-1") throw new Error("Could not find block with ID: bad-1");
+      return []; // ok-1, ok-2는 리프
+    });
+
+    const all = await client.getChildPagesRecursive("root");
+    const ids = all.map((p) => p.id).sort();
+    expect(ids).toEqual(["bad-1", "ok-1", "ok-2"]); // 3건 모두 수집(bad-1 자체는 포함, 하위만 스킵)
+  });
+});
