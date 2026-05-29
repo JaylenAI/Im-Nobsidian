@@ -340,4 +340,118 @@ describe("StateDB", () => {
       expect(entry!.fileUploadId).toBe("upload-new");
     });
   });
+
+  describe("pending_operations (I12 WAL)", () => {
+    // pending_operations.sync_state_id 는 sync_state(id) 를 FK CASCADE 로 참조하므로
+    // op 기록 전에 부모 sync_state 행이 반드시 존재해야 한다(쓰기-우선).
+    function newState(path = "wal/note.md"): string {
+      const rec = db.upsert({
+        obsidianPath: path,
+        notionPageId: null,
+        notionParentId: "parent-1",
+        contentHash: "",
+        localLastModified: "2026-05-29T00:00:00Z",
+        syncDirection: "both",
+        fileType: "file",
+        status: "pending",
+      });
+      return rec.id;
+    }
+
+    it("recordPendingOperation + getIncompletePendingOperations", () => {
+      const sid = newState();
+      const opId = db.recordPendingOperation({
+        syncStateId: sid,
+        operation: "create",
+        direction: "push",
+        payload: JSON.stringify({ path: "wal/note.md", parentId: "parent-1", title: "note" }),
+      });
+
+      expect(typeof opId).toBe("string");
+      const incomplete = db.getIncompletePendingOperations();
+      expect(incomplete).toHaveLength(1);
+      expect(incomplete[0]!.id).toBe(opId);
+      expect(incomplete[0]!.syncStateId).toBe(sid);
+      expect(incomplete[0]!.operation).toBe("create");
+      expect(incomplete[0]!.direction).toBe("push");
+      expect(incomplete[0]!.status).toBe("pending");
+      expect(JSON.parse(incomplete[0]!.payload!).title).toBe("note");
+    });
+
+    it("getIncompleteOpByState — 같은 state·operation 미완료 op 재사용(중복 기록 방지)", () => {
+      const sid = newState();
+      const opId = db.recordPendingOperation({
+        syncStateId: sid,
+        operation: "create",
+        direction: "push",
+        payload: null,
+      });
+
+      expect(db.getIncompleteOpByState(sid, "create")?.id).toBe(opId);
+      // 다른 operation 은 매칭되지 않음.
+      expect(db.getIncompleteOpByState(sid, "update")).toBeNull();
+    });
+
+    it("markPendingCompleted — 완료 처리 후 미완료 목록에서 제외", () => {
+      const sid = newState();
+      const opId = db.recordPendingOperation({
+        syncStateId: sid,
+        operation: "create",
+        direction: "push",
+        payload: null,
+      });
+
+      db.markPendingCompleted(opId);
+      expect(db.getIncompletePendingOperations()).toHaveLength(0);
+      expect(db.getIncompleteOpByState(sid, "create")).toBeNull();
+    });
+
+    it("markPendingFailed — 실패 처리 시 retry_count 증가·errorMessage 기록", () => {
+      const sid = newState();
+      const opId = db.recordPendingOperation({
+        syncStateId: sid,
+        operation: "create",
+        direction: "push",
+        payload: null,
+      });
+
+      db.markPendingFailed(opId, "boom");
+      // 실패도 더 이상 미완료 아님.
+      expect(db.getIncompletePendingOperations()).toHaveLength(0);
+    });
+
+    it("clearCompletedOperations — 완료/실패 항목만 정리, 미완료는 보존", () => {
+      const sid1 = newState("wal/a.md");
+      const sid2 = newState("wal/b.md");
+      const sid3 = newState("wal/c.md");
+      const done = db.recordPendingOperation({
+        syncStateId: sid1,
+        operation: "create",
+        direction: "push",
+      });
+      const failed = db.recordPendingOperation({
+        syncStateId: sid2,
+        operation: "create",
+        direction: "push",
+      });
+      db.recordPendingOperation({ syncStateId: sid3, operation: "create", direction: "push" });
+
+      db.markPendingCompleted(done);
+      db.markPendingFailed(failed, "x");
+      db.clearCompletedOperations();
+
+      const remaining = db.getIncompletePendingOperations();
+      expect(remaining).toHaveLength(1);
+      expect(remaining[0]!.syncStateId).toBe(sid3);
+    });
+
+    it("FK CASCADE — sync_state 삭제 시 연결된 pending op 도 함께 제거", () => {
+      const sid = newState();
+      db.recordPendingOperation({ syncStateId: sid, operation: "create", direction: "push" });
+      expect(db.getIncompletePendingOperations()).toHaveLength(1);
+
+      db.delete(sid);
+      expect(db.getIncompletePendingOperations()).toHaveLength(0);
+    });
+  });
 });

@@ -27,7 +27,7 @@ function createMockStateDb() {
     getByNotionId: vi.fn().mockReturnValue(null),
     getAll: vi.fn().mockReturnValue([]),
     getByStatus: vi.fn().mockReturnValue([]),
-    upsert: vi.fn(),
+    upsert: vi.fn().mockReturnValue({ id: 1 }),
     upsertWikilink: vi.fn(),
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
@@ -42,6 +42,16 @@ function createMockStateDb() {
     resolveWikilink: vi.fn().mockReturnValue(null),
     resolvePageId: vi.fn().mockReturnValue(null),
     transaction: vi.fn().mockImplementation((fn: () => unknown) => fn()),
+    // B4: pending_operations WAL + file_registry
+    recordPendingOperation: vi.fn().mockReturnValue(100),
+    getIncompletePendingOperations: vi.fn().mockReturnValue([]),
+    getIncompleteOpByState: vi.fn().mockReturnValue(null),
+    markPendingCompleted: vi.fn(),
+    markPendingFailed: vi.fn(),
+    clearCompletedOperations: vi.fn(),
+    registerFile: vi.fn(),
+    getFileRegistry: vi.fn().mockReturnValue(null),
+    isFileRegistered: vi.fn().mockReturnValue(false),
     close: vi.fn(),
   };
 }
@@ -348,6 +358,100 @@ describe("SyncOrchestrator", () => {
       expect(result.created).toBe(1);
       expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
       expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalled();
+    });
+  });
+
+  describe("I12 중단 재개(reconcile)", () => {
+    // 중단된 create op + state.notion_page_id=null 상황을 결정론적으로 재현하는 회귀 잠금.
+    function incompleteCreateOp(
+      path: string,
+      parentId = "parent-1",
+      title = "note",
+    ): Record<string, unknown> {
+      return {
+        id: "op-1",
+        syncStateId: "s-1",
+        operation: "create",
+        direction: "push",
+        payload: JSON.stringify({ path, parentId, title }),
+        retryCount: 0,
+        errorMessage: null,
+        status: "pending",
+        createdAt: "2026-05-29T00:00:00Z",
+        completedAt: null,
+      };
+    }
+
+    it("Window A — 고아 페이지를 부모에서 제목으로 찾아 입양(중복 생성 차단)", async () => {
+      const path = "recover/orphan.md";
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([incompleteCreateOp(path)]);
+      // 매핑 전 중단 → state 는 있으나 notionPageId=null.
+      mockStateDb.getByPath.mockImplementation((p: string) =>
+        p === path ? { id: "s-1", obsidianPath: path, notionPageId: null, contentHash: "" } : null,
+      );
+      // 부모에 제목이 일치하는 child_page 가 이미 존재(생성은 적용됐던 것).
+      mockNotionClient.fetchAllChildren.mockResolvedValue([
+        { id: "orphan-page", type: "child_page", child_page: { title: "note" } },
+      ]);
+      mockNotionClient.getPage.mockResolvedValue({ id: "orphan-page", archived: false });
+
+      await orchestrator.push();
+
+      // 입양: 매핑을 고아 페이지로 채우고 op 완료 처리. 새 페이지는 만들지 않는다.
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: path,
+          notionPageId: "orphan-page",
+          contentHash: "",
+          status: "pending",
+        }),
+      );
+      expect(mockStateDb.markPendingCompleted).toHaveBeenCalledWith("op-1");
+      expect(mockStateDb.delete).not.toHaveBeenCalled();
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+    });
+
+    it("고아 페이지 미발견 — 자리표시 레코드 제거(다음 push 가 새로 생성)", async () => {
+      const path = "recover/missing.md";
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([incompleteCreateOp(path)]);
+      mockStateDb.getByPath.mockImplementation((p: string) =>
+        p === path ? { id: "s-1", obsidianPath: path, notionPageId: null, contentHash: "" } : null,
+      );
+      // 부모에 일치하는 child_page 없음 → 생성이 적용되지 않았던 것.
+      mockNotionClient.fetchAllChildren.mockResolvedValue([]);
+
+      await orchestrator.push();
+
+      expect(mockStateDb.delete).toHaveBeenCalledWith("s-1");
+      expect(mockStateDb.markPendingCompleted).not.toHaveBeenCalledWith("op-1");
+    });
+
+    it("이미 매핑된 state — 추가 검색 없이 op 완료 처리", async () => {
+      const path = "recover/mapped.md";
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([incompleteCreateOp(path)]);
+      mockStateDb.getByPath.mockImplementation((p: string) =>
+        p === path
+          ? { id: "s-1", obsidianPath: path, notionPageId: "already-mapped", contentHash: "" }
+          : null,
+      );
+
+      await orchestrator.push();
+
+      expect(mockStateDb.markPendingCompleted).toHaveBeenCalledWith("op-1");
+      // 매핑이 이미 있으므로 고아 검색(fetchAllChildren)을 하지 않는다.
+      expect(mockNotionClient.fetchAllChildren).not.toHaveBeenCalled();
+      expect(mockStateDb.delete).not.toHaveBeenCalled();
+    });
+
+    it("지원하지 않는 op(예: pull/update)는 실패 처리만", async () => {
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([
+        { ...incompleteCreateOp("x.md"), direction: "pull", operation: "update" },
+      ]);
+
+      await orchestrator.push();
+
+      expect(mockStateDb.markPendingFailed).toHaveBeenCalledWith("op-1", expect.any(String));
+      expect(mockNotionClient.fetchAllChildren).not.toHaveBeenCalled();
     });
   });
 

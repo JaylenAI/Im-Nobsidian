@@ -77,6 +77,7 @@ export class SyncOrchestrator {
         retryBaseMs: config.advanced.mediaRetryBaseMs,
         maxFileSizeBytes: config.advanced.maxFileSizeBytes,
       },
+      stateDb,
     );
     this.fileHandler = new FileHandler(
       vaultFs,
@@ -110,6 +111,7 @@ export class SyncOrchestrator {
 
     this.cleanupInterruptedSync();
     this.repairFolderRecords();
+    await this.recoverInterruptedPushOps();
 
     const stats = await this.vaultFs.listMarkdownFileStats();
     const changes = await this.changeDetector.detectLocalChangesFast(stats, (path) =>
@@ -280,6 +282,8 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
     this.stateDb.setMeta("push_in_progress", "");
+    // 완료/실패한 WAL 항목 정리 — 테이블 무한 증가 방지(미완료 항목은 보존).
+    this.stateDb.clearCompletedOperations();
 
     return {
       created: counts.created,
@@ -934,6 +938,35 @@ export class SyncOrchestrator {
       );
     }
 
+    // I12 WAL(쓰기-우선): 페이지를 만들기 전에 자리표시 state(notion_page_id=null) +
+    // pending_operations(create) 를 먼저 기록한다. 생성 요청이 적용됐는데 응답이 유실되거나
+    // (timeout) 프로세스가 죽어 매핑 기록 전에 중단되면, 다음 push 시작 시 recoverInterruptedPushOps
+    // 가 부모에서 제목으로 고아 페이지를 찾아 입양하므로 중복 페이지 생성을 차단한다.
+    const placeholder = this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: null,
+      notionParentId: parentId,
+      contentHash: "",
+      notionLastEdited: null,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: this.isFolderNote(path) ? "folder-note" : "file",
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
+    // 인-런 재시도 시 같은 state 에 대한 op 중복 기록을 막는다(기존 미완료 op 재사용).
+    const existingOp = this.stateDb.getIncompleteOpByState(placeholder.id, "create");
+    const walOpId =
+      existingOp?.id ??
+      this.stateDb.recordPendingOperation({
+        syncStateId: placeholder.id,
+        operation: "create",
+        direction: "push",
+        payload: JSON.stringify({ path, parentId, title }),
+      });
+
     const page = await this.pushCreatePage(
       effectiveParentId,
       effectiveParentType,
@@ -991,6 +1024,9 @@ export class SyncOrchestrator {
 
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
+
+    // 생성·매핑·이미지·최종 synced 까지 모두 끝났으므로 WAL 을 완료 처리한다.
+    this.stateDb.markPendingCompleted(walOpId);
   }
 
   private async pushUpdate(path: string): Promise<void> {
@@ -1796,6 +1832,111 @@ export class SyncOrchestrator {
       getLogger().warn("[Im-Nobsidian] 이전 pull이 비정상 종료됨 — 플래그 정리");
       this.stateDb.setMeta("pull_in_progress", "");
     }
+  }
+
+  /**
+   * I12 — 중단된 push create 작업 재개.
+   *
+   * pending_operations 에 미완료(create·push) 항목이 있으면:
+   *  - state 에 notion_page_id 가 이미 있으면 → 생성·매핑까지는 끝났고 markCompleted 직전에
+   *    중단된 것 → 완료 처리(잔여 본문/이미지는 다음 변경감지가 pushUpdate 로 마무리).
+   *  - notion_page_id 가 비어 있으면(Window A: 생성 적용됐으나 매핑 기록 전 중단) → 부모에서
+   *    제목으로 child_page 를 검색해 고아 페이지를 입양(중복 생성 차단). 없으면 자리표시
+   *    레코드를 제거(FK CASCADE 로 op 도 삭제)해 다음 push 가 새로 생성하게 한다.
+   *
+   * 한계(문서화): Notion 은 idempotency key 가 없어 "생성 요청 적용 직후 같은 호출 내 재시도"
+   * 로 인한 중복은 완전히 차단하지 못한다. 429 는 적용 전 거절이라 안전하고, 프로세스 재시작
+   * 후 재개는 본 검색-입양으로 중복을 막는다. DB 모드(부모가 database)는 child_page 검색이
+   * 불가하므로 자리표시 제거 후 재생성으로 폴백한다.
+   */
+  private async recoverInterruptedPushOps(): Promise<void> {
+    const ops = this.stateDb.getIncompletePendingOperations();
+    if (ops.length === 0) return;
+
+    for (const op of ops) {
+      if (op.direction !== "push" || op.operation !== "create") {
+        // 현재 WAL 재개는 create·push 만 대상. 그 외는 정리만 한다.
+        this.stateDb.markPendingFailed(op.id, "unsupported resume op");
+        continue;
+      }
+
+      let payload: { path?: string; parentId?: string; title?: string } = {};
+      try {
+        payload = JSON.parse(op.payload ?? "{}") as typeof payload;
+      } catch {
+        this.stateDb.markPendingFailed(op.id, "invalid payload json");
+        continue;
+      }
+      const path = payload.path;
+      if (!path) {
+        this.stateDb.markPendingFailed(op.id, "missing payload.path");
+        continue;
+      }
+
+      const state = this.stateDb.getByPath(path);
+      if (state?.notionPageId) {
+        // 매핑 존재 → 안전. 완료 처리하고 잔여는 변경감지(contentHash="")가 pushUpdate 로 마무리.
+        this.stateDb.markPendingCompleted(op.id);
+        continue;
+      }
+
+      const parentId = payload.parentId ?? state?.notionParentId ?? undefined;
+      const title = payload.title;
+      const adopted = parentId && title ? await this.findChildPageByTitle(parentId, title) : null;
+
+      if (adopted) {
+        // 고아 페이지 입양: 매핑만 채우고 pending 유지 → 다음 변경감지가 본문·이미지 마무리.
+        this.stateDb.upsert({
+          obsidianPath: path,
+          notionPageId: adopted,
+          notionParentId: parentId ?? null,
+          contentHash: "",
+          notionLastEdited: state?.notionLastEdited ?? null,
+          localLastModified: new Date().toISOString(),
+          syncDirection: state?.syncDirection ?? "both",
+          fileType: state?.fileType ?? (this.isFolderNote(path) ? "folder-note" : "file"),
+          status: "pending",
+          baseSnapshot: null,
+          localMtime: null,
+          localFileSize: null,
+        });
+        this.stateDb.markPendingCompleted(op.id);
+        getLogger().info(`[Im-Nobsidian] 중단된 create 재개 — 고아 페이지 입양: ${path}`);
+      } else if (state) {
+        // 생성된 페이지를 못 찾음 → 자리표시 제거(CASCADE 로 op 삭제) → 다음 push 가 새로 생성.
+        this.stateDb.delete(state.id);
+        getLogger().info(`[Im-Nobsidian] 중단된 create 재개 — 미생성 확인, 자리표시 제거: ${path}`);
+      } else {
+        this.stateDb.markPendingCompleted(op.id);
+      }
+    }
+  }
+
+  /** 부모 페이지의 직속 자식 중 제목이 일치하는(보관/휴지통 제외) child_page id 를 찾는다. */
+  private async findChildPageByTitle(parentId: string, title: string): Promise<string | null> {
+    try {
+      const children = await this.notionClient.fetchAllChildren(parentId);
+      for (const b of children) {
+        if (b.type !== "child_page") continue;
+        const childTitle = (b as { child_page?: { title?: string } }).child_page?.title;
+        if (childTitle !== title) continue;
+        try {
+          const page = await this.notionClient.getPage(b.id);
+          const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+          if (inTrash || page.archived) continue;
+        } catch {
+          continue;
+        }
+        return b.id;
+      }
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 고아 페이지 검색 실패 (${parentId}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    return null;
   }
 
   private async resolveUniqueFilePath(basePath: string): Promise<string> {

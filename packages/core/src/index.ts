@@ -52,7 +52,13 @@ export { ConfigManager } from "./config/index.js";
 // State
 export { StateDB } from "./state/index.js";
 export type { IStateDB } from "./state/index.js";
-export type { UpsertSyncRecord, FileRegistryEntry, RegisterFileInput } from "./state/index.js";
+export type {
+  UpsertSyncRecord,
+  FileRegistryEntry,
+  RegisterFileInput,
+  PendingOperation,
+  RecordPendingInput,
+} from "./state/index.js";
 
 // Notion
 export { NotionClient, NotionBlockBuilder, PropertyMapper } from "./notion/index.js";

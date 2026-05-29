@@ -305,6 +305,78 @@ export class StateDB implements IStateDB {
     };
   }
 
+  // --- pending_operations (I12 크래시 복구 WAL) ---
+
+  recordPendingOperation(input: RecordPendingInput): string {
+    const id = generateId();
+    this.db
+      .prepare(
+        `INSERT INTO pending_operations
+          (id, sync_state_id, operation, direction, payload, status)
+        VALUES (?, ?, ?, ?, ?, 'pending')`,
+      )
+      .run(id, input.syncStateId, input.operation, input.direction, input.payload ?? null);
+    return id;
+  }
+
+  getIncompletePendingOperations(): PendingOperation[] {
+    const rows = this.db
+      .prepare(
+        "SELECT * FROM pending_operations WHERE status IN ('pending', 'processing') ORDER BY created_at ASC",
+      )
+      .all() as RawPendingRow[];
+    return rows.map((r) => this.mapPendingRow(r));
+  }
+
+  getIncompleteOpByState(
+    syncStateId: string,
+    operation: PendingOperation["operation"],
+  ): PendingOperation | null {
+    const row = this.db
+      .prepare(
+        `SELECT * FROM pending_operations
+         WHERE sync_state_id = ? AND operation = ? AND status IN ('pending', 'processing')
+         ORDER BY created_at ASC LIMIT 1`,
+      )
+      .get(syncStateId, operation) as RawPendingRow | undefined;
+    return row ? this.mapPendingRow(row) : null;
+  }
+
+  markPendingCompleted(id: string): void {
+    this.db
+      .prepare(
+        "UPDATE pending_operations SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
+      )
+      .run(id);
+  }
+
+  markPendingFailed(id: string, errorMessage: string): void {
+    this.db
+      .prepare(
+        "UPDATE pending_operations SET status = 'failed', retry_count = retry_count + 1, error_message = ?, completed_at = datetime('now') WHERE id = ?",
+      )
+      .run(errorMessage, id);
+  }
+
+  clearCompletedOperations(): void {
+    this.db.prepare("DELETE FROM pending_operations WHERE status IN ('completed', 'failed')").run();
+  }
+
+  private mapPendingRow(row: RawPendingRow): PendingOperation {
+    return {
+      id: row.id,
+      syncStateId: row.sync_state_id,
+      operation: row.operation as PendingOperation["operation"],
+      direction: row.direction as PendingOperation["direction"],
+      payload: row.payload,
+      retryCount: row.retry_count,
+      errorMessage: row.error_message,
+      status: row.status as PendingOperation["status"],
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
+    };
+  }
+
   // --- preserve markers ---
 
   storePreserveMarkers(path: string, markers: PreserveMarker[]): void {
@@ -433,4 +505,38 @@ export interface RegisterFileInput {
   readonly fileType: string;
   readonly fileHash: string;
   readonly fileSize: number;
+}
+
+interface RawPendingRow {
+  id: string;
+  sync_state_id: string;
+  operation: string;
+  direction: string;
+  payload: string | null;
+  retry_count: number;
+  error_message: string | null;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
+}
+
+/** I12 크래시 복구 WAL 항목. push/pull 적용 전 기록되고, 적용 완료 시 completed 로 마감된다. */
+export interface PendingOperation {
+  readonly id: string;
+  readonly syncStateId: string;
+  readonly operation: "create" | "update" | "delete" | "move";
+  readonly direction: "push" | "pull";
+  readonly payload: string | null;
+  readonly retryCount: number;
+  readonly errorMessage: string | null;
+  readonly status: "pending" | "processing" | "completed" | "failed";
+  readonly createdAt: string;
+  readonly completedAt: string | null;
+}
+
+export interface RecordPendingInput {
+  readonly syncStateId: string;
+  readonly operation: PendingOperation["operation"];
+  readonly direction: PendingOperation["direction"];
+  readonly payload?: string | null;
 }
