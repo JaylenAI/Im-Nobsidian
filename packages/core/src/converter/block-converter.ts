@@ -4,11 +4,11 @@ import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
+import { richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
+import type { RichTextItem } from "./rich-text-converter.js";
 import {
   MARKER_BRAND,
-  spacedMarker,
   compactMarker,
-  SPACED_END,
   TOGGLE_START,
   TOGGLE_END,
   COLUMN_LIST_START,
@@ -45,75 +45,6 @@ const EMBED_URL_PATTERNS = [
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-type RichTextItem = { plain_text: string; href?: string | null };
-
-function richTextToPlain(richText: RichTextItem[] | undefined): string {
-  if (!richText) return "";
-  return richText.map((t) => t.plain_text).join("");
-}
-
-interface RichTextAnnotated extends RichTextItem {
-  annotations?: Record<string, unknown>;
-  type?: string;
-  equation?: { expression: string };
-  mention?: {
-    type: string;
-    page?: { id: string };
-    date?: { start: string; end?: string | null };
-    user?: { id: string; name?: string };
-    database?: { id: string };
-  };
-}
-
-function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): string {
-  if (!richText) return "";
-  return richText
-    .map((t) => {
-      if (t.type === "equation" && t.equation) {
-        return `$${t.equation.expression}$`;
-      }
-
-      if (t.type === "mention" && t.mention) {
-        return formatMention(t.mention);
-      }
-
-      let text = t.plain_text;
-      const a = t.annotations;
-      if (a?.code) text = `\`${text}\``;
-      if (a?.bold) text = `**${text}**`;
-      if (a?.italic) text = `*${text}*`;
-      if (a?.strikethrough) text = `~~${text}~~`;
-      if (a?.underline) text = `<u>${text}</u>`;
-      if (t.href) text = `[${text}](${t.href})`;
-
-      const color = a?.color as string | undefined;
-      if (color && color !== "default") {
-        text = `${spacedMarker(`color:${color}`)}${text}${SPACED_END}`;
-      }
-
-      return text;
-    })
-    .join("");
-}
-
-function formatMention(mention: NonNullable<RichTextAnnotated["mention"]>): string {
-  switch (mention.type) {
-    case "page":
-      return mention.page ? `[[${mention.page.id}]]` : "";
-    case "date": {
-      if (!mention.date) return "";
-      const start = mention.date.start;
-      return mention.date.end ? `${start} → ${mention.date.end}` : start;
-    }
-    case "user":
-      return mention.user?.name ? `@${mention.user.name}` : "@user";
-    case "database":
-      return mention.database ? `[[${mention.database.id}]]` : "";
-    default:
-      return "";
-  }
 }
 
 export class BlockConverter {
