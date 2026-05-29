@@ -249,4 +249,73 @@ describe("WatchSyncService", () => {
       expect(service.getPendingCount()).toBe(1);
     });
   });
+
+  describe("증분 정합성 (Phase 6)", () => {
+    it("동기화 실패 시 변경 경로를 잃지 않고 재시도한다", async () => {
+      // 1차 실패 → 경로를 큐로 되돌려 재시도. (기존엔 await 전에 clear 해 영구 유실)
+      (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+        new Error("network"),
+      );
+
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      triggerFileChange("change", "a.md");
+      vi.advanceTimersByTime(200);
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(2);
+      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(1, { paths: ["a.md"] });
+      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(2, { paths: ["a.md"] });
+      expect(service.getPendingCount()).toBe(0);
+    });
+
+    it("큐 소진 후 stale debounce 타이머가 전체 동기화를 유발하지 않는다", async () => {
+      // syncQueued 재실행이 큐를 비운 뒤 남은 stale 타이머가 발화하면, 기존 코드는
+      // paths 미지정으로 전체 볼트를 동기화했다. 이제는 빈 큐 가드 + 진입 시 타이머 정리로 방지.
+      let resolveFirst: (() => void) | null = null;
+      (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        () =>
+          new Promise<SyncResult>((resolve) => {
+            resolveFirst = () =>
+              resolve({
+                pull: {
+                  created: 0,
+                  updated: 0,
+                  deleted: 0,
+                  conflicts: [],
+                  writtenPaths: [],
+                  failed: [],
+                  duration: 0,
+                },
+                push: { created: 0, updated: 0, deleted: 0, failed: [], duration: 0 },
+                conflicts: [],
+                duration: 0,
+              });
+          }),
+      );
+
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      triggerFileChange("change", "a.md");
+      vi.advanceTimersByTime(100); // 1차 동기화(a.md) 시작 — pending 비워짐
+      await Promise.resolve();
+      expect(service.isSyncing()).toBe(true);
+
+      triggerFileChange("change", "b.md"); // 진행 중 변경 → pending={b}, 새 타이머
+      vi.advanceTimersByTime(100); // 타이머 발화 → syncQueued=true (타이머 소비)
+      triggerFileChange("change", "c.md"); // 또 변경 → pending={b,c}, stale 후보 타이머
+
+      resolveFirst!(); // 1차 완료 → syncQueued 재실행이 b,c 처리 + stale 타이머 정리
+      await vi.runAllTimersAsync();
+
+      // 정확히 2회(a / b,c)만, 빈 경로(전체 동기화) 호출 없음
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(2);
+      for (const call of (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mock.calls) {
+        const paths = (call[0] as { paths?: string[] } | undefined)?.paths;
+        expect(paths && paths.length > 0).toBe(true);
+      }
+    });
+  });
 });
