@@ -50,7 +50,8 @@ describe("FileWatcher", () => {
 
     const ev = await waitForEvent();
     expect(ev.event).toBe("add");
-    expect(ev.path).toContain("new-file.txt");
+    // 절대경로가 아니라 rootPath 기준 볼트 상대경로를 방출해야 한다(동기화 paths 필터 정합).
+    expect(ev.path).toBe("new-file.txt");
   });
 
   it("파일 수정 이벤트 감지", async () => {
@@ -68,7 +69,7 @@ describe("FileWatcher", () => {
 
     const ev = await waitForEvent();
     expect(ev.event).toBe("change");
-    expect(ev.path).toContain("existing.txt");
+    expect(ev.path).toBe("existing.txt");
   });
 
   it("파일 삭제 이벤트 감지", async () => {
@@ -86,7 +87,25 @@ describe("FileWatcher", () => {
 
     const ev = await waitForEvent();
     expect(ev.event).toBe("unlink");
-    expect(ev.path).toContain("to-delete.txt");
+    expect(ev.path).toBe("to-delete.txt");
+  });
+
+  it("중첩 폴더 파일은 '/' 구분 상대경로로 방출", async () => {
+    const subDir = join(tempDir, "sub");
+    mkdirSync(subDir);
+
+    watcher = new FileWatcher(tempDir, (event, path) => {
+      events.push({ event, path });
+    });
+    watcher.start();
+
+    await new Promise((r) => setTimeout(r, 300));
+
+    writeFileSync(join(subDir, "nested.md"), "hi");
+
+    const ev = await waitForEvent();
+    expect(ev.event).toBe("add");
+    expect(ev.path).toBe("sub/nested.md");
   });
 
   it("dotfile 무시", async () => {
