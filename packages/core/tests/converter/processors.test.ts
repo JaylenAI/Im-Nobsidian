@@ -208,6 +208,24 @@ describe("FrontmatterGenerator", () => {
     expect(result.content).not.toContain("tags:");
     expect(result.content).toContain("status: active");
   });
+
+  it("본문이 `---`(divider)로 시작해도 frontmatter 생성·속성 보존 (gray-matter 재파싱 footgun)", () => {
+    // Notion divider 등으로 본문이 `---`로 시작하면 gray-matter 의 string-arg stringify 가
+    // 그 `---…---` 블록을 frontmatter 로 오인 파싱하다 throw → 속성 전체가 유실되던 회귀.
+    const body = "---\n**돌아보기** *(Notion DB)*\n**지식** *(Notion DB)*\n---\n\n본문";
+    const result = processor.process({
+      content: body,
+      metadata: { properties: { status: "active", category: "study" } },
+      context: pullContext,
+    });
+
+    // 1) frontmatter 가 실제로 생성됐다(스킵되지 않음).
+    expect(result.content.startsWith("---\n")).toBe(true);
+    expect(result.content).toContain("status: active");
+    expect(result.content).toContain("category: study");
+    // 2) 본문이 한 글자도 손실 없이 보존됐다.
+    expect(result.content).toContain(body);
+  });
 });
 
 describe("HtmlAnnotationStripper", () => {
