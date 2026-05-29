@@ -1032,7 +1032,10 @@ export class SyncOrchestrator {
           throw error;
         }
       }
-      this.stateDb.delete(record.id);
+      this.stateDb.transaction(() => {
+        this.stateDb.delete(record.id);
+        this.stateDb.deleteWikilink(record.obsidianPath);
+      });
     } else {
       this.stateDb.updateStatus(record.id, "pending");
     }
@@ -1334,19 +1337,29 @@ export class SyncOrchestrator {
 
     const updateStat = await this.vaultFs.getFileStat(record.obsidianPath);
     const newHash = computeHash(remoteContent);
-    this.stateDb.upsert({
-      obsidianPath: record.obsidianPath,
-      notionPageId: change.pageId,
-      notionParentId: record.notionParentId,
-      contentHash: newHash,
-      notionLastEdited: page.last_edited_time,
-      localLastModified: new Date().toISOString(),
-      syncDirection: record.syncDirection,
-      fileType: record.fileType,
-      status: "synced",
-      baseSnapshot: Buffer.from(remoteContent, "utf-8"),
-      localMtime: updateStat?.mtime ?? null,
-      localFileSize: updateStat?.size ?? null,
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        notionParentId: record.notionParentId,
+        contentHash: newHash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: record.syncDirection,
+        fileType: record.fileType,
+        status: "synced",
+        baseSnapshot: Buffer.from(remoteContent, "utf-8"),
+        localMtime: updateStat?.mtime ?? null,
+        localFileSize: updateStat?.size ?? null,
+      });
+
+      const aliases = extractAliases(properties);
+      this.stateDb.upsertWikilink({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        title,
+        aliases,
+      });
     });
 
     return { path: record.obsidianPath };
@@ -1364,7 +1377,10 @@ export class SyncOrchestrator {
       }
     }
 
-    this.stateDb.delete(record.id);
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(record.obsidianPath);
+    });
     return record.obsidianPath;
   }
 
@@ -1374,7 +1390,12 @@ export class SyncOrchestrator {
 
     if (folderNoteRecord?.notionPageId) {
       const existing = this.stateDb.getByPath(folderPath);
-      if (existing) this.stateDb.delete(existing.id);
+      if (existing) {
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(existing.id);
+          this.stateDb.deleteWikilink(existing.obsidianPath);
+        });
+      }
       return;
     }
 
@@ -1443,7 +1464,10 @@ export class SyncOrchestrator {
       const folderNotePath = `${folder.obsidianPath}/${folderName}.md`;
       const noteRecord = this.stateDb.getByPath(folderNotePath);
       if (noteRecord?.notionPageId) {
-        this.stateDb.delete(folder.id);
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(folder.id);
+          this.stateDb.deleteWikilink(folder.obsidianPath);
+        });
       }
     }
   }

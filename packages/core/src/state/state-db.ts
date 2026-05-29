@@ -230,6 +230,10 @@ export class StateDB implements IStateDB {
       .run(entry.obsidianPath, entry.notionPageId, entry.title, JSON.stringify(entry.aliases));
   }
 
+  deleteWikilink(obsidianPath: string): void {
+    this.db.prepare("DELETE FROM wikilink_map WHERE obsidian_path = ?").run(obsidianPath);
+  }
+
   // --- sync_metadata ---
 
   getMeta(key: string): string | null {

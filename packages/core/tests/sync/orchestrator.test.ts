@@ -29,6 +29,7 @@ function createMockStateDb() {
     getByStatus: vi.fn().mockReturnValue([]),
     upsert: vi.fn(),
     upsertWikilink: vi.fn(),
+    deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
@@ -213,6 +214,8 @@ describe("SyncOrchestrator", () => {
 
       expect(result.deleted).toBe(1);
       expect(mockNotionClient.archivePage).toHaveBeenCalledWith("page-del");
+      // 레코드 삭제 시 stale wikilink 도 함께 제거한다
+      expect(mockStateDb.deleteWikilink).toHaveBeenCalledWith("deleted.md");
     });
 
     it("dryRun 모드에서는 실제 작업 안 하고 예정 수량 반환", async () => {
@@ -326,6 +329,15 @@ describe("SyncOrchestrator", () => {
 
       expect(result.updated).toBe(1);
       expect(mockVaultFs.writeFile).toHaveBeenCalled();
+      // pull 업데이트 시 제목/별칭 변경 반영을 위해 wikilink 도 갱신한다
+      // (extractTitle 모킹이 전역 "Test Page" 를 반환)
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "existing.md",
+          notionPageId: "mod-page",
+          title: "Test Page",
+        }),
+      );
     });
 
     it("로컬+원격 동시 수정 시 충돌 감지", async () => {

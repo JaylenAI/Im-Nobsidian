@@ -435,6 +435,10 @@ export class SqlJsStateDB implements IStateDB {
     );
   }
 
+  deleteWikilink(obsidianPath: string): void {
+    this.run("DELETE FROM wikilink_map WHERE obsidian_path = ?", [obsidianPath]);
+  }
+
   // --- sync_metadata ---
 
   getMeta(key: string): string | null {

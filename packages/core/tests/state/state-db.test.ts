@@ -183,6 +183,25 @@ describe("StateDB", () => {
       expect(result).not.toBeNull();
       expect(result!.obsidianPath).toBe("notes/project.md");
     });
+
+    it("deleteWikilink — 경로로 항목 제거", () => {
+      db.upsertWikilink({
+        obsidianPath: "notes/project.md",
+        notionPageId: "page-abc",
+        title: "Project Plan",
+        aliases: ["PP"],
+      });
+      expect(db.resolvePageId("page-abc")).not.toBeNull();
+
+      db.deleteWikilink("notes/project.md");
+
+      expect(db.resolvePageId("page-abc")).toBeNull();
+      expect(db.resolveWikilink("Project Plan")).toBeNull();
+    });
+
+    it("deleteWikilink — 없는 경로는 무시(no-op)", () => {
+      expect(() => db.deleteWikilink("does/not/exist.md")).not.toThrow();
+    });
   });
 
   describe("sync_metadata", () => {

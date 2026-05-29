@@ -23,6 +23,8 @@ export interface IStateDB {
   resolveWikilink(text: string): WikilinkEntry | null;
   resolvePageId(pageId: string): WikilinkEntry | null;
   upsertWikilink(entry: WikilinkEntry): void;
+  /** 레코드 삭제 시 해당 경로의 wikilink 항목을 제거한다 (stale 링크 방지). */
+  deleteWikilink(obsidianPath: string): void;
 
   // sync_metadata
   getMeta(key: string): string | null;

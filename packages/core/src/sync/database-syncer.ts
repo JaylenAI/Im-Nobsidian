@@ -445,6 +445,13 @@ export class DatabaseSyncer {
             this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
             this.stateDb.updateStatus(record.id, "synced");
             this.stateDb.setNotionLastEdited(record.id, updatedPage.last_edited_time);
+            // 제목/별칭이 바뀌었을 수 있으므로 wikilink 도 함께 갱신해 최신성을 보장한다.
+            this.stateDb.upsertWikilink({
+              obsidianPath: file.path,
+              notionPageId: record.notionPageId!,
+              title,
+              aliases: extractAliases(frontmatter),
+            });
           });
           updated++;
         } else {

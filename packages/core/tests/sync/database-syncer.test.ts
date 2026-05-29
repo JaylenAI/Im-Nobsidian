@@ -29,6 +29,7 @@ function createMockStateDb() {
     getByStatus: vi.fn().mockReturnValue([]),
     upsert: vi.fn(),
     upsertWikilink: vi.fn(),
+    deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
@@ -509,6 +510,14 @@ describe("DatabaseSyncer", () => {
       expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalledWith(
         "existing-page-id",
         expect.any(String),
+      );
+      // 업데이트 시에도 제목/별칭 변경 반영을 위해 wikilink 를 갱신한다
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "databases/tasks/Updated Task.md",
+          notionPageId: "existing-page-id",
+          title: "Updated Task",
+        }),
       );
     });
 
