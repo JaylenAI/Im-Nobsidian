@@ -96,6 +96,22 @@ describe("notionEnhancedToObsidian", () => {
     const input = '<unknown id="abc" alt="bookmark"/>';
     expect(notionEnhancedToObsidian(input)).toBe("%%im-nobsidian:unknown:id=abc&type=bookmark%%");
   });
+
+  // 위키링크: Notion 이 escape 한 평문 위키링크 복원
+  it("escape 된 위키링크 \\[\\[..\\]\\] → [[..]] 복원", () => {
+    const input = "앞 \\[\\[존재하지않는페이지ZZZ\\]\\] 뒤";
+    expect(notionEnhancedToObsidian(input)).toBe("앞 [[존재하지않는페이지ZZZ]] 뒤");
+  });
+
+  it("escape 된 별칭 위키링크 \\[\\[t|d\\]\\] → [[t|d]] 복원", () => {
+    const input = "앞 \\[\\[대상|표시\\]\\] 뒤";
+    expect(notionEnhancedToObsidian(input)).toBe("앞 [[대상|표시]] 뒤");
+  });
+
+  it("escape 된 임베드 !\\[\\[..\\]\\] → ![[..]] 복원", () => {
+    const input = "!\\[\\[그림.png\\]\\]";
+    expect(notionEnhancedToObsidian(input)).toBe("![[그림.png]]");
+  });
 });
 
 describe("obsidianToNotionEnhanced", () => {
@@ -179,6 +195,31 @@ describe("obsidianToNotionEnhanced", () => {
   it("unknown 마커 → <unknown>", () => {
     const input = "%%im-nobsidian:unknown:id=abc&type=bookmark%%";
     expect(obsidianToNotionEnhanced(input)).toBe('<unknown id="abc" type="bookmark"/>');
+  });
+
+  // 위키링크: id 기반 mention → url 기반 mention (Notion markdown API 가 id 형식은 통째로 삭제)
+  it("resolved 위키링크 mention(id) → url 기반 mention", () => {
+    const input =
+      '앞 <mention-page id="36413b18-d382-8086-9a16-d92c1b2239cc">제목</mention-page> 뒤';
+    expect(obsidianToNotionEnhanced(input)).toBe(
+      '앞 <mention-page url="https://www.notion.so/36413b18d38280869a16d92c1b2239cc"/> 뒤',
+    );
+  });
+
+  it("unresolved 위키링크 preserve-link(target=label) → 평문 [[target]]", () => {
+    const input = "앞 [foo](im-nobsidian://wikilink/foo) 뒤";
+    expect(obsidianToNotionEnhanced(input)).toBe("앞 [[foo]] 뒤");
+  });
+
+  it("unresolved 위키링크 preserve-link(target≠label) → 평문 [[target|label]]", () => {
+    const enc = encodeURIComponent("실제 대상");
+    const input = `앞 [표시](im-nobsidian://wikilink/${enc}) 뒤`;
+    expect(obsidianToNotionEnhanced(input)).toBe("앞 [[실제 대상|표시]] 뒤");
+  });
+
+  it("평문 위키링크 [[...]] 는 그대로 보존 (Notion 이 텍스트로 round-trip 복원)", () => {
+    const input = "앞 [[그냥링크]] 뒤";
+    expect(obsidianToNotionEnhanced(input)).toBe("앞 [[그냥링크]] 뒤");
   });
 });
 
