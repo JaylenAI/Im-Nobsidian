@@ -14,6 +14,8 @@ import type {
   ResolutionChoice,
   ProgressCallback,
 } from "@im-nobsidian/core";
+import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
+import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
@@ -223,20 +225,14 @@ export default class ImNobsidianPlugin extends Plugin {
       const nodePath: typeof import("path") = require("path");
       const nodeFs: typeof import("fs") = require("fs");
       /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
-      const wasmPath = nodePath.join(
-        basePath,
-        ".obsidian",
-        "plugins",
-        "im-notion-sync",
-        "sql-wasm.wasm",
-      );
+      const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
       let existingData: Uint8Array | null = null;
       try {
         const adapter = this.app.vault.adapter;
-        if (await adapter.exists(".im-nobsidian/sync.db")) {
-          const buf = await adapter.readBinary(".im-nobsidian/sync.db");
+        if (await adapter.exists(STATE_DB_PATH)) {
+          const buf = await adapter.readBinary(STATE_DB_PATH);
           existingData = new Uint8Array(buf);
         }
       } catch {
@@ -247,20 +243,13 @@ export default class ImNobsidianPlugin extends Plugin {
         existingData,
         async (data: Uint8Array) => {
           const adapter = this.app.vault.adapter;
-          if (!(await adapter.exists(".im-nobsidian"))) {
-            await adapter.mkdir(".im-nobsidian");
+          if (!(await adapter.exists(INTERNAL_DIR))) {
+            await adapter.mkdir(INTERNAL_DIR);
           }
-          await adapter.writeBinary(".im-nobsidian/sync.db", data.buffer as ArrayBuffer);
+          await adapter.writeBinary(STATE_DB_PATH, data.buffer as ArrayBuffer);
         },
         wasmBinary,
       );
-
-      const client = new NotionClient({
-        token: this.settings.token,
-        concurrency: 3,
-        timeoutMs: 30000,
-        fetch: obsidianFetch as typeof globalThis.fetch,
-      });
 
       const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
 
@@ -283,6 +272,8 @@ export default class ImNobsidianPlugin extends Plugin {
           attachments: this.settings.attachments,
         },
       };
+
+      const client = NotionClient.fromConfig(config, obsidianFetch as typeof globalThis.fetch);
 
       this.orchestrator = new SyncOrchestrator(
         config,
@@ -394,13 +385,17 @@ export default class ImNobsidianPlugin extends Plugin {
   private registerColorPostProcessor(): void {
     this.registerMarkdownPostProcessor((el) => {
       const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      const colorRegex = /%%im-nobsidian:color:(\w+)%%([\s\S]*?)%%\/color%%/g;
+      const colorProbe = `%%${MARKER_BRAND}:color:`;
+      const colorRegex = new RegExp(
+        `%%${MARKER_BRAND}:color:(\\w+)%%([\\s\\S]*?)%%\\/color%%`,
+        "g",
+      );
       const nodesToReplace: { node: Text; fragments: DocumentFragment }[] = [];
 
       let textNode: Text | null;
       while ((textNode = walker.nextNode() as Text | null)) {
         const text = textNode.textContent ?? "";
-        if (!text.includes("%%im-nobsidian:color:")) continue;
+        if (!text.includes(colorProbe)) continue;
 
         const fragment = document.createDocumentFragment();
         let lastIndex = 0;

@@ -1,5 +1,6 @@
 import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { PROPERTIES_TAG } from "../../constants/markers.js";
 
 export class PropertiesTableInjector implements Processor {
   readonly name = "PropertiesTableInjector";
@@ -30,7 +31,7 @@ export class PropertiesTableInjector implements Processor {
 
     const yamlStr = matter.stringify("", filteredProps).trim();
     const yamlBody = yamlStr.slice(4, -3).trim();
-    const codeBlock = "```yaml\n# im-nobsidian:properties\n" + yamlBody + "\n```";
+    const codeBlock = "```yaml\n" + PROPERTIES_TAG + "\n" + yamlBody + "\n```";
 
     const content = codeBlock + "\n\n---\n\n" + input.content;
 

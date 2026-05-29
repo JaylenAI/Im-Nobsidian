@@ -4,8 +4,7 @@ import type { DBEntry, PropertyValue, ViewRenderData, PropertySchema } from "./t
 import { sortEntries, groupEntries, extractCalendarEntries } from "./filter-engine.js";
 import { getVisibleProperties } from "./filter-engine.js";
 import matter from "gray-matter";
-
-const DB_VIEWS_PATH = ".im-nobsidian/db-views.json";
+import { DB_VIEWS_PATH } from "../constants/paths.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}

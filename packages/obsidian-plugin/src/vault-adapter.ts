@@ -1,6 +1,7 @@
 import type { Vault } from "obsidian";
 import { TFile, TFolder, normalizePath } from "obsidian";
 import type { VaultFS, FileInfo, FileStatInfo, NonMdFileInfo } from "@im-nobsidian/core";
+import { isInternalPath } from "@im-nobsidian/core";
 
 export class ObsidianVaultAdapter implements VaultFS {
   constructor(private readonly vault: Vault) {}
@@ -98,7 +99,7 @@ export class ObsidianVaultAdapter implements VaultFS {
     const result: FileInfo[] = [];
 
     for (const file of files) {
-      if (file.path.startsWith(".im-nobsidian/")) continue;
+      if (isInternalPath(file.path)) continue;
 
       const content = await this.vault.read(file);
       result.push({
@@ -116,7 +117,7 @@ export class ObsidianVaultAdapter implements VaultFS {
     const result: FileStatInfo[] = [];
 
     for (const file of files) {
-      if (file.path.startsWith(".im-nobsidian/")) continue;
+      if (isInternalPath(file.path)) continue;
       result.push({
         path: file.path,
         mtime: new Date(file.stat.mtime).toISOString(),
@@ -143,7 +144,7 @@ export class ObsidianVaultAdapter implements VaultFS {
 
     for (const file of allFiles) {
       if (file.extension === "md") continue;
-      if (file.path.startsWith(".im-nobsidian/")) continue;
+      if (isInternalPath(file.path)) continue;
 
       result.push({
         path: file.path,

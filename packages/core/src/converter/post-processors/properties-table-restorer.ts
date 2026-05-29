@@ -1,7 +1,10 @@
 import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
-const YAML_PROPERTIES_REGEX = /```yaml\n# im-nobsidian:properties\n([\s\S]*?)```\n*(?:---\n*)?/;
+const YAML_PROPERTIES_REGEX = new RegExp(
+  "```yaml\\n# " + MARKER_BRAND_RE + ":properties\\n([\\s\\S]*?)```\\n*(?:---\\n*)?",
+);
 
 const LEGACY_TABLE_REGEX =
   /^\s*\| Property\s*\| Value\s*\|\n\s*\|\s*-{3,}\s*\|\s*-{3,}\s*\|\n((?:\|[^\n]+\|\n?)+)\n*---\n*/;

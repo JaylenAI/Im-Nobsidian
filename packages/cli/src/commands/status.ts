@@ -19,10 +19,7 @@ export const statusCommand = new Command("status")
     const stateDb = StateDB.open(configManager.dbPath);
 
     try {
-      const client = new NotionClient({
-        token: config.notion.token,
-        concurrency: config.advanced.concurrency,
-      });
+      const client = NotionClient.fromConfig(config);
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 

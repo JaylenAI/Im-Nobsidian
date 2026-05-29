@@ -1,3 +1,5 @@
+import { MARKER_BRAND_RE, compactMarker, TOGGLE_START, TOGGLE_END } from "../constants/markers.js";
+
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_CALLOUT_TAG_RE = /<callout[^>]*>\n?([\s\S]*?)<\/callout>/g;
 const NOTION_TOGGLE_RE = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
@@ -13,9 +15,6 @@ const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
 const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 const NOTION_UNDERLINE_RE = /<span underline="true">([\s\S]*?)<\/span>/g;
-
-const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
-const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
 
 export function notionEnhancedToObsidian(enhanced: string): string {
   let result = enhanced;
@@ -150,12 +149,12 @@ function preserveUnknownBlocks(content: string): string {
     const typeMatch = /type="([^"]*)"/.exec(attrs);
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? typeMatch?.[1] ?? "unknown";
-    return `%%im-nobsidian:unknown:id=${id}&type=${blockType}%%`;
+    return compactMarker(`unknown:id=${id}&type=${blockType}`);
   });
   result = result.replace(NOTION_UNKNOWN_URL_RE, (_match, url: string, attrs: string) => {
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? "bookmark";
-    return `%%im-nobsidian:unknown:id=${encodeURIComponent(url)}&type=${blockType}%%`;
+    return compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
   });
   return result;
 }
@@ -223,7 +222,7 @@ function convertTabBlocks(content: string): string {
 // 2C: <span underline> → 보존 마커
 function convertUnderlineSpans(content: string): string {
   return content.replace(NOTION_UNDERLINE_RE, (_match, text: string) => {
-    return `%%im-nobsidian:underline%%${text}%%/underline%%`;
+    return `${compactMarker("underline")}${text}%%/underline%%`;
   });
 }
 
@@ -376,7 +375,7 @@ function convertPageLinks(content: string): string {
 function convertColorSpans(content: string): string {
   return content.replace(
     NOTION_COLOR_SPAN_RE,
-    (_match, color: string, text: string) => `%%im-nobsidian:color:${color}%%${text}%%/color%%`,
+    (_match, color: string, text: string) => `${compactMarker(`color:${color}`)}${text}%%/color%%`,
   );
 }
 
@@ -509,7 +508,10 @@ function restoreTabBlocks(content: string): string {
   });
 }
 
-const OBSIDIAN_UNKNOWN_RE = /%%im-nobsidian:unknown:id=([^&]+)&type=([^%]+)%%/g;
+const OBSIDIAN_UNKNOWN_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
+  "g",
+);
 
 function restoreUnknownBlocks(content: string): string {
   return content.replace(OBSIDIAN_UNKNOWN_RE, (_match, id: string, type: string) => {
@@ -521,7 +523,10 @@ function restoreUnknownBlocks(content: string): string {
   });
 }
 
-const OBSIDIAN_COLOR_RE = /%%im-nobsidian:color:([^%]+)%%([\s\S]*?)%%\/color%%/g;
+const OBSIDIAN_COLOR_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:color:([^%]+)%%([\\s\\S]*?)%%\\/color%%`,
+  "g",
+);
 
 function restoreColorSpans(content: string): string {
   return content.replace(OBSIDIAN_COLOR_RE, (_match, color: string, text: string) => {
@@ -529,7 +534,10 @@ function restoreColorSpans(content: string): string {
   });
 }
 
-const OBSIDIAN_UNDERLINE_RE = /%%im-nobsidian:underline%%([\s\S]*?)%%\/underline%%/g;
+const OBSIDIAN_UNDERLINE_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:underline%%([\\s\\S]*?)%%\\/underline%%`,
+  "g",
+);
 
 function restoreUnderlineSpans(content: string): string {
   return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {

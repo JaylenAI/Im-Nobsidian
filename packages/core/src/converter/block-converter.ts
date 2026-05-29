@@ -4,15 +4,22 @@ import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
+import {
+  MARKER_BRAND,
+  spacedMarker,
+  compactMarker,
+  SPACED_END,
+  TOGGLE_START,
+  TOGGLE_END,
+  COLUMN_LIST_START,
+  COLUMN_SEP,
+  COLUMN_LIST_END,
+  TOC_MARKER,
+} from "../constants/markers.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
 
 const DIVIDER_PLACEHOLDER = "​%%IM-NOBSIDIAN_DIVIDER%%​";
-const TOGGLE_START = "%%im-nobsidian:toggle:start%%";
-const TOGGLE_END = "%%im-nobsidian:toggle:end%%";
-const COLUMN_LIST_START = "%%im-nobsidian:column-list:start%%";
-const COLUMN_SEP = "%%im-nobsidian:column%%";
-const COLUMN_LIST_END = "%%im-nobsidian:column-list:end%%";
 
 const VIDEO_URL_PATTERNS = [
   /^https?:\/\/(www\.)?youtube\.com\/watch/,
@@ -82,7 +89,7 @@ function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): string {
 
       const color = a?.color as string | undefined;
       if (color && color !== "default") {
-        text = `%% im-nobsidian:color:${color} %%${text}%% im-nobsidian:end %%`;
+        text = `${spacedMarker(`color:${color}`)}${text}${SPACED_END}`;
       }
 
       return text;
@@ -125,7 +132,7 @@ export class BlockConverter {
       this.n2m.setCustomTransformer(blockType, (block) => {
         const id = block.id ?? "unknown";
         return Promise.resolve(
-          `> [!im-nobsidian-unsupported] Notion 전용 블록\n> type: ${blockType}, id: ${id}\n> %%im-nobsidian:unsupported:type=${blockType}&id=${id}%%`,
+          `> [!${MARKER_BRAND}-unsupported] Notion 전용 블록\n> type: ${blockType}, id: ${id}\n> ${compactMarker(`unsupported:type=${blockType}&id=${id}`)}`,
         );
       });
     }
@@ -323,7 +330,7 @@ export class BlockConverter {
         child_database: { title: string };
       } & BlockObjectResponse;
       const title = b.child_database?.title ?? "Database";
-      return `> [!database] ${title}\n> %%im-nobsidian:child-database:id=${b.id}&title=${encodeURIComponent(title)}%%`;
+      return `> [!database] ${title}\n> ${compactMarker(`child-database:id=${b.id}&title=${encodeURIComponent(title)}`)}`;
     });
   }
 
@@ -356,7 +363,7 @@ export class BlockConverter {
   private registerTocTransformer(): void {
     if (!this.n2m) return;
     this.n2m.setCustomTransformer("table_of_contents", async () => {
-      return `%%im-nobsidian:toc%%`;
+      return TOC_MARKER;
     });
   }
 

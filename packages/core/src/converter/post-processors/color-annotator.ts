@@ -1,7 +1,10 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
-const COLOR_MARKER_REGEX =
-  /%% im-nobsidian:color:(\w+(?:_background)?) %%([\s\S]*?)%% im-nobsidian:end %%/g;
+const COLOR_MARKER_REGEX = new RegExp(
+  `%% ${MARKER_BRAND_RE}:color:(\\w+(?:_background)?) %%([\\s\\S]*?)%% ${MARKER_BRAND_RE}:end %%`,
+  "g",
+);
 
 export class ColorAnnotator implements Processor {
   readonly name = "ColorAnnotator";

@@ -1,5 +1,6 @@
 import { watch } from "chokidar";
 import type { FSWatcher } from "chokidar";
+import { INTERNAL_DIR_GLOB } from "../constants/paths.js";
 
 export type WatchEvent = "add" | "change" | "unlink";
 
@@ -17,7 +18,7 @@ export class FileWatcher {
 
   start(): void {
     this.watcher = watch(this.rootPath, {
-      ignored: [/(^|[/\\])\./, "**/node_modules/**", "**/.im-nobsidian/**"],
+      ignored: [/(^|[/\\])\./, "**/node_modules/**", INTERNAL_DIR_GLOB],
       persistent: true,
       ignoreInitial: true,
       awaitWriteFinish: {
