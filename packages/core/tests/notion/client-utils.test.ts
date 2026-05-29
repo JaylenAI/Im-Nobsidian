@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { NotionClient } from "../../src/notion/client.js";
+import { NotionClient, isNotionObjectNotFound } from "../../src/notion/client.js";
 
 function createClient() {
   return new NotionClient({ token: "ntn_test_fake_token", concurrency: 1, timeoutMs: 1000 });
@@ -507,5 +507,82 @@ describe("NotionClient - getChildPagesRecursive: 접근 불가 서브트리 grac
     const all = await client.getChildPagesRecursive("root");
     const ids = all.map((p) => p.id).sort();
     expect(ids).toEqual(["bad-1", "ok-1", "ok-2"]); // 3건 모두 수집(bad-1 자체는 포함, 하위만 스킵)
+  });
+});
+
+describe("isNotionObjectNotFound — 404 권위 판별 (결함9)", () => {
+  it("code=object_not_found 면 true", () => {
+    expect(isNotionObjectNotFound({ code: "object_not_found", status: 404 })).toBe(true);
+  });
+
+  it("status=404 만 있어도 true", () => {
+    expect(isNotionObjectNotFound({ status: 404 })).toBe(true);
+  });
+
+  it("code=object_not_found 만 있어도 true", () => {
+    expect(isNotionObjectNotFound({ code: "object_not_found" })).toBe(true);
+  });
+
+  it("실 Error 객체에 code 가 붙은 SDK 에러도 인식", () => {
+    const err = Object.assign(new Error("Could not find database"), {
+      code: "object_not_found",
+      status: 404,
+    });
+    expect(isNotionObjectNotFound(err)).toBe(true);
+  });
+
+  it("검증 오류(validation_error)는 false — 일시/실제 오류와 구분", () => {
+    expect(isNotionObjectNotFound({ code: "validation_error", status: 400 })).toBe(false);
+  });
+
+  it("rate limit(429)·5xx 는 false — 재시도 대상", () => {
+    expect(isNotionObjectNotFound({ status: 429 })).toBe(false);
+    expect(isNotionObjectNotFound({ code: "internal_server_error", status: 500 })).toBe(false);
+  });
+
+  it("null·undefined·문자열·숫자는 false (방어)", () => {
+    expect(isNotionObjectNotFound(null)).toBe(false);
+    expect(isNotionObjectNotFound(undefined)).toBe(false);
+    expect(isNotionObjectNotFound("object_not_found")).toBe(false);
+    expect(isNotionObjectNotFound(404)).toBe(false);
+    expect(isNotionObjectNotFound(new Error("network"))).toBe(false);
+  });
+});
+
+describe("NotionClient.getDatabaseSyncability — 접근성 선판별 (결함9)", () => {
+  function stubRetrieve(client: NotionClient, value: unknown): void {
+    // 내부 SDK 클라이언트의 databases.retrieve 를 교체해 네트워크 없이 응답을 주입한다.
+    (client as any).client.databases.retrieve = vi.fn().mockResolvedValue(value);
+  }
+
+  it("data_sources 가 1개 이상이면 queryable=true + 제목 추출", async () => {
+    const client = createClient();
+    stubRetrieve(client, {
+      title: [{ plain_text: "프로덕트 위키" }],
+      data_sources: [{ id: "ds-1" }],
+    });
+    const r = await client.getDatabaseSyncability("db-1");
+    expect(r).toEqual({ title: "프로덕트 위키", queryable: true });
+  });
+
+  it("data_sources 가 빈 배열이면 queryable=false (링크드/미공유 DB)", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: [{ plain_text: "링크드 DB" }], data_sources: [] });
+    const r = await client.getDatabaseSyncability("db-2");
+    expect(r).toEqual({ title: "링크드 DB", queryable: false });
+  });
+
+  it("data_sources 필드 자체가 없으면 queryable=false", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: [{ plain_text: "구모델 DB" }] });
+    const r = await client.getDatabaseSyncability("db-3");
+    expect(r.queryable).toBe(false);
+  });
+
+  it("title 이 비배열({})로 와도 크래시 없이 빈 제목 (결함7 계열 방어)", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: {}, data_sources: [{ id: "ds-x" }] });
+    const r = await client.getDatabaseSyncability("db-4");
+    expect(r).toEqual({ title: "", queryable: true });
   });
 });

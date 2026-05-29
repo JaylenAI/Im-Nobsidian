@@ -15,6 +15,18 @@ import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../ty
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 
+/**
+ * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
+ * 페이지/DB 의 **권위적 신호**다. 그래야 일시적/실제 오류(검증·rate limit·5xx)와 구분해
+ * 행 동기화 불가를 정직히 강등(스택트레이스 대신 1줄 + denylist)할 수 있다.
+ * SDK 의 `APIResponseError` 는 `code`/`status` 를 노출한다.
+ */
+export function isNotionObjectNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: unknown; status?: unknown };
+  return e.code === "object_not_found" || e.status === 404;
+}
+
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
@@ -256,6 +268,24 @@ export class NotionClient {
     const db = await this.fetchDatabaseModern(databaseId);
     const titleArr = db.title as Array<{ plain_text: string }> | undefined;
     return titleArr?.[0]?.plain_text ?? "";
+  }
+
+  /**
+   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 1회 호출로 판별한다.
+   * 신 모델(2025-09-03)에서 링크드 DB·미공유 데이터 소스·삭제 DB 는 `data_sources` 가
+   * 비어, 행 조회(`dataSources.query`)가 404 로 실패하고 그 전에 생성된 빈 폴더/`.base` 만
+   * 남긴다. 발견 단계에서 미리 걸러 **빈 폴더/.base 오염 + 매 pull 의 404 노이즈**를 차단한다.
+   * 제목은 함께 반환해 호출처가 추가 조회 없이 폴더명을 잡게 한다.
+   */
+  async getDatabaseSyncability(databaseId: string): Promise<{ title: string; queryable: boolean }> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      title?: Array<{ plain_text: string }>;
+      data_sources?: Array<{ id: string }>;
+    };
+    const title = Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "";
+    return { title, queryable: (db.data_sources?.length ?? 0) > 0 };
   }
 
   async getDatabaseSchema(

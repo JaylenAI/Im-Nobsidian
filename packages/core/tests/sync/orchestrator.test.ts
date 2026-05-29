@@ -102,6 +102,9 @@ function createMockNotionClient() {
     extractTitle: vi.fn().mockReturnValue("Test Page"),
     extractProperties: vi.fn().mockReturnValue({}),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
+    getDatabaseSyncability: vi.fn().mockResolvedValue({ title: "Test DB", queryable: true }),
+    getDatabaseTitle: vi.fn().mockResolvedValue("Test DB"),
+    getDatabaseViewsConfig: vi.fn().mockResolvedValue(null),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     movePage: vi.fn().mockResolvedValue({}),
@@ -970,5 +973,141 @@ describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실
     ).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
 
     expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결함9)", () => {
+  type Privates = {
+    buildDiscoveredDbConfig(
+      dbId: string,
+      parentPageId: string,
+    ): Promise<
+      | { kind: "ok"; config: { databaseId: string; localFolder: string; titleProperty: string } }
+      | { kind: "inaccessible" }
+      | { kind: "error" }
+    >;
+    pullDiscoveredDatabases(w: string[], f: unknown[], c: unknown[]): Promise<unknown>;
+  };
+
+  function makeOrchestrator(stateDb?: ReturnType<typeof createMockStateDb>) {
+    const notion = createMockNotionClient();
+    const sdb = stateDb ?? createMockStateDb();
+    const orch = new SyncOrchestrator(
+      createConfig(),
+      sdb as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+    return { orch: orch as unknown as Privates, notion, sdb };
+  }
+
+  describe("layer 1 — 발견 단계 선제 차단 (buildDiscoveredDbConfig)", () => {
+    it("queryable=true 면 kind=ok + 폴더 설정 생성", async () => {
+      const { orch, notion } = makeOrchestrator();
+      notion.getDatabaseSyncability.mockResolvedValue({ title: "프로덕트 위키", queryable: true });
+      const out = await orch.buildDiscoveredDbConfig("db-ok", "");
+      expect(out.kind).toBe("ok");
+      if (out.kind === "ok") {
+        expect(out.config.databaseId).toBe("db-ok");
+        expect(out.config.localFolder).toContain("위키"); // sanitize 후 제목 반영
+      }
+    });
+
+    it("queryable=false(링크드/미공유) 면 kind=inaccessible — 빈 폴더/.base 오염 방지", async () => {
+      const { orch, notion } = makeOrchestrator();
+      notion.getDatabaseSyncability.mockResolvedValue({ title: "링크드", queryable: false });
+      const out = await orch.buildDiscoveredDbConfig("db-linked", "");
+      expect(out.kind).toBe("inaccessible");
+    });
+
+    it("404(삭제된 DB) 면 kind=inaccessible — 재시도하지 않음", async () => {
+      const { orch, notion } = makeOrchestrator();
+      notion.getDatabaseSyncability.mockRejectedValue({ code: "object_not_found", status: 404 });
+      const out = await orch.buildDiscoveredDbConfig("db-deleted", "");
+      expect(out.kind).toBe("inaccessible");
+    });
+
+    it("일시/실제 오류(500)는 kind=error — 다음 pull 에 재시도 여지", async () => {
+      const { orch, notion } = makeOrchestrator();
+      notion.getDatabaseSyncability.mockRejectedValue({ status: 500 });
+      const out = await orch.buildDiscoveredDbConfig("db-flaky", "");
+      expect(out.kind).toBe("error");
+    });
+  });
+
+  describe("layer 2 — 쿼리 시점 방어/자가정리 (pullDiscoveredDatabases)", () => {
+    it("캐시에 있던 DB 가 행 조회 404 면 denylist 등록 + discovered_dbs 에서 제거", async () => {
+      const sdb = createMockStateDb();
+      const meta: Record<string, string | null> = {
+        discovered_dbs: JSON.stringify([
+          { databaseId: "db-linked", localFolder: "p/db-linked", titleProperty: "Name" },
+        ]),
+        inaccessible_dbs: null,
+      };
+      sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+      const setMetaCalls: Array<[string, string]> = [];
+      sdb.setMeta.mockImplementation((k: string, v: string) => {
+        setMetaCalls.push([k, v]);
+      });
+
+      const { orch, notion } = makeOrchestrator(sdb);
+      // 행 조회가 404 → pullDatabase 가 throw → orchestrator 가 404 로 강등
+      notion.queryAllDatabasePages.mockRejectedValue({ code: "object_not_found", status: 404 });
+
+      await orch.pullDiscoveredDatabases([], [], []);
+
+      const inaccessibleWrite = setMetaCalls.find(([k]) => k === "inaccessible_dbs");
+      expect(inaccessibleWrite).toBeDefined();
+      expect(JSON.parse(inaccessibleWrite![1])).toContain("dblinked"); // 하이픈 정규화 저장
+
+      const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+      expect(discoveredWrite).toBeDefined();
+      expect(JSON.parse(discoveredWrite![1])).toEqual([]); // 접근불가 DB 가 캐시에서 제거됨
+    });
+
+    it("이미 denylist 에 있는 DB 는 행 조회조차 시도하지 않음(노이즈 0)", async () => {
+      const sdb = createMockStateDb();
+      const meta: Record<string, string | null> = {
+        discovered_dbs: JSON.stringify([
+          { databaseId: "db-linked", localFolder: "p/db-linked", titleProperty: "Name" },
+        ]),
+        inaccessible_dbs: JSON.stringify(["dblinked"]),
+      };
+      sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+
+      const { orch, notion } = makeOrchestrator(sdb);
+      await orch.pullDiscoveredDatabases([], [], []);
+
+      // denylist 에 있으므로 pullDatabase 경로(schema/query) 진입 안 함
+      expect(notion.queryAllDatabasePages).not.toHaveBeenCalled();
+      expect(notion.getDatabaseSchema).not.toHaveBeenCalled();
+    });
+
+    it("404 가 아닌 실제 오류는 denylist 에 넣지 않고 캐시에 유지(재시도 보존)", async () => {
+      const sdb = createMockStateDb();
+      const meta: Record<string, string | null> = {
+        discovered_dbs: JSON.stringify([
+          { databaseId: "db-flaky", localFolder: "p/db-flaky", titleProperty: "Name" },
+        ]),
+        inaccessible_dbs: null,
+      };
+      sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+      const setMetaCalls: Array<[string, string]> = [];
+      sdb.setMeta.mockImplementation((k: string, v: string) => {
+        setMetaCalls.push([k, v]);
+      });
+
+      const { orch, notion } = makeOrchestrator(sdb);
+      notion.queryAllDatabasePages.mockRejectedValue({ status: 500 }); // 일시 오류
+
+      await orch.pullDiscoveredDatabases([], [], []);
+
+      expect(setMetaCalls.find(([k]) => k === "inaccessible_dbs")).toBeUndefined();
+      // 캐시 재기록이 일어나도 flaky DB 는 유지되어야 한다(빈 배열로 제거 금지)
+      const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+      if (discoveredWrite) {
+        expect(JSON.parse(discoveredWrite[1])).toHaveLength(1);
+      }
+    });
   });
 });

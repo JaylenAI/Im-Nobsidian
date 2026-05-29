@@ -15,6 +15,7 @@ import type {
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
+import { isNotionObjectNotFound } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { ChangeDetector } from "./change-detector.js";
@@ -36,6 +37,15 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
+
+/** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/접근 불가/일시 오류를 명시적으로 구분한다. */
+type DiscoveredDbOutcome =
+  | { kind: "ok"; config: { databaseId: string; localFolder: string; titleProperty: string } }
+  | { kind: "inaccessible" }
+  | { kind: "error" };
+
+/** 접근 불가 DB denylist 를 보존하는 상태 메타 키. */
+const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
 
 export class SyncOrchestrator {
   private readonly changeDetector: ChangeDetector;
@@ -713,38 +723,63 @@ export class SyncOrchestrator {
   private async buildDiscoveredDbConfig(
     dbId: string,
     parentPageId: string,
-  ): Promise<{ databaseId: string; localFolder: string; titleProperty: string } | null> {
+  ): Promise<DiscoveredDbOutcome> {
+    let dbTitle: string;
     try {
-      const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
-      const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
-      let parentFolder = "";
-      if (parentEntry?.obsidianPath) {
-        const obsPath = parentEntry.obsidianPath;
-        if (obsPath.endsWith(".md")) {
-          const parts = obsPath.split("/");
-          parts.pop();
-          parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
-        } else {
-          parentFolder = obsPath;
-        }
+      // 제목 + 접근 가능한 data source 유무를 1회 호출로 확인한다. data source 가 없으면
+      // 행 조회가 404 로 실패하고 빈 폴더/.base 만 남기므로, 발견 단계에서 미리 제외한다.
+      const info = await this.notionClient.getDatabaseSyncability(dbId);
+      if (!info.queryable) {
+        return { kind: "inaccessible" };
       }
-      let safeName: string;
-      if (dbTitle) {
-        safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
+      dbTitle = info.title;
+    } catch (error) {
+      // 삭제된 DB 도 404 → 접근 불가로 강등(재시도하지 않음). 그 외는 일시 오류로 본다.
+      if (isNotionObjectNotFound(error)) return { kind: "inaccessible" };
+      getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
+      return { kind: "error" };
+    }
+
+    const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
+    let parentFolder = "";
+    if (parentEntry?.obsidianPath) {
+      const obsPath = parentEntry.obsidianPath;
+      if (obsPath.endsWith(".md")) {
+        const parts = obsPath.split("/");
+        parts.pop();
+        parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
       } else {
-        const parentName = parentFolder.split("/").pop() || "";
-        safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+        parentFolder = obsPath;
       }
-      if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
-      if (!parentFolder) parentFolder = "databases";
-      return {
+    }
+    let safeName: string;
+    if (dbTitle) {
+      safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
+    } else {
+      const parentName = parentFolder.split("/").pop() || "";
+      safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+    }
+    if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+    if (!parentFolder) parentFolder = "databases";
+    return {
+      kind: "ok",
+      config: {
         databaseId: dbId,
         localFolder: `${parentFolder}/${safeName}`,
         titleProperty: "Name",
-      };
-    } catch (error) {
-      getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
-      return null;
+      },
+    };
+  }
+
+  /** 접근 불가 DB denylist 를 상태 메타에서 로드한다(하이픈 정규화). */
+  private loadInaccessibleDbIds(): Set<string> {
+    const raw = this.stateDb.getMeta(INACCESSIBLE_DBS_META_KEY);
+    if (!raw) return new Set();
+    try {
+      const arr = JSON.parse(raw) as string[];
+      return new Set(arr.map((id) => id.replace(/-/g, "")));
+    } catch {
+      return new Set();
     }
   }
 
@@ -779,18 +814,35 @@ export class SyncOrchestrator {
       ]);
       let changed = false;
 
+      // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
+      // 스택트레이스 노이즈를 차단한다. 발견 단계에서 걸러 빈 폴더/.base 오염도 막는다.
+      const inaccessibleIds = this.loadInaccessibleDbIds();
+      let inaccessibleChanged = false;
+      const degrade = (rawId: string): void => {
+        const nohyph = rawId.replace(/-/g, "");
+        if (!inaccessibleIds.has(nohyph)) {
+          inaccessibleIds.add(nohyph);
+          inaccessibleChanged = true;
+        }
+        getLogger().info(
+          `[Im-Nobsidian] DB ${rawId}: 접근 가능한 data source 없음(링크드/미공유/삭제 추정) — 동기화 대상에서 제외(제목은 부모 페이지에 보존)`,
+        );
+      };
+
       // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
       //     캐시가 비었을 때(최초 full pull)만 수행한다.
       if (dbConfigs.length === 0) {
         const discovered = await this.discoverChildDatabases();
         for (const { dbId, parentPageId } of discovered) {
           const nohyph = dbId.replace(/-/g, "");
-          if (knownIds.has(nohyph)) continue;
-          const cfg = await this.buildDiscoveredDbConfig(dbId, parentPageId);
-          if (cfg) {
-            dbConfigs.push(cfg);
-            knownIds.add(nohyph);
+          if (knownIds.has(nohyph) || inaccessibleIds.has(nohyph)) continue;
+          const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId);
+          knownIds.add(nohyph);
+          if (outcome.kind === "ok") {
+            dbConfigs.push(outcome.config);
             changed = true;
+          } else if (outcome.kind === "inaccessible") {
+            degrade(dbId);
           }
         }
       }
@@ -799,20 +851,23 @@ export class SyncOrchestrator {
       //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
       //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
       for (const [nohyph, parentPageId] of this._inlineDbRefs) {
-        if (knownIds.has(nohyph)) continue;
-        const cfg = await this.buildDiscoveredDbConfig(normalizeNotionId(nohyph), parentPageId);
-        if (cfg) {
-          dbConfigs.push(cfg);
-          knownIds.add(nohyph);
+        if (knownIds.has(nohyph) || inaccessibleIds.has(nohyph)) continue;
+        const dbId = normalizeNotionId(nohyph);
+        const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId);
+        knownIds.add(nohyph);
+        if (outcome.kind === "ok") {
+          dbConfigs.push(outcome.config);
           changed = true;
+        } else if (outcome.kind === "inaccessible") {
+          degrade(dbId);
         }
       }
 
-      if (changed && dbConfigs.length > 0) {
-        this.stateDb.setMeta("discovered_dbs", JSON.stringify(dbConfigs));
-      }
-
+      // 동기화 가능한 DB 만 처리하고, 캐시에 잔존하던 접근 불가 DB 는 건너뛴다.
+      // 처리에 성공/일시실패한 DB 만 stillSyncable 로 모아 캐시의 권위적 스냅샷으로 삼는다.
+      const stillSyncable: typeof dbConfigs = [];
       for (const dbConfig of dbConfigs) {
+        if (inaccessibleIds.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
         try {
           const dbResult = await this.databaseSyncer.pullDatabase(dbConfig);
           created += dbResult.created;
@@ -826,9 +881,25 @@ export class SyncOrchestrator {
               .map((r) => r.obsidianPath);
             writtenPaths.push(...dbPaths.slice(-dbResult.created - dbResult.updated));
           }
+          stillSyncable.push(dbConfig);
         } catch (error) {
-          getLogger().warn(`[Im-Nobsidian] DB ${dbConfig.databaseId} 동기화 실패:`, error);
+          if (isNotionObjectNotFound(error)) {
+            // 캐시에 있었지만 이제 행 조회가 404 — 링크드/미공유/삭제로 강등(스택트레이스 억제).
+            degrade(dbConfig.databaseId);
+          } else {
+            // 일시적/실제 오류 — 캐시에 유지해 다음 pull 에 재시도한다.
+            getLogger().warn(`[Im-Nobsidian] DB ${dbConfig.databaseId} 동기화 실패:`, error);
+            stillSyncable.push(dbConfig);
+          }
         }
+      }
+
+      // 발견·강등·정리 결과를 캐시에 1회 반영(접근 불가 DB 는 stillSyncable 에서 빠져 제거됨).
+      if (changed || inaccessibleChanged || stillSyncable.length !== dbConfigs.length) {
+        this.stateDb.setMeta("discovered_dbs", JSON.stringify(stillSyncable));
+      }
+      if (inaccessibleChanged) {
+        this.stateDb.setMeta(INACCESSIBLE_DBS_META_KEY, JSON.stringify([...inaccessibleIds]));
       }
     } catch (error) {
       getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
