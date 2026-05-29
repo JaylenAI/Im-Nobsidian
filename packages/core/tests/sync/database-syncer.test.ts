@@ -4,6 +4,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
+import { computeHash } from "../../src/utils/hash.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -234,7 +235,9 @@ describe("DatabaseSyncer", () => {
       expect(mdWriteCalls).toHaveLength(0);
     });
 
-    it("lastEdited가 다르면 업데이트", async () => {
+    it("lastEdited가 다르고 로컬 미수정이면 업데이트(덮어쓰기)", async () => {
+      // 로컬 파일이 마지막 동기화 이후 변경되지 않은 경우(해시 일치) → 안전하게 덮어쓰기
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
           id: "page-1",
@@ -250,16 +253,93 @@ describe("DatabaseSyncer", () => {
         obsidianPath: "databases/tasks/Updated Task.md",
         notionPageId: "page-1",
         notionLastEdited: "2026-05-16T00:00:00.000Z",
-        contentHash: "old-hash",
+        contentHash: computeHash("LOCAL UNCHANGED"),
       });
 
       const result = await syncer.pullAll();
 
       expect(result.updated).toBe(1);
+      expect(result.conflicts).toHaveLength(0);
       expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
         "databases/tasks/Updated Task.md",
         expect.any(String),
       );
+    });
+
+    it("로컬·리모트 동시 수정이면 충돌로 보존 (manual 전략, 데이터 손실 방지)", async () => {
+      // 로컬이 마지막 동기화 이후 수정됨(해시 불일치) + 리모트도 변경 → 충돌
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED — 사용자 변경분");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Updated Task" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "stored-hash-at-last-sync",
+        baseSnapshot: Buffer.from("BASE SNAPSHOT", "utf-8"),
+      });
+
+      const result = await syncer.pullAll();
+
+      // 업데이트 카운트 0, 충돌 1건, 로컬 .md 덮어쓰기 없음
+      expect(result.updated).toBe(0);
+      expect(result.conflicts).toHaveLength(1);
+      expect(result.conflicts[0]?.localContent).toBe("LOCALLY EDITED — 사용자 변경분");
+      expect(mockStateDb.updateStatus).toHaveBeenCalledWith("rec-1", "conflict");
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
+    });
+
+    it("local-first 전략이면 로컬 수정 시 리모트 변경 스킵", async () => {
+      const localFirstConfig = createConfig([createDbConfig()]);
+      (localFirstConfig.sync as any).conflictStrategy = "local-first";
+      const localSyncer = new DatabaseSyncer(
+        localFirstConfig,
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+        pipeline,
+        mockImageHandler as any,
+      );
+
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Updated Task" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "stored-hash-at-last-sync",
+      });
+
+      const result = await localSyncer.pullAll();
+
+      expect(result.updated).toBe(0);
+      expect(result.conflicts).toHaveLength(0);
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
     });
 
     it("속성을 프론트매터로 변환하여 포함", async () => {
