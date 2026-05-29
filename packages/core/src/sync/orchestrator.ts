@@ -53,6 +53,11 @@ export class SyncOrchestrator {
   // 블록 트리 재귀 없이 markdown 신호만으로 컬럼/synced_block 등 깊이 중첩된
   // child_database 까지 발견해 폴더+.base 동기화 대상으로 등록한다.
   private _inlineDbRefs = new Map<string, string>();
+  // pull 발견 단계에서 모든 페이지의 부모를 해소하며 채우는 "자식을 가진 페이지" 집합
+  // (정규화된 page id). 폴더노트/폴더 판정의 단일 신뢰 원천 — 얕은 블록 검사로 callout·
+  // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
+  // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
+  private _childParentIds = new Set<string>();
 
   constructor(
     private readonly config: Config,
@@ -1166,6 +1171,7 @@ export class SyncOrchestrator {
 
   private async detectRemoteChanges(): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
+    this._childParentIds.clear();
     const lastPull = this.stateDb.getMeta("last_pull_at");
     const syncedRecords = this.stateDb.getAll();
     const trackedPageIds = new Set(
@@ -1236,6 +1242,7 @@ export class SyncOrchestrator {
 
   private async detectRemoteChangesIncremental(since: string): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
+    this._childParentIds.clear();
     const recentPages = await this.notionClient.searchRecentPages(since);
 
     for (const page of recentPages) {
@@ -1244,6 +1251,7 @@ export class SyncOrchestrator {
         try {
           const fullPage = await this.notionClient.getPage(page.id);
           const parentId = await this.extractParentId(fullPage);
+          if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
           if (parentId && this.isTrackedParent(parentId)) {
             changes.push({
               pageId: page.id,
@@ -1320,6 +1328,9 @@ export class SyncOrchestrator {
           break;
         }
         const pid = normalizeNotionId(parentId);
+        // current(id) 는 pid 의 자식 → pid 는 "자식을 가진 페이지"(폴더). 발견 단계에서
+        // 전 페이지의 직속 부모를 해소하므로, 이 집합은 폴더 판정의 단일 신뢰 원천이 된다.
+        this._childParentIds.add(pid);
         if (pid === root) {
           result = true;
           break;
@@ -1364,10 +1375,7 @@ export class SyncOrchestrator {
 
     const parentPath = await this.resolveParentPath(page);
 
-    const firstChildren = await this.notionClient.listChildren(pageId, {
-      pageSize: this.config.advanced.pageSize,
-    });
-    const hasChildPages = firstChildren.results.some((b) => "type" in b && b.type === "child_page");
+    const hasChildPages = await this.pageHasChildContainers(pageId);
 
     const markdown = await this.fetchPageMarkdown(pageId);
     const hasContent = markdown.trim().length > 0;
@@ -1455,6 +1463,29 @@ export class SyncOrchestrator {
     });
 
     return filePath;
+  }
+
+  /**
+   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 신뢰성 있게 판정한다.
+   *
+   * 결함(폴더노트 본문분리)의 근본 원인은 얕은 판정이었다 — 최상위 블록 첫 페이지에서
+   * child_page 만 검사하면 callout·column·toggle 안에 중첩된 자식 페이지나 child_database 를
+   * 놓쳐 폴더노트가 file 로 오분류되고, 본문이 폴더 밖 최상위로 밀려 resolveUniqueFilePath
+   * 충돌(' (1).md')로 쪼개졌다.
+   *
+   * 1차: 발견 단계(filterPagesUnderRoot/증분)에서 전 페이지의 부모를 해소하며 만든
+   *      _childParentIds 집합으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
+   * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
+   *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
+   */
+  private async pageHasChildContainers(pageId: string): Promise<boolean> {
+    if (this._childParentIds.has(normalizeNotionId(pageId))) return true;
+    try {
+      const deep = await this.notionClient.fetchAllChildrenDeep(pageId);
+      return deep.some((b) => b.type === "child_page" || b.type === "child_database");
+    } catch {
+      return false;
+    }
   }
 
   private async pullUpdate(change: RemoteChange): Promise<{ path?: string; conflict?: Conflict }> {
