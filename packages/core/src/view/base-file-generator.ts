@@ -51,6 +51,8 @@ export class BaseFileGenerator {
     lines.push("filters:");
     lines.push("  and:");
     lines.push(`    - file.inFolder("${folderPath}")`);
+    // `.base` 파일 자신도 폴더에 있어 카드로 잡히므로(빈 카드) markdown 노트만 남긴다.
+    lines.push(`    - file.ext == "md"`);
     lines.push("");
   }
 
@@ -168,7 +170,11 @@ export class BaseFileGenerator {
         .filter((p) => p.visible !== false)
         .map((p) => {
           const name = p.propertyName ?? this.resolvePropertyName(p.propertyId, schema);
-          return name ? this.toNoteRef(name) : null;
+          if (!name) return null;
+          // title 타입 속성은 카드/표 제목(file.name)과 중복되고, 프론트매터엔
+          // title 키가 없어(본문 H1·파일명으로 보존) 빈 컬럼으로 표시되므로 제외한다.
+          if (schema[name]?.type === "title") return null;
+          return this.toNoteRef(name);
         })
         .filter((name): name is string => !!name);
 
@@ -245,10 +251,23 @@ export class BaseFileGenerator {
     propertyId: string,
     schema: Record<string, BasePropertySchema>,
   ): string | undefined {
+    // Notion `views.retrieve` 는 RAW 속성 id(예: `[jiM`)를 주지만
+    // `databases.retrieve` 스키마는 URL-인코딩된 id(예: `%5BjiM`)를 준다.
+    // 디코드 후 비교하지 않으면 "title" 외 모든 속성(cover/order/sort/groupBy)이
+    // 매칭에 실패해 갤러리 커버·표시 컬럼이 통째로 사라진다.
+    const target = this.decodeId(propertyId);
     for (const [name, prop] of Object.entries(schema)) {
-      if (prop.id === propertyId) return name;
+      if (this.decodeId(prop.id) === target) return name;
     }
     return undefined;
+  }
+
+  private decodeId(id: string): string {
+    try {
+      return decodeURIComponent(id);
+    } catch {
+      return id;
+    }
   }
 
   private yamlKey(key: string): string {

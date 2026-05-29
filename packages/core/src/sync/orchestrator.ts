@@ -48,6 +48,11 @@ export class SyncOrchestrator {
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
+  // pull 중 각 페이지 markdown(<database url=.../>)에서 추출한 인라인 DB 참조.
+  // key: 하이픈 제거 databaseId, value: 그 DB가 박힌 부모 페이지 id.
+  // 블록 트리 재귀 없이 markdown 신호만으로 컬럼/synced_block 등 깊이 중첩된
+  // child_database 까지 발견해 폴더+.base 동기화 대상으로 등록한다.
+  private _inlineDbRefs = new Map<string, string>();
 
   constructor(
     private readonly config: Config,
@@ -308,6 +313,7 @@ export class SyncOrchestrator {
     const counts = { created: 0, updated: 0, deleted: 0 };
     this._pullImageCount = 0;
     this._pullFileCount = 0;
+    this._inlineDbRefs.clear();
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
@@ -687,6 +693,51 @@ export class SyncOrchestrator {
     return allDbs;
   }
 
+  /**
+   * 자동 발견된 child_database 1개를 DatabaseSyncer 설정으로 변환한다.
+   * 블록 스캔/markdown 양쪽 발견 경로에서 공통으로 사용한다.
+   * - localFolder: 부모 페이지의 obsidianPath 기준으로 폴더를 잡아 원본 중첩 구조를 보존
+   *   (예: 부모 "AI Engineer (1).md" + DB "Minirecord Project" → "AI Engineer (1)/Minirecord-Project")
+   * - 제목 취득 실패 시 부모 폴더명 기반 안전 이름으로 폴백
+   */
+  private async buildDiscoveredDbConfig(
+    dbId: string,
+    parentPageId: string,
+  ): Promise<{ databaseId: string; localFolder: string; titleProperty: string } | null> {
+    try {
+      const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
+      const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
+      let parentFolder = "";
+      if (parentEntry?.obsidianPath) {
+        const obsPath = parentEntry.obsidianPath;
+        if (obsPath.endsWith(".md")) {
+          const parts = obsPath.split("/");
+          parts.pop();
+          parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
+        } else {
+          parentFolder = obsPath;
+        }
+      }
+      let safeName: string;
+      if (dbTitle) {
+        safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
+      } else {
+        const parentName = parentFolder.split("/").pop() || "";
+        safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+      }
+      if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
+      if (!parentFolder) parentFolder = "databases";
+      return {
+        databaseId: dbId,
+        localFolder: `${parentFolder}/${safeName}`,
+        titleProperty: "Name",
+      };
+    } catch (error) {
+      getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
+      return null;
+    }
+  }
+
   private async pullDiscoveredDatabases(
     writtenPaths: string[],
     failed: FailedOperation[],
@@ -709,47 +760,46 @@ export class SyncOrchestrator {
         }
       }
 
+      const configuredIds = new Set(
+        (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
+      );
+      const knownIds = new Set<string>([
+        ...configuredIds,
+        ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
+      ]);
+      let changed = false;
+
+      // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
+      //     캐시가 비었을 때(최초 full pull)만 수행한다.
       if (dbConfigs.length === 0) {
-        const discoveredDbs = await this.discoverChildDatabases();
-        const configuredIds = new Set(
-          (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
-        );
-        const newDbs = discoveredDbs.filter((db) => !configuredIds.has(db.dbId.replace(/-/g, "")));
-        for (const { dbId, parentPageId } of newDbs) {
-          try {
-            const dbTitle = await this.notionClient.getDatabaseTitle(dbId);
-            const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
-            let parentFolder = "";
-            if (parentEntry?.obsidianPath) {
-              const obsPath = parentEntry.obsidianPath;
-              if (obsPath.endsWith(".md")) {
-                const parts = obsPath.split("/");
-                parts.pop();
-                parentFolder = parts.length > 0 ? parts.join("/") : obsPath.replace(/\.md$/, "");
-              } else {
-                parentFolder = obsPath;
-              }
-            }
-            let safeName: string;
-            if (dbTitle) {
-              safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
-            } else {
-              const parentName = parentFolder.split("/").pop() || "";
-              safeName = parentName ? `${parentName}-DB` : `db-${dbId.slice(0, 8)}`;
-            }
-            if (!parentFolder) parentFolder = "databases";
-            dbConfigs.push({
-              databaseId: dbId,
-              localFolder: `${parentFolder}/${safeName}`,
-              titleProperty: "Name",
-            });
-          } catch (error) {
-            getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 동기화 실패:`, error);
+        const discovered = await this.discoverChildDatabases();
+        for (const { dbId, parentPageId } of discovered) {
+          const nohyph = dbId.replace(/-/g, "");
+          if (knownIds.has(nohyph)) continue;
+          const cfg = await this.buildDiscoveredDbConfig(dbId, parentPageId);
+          if (cfg) {
+            dbConfigs.push(cfg);
+            knownIds.add(nohyph);
+            changed = true;
           }
         }
-        if (dbConfigs.length > 0) {
-          this.stateDb.setMeta("discovered_dbs", JSON.stringify(dbConfigs));
+      }
+
+      // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
+      //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
+      //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
+      for (const [nohyph, parentPageId] of this._inlineDbRefs) {
+        if (knownIds.has(nohyph)) continue;
+        const cfg = await this.buildDiscoveredDbConfig(normalizeNotionId(nohyph), parentPageId);
+        if (cfg) {
+          dbConfigs.push(cfg);
+          knownIds.add(nohyph);
+          changed = true;
         }
+      }
+
+      if (changed && dbConfigs.length > 0) {
+        this.stateDb.setMeta("discovered_dbs", JSON.stringify(dbConfigs));
       }
 
       for (const dbConfig of dbConfigs) {
@@ -808,8 +858,10 @@ export class SyncOrchestrator {
         });
         content = resolved;
 
+        // Notion 내부 페이지 링크는 `/<id>?pvs=N` 또는 `/p/<id>?...`(신형) 형태로 온다.
+        // 선택적 `p/` 접두사와 임의 쿼리스트링(또는 쿼리 없음)을 모두 허용한다.
         const resolved2 = content.replace(
-          /\[([^\]]+)\]\(\/([a-f0-9]{32})\?pvs=\d+\)/g,
+          /\[([^\]]+)\]\(\/(?:p\/)?([a-f0-9]{32})(?:\?[^)]*)?\)/g,
           (_match, text: string, id: string) => {
             const title = idToTitle.get(id);
             if (title) {
@@ -1655,12 +1707,27 @@ export class SyncOrchestrator {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
+        this.collectInlineDbRefs(pageId, result.markdown);
         return this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown));
       } catch {
         // Markdown API 실패 시 blocks API fallback
       }
     }
     return this.blockConverter.notionBlocksToMarkdown(pageId);
+  }
+
+  // Markdown API는 인라인 데이터베이스를 다음처럼 렌더한다(컬럼/synced_block 내부 포함):
+  //   <database url="https://www.notion.so/<id-nohyph>" inline="true"
+  //             data-source-url="collection://<ds-id>">Title</database>
+  // url 안의 32자리 hex 가 databaseId 이므로, 별도 블록 트리 재귀 없이 이 태그만 파싱해
+  // 깊이 중첩된 child_database 까지 폴더+.base 동기화 대상으로 등록한다.
+  private collectInlineDbRefs(parentPageId: string, rawMarkdown: string): void {
+    const re = /<database\b[^>]*\burl="https:\/\/www\.notion\.so\/([a-f0-9]{32})"[^>]*>/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(rawMarkdown)) !== null) {
+      const dbId = m[1];
+      if (dbId) this._inlineDbRefs.set(dbId, parentPageId);
+    }
   }
 
   // pull 시 url 기반 page mention 은 `[[notion:<id>]]` 로 1차 변환된다(notionEnhancedToObsidian).

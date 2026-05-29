@@ -206,7 +206,18 @@ function preserveUnknownBlocks(content: string): string {
   result = result.replace(NOTION_UNKNOWN_URL_RE, (_match, url: string, attrs: string) => {
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? "bookmark";
-    return compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
+    const marker = compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
+    // URL 을 가진 임베드/북마크는 읽기뷰에서 보이지 않는 주석 마커만 남기면
+    // 사용자가 "왜 빈 줄이지?" 하고 혼란스럽다. 클릭 가능한 링크를 앞에 붙이되,
+    // round-trip 권위는 뒤따르는 마커(인코딩된 원본 URL)가 갖는다. 링크와 마커는
+    // 공백 없이 즉시 인접시켜, 역변환 시 한 쌍으로 같이 제거 → Notion drift 방지.
+    const label =
+      blockType === "embed"
+        ? "🔗 Embed"
+        : blockType === "bookmark"
+          ? "🔖 Bookmark"
+          : `🔗 ${blockType}`;
+    return `[${label}](${url})${marker}`;
   });
   return result;
 }
@@ -560,8 +571,11 @@ function restoreTabBlocks(content: string): string {
   });
 }
 
+// 앞에 즉시 인접(공백 없음)한 가시 링크 `[label](url)` 가 있으면 마커와 함께 소비한다.
+// 이는 forward 에서 URL 임베드/북마크를 "[🔗 Embed](url)%%...%%" 로 렌더한 쌍을 통째로
+// <unknown.../> 로 복원하기 위함이다. 공백 없는 인접만 매칭하므로 사용자 일반 링크는 영향 없음.
 const OBSIDIAN_UNKNOWN_RE = new RegExp(
-  `%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
+  `(?:\\[[^\\]]*\\]\\([^)]*\\))?%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
   "g",
 );
 

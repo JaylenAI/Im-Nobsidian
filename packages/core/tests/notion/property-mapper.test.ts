@@ -272,6 +272,57 @@ describe("PropertyMapper", () => {
       });
       expect(result.verified).toBe("verified");
     });
+
+    it("files: 단일 외부 파일 → 스칼라 URL 문자열 (Bases image 렌더용)", () => {
+      const result = mapper.fromNotionProperties({
+        이미지: {
+          type: "files",
+          files: [
+            { name: "thumb", type: "external", external: { url: "https://cdn.x.com/a.jpg" } },
+          ],
+        },
+      });
+      // 스칼라 문자열이어야 Obsidian Bases 카드 image: 가 렌더한다 ([{name,url}] 배열은 렌더 안됨)
+      expect(result.이미지).toBe("https://cdn.x.com/a.jpg");
+    });
+
+    it("files: 복수 파일 → URL 문자열 배열", () => {
+      const result = mapper.fromNotionProperties({
+        docs: {
+          type: "files",
+          files: [
+            { name: "a", type: "external", external: { url: "https://x.com/a.pdf" } },
+            { name: "b", type: "file", file: { url: "https://s3.x.com/b.pdf" } },
+          ],
+        },
+      });
+      expect(result.docs).toEqual(["https://x.com/a.pdf", "https://s3.x.com/b.pdf"]);
+    });
+
+    it("files: 빈 목록 → 빈 배열", () => {
+      const result = mapper.fromNotionProperties({ docs: { type: "files", files: [] } });
+      expect(result.docs).toEqual([]);
+    });
+
+    it("files: fromNotion 스칼라 URL → toNotion 라운드트립(external)", () => {
+      mapper.loadSchema({ 이미지: { id: "x", type: "files" } });
+      const fm = mapper.fromNotionProperties({
+        이미지: {
+          type: "files",
+          files: [{ name: "t", type: "external", external: { url: "https://cdn.x.com/a.jpg" } }],
+        },
+      });
+      const back = mapper.toNotionProperties({ 이미지: fm.이미지 }, "T");
+      expect(back.이미지).toEqual({
+        files: [
+          {
+            type: "external",
+            name: "https://cdn.x.com/a.jpg",
+            external: { url: "https://cdn.x.com/a.jpg" },
+          },
+        ],
+      });
+    });
   });
 
   describe("toNotionProperties — 입력 검증/하드닝 (Phase 2b)", () => {
