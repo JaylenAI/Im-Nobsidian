@@ -1,4 +1,10 @@
-import { MARKER_BRAND_RE, compactMarker, TOGGLE_START, TOGGLE_END } from "../constants/markers.js";
+import {
+  MARKER_BRAND_RE,
+  compactMarker,
+  TOGGLE_START,
+  TOGGLE_END,
+  WIKILINK_PROTOCOL,
+} from "../constants/markers.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_CALLOUT_TAG_RE = /<callout[^>]*>\n?([\s\S]*?)<\/callout>/g;
@@ -40,9 +46,17 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
+  result = unescapeWikilinkBrackets(result);
   result = ensureCalloutContinuity(result);
 
   return result;
+}
+
+// Notion markdown API 는 평문 위키링크 `[[..]]` 를 `\[\[..\]\]` 로 escape 저장한다.
+// (resolved 위키링크는 mention 이 되어 이 경로를 타지 않고, unresolved 만 평문으로 보존됨)
+// pull 시 escape 를 해제해 Obsidian 위키링크 기능과 push↔pull 수렴을 보장한다.
+function unescapeWikilinkBrackets(content: string): string {
+  return content.replace(/\\\[\\\[([\s\S]*?)\\\]\\\]/g, "[[$1]]");
 }
 
 export function obsidianToNotionEnhanced(obsidian: string): string {
@@ -55,8 +69,46 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreUnknownBlocks(result);
   result = restoreColorSpans(result);
   result = restoreUnderlineSpans(result);
+  result = convertMentionPageIdToUrl(result);
+  result = restoreWikilinkPreserveLinks(result);
 
   return result;
+}
+
+// ─── Push 방향: 위키링크 → Notion markdown API 호환 표현 ───
+//
+// 배경: Notion 공식 markdown API(`pages.create({markdown})`, `updateMarkdown`)는
+//   - `<mention-page id="X">label</mention-page>` 를 **통째로 삭제**한다(레이블까지 소실).
+//   - `<mention-page url="https://www.notion.so/<id>"/>` 만 진짜 page mention 으로 인식한다.
+//   - 커스텀 스킴 링크(`[label](im-nobsidian://wikilink/..)`)는 링크를 버리고 텍스트만 남긴다.
+//   - 평문 `[[target]]` 는 텍스트로 escape 보존되어 round-trip 시 정확히 복원된다.
+// 따라서 파이프라인(WikilinkResolver)이 만든 표현을 위 규칙에 맞게 한 번 더 변환한다.
+
+const MENTION_PAGE_ID_RE = /<mention-page id="([^"]+)">[\s\S]*?<\/mention-page>/g;
+const WIKILINK_PRESERVE_LINK_RE = new RegExp(
+  `\\[([^\\]]+)\\]\\(${WIKILINK_PROTOCOL}([^)]+)\\)`,
+  "g",
+);
+
+// resolved 위키링크: id 기반 mention → Notion 이 수용하는 url 기반 mention 으로 변환
+function convertMentionPageIdToUrl(content: string): string {
+  return content.replace(MENTION_PAGE_ID_RE, (_match, id: string) => {
+    const nohyph = id.replace(/-/g, "");
+    return `<mention-page url="https://www.notion.so/${nohyph}"/>`;
+  });
+}
+
+// unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
+function restoreWikilinkPreserveLinks(content: string): string {
+  return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
+    let target = enc;
+    try {
+      target = decodeURIComponent(enc);
+    } catch {
+      // 잘못 인코딩된 경우 원문 유지
+    }
+    return target === label ? `[[${target}]]` : `[[${target}|${label}]]`;
+  });
 }
 
 function normalizeCodeBlockToggles(content: string): string {

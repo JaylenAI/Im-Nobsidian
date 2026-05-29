@@ -1655,12 +1655,25 @@ export class SyncOrchestrator {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
-        return notionEnhancedToObsidian(result.markdown);
+        return this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown));
       } catch {
         // Markdown API 실패 시 blocks API fallback
       }
     }
     return this.blockConverter.notionBlocksToMarkdown(pageId);
+  }
+
+  // pull 시 url 기반 page mention 은 `[[notion:<id>]]` 로 1차 변환된다(notionEnhancedToObsidian).
+  // 이를 state DB 역조회로 원래 `[[제목]]` 위키링크로 복원해 push↔pull 라운드트립을 수렴시킨다.
+  // 볼트 밖/미추적 페이지면 `[[notion:<id>]]` 를 그대로 두어 정보 손실을 막는다.
+  private resolveNotionIdWikilinks(markdown: string): string {
+    return markdown.replace(/\[\[notion:([a-f0-9]{32})\]\]/g, (match, id: string) => {
+      const record = this.stateDb.getByNotionId(normalizeNotionId(id));
+      if (!record?.obsidianPath) return match;
+      const base = record.obsidianPath.split("/").pop() ?? record.obsidianPath;
+      const title = base.replace(/\.md$/, "");
+      return `[[${title}]]`;
+    });
   }
 
   private async extractParentId(page: PageObjectResponse): Promise<string | null> {
