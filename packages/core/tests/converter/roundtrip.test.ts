@@ -13,7 +13,12 @@ import { MentionToWikilink } from "../../src/converter/post-processors/mention-t
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import { CalloutRestorer } from "../../src/converter/post-processors/callout-restorer.js";
 import { PropertiesTableRestorer } from "../../src/converter/post-processors/properties-table-restorer.js";
+import { roundtrip } from "./roundtrip-fidelity.js";
 import type { ConversionContext } from "../../src/types/convert.js";
+
+// I1·I3 라운드트립 충실도의 SSOT 증명은 roundtrip-fidelity.test.ts 가 전체 픽스처에 대해
+// deep-equal(frontmatter 의미 + body delta=0)로 수행한다. 이 파일의 .toContain 검사는
+// push 변환의 Notion 측 마커 표현 등 "방향별 단위 검증"이며 충실도 증명이 아니다.
 
 const FIXTURES_DIR = join(import.meta.dirname, "../fixtures/obsidian");
 
@@ -28,14 +33,6 @@ const pullContext: ConversionContext = {
   path: "markdown-api",
   filePath: "test.md",
 };
-
-function normalize(md: string): string {
-  return md
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
-}
 
 describe("Roundtrip 테스트", () => {
   let pipeline: ConversionPipeline;
@@ -414,24 +411,14 @@ describe("Roundtrip 테스트", () => {
     expect(pushResult.properties).toEqual({ title: "Nested Structure", status: "review" });
   });
 
-  it("완전 순환 Push→Pull 동일성: simple-note.md", async () => {
+  it("완전 순환 Push→Pull 동일성: simple-note.md (deep-equal delta=0)", async () => {
+    // 단편 포함(.toContain)이 아니라 전체 의미 동일성으로 증명한다.
+    // 프로덕션 파이프라인(createDefaultPipeline) 기반 — 전체 코퍼스 증명은 roundtrip-fidelity.test.ts.
     const input = await readFile(join(FIXTURES_DIR, "simple-note.md"), "utf-8");
-    const pushResult = pipeline.convertToNotion(input, pushContext);
+    const r = roundtrip(input);
 
-    const pullResult = pipeline.convertToMarkdown(pushResult.content, pullContext, {
-      properties: pushResult.properties,
-    });
-
-    const normalizedOutput = normalize(pullResult);
-
-    expect(normalizedOutput).toContain("title: Simple Note");
-    expect(normalizedOutput).toContain("status: active");
-    expect(normalizedOutput).toContain("# Simple Note");
-    expect(normalizedOutput).toContain("- Bullet point 1");
-    expect(normalizedOutput).toContain("- [x] Completed task");
-    expect(normalizedOutput).toContain("```typescript");
-    expect(normalizedOutput).toContain("> This is a blockquote");
-    expect(normalizedOutput).toContain("[External Link](https://github.com)");
+    expect(r.outputData).toEqual(r.inputData);
+    expect(r.outputBody).toBe(r.inputBody);
   });
 
   it("media-embed-note.md 미디어 임베드 보존", async () => {

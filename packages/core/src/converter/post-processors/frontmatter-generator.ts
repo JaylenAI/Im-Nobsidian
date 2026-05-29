@@ -1,5 +1,6 @@
 import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { restoreLinkMarkersInValue } from "../link-restore.js";
 
 export class FrontmatterGenerator implements Processor {
   readonly name = "FrontmatterGenerator";
@@ -12,7 +13,9 @@ export class FrontmatterGenerator implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const normalized = normalizeProperties(properties);
+    // Pull 시 속성 값에 박힌 위키링크/임베드 보존 마커를 [[...]] 로 복원한다.
+    const restoreMarkers = input.context.direction === "pull";
+    const normalized = normalizeProperties(properties, restoreMarkers);
     const content = matter.stringify(input.content, normalized);
 
     return {
@@ -22,11 +25,15 @@ export class FrontmatterGenerator implements Processor {
   }
 }
 
-function normalizeProperties(props: Record<string, unknown>): Record<string, unknown> {
+function normalizeProperties(
+  props: Record<string, unknown>,
+  restoreMarkers: boolean,
+): Record<string, unknown> {
   const result: Record<string, unknown> = {};
 
   for (const [key, value] of Object.entries(props)) {
-    const normalized = normalizeValue(value);
+    const restored = restoreMarkers ? restoreLinkMarkersInValue(value) : value;
+    const normalized = normalizeValue(restored);
     if (normalized !== undefined) {
       result[key] = normalized;
     }
