@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BlockConverter } from "../../src/converter/block-converter.js";
+import { TOC_MARKER, BREADCRUMB_MARKER } from "../../src/constants/markers.js";
 
 describe("BlockConverter", () => {
   describe("markdownToNotionBlocks", () => {
@@ -62,6 +63,38 @@ describe("BlockConverter", () => {
 
       const dividers = blocks.filter((b) => b.type === "divider");
       expect(dividers.length).toBe(2);
+    });
+  });
+
+  describe("postProcessBlocks — 단일라인 마커(toc/breadcrumb) 복원", () => {
+    it("TOC 마커 문단을 table_of_contents 블록으로 복원", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks(`# Title\n\n${TOC_MARKER}\n\nBody`) as Array<
+        Record<string, unknown>
+      >;
+
+      const toc = blocks.find((b) => b.type === "table_of_contents");
+      expect(toc).toBeDefined();
+      // 마커 텍스트가 일반 문단으로 새어나가지 않아야 한다.
+      const leaked = blocks.some(
+        (b) => b.type === "paragraph" && JSON.stringify(b.paragraph).includes("im-nobsidian:toc"),
+      );
+      expect(leaked).toBe(false);
+    });
+
+    it("breadcrumb 마커 문단을 breadcrumb 블록으로 복원", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks(`${BREADCRUMB_MARKER}\n\n# Title`) as Array<
+        Record<string, unknown>
+      >;
+
+      const crumb = blocks.find((b) => b.type === "breadcrumb");
+      expect(crumb).toBeDefined();
+      const leaked = blocks.some(
+        (b) =>
+          b.type === "paragraph" && JSON.stringify(b.paragraph).includes("im-nobsidian:breadcrumb"),
+      );
+      expect(leaked).toBe(false);
     });
   });
 

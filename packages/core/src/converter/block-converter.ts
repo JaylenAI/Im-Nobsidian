@@ -15,6 +15,7 @@ import {
   COLUMN_SEP,
   COLUMN_LIST_END,
   TOC_MARKER,
+  BREADCRUMB_MARKER,
 } from "../constants/markers.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
@@ -369,7 +370,9 @@ export class BlockConverter {
 
   private registerBreadcrumbTransformer(): void {
     if (!this.n2m) return;
-    this.n2m.setCustomTransformer("breadcrumb", async () => "");
+    // breadcrumb 은 마크다운 표현이 없다. 빈 문자열로 버리면 라운드트립에서 소실되므로
+    // 보존 마커를 남겨 push 시 breadcrumb 블록으로 복원한다(convertSingleLineMarker).
+    this.n2m.setCustomTransformer("breadcrumb", async () => BREADCRUMB_MARKER);
   }
 
   private registerLinkPreviewTransformer(): void {
@@ -577,6 +580,12 @@ export class BlockConverter {
         continue;
       }
 
+      const markerConverted = this.convertSingleLineMarker(block);
+      if (markerConverted) {
+        result.push(markerConverted);
+        continue;
+      }
+
       const videoConverted = this.convertImageToVideoOrEmbed(block);
       if (videoConverted) {
         result.push(videoConverted);
@@ -655,6 +664,32 @@ export class BlockConverter {
 
     if (text.includes("%%IM-NOBSIDIAN_DIVIDER%%")) {
       return NotionBlockBuilder.divider();
+    }
+    return null;
+  }
+
+  /**
+   * 단일 라인 보존 마커(목차·breadcrumb)를 원래 블록으로 복원한다.
+   * pull 시 마크다운 표현이 없는 블록을 `%%im-nobsidian:toc%%` /
+   * `%%im-nobsidian:breadcrumb%%` 마커 문단으로 남겨두므로, push 시 이 문단을
+   * 감지해 table_of_contents / breadcrumb 블록으로 되돌린다. 그러지 않으면
+   * 마커 텍스트가 일반 문단으로 Notion 에 기록되는 잠재 손실이 된다.
+   */
+  private convertSingleLineMarker(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const texts = para?.rich_text ?? [];
+    if (texts.length !== 1) return null;
+
+    const text = (texts[0]?.text?.content ?? "").trim();
+    if (text === TOC_MARKER) {
+      return NotionBlockBuilder.tableOfContents();
+    }
+    if (text === BREADCRUMB_MARKER) {
+      return NotionBlockBuilder.breadcrumb();
     }
     return null;
   }

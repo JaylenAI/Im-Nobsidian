@@ -50,6 +50,12 @@ export const COLUMN_SEP = compactMarker("column");
 /** 목차(table of contents) 블록 보존 마커. */
 export const TOC_MARKER = compactMarker("toc");
 
+/**
+ * breadcrumb 블록 보존 마커. Notion breadcrumb 은 마크다운 표현이 없어 pull 시
+ * 빈 문자열로 소실됐다 — 이 마커로 자리를 남겨 push 시 breadcrumb 블록으로 복원한다.
+ */
+export const BREADCRUMB_MARKER = compactMarker("breadcrumb");
+
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 
