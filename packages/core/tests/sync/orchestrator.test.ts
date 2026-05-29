@@ -260,6 +260,58 @@ describe("SyncOrchestrator", () => {
       expect(result.failed).toHaveLength(1);
       expect(result.failed[0]!.error).toBe("API limit");
     });
+
+    it("페이지 생성 직후 pending 상태로 매핑을 먼저 기록(원자성)", async () => {
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "atomic.md", mtime: now, size: 60 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Atomic\n\nbody");
+
+      await orchestrator.push();
+
+      // 페이지 생성 직후·이미지 업로드/최종 동기화 이전에 notionPageId+pending 으로 선기록해야
+      // 한다. 이래야 이후 단계가 실패/크래시해도 다음 시도가 중복 생성이 아닌 업데이트로 이어진다.
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "atomic.md",
+          notionPageId: "page-id-123",
+          contentHash: "",
+          status: "pending",
+        }),
+      );
+    });
+
+    it("이미 notionPageId 가 매핑된 created 변경은 중복 생성 없이 업데이트로 위임(멱등)", async () => {
+      const now = new Date().toISOString();
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "idempotent.md", mtime: now, size: 80 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Idem\n\nbody");
+
+      // 감지 시점엔 레코드가 없어 "created" 로 분류되지만, pushCreate 진입 시점엔
+      // 이전 시도가 페이지 생성까지 성공해 notionPageId 가 이미 매핑돼 있다고 가정한다.
+      let calls = 0;
+      mockStateDb.getByPath.mockImplementation((p: string) => {
+        if (p !== "idempotent.md") return null;
+        calls++;
+        return calls === 1
+          ? null
+          : {
+              id: 1,
+              obsidianPath: "idempotent.md",
+              notionPageId: "page-id-123",
+              contentHash: "",
+            };
+      });
+
+      const result = await orchestrator.push();
+
+      // 분류상 created 카운트는 유지되지만 새 페이지는 만들지 않고 업데이트 경로로 위임한다.
+      expect(result.created).toBe(1);
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalled();
+    });
   });
 
   describe("pull", () => {
