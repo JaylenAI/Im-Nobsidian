@@ -43,7 +43,8 @@ export class BaseFileGenerator {
     this.writePropertyDisplayNames(lines, options.schema);
     this.writeViews(lines, options.viewsConfig.views, options.schema);
 
-    return lines.join("\n");
+    // YAML 파일은 말미 개행으로 끝낸다(POSIX 텍스트 관례·diff 안정성).
+    return lines.join("\n") + "\n";
   }
 
   private writeFilters(lines: string[], folderPath: string): void {
@@ -109,28 +110,29 @@ export class BaseFileGenerator {
       if (view.order && view.order.length > 0) {
         lines.push("    order:");
         for (const col of view.order) {
-          lines.push(`      - ${col}`);
+          lines.push(`      - ${this.propRef(col)}`);
         }
       }
 
       if (view.sort && view.sort.length > 0) {
         lines.push("    sort:");
         for (const s of view.sort) {
-          lines.push(`      - column: ${s.column}`);
+          // Bases 정렬 항목의 키는 `property`다(`column` 아님 — Obsidian이 무시함).
+          lines.push(`      - property: ${this.propRef(s.property)}`);
           lines.push(`        direction: ${s.direction}`);
         }
       }
 
       if (view.groupBy) {
         lines.push("    groupBy:");
-        lines.push(`      property: ${view.groupBy.property}`);
+        lines.push(`      property: ${this.propRef(view.groupBy.property)}`);
         if (view.groupBy.direction) {
           lines.push(`      direction: ${view.groupBy.direction}`);
         }
       }
 
       if (view.image) {
-        lines.push(`    image: ${view.image}`);
+        lines.push(`    image: ${this.propRef(view.image)}`);
       }
     }
   }
@@ -142,7 +144,7 @@ export class BaseFileGenerator {
     type: BasesViewType;
     name: string;
     order?: string[];
-    sort?: Array<{ column: string; direction: string }>;
+    sort?: Array<{ property: string; direction: string }>;
     groupBy?: { property: string; direction?: string };
     image?: string;
   } | null {
@@ -153,7 +155,7 @@ export class BaseFileGenerator {
       type: BasesViewType;
       name: string;
       order?: string[];
-      sort?: Array<{ column: string; direction: string }>;
+      sort?: Array<{ property: string; direction: string }>;
       groupBy?: { property: string; direction?: string };
       image?: string;
     } = {
@@ -178,17 +180,17 @@ export class BaseFileGenerator {
     if (view.sorts && view.sorts.length > 0) {
       result.sort = view.sorts
         .map((s) => {
-          let column: string;
+          let property: string;
           if (s.property) {
             const propName = this.resolvePropertyName(s.property, schema) ?? s.property;
-            column = this.toNoteRef(propName);
+            property = this.toNoteRef(propName);
           } else if (s.timestamp) {
-            column = s.timestamp === "created_time" ? "file.ctime" : "file.mtime";
+            property = s.timestamp === "created_time" ? "file.ctime" : "file.mtime";
           } else {
             return null;
           }
           return {
-            column,
+            property,
             direction: s.direction === "ascending" ? "ASC" : "DESC",
           };
         })
@@ -227,6 +229,16 @@ export class BaseFileGenerator {
 
   private toNoteRef(propertyName: string): string {
     return propertyName;
+  }
+
+  /**
+   * 속성 참조(order/sort/groupBy/image)를 YAML로 안전하게 출력한다.
+   * `file.name`·`formula.coverImage`·`note.cover` 같은 접두사 식별자와 공백 포함 일반 속성명은
+   * 평문 스칼라로 안전하므로 그대로 두고, 콜론·해시·따옴표 등 YAML 메타문자가 있을 때만 인용한다.
+   */
+  private propRef(ref: string): string {
+    if (/^[A-Za-z0-9_][A-Za-z0-9_. ]*$/.test(ref) && !ref.endsWith(" ")) return ref;
+    return `"${ref.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   }
 
   private resolvePropertyName(
