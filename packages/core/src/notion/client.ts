@@ -13,6 +13,7 @@ import type {
 import { PropertyMapper } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 import type { Config } from "../types/config.js";
+import { getLogger } from "../utils/logger.js";
 
 export interface NotionClientOptions {
   readonly token: string;
@@ -573,7 +574,17 @@ export class NotionClient {
     if (childPageBlocks.length === 0) return [];
 
     const pages = await Promise.all(childPageBlocks.map((b) => this.getPage(b.id)));
-    return pages;
+    // 휴지통/아카이브된 페이지 제외: 부모 블록에는 child_page 참조가 남아 있어도
+    // 대상 페이지가 삭제(in_trash)·보관(archived)된 경우 블록 조회 시 object_not_found가
+    // 발생하므로 동기화 대상에서 사전 제거한다. (재귀 스캔의 무한·실패 전파 차단)
+    return pages.filter((p) => !NotionClient.isTrashedOrArchived(p));
+  }
+
+  /** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
+  private static isTrashedOrArchived(page: PageObjectResponse): boolean {
+    // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
+    const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+    return inTrash || page.archived === true;
   }
 
   async getChildDatabaseIds(parentId: string): Promise<string[]> {
@@ -589,7 +600,19 @@ export class NotionClient {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
-        const children = await this.getChildPages(id);
+        let children: PageObjectResponse[];
+        try {
+          children = await this.getChildPages(id);
+        } catch (error) {
+          // 한 서브트리가 접근 불가(공유 해제·삭제 등)여도 전체 스캔이 중단되지 않도록
+          // 해당 노드만 건너뛴다. 형제·다른 가지의 페이지 손실을 방지한다.
+          getLogger().warn(
+            `[Im-Nobsidian] 하위 페이지 스캔 건너뜀 (${id}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          continue;
+        }
         for (const child of children) {
           all.push(child);
           nextLevel.push(child.id);
