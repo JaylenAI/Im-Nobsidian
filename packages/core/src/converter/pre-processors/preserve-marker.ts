@@ -1,7 +1,8 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import type { PreserveMarker } from "../../types/convert.js";
+import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
-const MARKER_REGEX = /%% im-nobsidian:(\w[\w-]*):([^\s]+?) %%/g;
+const MARKER_REGEX = new RegExp(`%% ${MARKER_BRAND_RE}:(\\w[\\w-]*):([^\\s]+?) %%`, "g");
 
 export class PreserveMarkerCollector implements Processor {
   readonly name = "PreserveMarkerCollector";

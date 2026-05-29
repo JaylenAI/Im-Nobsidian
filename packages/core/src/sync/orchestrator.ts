@@ -64,8 +64,19 @@ export class SyncOrchestrator {
       config.paths.attachments,
       notionClient,
       customFetch,
+      {
+        concurrency: config.advanced.mediaConcurrency,
+        maxRetries: config.advanced.mediaMaxRetries,
+        retryBaseMs: config.advanced.mediaRetryBaseMs,
+        maxFileSizeBytes: config.advanced.maxFileSizeBytes,
+      },
     );
-    this.fileHandler = new FileHandler(vaultFs, notionClient, stateDb);
+    this.fileHandler = new FileHandler(
+      vaultFs,
+      notionClient,
+      stateDb,
+      config.advanced.fileConcurrency,
+    );
     this.propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(
       config,
@@ -215,8 +226,11 @@ export class SyncOrchestrator {
 
     if (failed.length > 0) {
       const retryTargets = failed.splice(0, failed.length);
-      getLogger().info(`[Im-Nobsidian] Push ${retryTargets.length}건 재시도 (2초 후)`);
-      await new Promise((r) => setTimeout(r, 2000));
+      const retryWaitMs = this.config.advanced.retryWaitMs;
+      getLogger().info(
+        `[Im-Nobsidian] Push ${retryTargets.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+      );
+      await new Promise((r) => setTimeout(r, retryWaitMs));
 
       for (const target of retryTargets) {
         const change = filtered.find((c) => c.path === target.path);
@@ -455,8 +469,11 @@ export class SyncOrchestrator {
 
     if (failed.length > 0) {
       const retryTargets = failed.splice(0, failed.length);
-      getLogger().info(`[Im-Nobsidian] Pull ${retryTargets.length}건 재시도 (2초 후)`);
-      await new Promise((r) => setTimeout(r, 2000));
+      const retryWaitMs = this.config.advanced.retryWaitMs;
+      getLogger().info(
+        `[Im-Nobsidian] Pull ${retryTargets.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+      );
+      await new Promise((r) => setTimeout(r, retryWaitMs));
 
       for (const target of retryTargets) {
         const change = filtered.find((c) => {
@@ -1150,7 +1167,9 @@ export class SyncOrchestrator {
 
     const parentPath = await this.resolveParentPath(page);
 
-    const firstChildren = await this.notionClient.listChildren(pageId, { pageSize: 100 });
+    const firstChildren = await this.notionClient.listChildren(pageId, {
+      pageSize: this.config.advanced.pageSize,
+    });
     const hasChildPages = firstChildren.results.some((b) => "type" in b && b.type === "child_page");
 
     const markdown = await this.fetchPageMarkdown(pageId);

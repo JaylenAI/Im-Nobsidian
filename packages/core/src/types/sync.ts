@@ -55,30 +55,22 @@ export interface ProgressItem {
 
 export type ProgressCallback = (current: number, total: number, item: ProgressItem) => void;
 
-export interface PushOptions {
+/** push/pull/sync 가 공통으로 받는 동기화 옵션. */
+export interface BaseSyncOptions {
   readonly paths?: string[];
+  readonly force?: boolean;
+  readonly dryRun?: boolean;
+  readonly onProgress?: ProgressCallback;
+  readonly signal?: AbortSignal;
+}
+
+export interface PushOptions extends BaseSyncOptions {
   readonly excludePaths?: string[];
-  readonly force?: boolean;
-  readonly dryRun?: boolean;
-  readonly onProgress?: ProgressCallback;
-  readonly signal?: AbortSignal;
 }
 
-export interface PullOptions {
-  readonly paths?: string[];
-  readonly force?: boolean;
-  readonly dryRun?: boolean;
-  readonly onProgress?: ProgressCallback;
-  readonly signal?: AbortSignal;
-}
+export type PullOptions = BaseSyncOptions;
 
-export interface SyncOptions {
-  readonly paths?: string[];
-  readonly force?: boolean;
-  readonly dryRun?: boolean;
-  readonly onProgress?: ProgressCallback;
-  readonly signal?: AbortSignal;
-}
+export type SyncOptions = BaseSyncOptions;
 
 export interface PushResult {
   readonly created: number;

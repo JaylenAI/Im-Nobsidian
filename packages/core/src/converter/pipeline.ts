@@ -7,6 +7,10 @@ import type {
   ProcessorMetadata,
 } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
+import { MARKER_BRAND_RE } from "../constants/markers.js";
+
+const INLINE_DB_PROBE = new RegExp(`%% ${MARKER_BRAND_RE}:inline-db`);
+const TOGGLE_HEADING_PROBE = new RegExp(`%% ${MARKER_BRAND_RE}:toggle-heading`);
 
 export class ConversionPipeline {
   private readonly preProcessors: Processor[] = [];
@@ -23,9 +27,9 @@ export class ConversionPipeline {
   }
 
   selectPath(content: string): ConversionPath {
-    const hasInlineDb = /%% im-nobsidian:inline-db/.test(content);
+    const hasInlineDb = INLINE_DB_PROBE.test(content);
     const hasColumnLayout = />\s*\[!col\]/.test(content);
-    const hasToggleHeading = /%% im-nobsidian:toggle-heading/.test(content);
+    const hasToggleHeading = TOGGLE_HEADING_PROBE.test(content);
 
     if (hasInlineDb || hasColumnLayout || hasToggleHeading) {
       return "block-api";

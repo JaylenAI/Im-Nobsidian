@@ -5,6 +5,7 @@ import type {
   WikilinkEntry,
   PreserveMarker,
 } from "../../types/convert.js";
+import { WIKILINK_PROTOCOL } from "../../constants/markers.js";
 
 const WIKILINK_REGEX = /(?<!!)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 
@@ -44,7 +45,7 @@ export class WikilinkResolver implements Processor {
         });
 
         const encodedTarget = encodeURIComponent(target);
-        return `[${label}](im-nobsidian://wikilink/${encodedTarget})`;
+        return `[${label}](${WIKILINK_PROTOCOL}${encodedTarget})`;
       },
     );
 

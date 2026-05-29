@@ -1,7 +1,8 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
-const INLINE_DB_START = /%% im-nobsidian:inline-db:([^\s]+) %%/g;
-const INLINE_DB_END = /%% im-nobsidian:end %%/g;
+const INLINE_DB_START = new RegExp(`%% ${MARKER_BRAND_RE}:inline-db:([^\\s]+) %%`, "g");
+const INLINE_DB_END = new RegExp(`%% ${MARKER_BRAND_RE}:end %%`, "g");
 
 export class InlineDBParser implements Processor {
   readonly name = "InlineDBParser";

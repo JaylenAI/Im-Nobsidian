@@ -12,6 +12,7 @@ import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
+import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -148,7 +149,7 @@ export class DatabaseSyncer {
     force = false,
   ): Promise<DatabaseViewsConfig | null> {
     try {
-      const configPath = ".im-nobsidian/db-views.json";
+      const configPath = DB_VIEWS_PATH;
 
       if (!force) {
         try {
@@ -161,7 +162,7 @@ export class DatabaseSyncer {
       }
 
       const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
-      await this.vaultFs.ensureFolder(".im-nobsidian");
+      await this.vaultFs.ensureFolder(INTERNAL_DIR);
 
       let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
       try {

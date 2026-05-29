@@ -1,11 +1,12 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { WIKILINK_PROTOCOL, EMBED_PROTOCOL } from "../../constants/markers.js";
 
 const NOTION_LINK_REGEX =
   /\[([^\]]+)\]\((?:https:\/\/(?:www\.)?notion\.so\/|notion:\/\/)([a-f0-9-]+)\)/g;
 
-const WIKILINK_PRESERVE_REGEX = /\[([^\]]+)\]\(im-nobsidian:\/\/wikilink\/([^)]+)\)/g;
+const WIKILINK_PRESERVE_REGEX = new RegExp(`\\[([^\\]]+)\\]\\(${WIKILINK_PROTOCOL}([^)]+)\\)`, "g");
 
-const EMBED_PRESERVE_REGEX = /\[([^\]]+)\]\(im-nobsidian:\/\/embed\/([^)]+)\)/g;
+const EMBED_PRESERVE_REGEX = new RegExp(`\\[([^\\]]+)\\]\\(${EMBED_PROTOCOL}([^)]+)\\)`, "g");
 
 export class MentionToWikilink implements Processor {
   readonly name = "MentionToWikilink";

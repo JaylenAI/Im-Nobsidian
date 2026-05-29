@@ -2,9 +2,7 @@ import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { ConfigSchema, DEFAULT_CONFIG } from "../types/config.js";
 import type { Config } from "../types/config.js";
-
-const CONFIG_FILE = "config.json";
-const IM_NOBSIDIAN_DIR = ".im-nobsidian";
+import { INTERNAL_DIR, CONFIG_FILE, STATE_DB_FILE, GITIGNORE_ENTRY } from "../constants/paths.js";
 
 export class ConfigManager {
   private config: Config | null = null;
@@ -12,7 +10,7 @@ export class ConfigManager {
   constructor(private readonly vaultRoot: string) {}
 
   get configDir(): string {
-    return join(this.vaultRoot, IM_NOBSIDIAN_DIR);
+    return join(this.vaultRoot, INTERNAL_DIR);
   }
 
   get configPath(): string {
@@ -20,7 +18,7 @@ export class ConfigManager {
   }
 
   get dbPath(): string {
-    return join(this.configDir, "sync.db");
+    return join(this.configDir, STATE_DB_FILE);
   }
 
   async load(): Promise<Config> {
@@ -73,7 +71,7 @@ export class ConfigManager {
 
   private async ensureGitignore(): Promise<void> {
     const gitignorePath = join(this.vaultRoot, ".gitignore");
-    const entry = ".im-nobsidian/";
+    const entry = GITIGNORE_ENTRY;
 
     try {
       const content = await readFile(gitignorePath, "utf-8");

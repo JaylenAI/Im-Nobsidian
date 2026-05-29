@@ -12,11 +12,18 @@ import type {
 } from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
+import type { Config } from "../types/config.js";
 
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
   readonly timeoutMs?: number;
+  readonly rateLimitIntervalMs?: number;
+  readonly maxRetries?: number;
+  readonly retryBaseDelayMs?: number;
+  readonly retryBackoffFactor?: number;
+  readonly pageSize?: number;
+  readonly batchSize?: number;
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -28,6 +35,13 @@ export class NotionClient {
 
   private readonly customFetch?: typeof globalThis.fetch;
 
+  private readonly minRequestInterval: number;
+  private readonly maxRetries: number;
+  private readonly retryBaseDelayMs: number;
+  private readonly retryBackoffFactor: number;
+  private readonly defaultPageSize: number;
+  private readonly batchSize: number;
+
   constructor(options: NotionClientOptions) {
     this.client = new Client({
       auth: options.token,
@@ -38,6 +52,29 @@ export class NotionClient {
     this.token = options.token;
     this.customFetch = options.fetch;
     this.sema = new Sema(options.concurrency ?? 3);
+    this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
+    this.maxRetries = options.maxRetries ?? 5;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1000;
+    this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
+    this.defaultPageSize = options.pageSize ?? 100;
+    this.batchSize = options.batchSize ?? 100;
+  }
+
+  /** config.advanced 의 운영 튜닝값으로 클라이언트를 생성한다 (매직넘버 단일 진실원). */
+  static fromConfig(config: Config, fetch?: typeof globalThis.fetch): NotionClient {
+    const a = config.advanced;
+    return new NotionClient({
+      token: config.notion.token,
+      concurrency: a.concurrency,
+      timeoutMs: a.timeoutMs,
+      rateLimitIntervalMs: a.rateLimitIntervalMs,
+      maxRetries: a.maxRetries,
+      retryBaseDelayMs: a.retryBaseDelayMs,
+      retryBackoffFactor: a.retryBackoffFactor,
+      pageSize: a.pageSize,
+      batchSize: a.batchSize,
+      ...(fetch ? { fetch } : {}),
+    });
   }
 
   getInternalClient(): Client {
@@ -300,7 +337,7 @@ export class NotionClient {
       this.client.dataSources.query({
         data_source_id: dsId,
         start_cursor: options?.startCursor,
-        page_size: options?.pageSize ?? 100,
+        page_size: options?.pageSize ?? this.defaultPageSize,
         filter: options?.filter as never,
       }),
     );
@@ -317,7 +354,7 @@ export class NotionClient {
     do {
       const response = await this.queryDatabase(databaseId, {
         startCursor: cursor,
-        pageSize: 100,
+        pageSize: this.defaultPageSize,
         filter,
       });
       all.push(...response.results);
@@ -378,7 +415,7 @@ export class NotionClient {
       this.client.blocks.children.list({
         block_id: blockId,
         start_cursor: options?.startCursor,
-        page_size: options?.pageSize ?? 100,
+        page_size: options?.pageSize ?? this.defaultPageSize,
       }),
     );
     return {
@@ -436,9 +473,9 @@ export class NotionClient {
   }
 
   async appendChildren(blockId: string, children: unknown[]): Promise<void> {
-    const BATCH_SIZE = 100;
-    for (let i = 0; i < children.length; i += BATCH_SIZE) {
-      const batch = children.slice(i, i + BATCH_SIZE);
+    const batchSize = this.batchSize;
+    for (let i = 0; i < children.length; i += batchSize) {
+      const batch = children.slice(i, i + batchSize);
       await this.withRateLimit(() =>
         this.client.blocks.children.append({
           block_id: blockId,
@@ -491,7 +528,7 @@ export class NotionClient {
         query: params.query,
         filter: params.filter,
         start_cursor: params.startCursor,
-        page_size: params.pageSize ?? 100,
+        page_size: params.pageSize ?? this.defaultPageSize,
       }),
     );
     return {
@@ -511,7 +548,7 @@ export class NotionClient {
           filter: { property: "object", value: "page" },
           sort: { direction: "descending", timestamp: "last_edited_time" },
           start_cursor: cursor,
-          page_size: 100,
+          page_size: this.defaultPageSize,
         }),
       );
 
@@ -576,7 +613,7 @@ export class NotionClient {
         this.client.views.list({
           database_id: databaseId,
           start_cursor: cursor,
-          page_size: 100,
+          page_size: this.defaultPageSize,
         }),
       );
 
@@ -688,7 +725,6 @@ export class NotionClient {
   // ─── Internal ───
 
   private lastRequestTime = 0;
-  private readonly minRequestInterval = 350;
 
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
     await this.sema.acquire();
@@ -709,8 +745,10 @@ export class NotionClient {
     try {
       return await fn();
     } catch (error: unknown) {
-      if (isRetryable(error) && attempt < 5) {
-        const baseDelay = extractRetryAfter(error) ?? 1000 * Math.pow(2, attempt);
+      if (isRetryable(error) && attempt < this.maxRetries) {
+        const baseDelay =
+          extractRetryAfter(error) ??
+          this.retryBaseDelayMs * Math.pow(this.retryBackoffFactor, attempt);
         const jitter = baseDelay * (0.5 + Math.random() * 0.5);
         await sleep(jitter);
         return this.executeWithRetry(fn, attempt + 1);

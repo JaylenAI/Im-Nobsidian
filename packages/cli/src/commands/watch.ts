@@ -35,11 +35,7 @@ export const watchCommand = new Command("watch")
     const config = await configManager.load();
     const stateDb = StateDB.open(configManager.dbPath);
 
-    const client = new NotionClient({
-      token: config.notion.token,
-      concurrency: config.advanced.concurrency,
-      timeoutMs: config.advanced.timeoutMs,
-    });
+    const client = NotionClient.fromConfig(config);
     const vaultFs = new NodeVaultFS(cwd, config.paths);
     const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 

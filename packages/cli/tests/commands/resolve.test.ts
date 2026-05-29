@@ -39,7 +39,10 @@ vi.mock("@im-nobsidian/core", () => ({
       close: mockClose,
     }),
   },
-  NotionClient: vi.fn().mockImplementation(() => ({})),
+  NotionClient: Object.assign(
+    vi.fn().mockImplementation(() => ({})),
+    { fromConfig: vi.fn().mockReturnValue({}) },
+  ),
   SyncOrchestrator: vi.fn().mockImplementation(() => ({
     pull: mockPull,
     status: mockStatus,

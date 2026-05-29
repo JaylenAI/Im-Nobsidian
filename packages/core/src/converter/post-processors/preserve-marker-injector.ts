@@ -4,6 +4,7 @@ import type {
   ProcessorOutput,
   PreserveMarker,
 } from "../../types/convert.js";
+import { spacedMarker } from "../../constants/markers.js";
 
 export class PreserveMarkerInjector implements Processor {
   readonly name = "PreserveMarkerInjector";
@@ -38,6 +39,6 @@ export class PreserveMarkerInjector implements Processor {
     const params = Object.entries(marker.params)
       .map(([k, v]) => `${k}=${encodeURIComponent(v)}`)
       .join("&");
-    return `%% im-nobsidian:${marker.type}:${params} %%`;
+    return spacedMarker(`${marker.type}:${params}`);
   }
 }

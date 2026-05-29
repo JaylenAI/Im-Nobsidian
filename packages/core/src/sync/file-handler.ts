@@ -125,13 +125,16 @@ function getFolderPath(filePath: string): string {
 }
 
 export class FileHandler {
-  private readonly sema = new Sema(2);
+  private readonly sema: Sema;
 
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
     private readonly stateDb: IStateDB,
-  ) {}
+    concurrency: number = 2,
+  ) {
+    this.sema = new Sema(concurrency);
+  }
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
     const allFiles = await this.vaultFs.listNonMarkdownFiles();

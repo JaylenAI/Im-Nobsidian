@@ -30,11 +30,7 @@ export const pullCommand = new Command("pull")
     const stateDb = StateDB.open(configManager.dbPath);
 
     try {
-      const client = new NotionClient({
-        token: config.notion.token,
-        concurrency: config.advanced.concurrency,
-        timeoutMs: config.advanced.timeoutMs,
-      });
+      const client = NotionClient.fromConfig(config);
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
