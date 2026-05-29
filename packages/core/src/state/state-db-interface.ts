@@ -15,6 +15,8 @@ export interface IStateDB {
   setNotionLastEdited(id: string, lastEdited: string): void;
   updateStatCache(id: string, mtime: string, fileSize: number): void;
   setNotionParentId(id: string, parentId: string): void;
+  /** 레코드의 로컬 경로를 갱신한다 (파일 rename/move 추적용). */
+  updatePath(id: string, newPath: string): void;
   delete(id: string): void;
 
   // wikilink_map

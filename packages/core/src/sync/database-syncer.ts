@@ -3,7 +3,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import type { VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
-import type { Conflict, FailedOperation } from "../types/sync.js";
+import type { Conflict, FailedOperation, SyncRecord } from "../types/sync.js";
 import type { DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
@@ -396,6 +396,11 @@ export class DatabaseSyncer {
       : dbConfig.localFolder + "/";
     const dbFiles = allFiles.filter((f) => f.path.startsWith(prefix));
 
+    // rename 감지용 고아 레코드(로컬 파일이 사라진 추적 레코드) 인덱스.
+    // 새 경로의 파일이 어떤 고아의 내용 해시와 일치하면 신규 페이지 생성이 아니라 rename 으로 처리.
+    const livePaths = new Set(dbFiles.map((f) => f.path));
+    const orphanByHash = this.buildOrphanHashIndex(dbConfig.databaseId, livePaths);
+
     let created = 0;
     let updated = 0;
     const failed: FailedOperation[] = [];
@@ -443,6 +448,30 @@ export class DatabaseSyncer {
           });
           updated++;
         } else {
+          // rename 감지: 내용이 동일한 고아 레코드가 있으면 신규 페이지 생성 대신 경로만 재매핑.
+          // (과거: getByPath(newPath)=null → 무조건 신규 생성 → Notion 중복 페이지 + 고아 레코드.
+          //  db-row 프론트매터엔 Notion page id 가 없어 내용 해시로 동일 행을 식별한다.)
+          const renamed = orphanByHash.get(hash);
+          if (renamed?.notionPageId) {
+            const movedPageId = renamed.notionPageId;
+            orphanByHash.delete(hash); // 같은 고아를 두 번 매칭하지 않도록 제거
+            this.stateDb.transaction(() => {
+              this.stateDb.updatePath(renamed.id, file.path);
+              this.stateDb.updateHash(renamed.id, hash, Buffer.from(content, "utf-8"));
+              this.stateDb.updateStatus(renamed.id, "synced");
+              // 새 경로로 wikilink 갱신 — INSERT OR REPLACE 가 notion_page_id UNIQUE 충돌로
+              // 이전 경로의 wikilink 행을 자동 정리한다.
+              this.stateDb.upsertWikilink({
+                obsidianPath: file.path,
+                notionPageId: movedPageId,
+                title,
+                aliases: extractAliases(frontmatter),
+              });
+            });
+            updated++;
+            continue;
+          }
+
           const page = await this.notionClient.createPageWithMarkdown({
             parentId: dbConfig.databaseId,
             parentType: "database",
@@ -485,6 +514,30 @@ export class DatabaseSyncer {
 
     getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
     return { created, updated, conflicts: [], failed };
+  }
+
+  /**
+   * rename 감지를 위한 고아 레코드 인덱스(내용 해시 → 레코드)를 만든다.
+   * 고아 = 해당 DB 소속 db-row 레코드 중 로컬 파일이 더 이상 존재하지 않는(livePaths 에 없는) 것.
+   * 같은 해시가 여러 고아에 걸리면 첫 항목을 유지한다(희박한 케이스).
+   */
+  private buildOrphanHashIndex(
+    databaseId: string,
+    livePaths: Set<string>,
+  ): Map<string, SyncRecord> {
+    const index = new Map<string, SyncRecord>();
+    for (const record of this.stateDb.getAll()) {
+      if (
+        record.fileType === "db-row" &&
+        record.notionParentId === databaseId &&
+        record.notionPageId &&
+        !livePaths.has(record.obsidianPath) &&
+        !index.has(record.contentHash)
+      ) {
+        index.set(record.contentHash, record);
+      }
+    }
+    return index;
   }
 }
 

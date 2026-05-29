@@ -387,6 +387,13 @@ export class SqlJsStateDB implements IStateDB {
     );
   }
 
+  updatePath(id: string, newPath: string): void {
+    this.run("UPDATE sync_state SET obsidian_path = ?, updated_at = datetime('now') WHERE id = ?", [
+      newPath,
+      id,
+    ]);
+  }
+
   delete(id: string): void {
     this.run("DELETE FROM sync_state WHERE id = ?", [id]);
   }

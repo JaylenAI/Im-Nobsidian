@@ -32,6 +32,7 @@ function createMockStateDb() {
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
+    updatePath: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
     setMeta: vi.fn(),
@@ -540,6 +541,80 @@ describe("DatabaseSyncer", () => {
       expect(mockStateDb.updateHash).not.toHaveBeenCalled();
       expect(mockStateDb.updateStatus).toHaveBeenCalledWith("rec-1", "error");
       expect(mockStateDb.updateStatus).not.toHaveBeenCalledWith("rec-1", "synced");
+    });
+
+    it("로컬 rename 시 중복 페이지 생성 대신 기존 페이지 재매핑", async () => {
+      const content = "---\ntitle: Renamed Task\n---\n\nUnchanged body.";
+      const hash = computeHash(content);
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Renamed Task.md",
+          content,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(content);
+      // 새 경로엔 추적 레코드 없음(rename 직후)
+      mockStateDb.getByPath.mockReturnValue(null);
+      // 고아 레코드: 같은 DB·같은 내용 해시·사라진 이전 경로
+      mockStateDb.getAll.mockReturnValue([
+        {
+          id: "rec-old",
+          obsidianPath: "databases/tasks/Old Name.md",
+          notionPageId: "existing-page-id",
+          notionParentId: "db-123",
+          contentHash: hash,
+          fileType: "db-row",
+        },
+      ]);
+
+      const result = await syncer.pushAll();
+
+      // 신규 페이지 생성하지 않고 업데이트(이동)로 집계
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      expect(result.created).toBe(0);
+      expect(result.updated).toBe(1);
+      // 레코드 경로 재매핑 + wikilink 새 경로 갱신(pageId 유지)
+      expect(mockStateDb.updatePath).toHaveBeenCalledWith(
+        "rec-old",
+        "databases/tasks/Renamed Task.md",
+      );
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "databases/tasks/Renamed Task.md",
+          notionPageId: "existing-page-id",
+        }),
+      );
+    });
+
+    it("내용이 다르면 rename 으로 보지 않고 신규 생성", async () => {
+      const content = "---\ntitle: Brand New\n---\n\nCompletely different.";
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Brand New.md",
+          content,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(content);
+      mockStateDb.getByPath.mockReturnValue(null);
+      // 고아는 있으나 해시가 다름 → rename 아님
+      mockStateDb.getAll.mockReturnValue([
+        {
+          id: "rec-old",
+          obsidianPath: "databases/tasks/Old Name.md",
+          notionPageId: "existing-page-id",
+          notionParentId: "db-123",
+          contentHash: "different-hash",
+          fileType: "db-row",
+        },
+      ]);
+
+      const result = await syncer.pushAll();
+
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(1);
+      expect(result.created).toBe(1);
+      expect(mockStateDb.updatePath).not.toHaveBeenCalled();
     });
 
     it("해시가 같으면 스킵", async () => {
