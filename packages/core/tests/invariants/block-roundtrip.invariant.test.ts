@@ -27,6 +27,7 @@ import {
   sleep,
 } from "./harness.js";
 import type { StateDB } from "../../src/state/state-db.js";
+import { TOC_MARKER, BREADCRUMB_MARKER } from "../../src/constants/markers.js";
 
 const RICH_NOTE = `---
 title: Rich Block Taxonomy
@@ -36,7 +37,11 @@ tags:
   - roundtrip
 ---
 
+${BREADCRUMB_MARKER}
+
 # 헤딩 1
+
+${TOC_MARKER}
 
 본문 문단에 **굵게**, *기울임*, \`인라인코드\`, ~~취소선~~ 포함.
 
@@ -174,6 +179,10 @@ describe.skipIf(SKIP)("I2·I3 블록 라운드트립 불변식", () => {
     expect(/`[^`\n]+`/.test(body), "인라인코드 손실").toBe(true);
     expect(/^---\s*$/m.test(bodyNoFm), "구분선 손실").toBe(true);
     expect(/\[[^\]]+\]\(https?:/.test(body), "링크 손실").toBe(true);
+    // breadcrumb·table_of_contents 는 마크다운 표현이 없어 보존 마커로 왕복한다.
+    // 마커가 사라지면 push 에서 일반 문단으로 새거나(toc) 통째 소실(breadcrumb)된 것.
+    expect(body.includes(BREADCRUMB_MARKER), "breadcrumb 블록 손실").toBe(true);
+    expect(body.includes(TOC_MARKER), "목차(toc) 블록 손실").toBe(true);
 
     await cleanupVault(vault, stateDb);
   });
