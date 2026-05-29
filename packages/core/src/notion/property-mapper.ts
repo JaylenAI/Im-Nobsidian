@@ -6,7 +6,11 @@ type NotionPropertySchema = {
 
 type NotionPropertyValue = Record<string, unknown>;
 
-const DATE_REGEX = /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?/;
+// ISO-8601 date / datetime. **양끝 앵커 필수** — 앵커가 없으면 "2026-05-29 마감" 처럼
+// 날짜로 시작하는 일반 텍스트가 date 로 오분류되어 본문이 유실되고 Notion 에 잘못된
+// 날짜가 전송된다. 초/밀리초/타임존(Z, ±HH:MM)까지 허용해 read→write 라운드트립을 보존.
+const DATE_REGEX =
+  /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
 
 export interface WikilinkResolver {
@@ -74,11 +78,18 @@ export class PropertyMapper {
       case "rich_text":
         return { rich_text: [{ text: { content: String(value) } }] };
 
-      case "number":
-        return { number: typeof value === "number" ? value : Number(value) };
+      case "number": {
+        // 숫자로 변환 불가한 값(NaN/Infinity)은 전송하지 않는다. {number: NaN} 은
+        // JSON 직렬화 시 null 로 바뀌어 기존 값을 소리 없이 비워버린다.
+        const num = typeof value === "number" ? value : Number(value);
+        return Number.isFinite(num) ? { number: num } : null;
+      }
 
-      case "select":
-        return { select: { name: String(value) } };
+      case "select": {
+        // 빈 이름은 Notion API 가 거부한다. 공백뿐이면 스킵(기존 값 보존).
+        const name = String(value);
+        return name.trim() ? { select: { name } } : null;
+      }
 
       case "multi_select": {
         const items = Array.isArray(value)
@@ -86,7 +97,9 @@ export class PropertyMapper {
           : String(value)
               .split(",")
               .map((s) => s.trim());
-        return { multi_select: items.map((name: unknown) => ({ name: String(name) })) };
+        // 빈 옵션 이름 제거 — "a,,b" 나 후행 콤마로 생긴 빈 항목은 Notion 이 거부한다.
+        const names = items.map((name: unknown) => String(name)).filter((name) => name.trim());
+        return { multi_select: names.map((name) => ({ name })) };
       }
 
       case "checkbox":
@@ -113,8 +126,11 @@ export class PropertyMapper {
       case "phone_number":
         return { phone_number: String(value) };
 
-      case "status":
-        return { status: { name: String(value) } };
+      case "status": {
+        // select 와 동일 — 빈 상태 이름은 Notion 이 거부한다.
+        const name = String(value);
+        return name.trim() ? { status: { name } } : null;
+      }
 
       case "relation": {
         const items = Array.isArray(value) ? value : [value];
@@ -146,17 +162,20 @@ export class PropertyMapper {
 
       case "files": {
         const fileList = Array.isArray(value) ? value : [value];
-        const filesArr = fileList.map((f) => {
-          if (typeof f === "object" && f !== null && "url" in f) {
-            const obj = f as { name?: string; url: string };
-            return { type: "external", name: obj.name ?? "file", external: { url: obj.url } };
-          }
-          return {
-            type: "external",
-            name: String(f),
-            external: { url: String(f) },
-          };
-        });
+        // 빈 URL 파일 항목은 Notion 이 거부하므로 제거한다(잘못된 첨부 전송 방지).
+        const filesArr = fileList
+          .map((f) => {
+            if (typeof f === "object" && f !== null && "url" in f) {
+              const obj = f as { name?: string; url: string };
+              const url = String(obj.url ?? "");
+              if (!url) return null;
+              return { type: "external", name: obj.name ?? "file", external: { url } };
+            }
+            const url = String(f);
+            if (!url) return null;
+            return { type: "external", name: url, external: { url } };
+          })
+          .filter(Boolean);
         return { files: filesArr };
       }
 

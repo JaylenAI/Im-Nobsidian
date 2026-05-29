@@ -273,4 +273,108 @@ describe("PropertyMapper", () => {
       expect(result.verified).toBe("verified");
     });
   });
+
+  describe("toNotionProperties — 입력 검증/하드닝 (Phase 2b)", () => {
+    beforeEach(() => {
+      mapper.loadSchema({
+        due: { id: "a", type: "date" },
+        note: { id: "b", type: "rich_text" },
+        priority: { id: "c", type: "number" },
+        status: { id: "d", type: "select" },
+        phase: { id: "e", type: "status" },
+        tags: { id: "f", type: "multi_select" },
+        attachments: { id: "g", type: "files" },
+      });
+    });
+
+    it("date: 날짜로 시작하는 일반 텍스트를 date 로 오분류하지 않음", () => {
+      // 스키마가 rich_text 인 키에 날짜로 시작하는 텍스트 → 그대로 보존
+      const result = mapper.toNotionProperties({ note: "2026-05-29 프로젝트 마감" }, "T");
+      expect(result.note).toEqual({
+        rich_text: [{ text: { content: "2026-05-29 프로젝트 마감" } }],
+      });
+    });
+
+    it("date: 잘못된 날짜 문자열은 전송하지 않음(null)", () => {
+      const result = mapper.toNotionProperties({ due: "2026-05-29 마감" }, "T");
+      expect(result.due).toBeUndefined();
+    });
+
+    it("date: 초/밀리초/타임존 포함 ISO datetime 라운드트립 보존", () => {
+      const iso = "2026-05-29T14:30:00.000+09:00";
+      const result = mapper.toNotionProperties({ due: iso }, "T");
+      expect(result.due).toEqual({ date: { start: iso, end: null } });
+    });
+
+    it("number: 숫자로 변환 불가한 값은 NaN 대신 스킵", () => {
+      const result = mapper.toNotionProperties({ priority: "높음" }, "T");
+      expect(result.priority).toBeUndefined();
+    });
+
+    it("number: 0 은 정상 전송", () => {
+      const result = mapper.toNotionProperties({ priority: 0 }, "T");
+      expect(result.priority).toEqual({ number: 0 });
+    });
+
+    it("select: 빈/공백 이름은 스킵", () => {
+      expect(mapper.toNotionProperties({ status: "" }, "T").status).toBeUndefined();
+      expect(mapper.toNotionProperties({ status: "   " }, "T").status).toBeUndefined();
+    });
+
+    it("status: 빈 이름은 스킵", () => {
+      expect(mapper.toNotionProperties({ phase: "" }, "T").phase).toBeUndefined();
+    });
+
+    it("multi_select: 빈 옵션 이름 제거", () => {
+      const result = mapper.toNotionProperties({ tags: "a,,b, ,c" }, "T");
+      expect(result.tags).toEqual({
+        multi_select: [{ name: "a" }, { name: "b" }, { name: "c" }],
+      });
+    });
+
+    it("files: 빈 URL 항목 제거", () => {
+      const result = mapper.toNotionProperties(
+        {
+          attachments: [
+            { name: "ok", url: "https://x.com/a.pdf" },
+            { name: "bad", url: "" },
+          ],
+        },
+        "T",
+      );
+      expect(result.attachments).toEqual({
+        files: [{ type: "external", name: "ok", external: { url: "https://x.com/a.pdf" } }],
+      });
+    });
+  });
+
+  describe("라운드트립 충실도 (from→to)", () => {
+    beforeEach(() => {
+      mapper.loadSchema({
+        status: { id: "a", type: "select" },
+        tags: { id: "b", type: "multi_select" },
+        priority: { id: "c", type: "number" },
+        done: { id: "d", type: "checkbox" },
+        due: { id: "e", type: "date" },
+      });
+    });
+
+    it("select/multi_select/number/checkbox/date 왕복 일치", () => {
+      const notion = {
+        status: { type: "select", select: { name: "active" } },
+        tags: { type: "multi_select", multi_select: [{ name: "x" }, { name: "y" }] },
+        priority: { type: "number", number: 0 },
+        done: { type: "checkbox", checkbox: false },
+        due: { type: "date", date: { start: "2026-06-30" } },
+      };
+      const fm = mapper.fromNotionProperties(notion);
+      const back = mapper.toNotionProperties(fm, "Title");
+
+      expect(back.status).toEqual({ select: { name: "active" } });
+      expect(back.tags).toEqual({ multi_select: [{ name: "x" }, { name: "y" }] });
+      expect(back.priority).toEqual({ number: 0 });
+      expect(back.done).toEqual({ checkbox: false });
+      expect(back.due).toEqual({ date: { start: "2026-06-30", end: null } });
+    });
+  });
 });
