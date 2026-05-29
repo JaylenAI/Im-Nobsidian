@@ -29,7 +29,7 @@ import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
-import { notionIdsEqual } from "../utils/id.js";
+import { notionIdsEqual, normalizeNotionId } from "../utils/id.js";
 import { runPool } from "../utils/pool.js";
 import type { VaultFS } from "./vault-fs.js";
 import {
@@ -1076,7 +1076,12 @@ export class SyncOrchestrator {
       } while (cursor);
       remotePages = allPages;
     } else {
-      remotePages = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId);
+      // search API로 접근 가능한 전체 페이지를 일괄 조회한 뒤 root subtree만 ancestry 필터링.
+      // 블록 트리를 페이지별로 직렬 재귀하던 getChildPagesRecursive(호출 수가 페이지 수의
+      // 수십 배) 대비 API 호출 수를 페이지 수/100 수준으로 줄여 첫 pull/전체 스캔을 가속한다.
+      const allAccessible = await this.notionClient.searchAllPages();
+      const underRoot = await this.filterPagesUnderRoot(allAccessible);
+      remotePages = underRoot.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     }
 
     for (const page of remotePages) {
@@ -1157,6 +1162,88 @@ export class SyncOrchestrator {
   private isTrackedParent(parentId: string): boolean {
     if (notionIdsEqual(parentId, this.config.notion.rootPageId)) return true;
     return !!this.stateDb.getByNotionId(parentId);
+  }
+
+  /**
+   * search API로 받은 전체 접근 가능 페이지 중 rootPageId 하위(자손)만 남긴다.
+   * 각 페이지의 parent 체인을 root에 닿을 때까지 거슬러 올라가며 판정한다.
+   * - 부모가 이미 받은 페이지면 추가 API 호출 없이 메모리에서 해석(공통 경로)
+   * - 부모가 검색 결과에 없으면(데이터베이스·미공유 조상 등) getPage로 1회 조회 후 캐시
+   * - 조회 불가/순환/깊이 초과 시 보수적으로 root 하위가 아님으로 판정
+   * 판정 결과는 체인 전체에 메모이즈해 형제 페이지 처리 시 재사용한다.
+   */
+  private async filterPagesUnderRoot(
+    allPages: PageObjectResponse[],
+  ): Promise<PageObjectResponse[]> {
+    const root = normalizeNotionId(this.config.notion.rootPageId);
+    const byId = new Map<string, PageObjectResponse>();
+    for (const p of allPages) byId.set(normalizeNotionId(p.id), p);
+
+    const verdict = new Map<string, boolean>();
+
+    const isUnderRoot = async (start: PageObjectResponse): Promise<boolean> => {
+      const chain: string[] = [];
+      let current: PageObjectResponse | null = start;
+      let result = false;
+
+      while (current) {
+        const id = normalizeNotionId(current.id);
+        if (id === root) {
+          result = true;
+          break;
+        }
+        const memo = verdict.get(id);
+        if (memo !== undefined) {
+          result = memo;
+          break;
+        }
+        if (chain.includes(id)) {
+          result = false; // 순환 방지
+          break;
+        }
+        chain.push(id);
+
+        const parentId = await this.extractParentId(current);
+        if (!parentId) {
+          result = false;
+          break;
+        }
+        const pid = normalizeNotionId(parentId);
+        if (pid === root) {
+          result = true;
+          break;
+        }
+        const memoParent = verdict.get(pid);
+        if (memoParent !== undefined) {
+          result = memoParent;
+          break;
+        }
+
+        let parentPage = byId.get(pid) ?? null;
+        if (!parentPage) {
+          try {
+            parentPage = await this.notionClient.getPage(parentId);
+            byId.set(pid, parentPage);
+          } catch {
+            // 부모가 데이터베이스이거나 미공유 → root 도달 불가로 간주(보수적)
+            result = false;
+            break;
+          }
+        }
+        current = parentPage;
+      }
+
+      for (const id of chain) verdict.set(id, result);
+      return result;
+    };
+
+    const out: PageObjectResponse[] = [];
+    for (const p of allPages) {
+      // 루트 페이지 자체는 볼트 컨테이너이므로 콘텐츠 파일로 동기화하지 않는다(자손만 대상).
+      if (normalizeNotionId(p.id) === root) continue;
+      if (await isUnderRoot(p)) out.push(p);
+    }
+    return out;
   }
 
   private async pullCreate(pageId: string): Promise<string> {

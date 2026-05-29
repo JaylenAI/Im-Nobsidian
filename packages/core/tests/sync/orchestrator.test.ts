@@ -96,6 +96,7 @@ function createMockNotionClient() {
     movePage: vi.fn().mockResolvedValue({}),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
     searchRecentPages: vi.fn().mockResolvedValue([]),
+    searchAllPages: vi.fn().mockResolvedValue([]),
   };
 }
 
@@ -325,8 +326,12 @@ describe("SyncOrchestrator", () => {
     });
 
     it("새 원격 페이지 로컬에 생성", async () => {
-      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
-        { id: "new-page", last_edited_time: "2026-01-01T00:00:00.000Z" },
+      mockNotionClient.searchAllPages.mockResolvedValue([
+        {
+          id: "new-page",
+          last_edited_time: "2026-01-01T00:00:00.000Z",
+          parent: { type: "page_id", page_id: "root-page-id" },
+        },
       ]);
       mockNotionClient.getPage.mockResolvedValue({
         id: "new-page",
@@ -363,8 +368,12 @@ describe("SyncOrchestrator", () => {
       );
       mockStateDb.getAll.mockReturnValue([existingRecord]);
 
-      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
-        { id: "mod-page", last_edited_time: "2026-06-01T00:00:00.000Z" },
+      mockNotionClient.searchAllPages.mockResolvedValue([
+        {
+          id: "mod-page",
+          last_edited_time: "2026-06-01T00:00:00.000Z",
+          parent: { type: "page_id", page_id: "root-page-id" },
+        },
       ]);
       mockNotionClient.getPage.mockResolvedValue({
         id: "mod-page",
@@ -410,8 +419,12 @@ describe("SyncOrchestrator", () => {
       );
       mockStateDb.getAll.mockReturnValue([existingRecord]);
 
-      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
-        { id: "conflict-page", last_edited_time: "2026-06-01T00:00:00.000Z" },
+      mockNotionClient.searchAllPages.mockResolvedValue([
+        {
+          id: "conflict-page",
+          last_edited_time: "2026-06-01T00:00:00.000Z",
+          parent: { type: "page_id", page_id: "root-page-id" },
+        },
       ]);
       mockNotionClient.getPage.mockResolvedValue({
         id: "conflict-page",
@@ -432,8 +445,12 @@ describe("SyncOrchestrator", () => {
     });
 
     it("dryRun 모드에서 예정 수량 반환", async () => {
-      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
-        { id: "new-page", last_edited_time: "2026-01-01T00:00:00.000Z" },
+      mockNotionClient.searchAllPages.mockResolvedValue([
+        {
+          id: "new-page",
+          last_edited_time: "2026-01-01T00:00:00.000Z",
+          parent: { type: "page_id", page_id: "root-page-id" },
+        },
       ]);
 
       const result = await orchestrator.pull({ dryRun: true });
