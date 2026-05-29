@@ -219,6 +219,42 @@ describe("SyncOrchestrator", () => {
       expect(mockStateDb.deleteWikilink).toHaveBeenCalledWith("deleted.md");
     });
 
+    // 회귀 잠금: deleteSync=false 면 로컬 삭제를 Notion 에 전파하지 않는다.
+    // archive 호출 없음 + 레코드는 pending 으로만 표시 + deleted 카운트는 0(정직한 보고).
+    it("deleteSync=false 면 로컬 삭제를 Notion 에 전파하지 않고 deleted=0", async () => {
+      const deletedRecord = {
+        id: 7,
+        obsidianPath: "keep-remote.md",
+        notionPageId: "page-keep",
+        contentHash: "some-hash",
+        status: "synced",
+      };
+
+      mockStateDb.getByPath.mockImplementation((path: string) =>
+        path === "keep-remote.md" ? deletedRecord : null,
+      );
+      mockStateDb.getByStatus.mockImplementation((status: string) =>
+        status === "synced" ? [deletedRecord] : [],
+      );
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      config = createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: false } });
+      orchestrator = new SyncOrchestrator(
+        config,
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+      );
+
+      const result = await orchestrator.push();
+
+      expect(result.deleted).toBe(0);
+      expect(mockNotionClient.archivePage).not.toHaveBeenCalled();
+      expect(mockStateDb.delete).not.toHaveBeenCalled();
+      expect(mockStateDb.deleteWikilink).not.toHaveBeenCalled();
+      expect(mockStateDb.updateStatus).toHaveBeenCalledWith(7, "pending");
+    });
+
     it("dryRun 모드에서는 실제 작업 안 하고 예정 수량 반환", async () => {
       const now = new Date().toISOString();
       (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([

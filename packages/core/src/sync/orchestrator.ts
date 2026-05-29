@@ -203,10 +203,11 @@ export class SyncOrchestrator {
           await this.pushMove(change.path);
           counts.updated++;
           break;
-        case "deleted":
-          await this.pushDelete(change.path);
-          counts.deleted++;
+        case "deleted": {
+          const propagated = await this.pushDelete(change.path);
+          if (propagated) counts.deleted++;
           break;
+        }
       }
     };
 
@@ -1061,28 +1062,33 @@ export class SyncOrchestrator {
     });
   }
 
-  private async pushDelete(path: string): Promise<void> {
+  // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.
+  // deleteSync=false 면 로컬 삭제를 pending 으로만 기록하고 Notion 은 보존하므로
+  // false 를 돌려준다 → 호출부가 deleted 카운트를 올리지 않아 보고가 정직해진다.
+  private async pushDelete(path: string): Promise<boolean> {
     const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return;
+    if (!record?.notionPageId) return false;
 
-    if (this.config.sync.deleteSync) {
-      try {
-        await this.notionClient.archivePage(record.notionPageId);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        if (msg.includes("archived ancestor")) {
-          // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
-        } else {
-          throw error;
-        }
-      }
-      this.stateDb.transaction(() => {
-        this.stateDb.delete(record.id);
-        this.stateDb.deleteWikilink(record.obsidianPath);
-      });
-    } else {
+    if (!this.config.sync.deleteSync) {
       this.stateDb.updateStatus(record.id, "pending");
+      return false;
     }
+
+    try {
+      await this.notionClient.archivePage(record.notionPageId);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      if (msg.includes("archived ancestor")) {
+        // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
+      } else {
+        throw error;
+      }
+    }
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(record.obsidianPath);
+    });
+    return true;
   }
 
   private async pushMove(path: string): Promise<void> {
