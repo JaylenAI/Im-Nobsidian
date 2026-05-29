@@ -174,101 +174,79 @@ export class SyncOrchestrator {
       await this.ensureFolderPage(folderPath);
     }
 
-    const sema = new Sema(this.config.advanced.concurrency);
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
+    const counts = { created: 0, updated: 0, deleted: 0 };
     const failed: FailedOperation[] = [];
 
     let completed = 0;
     const total = filtered.length;
 
-    const tasks = filtered.map((change) => async () => {
-      await sema.acquire();
-      try {
-        if (options?.signal?.aborted) return;
-        const op =
-          change.type === "created"
-            ? ("create" as const)
-            : change.type === "deleted"
-              ? ("delete" as const)
-              : ("update" as const);
-        options?.onProgress?.(++completed, total, { path: change.path, operation: op });
-        switch (change.type) {
-          case "created":
-            await this.pushCreate(change.path);
-            created++;
-            break;
-          case "modified":
-            await this.pushUpdate(change.path);
-            updated++;
-            break;
-          case "moved":
-            await this.pushMove(change.path);
-            updated++;
-            break;
-          case "deleted":
-            await this.pushDelete(change.path);
-            deleted++;
-            break;
-        }
-      } catch (error) {
-        failed.push({
-          path: change.path,
-          operation:
-            change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        sema.release();
+    const opOf = (change: LocalChange): "create" | "update" | "delete" =>
+      change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update";
+
+    // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
+    const applyPushChange = async (change: LocalChange): Promise<void> => {
+      switch (change.type) {
+        case "created":
+          await this.pushCreate(change.path);
+          counts.created++;
+          break;
+        case "modified":
+          await this.pushUpdate(change.path);
+          counts.updated++;
+          break;
+        case "moved":
+          await this.pushMove(change.path);
+          counts.updated++;
+          break;
+        case "deleted":
+          await this.pushDelete(change.path);
+          counts.deleted++;
+          break;
       }
-    });
+    };
 
-    await Promise.all(tasks.map((t) => t()));
+    // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패분은 변경 객체째 재시도 큐로.
+    const retryQueue: LocalChange[] = [];
+    await runPool(
+      filtered,
+      async (change) => {
+        if (options?.signal?.aborted) return;
+        options?.onProgress?.(++completed, total, { path: change.path, operation: opOf(change) });
+        try {
+          await applyPushChange(change);
+        } catch {
+          retryQueue.push(change);
+        }
+      },
+      { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+    );
 
-    if (failed.length > 0) {
-      const retryTargets = failed.splice(0, failed.length);
+    // 재시도 — 워커 풀 병렬(기존엔 순차). 변경 객체를 그대로 들고 있어 경로 역매칭
+    // 취약함이 없다. pushCreate 는 멱등하므로 부분 성공분을 다시 만들지 않는다.
+    if (retryQueue.length > 0) {
       const retryWaitMs = this.config.advanced.retryWaitMs;
       getLogger().info(
-        `[Im-Nobsidian] Push ${retryTargets.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+        `[Im-Nobsidian] Push ${retryQueue.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
       );
       await new Promise((r) => setTimeout(r, retryWaitMs));
 
-      for (const target of retryTargets) {
-        const change = filtered.find((c) => c.path === target.path);
-        if (!change) {
-          failed.push(target);
-          continue;
-        }
-        try {
-          switch (change.type) {
-            case "created":
-              await this.pushCreate(change.path);
-              created++;
-              break;
-            case "modified":
-              await this.pushUpdate(change.path);
-              updated++;
-              break;
-            case "moved":
-              await this.pushMove(change.path);
-              updated++;
-              break;
-            case "deleted":
-              await this.pushDelete(change.path);
-              deleted++;
-              break;
+      await runPool(
+        retryQueue,
+        async (change) => {
+          try {
+            await applyPushChange(change);
+            getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
+          } catch (error) {
+            failed.push({
+              path: change.path,
+              operation: opOf(change),
+              error: error instanceof Error ? error.message : String(error),
+            });
+            getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
           }
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
-        } catch (error) {
-          failed.push({
-            path: change.path,
-            operation: target.operation,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
-        }
-      }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
     }
 
     if (this.config.sync.syncFiles !== false) {
@@ -285,8 +263,8 @@ export class SyncOrchestrator {
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
         const dbResult = await this.databaseSyncer.pushAll();
-        created += dbResult.created;
-        updated += dbResult.updated;
+        counts.created += dbResult.created;
+        counts.updated += dbResult.updated;
         failed.push(...dbResult.failed);
       } catch (error) {
         getLogger().warn("[Im-Nobsidian] DB Push 중 오류:", error);
@@ -297,7 +275,13 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("last_sync_at", new Date().toISOString());
     this.stateDb.setMeta("push_in_progress", "");
 
-    return { created, updated, deleted, failed, duration: Date.now() - startTime };
+    return {
+      created: counts.created,
+      updated: counts.updated,
+      deleted: counts.deleted,
+      failed,
+      duration: Date.now() - startTime,
+    };
   }
 
   async pull(options?: PullOptions): Promise<PullResult> {
@@ -856,6 +840,15 @@ export class SyncOrchestrator {
   }
 
   private async pushCreate(path: string): Promise<void> {
+    // 멱등성/원자성: 이전 시도가 페이지 생성까지는 성공해 notionPageId 가 이미
+    // 매핑돼 있으면(이미지 업로드 실패·크래시·인-런 재시도 등) 새 페이지를 또
+    // 만들지 않고 업데이트 경로로 위임한다 → 고아 페이지·중복 생성 방지.
+    const existingRecord = this.stateDb.getByPath(path);
+    if (existingRecord?.notionPageId) {
+      await this.pushUpdate(path);
+      return;
+    }
+
     const content = await this.vaultFs.readFile(path);
     const title = extractTitle(path);
     const parentId = await this.resolveNotionParent(path);
@@ -895,6 +888,24 @@ export class SyncOrchestrator {
       conversionResult.content,
       effectiveProperties,
     );
+
+    // 페이지 생성 직후 매핑을 먼저 기록(전이 상태 pending). 이후 이미지 업로드 등이
+    // 실패해도 이 레코드 덕에 다음 시도는 pushCreate(중복) 가 아니라 pushUpdate 로
+    // 이어진다. contentHash 를 비워 변경감지가 "미완료 → 재푸시 필요"로 인식하게 한다.
+    this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: page.id,
+      notionParentId: parentId,
+      contentHash: "",
+      notionLastEdited: page.last_edited_time,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: this.isFolderNote(path) ? "folder-note" : "file",
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
 
     await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images);
 
