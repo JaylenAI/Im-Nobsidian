@@ -240,12 +240,10 @@ describe("NotionClient - extractProperties", () => {
         ],
       },
     });
-    const result = client.extractProperties(page).Attachments as any[];
-    expect(result).toHaveLength(2);
-    expect(result[0].name).toBe("doc.pdf");
-    expect(result[0].url).toBe("https://s3.example.com/doc.pdf");
-    expect(result[1].name).toBe("photo.png");
-    expect(result[1].url).toBe("https://example.com/photo.png");
+    // files 는 Obsidian Bases image: 가 렌더할 수 있도록 URL 문자열 배열로 직렬화한다
+    // (이전 [{name,url}] 객체 배열은 카드 커버로 렌더되지 않음).
+    const result = client.extractProperties(page).Attachments as string[];
+    expect(result).toEqual(["https://s3.example.com/doc.pdf", "https://example.com/photo.png"]);
   });
 
   it("formula 속성 추출 (string)", () => {

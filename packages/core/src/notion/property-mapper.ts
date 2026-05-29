@@ -269,12 +269,15 @@ export class PropertyMapper {
               external?: { url: string };
             }>
           | undefined;
-        return (
-          files?.map((f) => ({
-            name: f.name,
-            url: f.type === "file" ? f.file?.url : f.external?.url,
-          })) ?? []
-        );
+        // Obsidian Bases 의 카드 `image:` 는 스칼라 문자열(외부 URL 또는 [[wikilink]])만
+        // 렌더한다 — [{name,url}] 객체 배열은 표시되지 않는다. 따라서 URL 문자열로 직렬화한다.
+        // 단일 파일 → 스칼라(갤러리 커버 렌더), 복수 → URL 배열(데이터 보존).
+        // toNotionProperties 의 files 케이스가 문자열/문자열배열을 모두 받으므로 라운드트립 안전.
+        const urls = (files ?? [])
+          .map((f) => (f.type === "file" ? f.file?.url : f.external?.url))
+          .filter((u): u is string => typeof u === "string" && u.length > 0);
+        if (urls.length === 0) return [];
+        return urls.length === 1 ? urls[0] : urls;
       }
       case "formula": {
         const formula = prop.formula as { type: string; [k: string]: unknown } | undefined;
