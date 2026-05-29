@@ -120,4 +120,42 @@ describe("resolvePullConflict", () => {
     expect(result.action).toBe("conflict");
     expect(result.conflict!.baseContent).toBeNull();
   });
+
+  // --- 거짓 충돌 방지 (Phase 3) ---
+
+  it("로컬 수정 + 리모트 내용이 base 와 동일 → manual 이어도 충돌 아님(로컬 보존 skip)", () => {
+    // 리모트는 last_edited 만 갱신된 가짜 변경. 로컬만 실제로 바뀜.
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: Buffer.from("BASE") }),
+      localContent: "LOCALLY EDITED",
+      remoteContent: "BASE",
+      remoteChange,
+      strategy: "manual",
+    });
+    expect(result.action).toBe("skip");
+    expect(result.conflict).toBeUndefined();
+  });
+
+  it("로컬·리모트 내용이 이미 동일 → 충돌 아님(write 로 정리)", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: Buffer.from("BASE") }),
+      localContent: "CONVERGED",
+      remoteContent: "CONVERGED",
+      remoteChange,
+      strategy: "duplicate",
+    });
+    expect(result.action).toBe("write");
+    expect(result.conflict).toBeUndefined();
+  });
+
+  it("base 가 없고 리모트가 로컬과 다르면 여전히 충돌(보수적 동작 유지)", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: null }),
+      localContent: "LOCALLY EDITED",
+      remoteContent: "REMOTE DIFFERENT",
+      remoteChange,
+      strategy: "manual",
+    });
+    expect(result.action).toBe("conflict");
+  });
 });

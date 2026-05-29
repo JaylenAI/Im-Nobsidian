@@ -57,6 +57,22 @@ export function resolvePullConflict(input: PullConflictInput): PullConflictResul
     return { action: "skip", localHash };
   }
 
+  // --- manual / duplicate: 충돌로 넘기기 전에 "거짓 충돌"부터 걸러낸다 ---
+
+  // 양쪽 내용이 이미 동일하면 충돌이 아니다(동일 편집으로 수렴). 덮어써도 무손실이고
+  // 상태를 synced 로 정리하므로 write 로 처리한다.
+  if (localContent === remoteContent) {
+    return { action: "write", localHash };
+  }
+
+  // 리모트 내용이 base(마지막 동기화 스냅샷)와 같으면 리모트는 실제로 변하지 않은 것이다.
+  // (notion last_edited 만 갱신된 가짜 변경.) 로컬만 바뀌었으므로 로컬을 보존(skip)한다.
+  // 이때 write 로 덮어쓰면 로컬의 새 편집이 옛 내용으로 사라진다 — 반드시 skip.
+  const baseContent = record.baseSnapshot?.toString("utf-8") ?? null;
+  if (baseContent !== null && remoteContent === baseContent) {
+    return { action: "skip", localHash };
+  }
+
   // manual / duplicate → 충돌로 보존, 사용자 해소 대기.
   const conflict: Conflict = {
     syncRecord: record,
@@ -67,7 +83,7 @@ export function resolvePullConflict(input: PullConflictInput): PullConflictResul
       previousHash: record.contentHash,
     },
     remoteChange,
-    baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
+    baseContent,
     localContent,
     remoteContent,
   };
