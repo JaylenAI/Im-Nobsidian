@@ -30,6 +30,7 @@ import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual } from "../utils/id.js";
+import { runPool } from "../utils/pool.js";
 import type { VaultFS } from "./vault-fs.js";
 import {
   notionEnhancedToObsidian,
@@ -320,9 +321,7 @@ export class SyncOrchestrator {
 
     this.cleanupInterruptedSync();
 
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
+    const counts = { created: 0, updated: 0, deleted: 0 };
     this._pullImageCount = 0;
     this._pullFileCount = 0;
     const conflicts: Conflict[] = [];
@@ -404,128 +403,110 @@ export class SyncOrchestrator {
 
     this.stateDb.setMeta("pull_in_progress", "true");
 
-    const sema = new Sema(this.config.advanced.concurrency);
-
-    let pullCompleted = 0;
     const pullTotal = filtered.length;
+    let pullCompleted = 0;
 
-    const tasks = filtered.map((change) => async () => {
-      await sema.acquire();
-      try {
-        if (options?.signal?.aborted) return;
-        let resultPath: string | undefined;
-        switch (change.type) {
-          case "created": {
-            const path = await this.pullCreate(change.pageId);
-            writtenPaths.push(path);
-            created++;
-            resultPath = path;
-            break;
-          }
-          case "modified": {
-            const result = await this.pullUpdate(change);
-            if (result.conflict) {
-              conflicts.push(result.conflict);
-            } else if (result.path) {
-              writtenPaths.push(result.path);
-              updated++;
-            }
-            resultPath = result.path;
-            break;
-          }
-          case "deleted": {
-            const record = this.stateDb.getByNotionId(change.pageId);
-            resultPath = record?.obsidianPath;
-            const path = await this.pullDelete(change.pageId);
-            if (path) {
-              deleted++;
-              resultPath = path;
-            }
-            break;
-          }
+    // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
+    const toFailure = (change: RemoteChange, error: unknown): FailedOperation => {
+      const record = this.stateDb.getByNotionId(change.pageId);
+      return {
+        path: record?.obsidianPath ?? change.pageId,
+        operation:
+          change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
+        error: error instanceof Error ? error.message : String(error),
+      };
+    };
+
+    // 단일 변경을 적용하고 진행률 표시용 경로를 돌려준다. 실패는 throw 로 호출자에 위임.
+    const applyChange = async (change: RemoteChange): Promise<string | undefined> => {
+      switch (change.type) {
+        case "created": {
+          const path = await this.pullCreate(change.pageId);
+          writtenPaths.push(path);
+          counts.created++;
+          return path;
         }
-        const record = this.stateDb.getByNotionId(change.pageId);
-        const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
-        const op =
-          change.type === "created"
-            ? ("create" as const)
-            : change.type === "deleted"
-              ? ("delete" as const)
-              : ("update" as const);
-        options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
-      } catch (error) {
-        const record = this.stateDb.getByNotionId(change.pageId);
-        failed.push({
-          path: record?.obsidianPath ?? change.pageId,
-          operation:
-            change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      } finally {
-        sema.release();
+        case "modified": {
+          const result = await this.pullUpdate(change);
+          if (result.conflict) {
+            conflicts.push(result.conflict);
+          } else if (result.path) {
+            writtenPaths.push(result.path);
+            counts.updated++;
+          }
+          return result.path;
+        }
+        case "deleted": {
+          const record = this.stateDb.getByNotionId(change.pageId);
+          const path = await this.pullDelete(change.pageId);
+          if (path) {
+            counts.deleted++;
+            return path;
+          }
+          return record?.obsidianPath;
+        }
+        default:
+          return undefined;
       }
-    });
+    };
 
-    await Promise.all(tasks.map((t) => t()));
+    // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패한 변경은 재시도 큐로 모은다.
+    const retryQueue: RemoteChange[] = [];
+    await runPool(
+      filtered,
+      async (change) => {
+        if (options?.signal?.aborted) return;
+        try {
+          const resultPath = await applyChange(change);
+          const record = this.stateDb.getByNotionId(change.pageId);
+          const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
+          const op =
+            change.type === "created"
+              ? ("create" as const)
+              : change.type === "deleted"
+                ? ("delete" as const)
+                : ("update" as const);
+          options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
+        } catch {
+          retryQueue.push(change);
+        }
+      },
+      { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+    );
 
-    if (failed.length > 0) {
-      const retryTargets = failed.splice(0, failed.length);
+    // 재시도 — 1차와 동일하게 워커 풀로 병렬 실행(기존엔 순차였다). 변경 객체를
+    // 그대로 들고 있으므로 경로 문자열로 역매칭하던 취약함이 사라진다.
+    if (retryQueue.length > 0) {
       const retryWaitMs = this.config.advanced.retryWaitMs;
       getLogger().info(
-        `[Im-Nobsidian] Pull ${retryTargets.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
+        `[Im-Nobsidian] Pull ${retryQueue.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
       );
       await new Promise((r) => setTimeout(r, retryWaitMs));
 
-      for (const target of retryTargets) {
-        const change = filtered.find((c) => {
-          const record = this.stateDb.getByNotionId(c.pageId);
-          return (record?.obsidianPath ?? c.pageId) === target.path;
-        });
-        if (!change) {
-          failed.push(target);
-          continue;
-        }
-        try {
-          switch (change.type) {
-            case "created": {
-              const path = await this.pullCreate(change.pageId);
-              writtenPaths.push(path);
-              created++;
-              break;
-            }
-            case "modified": {
-              const result = await this.pullUpdate(change);
-              if (result.conflict) {
-                conflicts.push(result.conflict);
-              } else if (result.path) {
-                writtenPaths.push(result.path);
-                updated++;
-              }
-              break;
-            }
-            case "deleted": {
-              const path = await this.pullDelete(change.pageId);
-              if (path) deleted++;
-              break;
-            }
+      await runPool(
+        retryQueue,
+        async (change) => {
+          try {
+            await applyChange(change);
+            const record = this.stateDb.getByNotionId(change.pageId);
+            getLogger().info(
+              `[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`,
+            );
+          } catch (error) {
+            const failure = toFailure(change, error);
+            failed.push(failure);
+            getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
           }
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${target.path}`);
-        } catch (error) {
-          failed.push({
-            path: target.path,
-            operation: target.operation,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${target.path}`);
-        }
-      }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
     }
 
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
         const dbResult = await this.databaseSyncer.pullAll();
-        created += dbResult.created;
-        updated += dbResult.updated;
+        counts.created += dbResult.created;
+        counts.updated += dbResult.updated;
         conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
         if (dbResult.created + dbResult.updated > 0) {
@@ -542,8 +523,8 @@ export class SyncOrchestrator {
 
     {
       const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
-      created += dbDiscovery.created;
-      updated += dbDiscovery.updated;
+      counts.created += dbDiscovery.created;
+      counts.updated += dbDiscovery.updated;
     }
 
     const linkTargetPaths = writtenPaths.length > 0 ? writtenPaths : [];
@@ -555,9 +536,9 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("pull_in_progress", "");
 
     return {
-      created,
-      updated,
-      deleted,
+      created: counts.created,
+      updated: counts.updated,
+      deleted: counts.deleted,
       conflicts,
       writtenPaths,
       failed,
