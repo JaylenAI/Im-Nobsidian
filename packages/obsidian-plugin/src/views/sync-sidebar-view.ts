@@ -1,7 +1,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import SyncDashboard from "./SyncDashboard.svelte";
-import type { LocalChange, RemoteChange, Conflict } from "@im-nobsidian/core";
+import type { SyncDashboardState, SyncStatePatch } from "../sync/sync-controller.js";
 
 export const SYNC_SIDEBAR_TYPE = "im-notion-sync-sidebar";
 
@@ -15,17 +15,8 @@ interface SyncActions {
   onOpenFile: (path: string) => void;
 }
 
-interface SyncState {
-  lastSyncAt: string | null;
-  localChanges: LocalChange[];
-  remoteChanges: RemoteChange[];
-  conflicts: Conflict[];
-  syncState: "ready" | "syncing" | "error" | "conflict";
-  operationType: "pull" | "push" | "sync" | null;
-  progress: { current: number; total: number; currentPath: string } | null;
-  errorMessage: string | null;
-  completionSummary: string | null;
-}
+// 동기화 상태 형태는 SyncController(SSOT)에서 가져온다. 사이드바는 상태를 표시·전달만 한다.
+type SyncState = SyncDashboardState;
 
 export class SyncSidebarView extends ItemView {
   private component: ReturnType<typeof mount> | null = null;
@@ -63,7 +54,7 @@ export class SyncSidebarView extends ItemView {
     this.actions = actions;
   }
 
-  updateState(partial: Partial<SyncState>): void {
+  updateState(partial: SyncStatePatch): void {
     this.state = { ...this.state, ...partial };
     if (this.stateUpdater) {
       this.stateUpdater({ ...this.state });
