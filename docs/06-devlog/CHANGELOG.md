@@ -3,6 +3,58 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.1.12] - 2026-05-29
+
+> Notion → Obsidian pull 충실도와 동기화 안정성에 집중한 릴리스.
+> 중첩 DB를 Obsidian Bases로 완전 재현하고, 갤러리 커버 이미지가 실제로 렌더되도록 고쳤으며,
+> push/pull 수렴·충돌 병합·watch 증분 동기화의 데이터 손실 경로를 다수 제거했다.
+
+### Added
+
+- **중첩 DB → 폴더 + `.base` 자동 생성** — 페이지 본문의 `<database>` 참조를 발견해 하위 폴더 + Obsidian Bases(`.base`) + 속성 프론트매터로 재귀 생성 (마크다운 태그 기반 발견 병합)
+- **Pull 파이프라인 워커 풀** — 백프레셔 + 병렬 재시도로 대용량 볼트 pull 안정화
+- **설정/상수 SSOT 중앙화** — 흩어진 설정을 단일 소스로 통합, 미배선 설정 정리 (Phase 1)
+
+### Fixed
+
+#### Pull 충실도
+
+- **갤러리 커버 이미지 렌더** — Notion `views`(raw 속성 id)와 schema(URL-인코딩 id) 불일치로 `title` 외 모든 속성(커버/표시컬럼/정렬/그룹)이 누락되던 문제 해결. files 속성을 Obsidian Bases가 렌더할 수 있는 스칼라 URL 문자열로 직렬화. 빈 `title` 컬럼 제거. `.base` 파일 자신이 카드로 표시되던 문제(`file.ext == "md"` 필터)
+- **인라인 페이지 링크 해결** — `/p/<id>?pvs=` 형식 페이지 멘션을 위키링크로 변환
+- **embed/bookmark 라운드트립** — URL 기반 unknown 블록을 클릭 가능한 링크 + 보존 마커로 무손실 보존
+
+#### 동기화 안정성
+
+- **위키링크 push 데이터 손실** 수정 + push↔pull 수렴 보장
+- **DB pull 시 로컬 수정 보존** — 무조건 덮어쓰기로 인한 데이터 손실 제거 (Phase 2-A)
+- **DB push 부분 실패 복구** — 본문 push 실패 시 거짓 synced 상태 제거 (Phase 2-B)
+- **DB 파일 rename 중복 방지** — rename 시 중복 Notion 페이지 생성 차단 (Phase 2-C)
+- **3-way 병합 정확도** — LCS 기반 diff3 재작성으로 거짓 충돌 제거 (Phase 3)
+- **속성 매퍼 라운드트립 충실도** — 잘못된 값 전송 방지 (Phase 2b)
+- **watch 증분 동기화 정합성** 4건
+- **Push 경로 원자성**·부분 실패 복구 강화
+- **휴지통·보관 페이지 동기화 제외** + 깨진 서브트리 graceful skip
+- **Bases 정렬 키** column→property 교정 + 속성 참조 YAML 인용 견고화
+- **wikilink_map 최신성** 보장
+
+### Performance
+
+- **첫 pull 전체 스캔 ~21배 가속** — 블록 순회 → Notion search API 기반
+
+### Changed
+
+- 동기화 로직을 `SyncController`로 분리해 UI 비종속화
+
+### Quality
+
+- 테스트 777개 통과 (core 615 + CLI 31 + plugin 131)
+- lint / typecheck 클린
+- 실데이터 E2E — Im-Nobsidian-Test 볼트 138 노트 / 449 첨부 fresh pull, 갤러리 12 row 이미지 렌더 검증
+
+### Notes
+
+- DB 갤러리 커버용 files 속성은 이제 `[{name,url}]` 객체배열이 아닌 URL 문자열로 저장된다(라운드트립 호환). 기존 볼트는 재pull 시 자동 갱신.
+
 ## [0.1.11] - 2026-05-23
 
 ### Added
