@@ -511,6 +511,37 @@ describe("DatabaseSyncer", () => {
       );
     });
 
+    it("본문 push 실패 시 synced 미표시·해시 미전진 (거짓 synced 방지)", async () => {
+      const updatedContent = "---\ntitle: Updated Task\n---\n\n# Updated\n\nNew body.";
+      mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
+        {
+          path: "databases/tasks/Updated Task.md",
+          content: updatedContent,
+          mtime: "2026-05-16T02:00:00.000Z",
+        },
+      ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(updatedContent);
+      mockStateDb.getByPath.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "existing-page-id",
+        contentHash: "old-hash",
+      });
+      // Markdown 본문 push 가 실패하는 상황 시뮬레이션
+      mockNotionClient.replacePageMarkdown.mockRejectedValueOnce(new Error("Markdown API 500"));
+
+      const result = await syncer.pushAll();
+
+      // 업데이트 카운트 0, 실패 1건(operation=update)
+      expect(result.updated).toBe(0);
+      expect(result.failed).toHaveLength(1);
+      expect(result.failed[0]?.operation).toBe("update");
+      // 해시를 전진시키지 않고 synced 로 표시하지 않으며 error 로 표시
+      expect(mockStateDb.updateHash).not.toHaveBeenCalled();
+      expect(mockStateDb.updateStatus).toHaveBeenCalledWith("rec-1", "error");
+      expect(mockStateDb.updateStatus).not.toHaveBeenCalledWith("rec-1", "synced");
+    });
+
     it("해시가 같으면 스킵", async () => {
       const content = "---\ntitle: Same\n---\n\nNo changes.";
       mockVaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([

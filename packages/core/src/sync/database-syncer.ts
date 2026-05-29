@@ -419,12 +419,20 @@ export class DatabaseSyncer {
         const enhanced = obsidianToNotionEnhanced(body.trim());
 
         if (record?.notionPageId) {
-          await this.notionClient.updatePageProperties(record.notionPageId, notionProps);
-
           try {
+            await this.notionClient.updatePageProperties(record.notionPageId, notionProps);
             await this.notionClient.replacePageMarkdown(record.notionPageId, enhanced);
-          } catch {
-            // Markdown API 실패 시 무시
+          } catch (error) {
+            // push 실패: 본문/속성이 Notion 에 반영되지 않았으므로 해시를 전진시키거나
+            // synced 로 표시하지 않는다. (과거: 본문 실패를 삼키고 synced 처리 → 거짓 동기화·
+            // 본문 영구 유실. 해시 전진 탓에 다음 push 에서 스킵되어 변경이 영원히 전달 안 됨)
+            this.stateDb.updateStatus(record.id, "error");
+            failed.push({
+              path: file.path,
+              operation: "update",
+              error: error instanceof Error ? error.message : String(error),
+            });
+            continue;
           }
 
           const updatedPage = await this.notionClient.getPage(record.notionPageId);
