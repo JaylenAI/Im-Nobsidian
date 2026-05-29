@@ -111,7 +111,7 @@ export {
   UnsupportedBlockStripper,
   PropertiesTableInjector,
   PropertiesTableRestorer,
-  HtmlAnnotationStripper,
+  InlineAnnotationPreserver,
 } from "./converter/index.js";
 
 // Conflict

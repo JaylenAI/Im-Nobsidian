@@ -33,6 +33,21 @@ describe("BlockConverter", () => {
 
       expect(blocks.length).toBeGreaterThan(0);
     });
+
+    it("compact underline/color 마커는 폴백에서 평문으로 강등(리터럴 누출 0)", () => {
+      // 기본 경로(Markdown API)가 실패해 block 폴백을 탈 때, 마커 텍스트가 본문에
+      // 리터럴로 새지 않고 텍스트만 남아야 한다(서식은 degrade, 내용은 보존).
+      const converter = new BlockConverter();
+      const md =
+        "A %%im-nobsidian:underline%%under%%/underline%% and %%im-nobsidian:color:red%%red%%/color%% end";
+      const json = JSON.stringify(converter.markdownToNotionBlocks(md));
+
+      expect(json).not.toContain("im-nobsidian:underline");
+      expect(json).not.toContain("im-nobsidian:color");
+      expect(json).not.toContain("%%/");
+      expect(json).toContain("under");
+      expect(json).toContain("red");
+    });
   });
 
   describe("postProcessBlocks — divider 변환", () => {

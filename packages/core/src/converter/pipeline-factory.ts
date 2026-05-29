@@ -7,7 +7,7 @@ import { EmbedResolver } from "./pre-processors/embed.js";
 import { PreserveMarkerCollector } from "./pre-processors/preserve-marker.js";
 import { UnsupportedBlockStripper } from "./pre-processors/unsupported-block-stripper.js";
 import { PropertiesTableInjector } from "./pre-processors/properties-table.js";
-import { HtmlAnnotationStripper } from "./pre-processors/html-annotation.js";
+import { InlineAnnotationPreserver } from "./pre-processors/html-annotation.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { PreserveMarkerInjector } from "./post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "./post-processors/callout-restorer.js";
@@ -23,7 +23,7 @@ export interface PipelineOptions {
 export function createDefaultPipeline(options?: PipelineOptions): ConversionPipeline {
   const pipeline = new ConversionPipeline();
 
-  pipeline.registerPreProcessor(new HtmlAnnotationStripper());
+  pipeline.registerPreProcessor(new InlineAnnotationPreserver());
   pipeline.registerPreProcessor(new UnsupportedBlockStripper());
   pipeline.registerPreProcessor(new FrontmatterExtractor());
   pipeline.registerPreProcessor(new PropertiesTableInjector());

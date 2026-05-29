@@ -407,7 +407,21 @@ export class BlockConverter {
     processed = this.extractColumnBlocks(processed);
     processed = this.replaceDividers(processed);
     processed = processed.replace(/<unknown[^>]*\/>/g, "");
+    processed = this.stripInlineAnnotationMarkers(processed);
     return processed;
+  }
+
+  /**
+   * compact underline/color 보존마커를 평문으로 강등 — block(martian) 폴백 경로 전용.
+   *
+   * 무손실 underline/color 복원은 기본 경로인 Markdown API({@link obsidianToNotionEnhanced})가
+   * 전담한다. martian 은 이 서식을 표현할 수 없으므로, Markdown API 가 실패해 이 폴백을 탈 때는
+   * 마커 텍스트가 본문에 리터럴로 새지 않도록 텍스트만 남기고 마커를 제거한다(서식 degrade).
+   */
+  private stripInlineAnnotationMarkers(markdown: string): string {
+    return markdown
+      .replace(new RegExp(`%%${MARKER_BRAND}:underline%%([\\s\\S]*?)%%\\/underline%%`, "g"), "$1")
+      .replace(new RegExp(`%%${MARKER_BRAND}:color:[^%]+%%([\\s\\S]*?)%%\\/color%%`, "g"), "$1");
   }
 
   private replaceDividers(markdown: string): string {

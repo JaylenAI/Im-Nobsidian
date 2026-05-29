@@ -369,3 +369,23 @@ describe("round-trip", () => {
     expect(obsidian).toContain("\\sum_{i=1}^n i");
   });
 });
+
+// I3 인라인 서식 무손실 — Notion span ↔ compact 마커 왕복이 첫 라운드 이후 fixpoint 로
+// 수렴함을 합성으로 못박는다(개별 방향 테스트는 위 두 describe 에 존재).
+describe("underline/color 왕복 fixpoint (I3)", () => {
+  const spans = [
+    '<span underline="true">밑줄</span>',
+    '<span color="red">빨강</span>',
+    '<span color="yellow_background">강조</span>',
+  ];
+
+  for (const span of spans) {
+    it(`Notion→Obsidian→Notion fixpoint: ${span}`, () => {
+      const marker = notionEnhancedToObsidian(span);
+      expect(marker).not.toContain("<span"); // Obsidian 측은 compact 마커
+      expect(obsidianToNotionEnhanced(marker)).toBe(span); // 재push 시 원본 span 복원
+      // Obsidian 측 마커 자체도 한 번 더 왕복하면 그대로(fixpoint)
+      expect(notionEnhancedToObsidian(obsidianToNotionEnhanced(marker))).toBe(marker);
+    });
+  }
+});

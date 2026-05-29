@@ -3,7 +3,8 @@ import { MathNormalizer } from "../../src/converter/pre-processors/math.js";
 import { EmbedResolver } from "../../src/converter/pre-processors/embed.js";
 import { InlineDBParser } from "../../src/converter/pre-processors/inline-db.js";
 import { PreserveMarkerCollector } from "../../src/converter/pre-processors/preserve-marker.js";
-import { HtmlAnnotationStripper } from "../../src/converter/pre-processors/html-annotation.js";
+import { InlineAnnotationPreserver } from "../../src/converter/pre-processors/html-annotation.js";
+import { obsidianToNotionEnhanced } from "../../src/converter/enhanced-md-converter.js";
 import { ColorAnnotator } from "../../src/converter/post-processors/color-annotator.js";
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import type { ConversionContext } from "../../src/types/convert.js";
@@ -228,46 +229,36 @@ describe("FrontmatterGenerator", () => {
   });
 });
 
-describe("HtmlAnnotationStripper", () => {
-  const processor = new HtmlAnnotationStripper();
+describe("InlineAnnotationPreserver (I3 무손실 underline/color push)", () => {
+  const processor = new InlineAnnotationPreserver();
+  const transform = (content: string): string =>
+    processor.process({ content, metadata: {}, context: pushContext }).content;
 
-  it("Push 시 <u> 태그를 제거", () => {
-    const result = processor.process({
-      content: "This is <u>underlined</u> text",
-      metadata: {},
-      context: pushContext,
-    });
-    expect(result.content).toBe("This is underlined text");
+  it("Push 시 <u> → compact underline 마커로 승격(제거 아님)", () => {
+    expect(transform("This is <u>underlined</u> text")).toBe(
+      "This is %%im-nobsidian:underline%%underlined%%/underline%% text",
+    );
   });
 
-  it("Push 시 color span을 제거", () => {
-    const result = processor.process({
-      content: 'This is <span class="notion-red">red</span> text',
-      metadata: {},
-      context: pushContext,
-    });
-    expect(result.content).toBe("This is red text");
+  it("Push 시 color span → compact color 마커", () => {
+    expect(transform('This is <span class="notion-red">red</span> text')).toBe(
+      "This is %%im-nobsidian:color:red%%red%%/color%% text",
+    );
   });
 
-  it("Push 시 background color span을 제거", () => {
-    const result = processor.process({
-      content: 'This is <span class="notion-yellow-bg">highlighted</span> text',
-      metadata: {},
-      context: pushContext,
-    });
-    expect(result.content).toBe("This is highlighted text");
+  it("Push 시 background color span(-bg) → _background 색상 마커", () => {
+    expect(transform('This is <span class="notion-yellow-bg">highlighted</span> text')).toBe(
+      "This is %%im-nobsidian:color:yellow_background%%highlighted%%/color%% text",
+    );
   });
 
-  it("Push 시 im-nobsidian color 마커를 제거", () => {
-    const result = processor.process({
-      content: "This is %% im-nobsidian:color:red %%colored%% im-nobsidian:end %% text",
-      metadata: {},
-      context: pushContext,
-    });
-    expect(result.content).toBe("This is colored text");
+  it("Push 시 공백형 im-nobsidian color 마커 → compact color 마커", () => {
+    expect(
+      transform("This is %% im-nobsidian:color:red %%colored%% im-nobsidian:end %% text"),
+    ).toBe("This is %%im-nobsidian:color:red%%colored%%/color%% text");
   });
 
-  it("Pull 방향에서는 동작하지 않음", () => {
+  it("Pull 방향에서는 동작하지 않음(원본 보존)", () => {
     const result = processor.process({
       content: "This is <u>underlined</u> text",
       metadata: {},
@@ -276,13 +267,23 @@ describe("HtmlAnnotationStripper", () => {
     expect(result.content).toBe("This is <u>underlined</u> text");
   });
 
-  it("여러 태그 동시 처리", () => {
-    const result = processor.process({
-      content:
+  it("여러 표기 동시 승격", () => {
+    expect(
+      transform(
         '<u>bold</u> and <span class="notion-blue">blue</span> and %% im-nobsidian:color:green %%green%% im-nobsidian:end %%',
-      metadata: {},
-      context: pushContext,
-    });
-    expect(result.content).toBe("bold and blue and green");
+      ),
+    ).toBe(
+      "%%im-nobsidian:underline%%bold%%/underline%% and %%im-nobsidian:color:blue%%blue%%/color%% and %%im-nobsidian:color:green%%green%%/color%%",
+    );
+  });
+
+  it("승격된 마커는 obsidianToNotionEnhanced 가 Notion span 으로 무손실 복원", () => {
+    // <u>·color span → compact 마커 → push 직전 단일 SSOT → Notion Enhanced-MD span
+    const promoted = transform(
+      'A <u>u</u> and <span class="notion-red">r</span> and <span class="notion-blue-bg">b</span>',
+    );
+    expect(obsidianToNotionEnhanced(promoted)).toBe(
+      'A <span underline="true">u</span> and <span color="red">r</span> and <span color="blue_background">b</span>',
+    );
   });
 });

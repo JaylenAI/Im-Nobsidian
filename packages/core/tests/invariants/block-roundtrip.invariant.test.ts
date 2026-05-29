@@ -45,6 +45,8 @@ ${TOC_MARKER}
 
 본문 문단에 **굵게**, *기울임*, \`인라인코드\`, ~~취소선~~ 포함.
 
+인라인 서식 %%im-nobsidian:underline%%밑줄 텍스트%%/underline%% 과 %%im-nobsidian:color:red%%빨강 텍스트%%/color%% 도 무손실 왕복.
+
 ## 헤딩 2
 
 - 최상위 항목
@@ -177,6 +179,15 @@ describe.skipIf(SKIP)("I2·I3 블록 라운드트립 불변식", () => {
     expect(/(^|[^*])\*[^*\n]+\*/.test(body), "기울임 손실").toBe(true);
     expect(body.includes("~~"), "취소선 손실").toBe(true);
     expect(/`[^`\n]+`/.test(body), "인라인코드 손실").toBe(true);
+    // (I3) 인라인 underline/color — Notion span ↔ compact 마커 무손실 왕복(#47).
+    // strip 되면 마커가 사라져 0/false.
+    expect(
+      /%%im-nobsidian:underline%%[\s\S]*?%%\/underline%%/.test(body),
+      "밑줄(underline) 손실",
+    ).toBe(true);
+    expect(/%%im-nobsidian:color:\w+%%[\s\S]*?%%\/color%%/.test(body), "색상(color) 손실").toBe(
+      true,
+    );
     expect(/^---\s*$/m.test(bodyNoFm), "구분선 손실").toBe(true);
     expect(/\[[^\]]+\]\(https?:/.test(body), "링크 손실").toBe(true);
     // breadcrumb·table_of_contents 는 마크다운 표현이 없어 보존 마커로 왕복한다.
