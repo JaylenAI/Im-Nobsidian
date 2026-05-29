@@ -23,6 +23,24 @@ import {
 } from "./harness.js";
 import type { StateDB } from "../../src/state/state-db.js";
 
+// 부모의 전체 직속 child_page 개수.
+async function countAllChildPages(raw: Client, parentId: string): Promise<number> {
+  let count = 0;
+  let cursor: string | undefined;
+  do {
+    const res = await raw.blocks.children.list({
+      block_id: parentId,
+      page_size: 100,
+      start_cursor: cursor,
+    });
+    for (const b of res.results as Array<{ type: string }>) {
+      if (b.type === "child_page") count++;
+    }
+    cursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
+  } while (cursor);
+  return count;
+}
+
 describe.skipIf(SKIP)("I5 멱등성 불변식", () => {
   let raw: Client;
   const createdPageIds: string[] = [];
@@ -121,6 +139,46 @@ describe.skipIf(SKIP)("I5 멱등성 불변식", () => {
     }
 
     expect(converged, `fixpoint 미수렴 — 마지막: ${lastSummary}`).toBe(true);
+
+    await cleanupVault(vault, stateDb);
+  });
+
+  it("자식 페이지 보유 페이지 — 본문 push 시 자식 페이지 무손실(수정2)", async () => {
+    // 회귀 잠금: 빈 볼트 E2E 에서 발견된 폴더노트 데이터 손실 결함.
+    // child page 를 가진 페이지의 본문 push 는 replace_content[allow_deleting_content]
+    // 와 block 삭제-후-append 경로 모두 child page 를 in_trash 로 삭제한다(실Notion 확인).
+    // 수정2 가드는 살아있는 child page 가 있으면 파괴적 본문 갱신을 건너뛰어 자식을 보존한다.
+    // (구조 매퍼의 폴더노트 매핑에 의존하지 않도록 자식을 raw API 로 직접 생성 → 결정적.)
+    const root = await createIsolatedRoot(raw, "idem-childguard");
+    createdPageIds.push(root);
+    const vault = await createTmpVault();
+    const { orchestrator, stateDb, vaultFs } = makeOrchestrator(vault, root);
+
+    await vaultFs.writeFile("parent.md", "# Parent\n\n부모 본문 한 줄.\n");
+    const push1 = await orchestrator.push();
+    trackPages(stateDb);
+    expect(push1.failed, "1차 push 실패").toHaveLength(0);
+    expect(push1.created).toBe(1);
+
+    const parentId = stateDb.getByPath("parent.md")?.notionPageId;
+    expect(parentId, "parent 페이지 생성").toBeTruthy();
+
+    // 부모 직속에 실제 child_page 를 생성 → 부모는 "본문 + 살아있는 자식" 상태.
+    const child = (await raw.pages.create({
+      parent: { type: "page_id", page_id: parentId! },
+      properties: { title: { title: [{ type: "text", text: { content: "Leaf" } }] } },
+    })) as { id: string };
+    createdPageIds.push(child.id);
+    await sleep(1500);
+    expect(await countAllChildPages(raw, parentId!), "사전 조건: 자식 1개").toBe(1);
+
+    // 부모 본문 편집 → push. 가드가 파괴적 replace 를 막아 push 는 성공(실패 0)하고
+    // 자식 child_page 는 그대로 보존돼야 한다.
+    await vaultFs.writeFile("parent.md", "# Parent\n\n부모 본문 수정됨!\n");
+    const pushEdit = await orchestrator.push();
+    expect(pushEdit.failed, "본문 편집 push 실패").toHaveLength(0);
+    await sleep(1500);
+    expect(await countAllChildPages(raw, parentId!), "본문 편집 후 자식 페이지 삭제됨").toBe(1);
 
     await cleanupVault(vault, stateDb);
   });

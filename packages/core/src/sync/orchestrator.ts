@@ -881,6 +881,23 @@ export class SyncOrchestrator {
 
         if (changed) {
           await this.vaultFs.writeFile(filePath, content);
+          // 링크 정규화로 디스크 내용이 바뀌었으므로 해당 sync record 의 해시·스냅샷·stat
+          // 을 새 내용으로 재동기화한다. 이걸 빠뜨리면 디스크(위키링크 형태)와 저장 해시
+          // (`/p/<id>` 형태)가 영구 불일치해 매 sync마다 "modified" 로 재감지되는
+          // fixpoint 위반(I5)이 발생한다. push 가 가능한 파일은 다음 push 로 self-heal
+          // 되지만, child page 를 가진 폴더노트는 push 가 실패해 영영 churn 한다.
+          const record = this.stateDb.getByPath(filePath);
+          if (record) {
+            const stat = await this.vaultFs.getFileStat(filePath);
+            this.stateDb.transaction(() => {
+              this.stateDb.updateHash(
+                record.id,
+                computeHash(content),
+                Buffer.from(content, "utf-8"),
+              );
+              if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
+            });
+          }
         }
       } catch {
         // 파일 읽기/쓰기 실패 무시
@@ -1715,11 +1732,42 @@ export class SyncOrchestrator {
     return page;
   }
 
+  // 페이지에 살아있는(휴지통 아님) child page/database 가 직속 블록으로 존재하는가.
+  // 휴지통(in_trash) 자식은 children.list 에 잡히지 않으므로 "live" 는 암묵적이다.
+  private async pageHasLiveChildren(pageId: string): Promise<boolean> {
+    try {
+      const children = await this.notionClient.fetchAllChildren(pageId);
+      return children.some((b) => b.type === "child_page" || b.type === "child_database");
+    } catch (error) {
+      // 조회 실패 시 안전측: 자식이 있을 수 있다고 보고 파괴적 replace 를 막는다.
+      getLogger().warn(
+        `[Im-Nobsidian] 자식 페이지 조회 실패 — 본문 push 보수적 생략(자식 보호): ${pageId} (${
+          error instanceof Error ? error.message : String(error)
+        })`,
+      );
+      return true;
+    }
+  }
+
   private async pushUpdatePage(
     pageId: string,
     markdownContent: string,
     _baseSnapshot?: Buffer | null,
   ): Promise<void> {
+    // 데이터 손실 가드: 이 페이지가 살아있는 child page/database 를 가지면 두 push 경로
+    // (replace_content[allow_deleting_content] · block 삭제-후-append)가 모두 자식을
+    // 삭제한다. 실Notion probe 확인: replace_content 는 새 마크다운에 없는 child page 를
+    // in_trash 로 삭제하고, child page 를 mention 으로 표현하려 하면 거부한다.
+    // 자식 페이지는 각자 자기 sync record 로 독립 동기화되므로, 여기서는 본문 갱신을
+    // 건너뛰고 자식을 보존한다(무손실). 폴더노트 본문 편집의 Notion 반영은 의도적 degrade.
+    if (await this.pageHasLiveChildren(pageId)) {
+      getLogger().warn(
+        `[Im-Nobsidian] 자식 페이지 보유 — 본문 push 생략(자식 삭제 방지): ${pageId}. ` +
+          `자식 페이지는 각자 동기화되며, 이 페이지 본문 편집은 Notion 에 반영되지 않습니다.`,
+      );
+      return;
+    }
+
     if (this.config.conversion.preferMarkdownApi !== false) {
       const enhanced = obsidianToNotionEnhanced(markdownContent);
       await this.notionClient.replacePageMarkdown(pageId, enhanced);

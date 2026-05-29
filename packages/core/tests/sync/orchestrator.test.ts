@@ -3,6 +3,7 @@ import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import type { Config } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
+import { computeHash } from "../../src/utils/hash.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -822,5 +823,152 @@ describe("SyncOrchestrator", () => {
 
       expect(mockStateDb.setMeta).toHaveBeenCalledWith("push_in_progress", "");
     });
+  });
+});
+
+// 수정1 잠금: resolveNotionLinks 가 디스크 내용을 위키링크 형태로 재작성한 뒤
+// 해당 sync record 의 해시·stat 을 새 내용으로 동기화해야 한다. 이걸 빠뜨리면
+// 디스크(`[[Title]]`)와 저장 해시(`/p/<id>`)가 영구 불일치해 매 sync 마다 "modified"
+// 로 오검지되는 fixpoint 위반(I5)이 발생한다(폴더노트 무한 churn 의 근본 원인).
+describe("SyncOrchestrator.resolveNotionLinks 해시 동기화 (I5 fixpoint 잠금)", () => {
+  it("링크 재작성 후 record 해시를 디스크 내용 해시로 갱신한다", async () => {
+    const targetId = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"; // 32 hex
+    const sourceRec = {
+      id: 1,
+      obsidianPath: "source.md",
+      notionPageId: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    };
+    const targetRec = { id: 2, obsidianPath: "Target.md", notionPageId: targetId };
+
+    const original =
+      "# Source\n\n" +
+      `[[notion:${targetId}]] 그리고 ` +
+      `[링크텍스트](/p/${targetId}?pvs=4) 참조.\n`;
+
+    let written = "";
+    const vaultFs = createMockVaultFs();
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(original);
+    (vaultFs.writeFile as ReturnType<typeof vi.fn>).mockImplementation(
+      async (_path: string, content: string) => {
+        written = content;
+      },
+    );
+    (vaultFs.getFileStat as ReturnType<typeof vi.fn>).mockResolvedValue({
+      mtime: "2026-05-30T00:00:00.000Z",
+      size: 999,
+    });
+
+    const stateDb = createMockStateDb();
+    stateDb.getAll.mockReturnValue([sourceRec, targetRec]);
+    stateDb.getByPath.mockImplementation((p: string) => (p === "source.md" ? sourceRec : null));
+
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      stateDb as any,
+      createMockNotionClient() as any,
+      vaultFs,
+    );
+
+    const resolved = await (
+      orchestrator as unknown as { resolveNotionLinks(paths: string[]): Promise<number> }
+    ).resolveNotionLinks(["source.md"]);
+
+    // 두 링크 형태(`[[notion:id]]`, `/p/<id>`) 모두 위키링크로 해소
+    expect(resolved).toBe(2);
+    expect(written).toContain("[[Target]]");
+    expect(written).toContain("[[Target|링크텍스트]]");
+    expect(written).not.toContain("notion:");
+    expect(written).not.toContain("/p/");
+
+    // 핵심 잠금: 저장 해시가 디스크에 쓴 바로 그 내용의 해시와 일치 → 다음 detect 시 "modified" 아님
+    expect(stateDb.updateHash).toHaveBeenCalledTimes(1);
+    expect(stateDb.updateHash).toHaveBeenCalledWith(
+      sourceRec.id,
+      computeHash(written),
+      expect.any(Buffer),
+    );
+    // stat 캐시도 새 파일 stat 으로 동기화 (mtime+size 빠른 경로 일치)
+    expect(stateDb.updateStatCache).toHaveBeenCalledWith(
+      sourceRec.id,
+      "2026-05-30T00:00:00.000Z",
+      999,
+    );
+  });
+
+  it("변경 없는 파일은 write/해시 갱신을 하지 않는다(불필요한 churn 방지)", async () => {
+    const stateDb = createMockStateDb();
+    stateDb.getAll.mockReturnValue([
+      { id: 1, obsidianPath: "plain.md", notionPageId: "cccccccccccccccccccccccccccccccc" },
+    ]);
+    const vaultFs = createMockVaultFs();
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Plain\n\n링크 없음.\n");
+
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      stateDb as any,
+      createMockNotionClient() as any,
+      vaultFs,
+    );
+
+    const resolved = await (
+      orchestrator as unknown as { resolveNotionLinks(paths: string[]): Promise<number> }
+    ).resolveNotionLinks(["plain.md"]);
+
+    expect(resolved).toBe(0);
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
+    expect(stateDb.updateHash).not.toHaveBeenCalled();
+    expect(stateDb.updateStatCache).not.toHaveBeenCalled();
+  });
+});
+
+// 수정2 잠금: child page/database 를 보유한 페이지의 본문 push 는 자식을 삭제하지
+// 않도록 가드된다(실Notion probe 확인: replace_content[allow_deleting_content] 와
+// block 삭제-후-append 경로 모두 자식 child_page 를 in_trash 로 삭제). 가드는 본문
+// 갱신을 건너뛰고 destructive API 를 호출하지 않는다.
+describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실 방지)", () => {
+  it("자식 페이지 보유 시 replacePageMarkdown/deleteBlock 을 호출하지 않는다", async () => {
+    const notion = createMockNotionClient();
+    // 직속 자식에 child_page 1개 존재
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "leaf-1", type: "child_page" },
+    ]);
+
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await (
+      orchestrator as unknown as {
+        pushUpdatePage(id: string, md: string): Promise<void>;
+      }
+    ).pushUpdatePage("hub-page", "# Hub\n\n수정된 본문.\n");
+
+    // 파괴적 본문 갱신 경로(둘 다)를 절대 타지 않아야 한다
+    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
+    expect(notion.deleteBlock).not.toHaveBeenCalled();
+    expect(notion.appendChildren).not.toHaveBeenCalled();
+  });
+
+  it("자식이 없으면 정상적으로 replacePageMarkdown 으로 본문을 갱신한다", async () => {
+    const notion = createMockNotionClient();
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([]); // 자식 없음
+
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await (
+      orchestrator as unknown as {
+        pushUpdatePage(id: string, md: string): Promise<void>;
+      }
+    ).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
+
+    expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(1);
   });
 });
