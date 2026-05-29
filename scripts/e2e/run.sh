@@ -106,9 +106,29 @@ p_roundtrip() {
 p_summary() {
   phase "요약"
   echo "  로그: $LOGDIR"
+  local k
   for k in reset init pull analyze repull pushdry roundtrip; do
-    [[ -n "${RESULTS[$k]:-}" ]] && printf "  %-10s %s\n" "$k" "${RESULTS[$k]}"
+    if [[ -n "${RESULTS[$k]:-}" ]]; then
+      printf "  %-10s %s\n" "$k" "${RESULTS[$k]}"
+    fi
   done
+}
+
+# 실행 단계 결과로 종합 성패를 판정한다 — 성공 0 / 실제 실패만 비0.
+# (요약 루프의 마지막 `[[ ]] &&` 테스트가 미실행 단계에서 false 가 되어 스크립트
+#  종료코드로 누수되던 문제를 막고, CI/자동화가 exit code 로 성패를 신뢰하게 한다.)
+overall_status() {
+  local k failed=0
+  for k in "${!RESULTS[@]}"; do
+    case "${RESULTS[$k]}" in
+      실패 | 위반 | 손실 | churn=*)
+        failed=1
+        err "단계 실패: ${k}=${RESULTS[$k]}"
+        ;;
+    esac
+  done
+  if [[ $failed -eq 0 ]]; then ok "E2E 전체 통과"; fi
+  return "$failed"
 }
 
 # ─── 메인 ───
@@ -138,6 +158,7 @@ main() {
     esac
   done
   p_summary
+  overall_status
 }
 
 main "$@"
