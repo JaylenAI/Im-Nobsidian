@@ -104,6 +104,11 @@ export class BaseFileGenerator {
       return;
     }
 
+    // Obsidian Bases 는 뷰 이름 유일성을 요구한다. Notion 은 이름 없는 뷰를 'Untitled'로
+    // 반환하므로(동명 다수 발생) 중복 시 ' 2','3'… 접미사로 유일화한다. 미적용 시 Bases 가
+    // 동명 뷰를 하나로 합치거나 무시해 갤러리·표 뷰가 사라진다.
+    this.dedupeViewNames(basesViews);
+
     lines.push("views:");
     for (const view of basesViews) {
       lines.push(`  - type: ${view.type}`);
@@ -136,6 +141,24 @@ export class BaseFileGenerator {
       if (view.image) {
         lines.push(`    image: ${this.propRef(view.image)}`);
       }
+    }
+  }
+
+  /**
+   * 뷰 이름을 Bases 요구사항대로 유일화한다(in-place). 동명 충돌 시 ' 2',' 3'… 를 붙이되
+   * 이미 존재하는 이름과 다시 충돌하지 않을 때까지 증가시킨다.
+   */
+  private dedupeViewNames(views: Array<{ name: string }>): void {
+    const used = new Set<string>();
+    for (const v of views) {
+      let name = v.name;
+      if (used.has(name)) {
+        let n = 2;
+        while (used.has(`${v.name} ${n}`)) n++;
+        name = `${v.name} ${n}`;
+      }
+      used.add(name);
+      v.name = name;
     }
   }
 

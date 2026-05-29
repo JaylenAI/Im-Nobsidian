@@ -14,8 +14,13 @@
 import { readdirSync, statSync, existsSync } from "node:fs";
 import { join, relative, basename, dirname, extname } from "node:path";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
-const require = createRequire(import.meta.url);
+// better-sqlite3 는 @im-nobsidian/core 의 의존성이다. 스크립트 위치(scripts/e2e)에는
+// node_modules 가 없으므로 require 기준점을 core 패키지로 고정해야 해결된다.
+const E2E_DIR = dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = join(E2E_DIR, "..", "..");
+const require = createRequire(join(REPO_ROOT, "packages", "core", "package.json"));
 
 const vault = process.argv[2];
 const jsonOnly = process.argv.includes("--json");
@@ -48,9 +53,12 @@ function walk(dir, acc) {
 const fs = { md: [], base: [], other: [], folders: [] };
 walk(vault, fs);
 
-// 충돌 접미사 ` (N).md` — 본문분리/충돌의 신호 (단, 정당한 제목일 수 있어 DB와 교차검증).
-const collisionRe = / \(\d+\)\.md$/;
-const collisions = fs.md.filter((p) => collisionRe.test(p));
+// 툴이 동명(同名) 페이지를 구분할 때 붙이는 접미사는 ` (<8-hex>)` 다(database-syncer:
+// `${safeName} (${page.id.slice(0,8)})`). 이는 '서로 다른 page_id 의 동명 페이지'에 대한
+// 정상 disambiguation 이지 손실이 아니므로 정보성 신호로만 보고한다.
+// 반면 정당한 Notion 제목의 ` (1)` 등 십진 접미사는 위반이 전혀 아니다(과거 오판 원인).
+const dedupSuffixRe = / \([0-9a-f]{8}\)\.md$/;
+const dedupSuffixed = fs.md.filter((p) => dedupSuffixRe.test(p));
 
 // ─── 2) 상태 DB ───
 let db = null;
@@ -115,8 +123,9 @@ if (existsSync(dbPath)) {
 }
 
 // ─── 3) 판정 ───
+// 진짜 무결성 위반은 '같은 page_id 가 여러 파일에 매핑'(중복/부활)과 'folder-note 위치오류'다.
+// dedup 접미사는 정상 동작이므로 위반이 아니다.
 const violations = [];
-if (collisions.length) violations.push(`충돌접미사 ${collisions.length}건`);
 if (dbReport.duplicatePageIds.length)
   violations.push(`중복 page_id ${dbReport.duplicatePageIds.length}건`);
 if (dbReport.folderNoteMisplaced.length)
@@ -131,7 +140,7 @@ const report = {
     folders: fs.folders.length,
   },
   db: dbReport,
-  collisions,
+  dedupSuffixed,
   violations,
   clean: violations.length === 0,
 };
@@ -151,7 +160,8 @@ if (jsonOnly) {
   } else {
     L(`  DB:    (사용 불가${dbReport.error ? ": " + dbReport.error : ""})`);
   }
-  if (collisions.length) L(`  ⚠ 충돌접미사: ${collisions.slice(0, 10).join(", ")}${collisions.length > 10 ? " …" : ""}`);
+  if (dedupSuffixed.length)
+    L(`  · dedup 접미사(정상 disambiguation) ${dedupSuffixed.length}건: ${dedupSuffixed.slice(0, 5).join(", ")}${dedupSuffixed.length > 5 ? " …" : ""}`);
   if (dbReport.duplicatePageIds.length)
     L(`  ⚠ 중복 page_id: ${JSON.stringify(dbReport.duplicatePageIds.slice(0, 5))}`);
   if (dbReport.folderNoteMisplaced.length)

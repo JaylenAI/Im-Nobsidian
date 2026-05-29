@@ -513,4 +513,59 @@ describe("BaseFileGenerator", () => {
 
     expect(result.endsWith("\n")).toBe(true);
   });
+
+  it("동명 뷰(Untitled 다수)는 유일한 이름으로 dedupe 한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            { id: "v1", name: "Untitled", type: "table" },
+            { id: "v2", name: "Untitled", type: "table" },
+            { id: "v3", name: "Untitled", type: "gallery", cover: { type: "page_cover" } },
+            { id: "v4", name: "갤러리", type: "gallery", cover: { type: "page_cover" } },
+          ],
+        },
+      }),
+    );
+
+    // YAML 인용(공백·비ASCII 이름은 따옴표) 제거 후 비교.
+    const names = [...result.matchAll(/^ {4}name: (.+)$/gm)].map((m) =>
+      m[1].replace(/^"(.*)"$/, "$1"),
+    );
+    // 4개 뷰 모두 보존 + 이름 유일.
+    expect(names).toHaveLength(4);
+    expect(new Set(names).size).toBe(4);
+    expect(names).toContain("Untitled");
+    expect(names).toContain("Untitled 2");
+    expect(names).toContain("Untitled 3");
+    expect(names).toContain("갤러리");
+  });
+
+  it("이미 존재하는 접미사 이름과도 충돌하지 않게 증가한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            { id: "v1", name: "View", type: "table" },
+            { id: "v2", name: "View 2", type: "table" },
+            { id: "v3", name: "View", type: "table" },
+          ],
+        },
+      }),
+    );
+
+    // YAML 인용(공백·비ASCII 이름은 따옴표) 제거 후 비교.
+    const names = [...result.matchAll(/^ {4}name: (.+)$/gm)].map((m) =>
+      m[1].replace(/^"(.*)"$/, "$1"),
+    );
+    expect(new Set(names).size).toBe(3);
+    // 'View'(v1) → 'View', 'View 2'(v2) 그대로, 'View'(v3)는 'View 2' 충돌 회피 → 'View 3'.
+    expect(names).toEqual(["View", "View 2", "View 3"]);
+  });
 });
