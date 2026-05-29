@@ -11,6 +11,7 @@ import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict } from "./conflict-detector.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
+import { resolveDbRowPath } from "../utils/db-row-path.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
@@ -304,11 +305,9 @@ export class DatabaseSyncer {
     if (existingRecord?.obsidianPath) {
       filePath = existingRecord.obsidianPath;
     } else {
-      filePath = `${dbConfig.localFolder}/${safeName}.md`;
-      const existingByPath = this.stateDb.getByPath(filePath);
-      if (existingByPath && existingByPath.notionPageId !== page.id) {
-        filePath = `${dbConfig.localFolder}/${safeName} (${page.id.slice(0, 8)}).md`;
-      }
+      filePath = resolveDbRowPath(dbConfig.localFolder, safeName, page.id, (p) =>
+        this.stateDb.getByPath(p),
+      );
     }
 
     const finalContent = this.pipeline.convertToMarkdown(
