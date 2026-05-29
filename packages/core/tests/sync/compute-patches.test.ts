@@ -29,6 +29,7 @@ function createMockStateDb() {
     getByStatus: vi.fn().mockReturnValue([]),
     upsert: vi.fn(),
     upsertWikilink: vi.fn(),
+    deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),

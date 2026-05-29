@@ -24,6 +24,7 @@ import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
+import { resolvePullConflict } from "./conflict-detector.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
@@ -343,7 +344,7 @@ export class SyncOrchestrator {
       : remoteChanges;
 
     if (filtered.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
-      const hasDbResults = await this.pullDiscoveredDatabases(writtenPaths, failed);
+      const hasDbResults = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
       if (!hasDbResults.created && !hasDbResults.updated) {
         this.stateDb.setMeta("last_pull_at", new Date().toISOString());
         this.stateDb.setMeta("last_sync_at", new Date().toISOString());
@@ -357,7 +358,7 @@ export class SyncOrchestrator {
         created: hasDbResults.created,
         updated: hasDbResults.updated,
         deleted: 0,
-        conflicts: [],
+        conflicts,
         writtenPaths,
         failed,
         duration: Date.now() - startTime,
@@ -525,6 +526,7 @@ export class SyncOrchestrator {
         const dbResult = await this.databaseSyncer.pullAll();
         created += dbResult.created;
         updated += dbResult.updated;
+        conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
         if (dbResult.created + dbResult.updated > 0) {
           const dbPaths = this.stateDb
@@ -539,7 +541,7 @@ export class SyncOrchestrator {
     }
 
     {
-      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed);
+      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
       created += dbDiscovery.created;
       updated += dbDiscovery.updated;
     }
@@ -723,6 +725,7 @@ export class SyncOrchestrator {
   private async pullDiscoveredDatabases(
     writtenPaths: string[],
     failed: FailedOperation[],
+    conflicts: Conflict[],
   ): Promise<{ created: number; updated: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0 };
 
@@ -789,6 +792,7 @@ export class SyncOrchestrator {
           const dbResult = await this.databaseSyncer.pullDatabase(dbConfig);
           created += dbResult.created;
           updated += dbResult.updated;
+          conflicts.push(...dbResult.conflicts);
           failed.push(...dbResult.failed);
           if (dbResult.created + dbResult.updated > 0) {
             const dbPaths = this.stateDb
@@ -1028,7 +1032,10 @@ export class SyncOrchestrator {
           throw error;
         }
       }
-      this.stateDb.delete(record.id);
+      this.stateDb.transaction(() => {
+        this.stateDb.delete(record.id);
+        this.stateDb.deleteWikilink(record.obsidianPath);
+      });
     } else {
       this.stateDb.updateStatus(record.id, "pending");
     }
@@ -1309,53 +1316,50 @@ export class SyncOrchestrator {
       localContent = "";
     }
 
-    const localHash = computeHash(localContent);
-    const localModified = localHash !== record.contentHash;
+    const resolution = resolvePullConflict({
+      record,
+      localContent,
+      remoteContent,
+      remoteChange: change,
+      strategy: this.config.sync.conflictStrategy,
+    });
 
-    if (localModified) {
-      const strategy = this.config.sync.conflictStrategy;
-
-      if (strategy === "remote-first") {
-        // 리모트 우선: 로컬 변경 무시, 리모트 내용으로 덮어쓰기
-      } else if (strategy === "local-first") {
-        return { path: record.obsidianPath };
-      } else {
-        const conflict: Conflict = {
-          syncRecord: record,
-          localChange: {
-            path: record.obsidianPath,
-            type: "modified",
-            currentHash: localHash,
-            previousHash: record.contentHash,
-          },
-          remoteChange: change,
-          baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
-          localContent,
-          remoteContent,
-        };
-
-        this.stateDb.updateStatus(record.id, "conflict");
-        return { conflict };
-      }
+    if (resolution.action === "skip") {
+      // local-first: 로컬 보존, 리모트 변경 무시
+      return { path: record.obsidianPath };
+    }
+    if (resolution.action === "conflict") {
+      this.stateDb.updateStatus(record.id, "conflict");
+      return { conflict: resolution.conflict };
     }
 
     await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
 
     const updateStat = await this.vaultFs.getFileStat(record.obsidianPath);
     const newHash = computeHash(remoteContent);
-    this.stateDb.upsert({
-      obsidianPath: record.obsidianPath,
-      notionPageId: change.pageId,
-      notionParentId: record.notionParentId,
-      contentHash: newHash,
-      notionLastEdited: page.last_edited_time,
-      localLastModified: new Date().toISOString(),
-      syncDirection: record.syncDirection,
-      fileType: record.fileType,
-      status: "synced",
-      baseSnapshot: Buffer.from(remoteContent, "utf-8"),
-      localMtime: updateStat?.mtime ?? null,
-      localFileSize: updateStat?.size ?? null,
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        notionParentId: record.notionParentId,
+        contentHash: newHash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: record.syncDirection,
+        fileType: record.fileType,
+        status: "synced",
+        baseSnapshot: Buffer.from(remoteContent, "utf-8"),
+        localMtime: updateStat?.mtime ?? null,
+        localFileSize: updateStat?.size ?? null,
+      });
+
+      const aliases = extractAliases(properties);
+      this.stateDb.upsertWikilink({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        title,
+        aliases,
+      });
     });
 
     return { path: record.obsidianPath };
@@ -1373,7 +1377,10 @@ export class SyncOrchestrator {
       }
     }
 
-    this.stateDb.delete(record.id);
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(record.obsidianPath);
+    });
     return record.obsidianPath;
   }
 
@@ -1383,7 +1390,12 @@ export class SyncOrchestrator {
 
     if (folderNoteRecord?.notionPageId) {
       const existing = this.stateDb.getByPath(folderPath);
-      if (existing) this.stateDb.delete(existing.id);
+      if (existing) {
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(existing.id);
+          this.stateDb.deleteWikilink(existing.obsidianPath);
+        });
+      }
       return;
     }
 
@@ -1452,7 +1464,10 @@ export class SyncOrchestrator {
       const folderNotePath = `${folder.obsidianPath}/${folderName}.md`;
       const noteRecord = this.stateDb.getByPath(folderNotePath);
       if (noteRecord?.notionPageId) {
-        this.stateDb.delete(folder.id);
+        this.stateDb.transaction(() => {
+          this.stateDb.delete(folder.id);
+          this.stateDb.deleteWikilink(folder.obsidianPath);
+        });
       }
     }
   }

@@ -439,6 +439,25 @@ describe("SqlJsStateDB", () => {
     it("존재하지 않는 페이지 ID는 null", () => {
       expect(db.resolvePageId("no-such-page")).toBeNull();
     });
+
+    it("deleteWikilink로 경로 항목 제거", () => {
+      db.upsertWikilink({
+        obsidianPath: "notes/meeting.md",
+        notionPageId: "page-w1",
+        title: "회의록",
+        aliases: ["MoM"],
+      });
+      expect(db.resolvePageId("page-w1")).not.toBeNull();
+
+      db.deleteWikilink("notes/meeting.md");
+
+      expect(db.resolvePageId("page-w1")).toBeNull();
+      expect(db.resolveWikilink("회의록")).toBeNull();
+    });
+
+    it("deleteWikilink — 없는 경로는 무시", () => {
+      expect(() => db.deleteWikilink("notes/none.md")).not.toThrow();
+    });
   });
 
   // --- sync_metadata ---
