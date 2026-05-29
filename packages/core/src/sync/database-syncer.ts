@@ -14,6 +14,7 @@ import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath } from "../utils/db-row-path.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
+import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import {
   notionEnhancedToObsidian,
@@ -38,6 +39,7 @@ type PullPageOutcome =
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
   private readonly baseFileGenerator = new BaseFileGenerator();
+  private readonly sidecarGenerator = new SidecarGenerator();
 
   constructor(
     private readonly config: Config,
@@ -217,24 +219,64 @@ export class DatabaseSyncer {
         dbConfig.localFolder.split("/").pop() ||
         "Database";
 
+      const resolvedViews: DatabaseViewsConfig = viewsConfig ?? {
+        databaseId: dbConfig.databaseId,
+        databaseName: dbName,
+        lastSynced: new Date().toISOString(),
+        views: [{ id: "default", name: "Table", type: "table" }],
+      };
+
       const baseContent = this.baseFileGenerator.generate({
         databaseId: dbConfig.databaseId,
         databaseName: dbName,
         schema: schemaFull,
-        viewsConfig: viewsConfig ?? {
-          databaseId: dbConfig.databaseId,
-          databaseName: dbName,
-          lastSynced: new Date().toISOString(),
-          views: [{ id: "default", name: "Table", type: "table" }],
-        },
+        viewsConfig: resolvedViews,
         folderPath: dbConfig.localFolder,
       });
 
-      const basePath = `${dbConfig.localFolder}/${sanitizeFileName(dbName)}.base`;
+      const safeName = sanitizeFileName(dbName);
+      const basePath = `${dbConfig.localFolder}/${safeName}.base`;
       await this.vaultFs.writeFile(basePath, baseContent);
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
+
+      await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
+    }
+  }
+
+  /**
+   * `.base` 가 표현하지 못하는 Notion DB 메타데이터(미지원 뷰·필터식·커버크기 등)를
+   * 사이드카 `<db>.notion.json` 으로 무손실 보존하고, degrade 된 항목을 정직하게 로그한다.
+   * 결정적 직렬화라 동일 DB 상태 → 동일 바이트 → 멱등(drift/churn 0).
+   */
+  private async generateSidecar(
+    dbConfig: DatabaseSyncConfig,
+    dbName: string,
+    safeName: string,
+    schemaFull: Record<string, { id: string; type: string; options?: Array<{ name: string }> }>,
+    resolvedViews: DatabaseViewsConfig,
+  ): Promise<void> {
+    try {
+      const sidecar = this.sidecarGenerator.build({
+        databaseId: dbConfig.databaseId,
+        databaseName: dbName,
+        schema: schemaFull,
+        viewsConfig: resolvedViews,
+      });
+      const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
+      await this.vaultFs.writeFile(sidecarPath, this.sidecarGenerator.serialize(sidecar));
+
+      if (sidecar.degraded.length > 0) {
+        const unrep = sidecar.degraded.filter((d) => d.kind === "view-unrepresentable").length;
+        const dropped = sidecar.degraded.length - unrep;
+        getLogger().info(
+          `[DB Sync] '${dbName}' degrade ${sidecar.degraded.length}건` +
+            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}.notion.json 보존`,
+        );
+      }
+    } catch (error) {
+      getLogger().warn(`[DB Sync] 사이드카 생성 실패 (계속 진행):`, error);
     }
   }
 
