@@ -217,6 +217,35 @@ describe("BlockConverter", () => {
 
       expect(blocks[0]?.type).toBe("quote");
     });
+
+    // 회귀 잠금(rank7): martian 은 blockquote 본문을 자식 paragraph 로 내려보내고 quote.rich_text 를
+    // 비운다. flattenMartianBlockquote 가 이를 끌어올려 본문을 보존한다. 평탄화가 빠지면
+    // rich_text 가 빈 채 자식 문단만 남아 push→pull 시 구조가 갈라진다.
+    it("blockquote 본문이 quote.rich_text 로 평탄화되어 보존된다(자식-중첩 아님)", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks("> 인용문 본문") as Array<
+        Record<string, unknown>
+      >;
+      expect(blocks).toHaveLength(1);
+      const quote = blocks[0]!.quote as {
+        rich_text: Array<{ text?: { content?: string } }>;
+        children?: unknown[];
+      };
+      const text = quote.rich_text.map((r) => r.text?.content ?? "").join("");
+      expect(text).toBe("인용문 본문"); // 본문이 rich_text 에 그대로
+      expect(quote.children ?? []).toHaveLength(0); // 자식으로 새지 않음
+    });
+
+    it("여러 줄 blockquote 는 줄바꿈 rich_text 로 연결되어 본문 보존", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks("> 첫 줄\n>\n> 둘째 줄") as Array<
+        Record<string, unknown>
+      >;
+      const quote = blocks[0]!.quote as { rich_text: Array<{ text?: { content?: string } }> };
+      const text = quote.rich_text.map((r) => r.text?.content ?? "").join("");
+      expect(text).toContain("첫 줄");
+      expect(text).toContain("둘째 줄");
+    });
   });
 
   describe("postProcessBlocks — toggle 보존 마커 변환", () => {
