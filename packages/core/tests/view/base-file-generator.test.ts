@@ -718,3 +718,103 @@ describe("BaseFileGenerator — RAW vs URL-인코딩 속성 id 해석 (rank13)",
     expect(a.includes("%5BjiM")).toBe(false);
   });
 });
+
+// rank14(I7): 스키마 진화(속성 삭제·이름변경)는 매 pull 마다 .base 를 현재 스키마로 **완전
+// 재생성**해 반영된다. 뷰는 속성을 **안정적 id** 로 참조하므로, 이름이 바뀌어도(id 동일)
+// 새 이름으로 따라가고, 속성이 삭제되면 properties/order 에서 자연히 사라진다.
+// 결정적 재생성이라 동일 스키마 → 동일 바이트(멱등). order 배열을 toEqual 로 잠근다.
+describe("BaseFileGenerator — 스키마 진화(삭제·이름변경) 반영 (rank14)", () => {
+  const generator = new BaseFileGenerator();
+
+  // 뷰는 속성을 id(s1/n1)로만 참조한다(propertyName 미지정 → resolvePropertyName 강제).
+  function makeEvoOptions(schema: BaseFileOptions["schema"]): BaseFileOptions {
+    return {
+      databaseId: "db-123",
+      databaseName: "Tasks",
+      schema,
+      viewsConfig: {
+        databaseId: "db-123",
+        databaseName: "Tasks",
+        lastSynced: "2026-01-01T00:00:00.000Z",
+        views: [
+          {
+            id: "v1",
+            name: "Table",
+            type: "table",
+            properties: [
+              { propertyId: "s1", visible: true },
+              { propertyId: "n1", visible: true },
+            ],
+            sorts: [{ property: "n1", direction: "descending" }],
+          },
+        ],
+      },
+      folderPath: "databases/Tasks",
+    };
+  }
+
+  // order: 블록을 라인 배열로 추출(없으면 null).
+  function extractOrder(result: string): string[] | null {
+    const lines = result.split("\n");
+    const start = lines.indexOf("    order:");
+    if (start < 0) return null;
+    const out: string[] = [];
+    for (let i = start + 1; i < lines.length; i++) {
+      const m = lines[i].match(/^ {6}- (.+)$/);
+      if (!m) break;
+      out.push(m[1]);
+    }
+    return out;
+  }
+
+  // properties: 섹션의 2칸 들여쓰기 키만 추출.
+  function extractPropKeys(result: string): string[] {
+    const lines = result.split("\n");
+    const start = lines.indexOf("properties:");
+    const end = lines.indexOf("views:");
+    if (start < 0 || end < 0) return [];
+    return lines
+      .slice(start + 1, end)
+      .filter((l) => /^ {2}\S/.test(l))
+      .map((l) => l.trim().replace(/:$/, ""));
+  }
+
+  const BASE_SCHEMA: BaseFileOptions["schema"] = {
+    Name: { id: "title", type: "title" },
+    Status: { id: "s1", type: "select", options: [{ name: "Done", color: "green" }] },
+    Priority: { id: "n1", type: "number" },
+  };
+
+  it("기준선 — Status·Priority 가 properties·order 에 모두 존재한다", () => {
+    const result = generator.generate(makeEvoOptions(BASE_SCHEMA));
+    expect(extractPropKeys(result)).toEqual(["Status", "Priority"]);
+    expect(extractOrder(result)).toEqual(["file.name", "Status", "Priority"]);
+  });
+
+  it("속성 이름변경(Status→State, id 동일 s1)이 properties·order 에 그대로 따라간다", () => {
+    const renamed: BaseFileOptions["schema"] = {
+      Name: { id: "title", type: "title" },
+      State: { id: "s1", type: "select", options: [{ name: "Done", color: "green" }] }, // 이름만 변경
+      Priority: { id: "n1", type: "number" },
+    };
+    const result = generator.generate(makeEvoOptions(renamed));
+    // 옛 이름 Status 는 완전히 사라지고 새 이름 State 로 대체.
+    expect(extractPropKeys(result)).toEqual(["State", "Priority"]);
+    expect(extractOrder(result)).toEqual(["file.name", "State", "Priority"]);
+    expect(result.includes("Status")).toBe(false);
+  });
+
+  it("속성 삭제(Status 제거)가 properties·order 에서 자연히 사라진다(잔존 0)", () => {
+    const deleted: BaseFileOptions["schema"] = {
+      Name: { id: "title", type: "title" },
+      Priority: { id: "n1", type: "number" }, // Status(s1) 삭제됨
+    };
+    const result = generator.generate(makeEvoOptions(deleted));
+    // 삭제된 Status 는 properties·order 어디에도 없고, Priority 만 남는다.
+    expect(extractPropKeys(result)).toEqual(["Priority"]);
+    expect(extractOrder(result)).toEqual(["file.name", "Priority"]);
+    expect(result.includes("Status")).toBe(false);
+    // 미해석 원시 id(s1)도 출력에 누출되지 않는다.
+    expect(/(^|\W)s1(\W|$)/.test(result)).toBe(false);
+  });
+});

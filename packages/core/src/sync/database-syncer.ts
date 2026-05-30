@@ -15,6 +15,7 @@ import { resolveDbRowPath } from "../utils/db-row-path.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
+import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import {
   notionEnhancedToObsidian,
@@ -240,8 +241,31 @@ export class DatabaseSyncer {
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
       await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
+      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
+    }
+  }
+
+  /**
+   * DB 제목이 바뀌면 `.base`/`.notion.json` 파일명(safeName)이 바뀌어 옛 이름의 산출물이
+   * 같은 폴더에 고아로 잔존한다(drift·부활 원인). DB 폴더 **직속**의 산출물 중 현재 이름이
+   * 아닌 것을 삭제해 멱등을 보장한다. 하위 폴더(중첩 DB)의 산출물은 보호한다.
+   */
+  private async cleanupStaleDbArtifacts(localFolder: string, safeName: string): Promise<void> {
+    try {
+      const keep = new Set([
+        `${localFolder}/${safeName}.base`,
+        `${localFolder}/${safeName}.notion.json`,
+      ]);
+      const files = await this.vaultFs.listNonMarkdownFiles();
+      const stale = selectStaleDbArtifacts(files, localFolder, keep);
+      for (const path of stale) {
+        await this.vaultFs.deleteFile(path);
+        getLogger().info(`[DB Sync] 고아 DB 산출물 삭제(rename): ${path}`);
+      }
+    } catch (error) {
+      getLogger().warn(`[DB Sync] 고아 .base/.notion.json 정리 실패 (계속 진행):`, error);
     }
   }
 
