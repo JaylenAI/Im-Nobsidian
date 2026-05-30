@@ -142,6 +142,9 @@ export {
   ViewDataProvider,
   EntryEditor,
   BaseFileGenerator,
+  basesViewTypeOf,
+  NOTION_TO_BASES_VIEW,
+  SidecarGenerator,
   sortEntries,
   groupEntries,
   extractCalendarEntries,
@@ -164,6 +167,11 @@ export type {
   FilterCondition,
   BasePropertySchema,
   BaseFileOptions,
+  BasesViewType,
+  NotionSidecar,
+  SidecarProperty,
+  SidecarView,
+  DegradeNote,
 } from "./view/index.js";
 
 // Utils

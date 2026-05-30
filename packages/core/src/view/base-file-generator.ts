@@ -15,9 +15,17 @@ export interface BaseFileOptions {
   readonly folderPath: string;
 }
 
-type BasesViewType = "table" | "cards" | "list";
+export type BasesViewType = "table" | "cards" | "list";
 
-const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
+/**
+ * Notion 뷰 타입 → Obsidian Bases 뷰 타입 매핑(SSOT).
+ *
+ * `null` = Bases 에 대응 뷰가 없어 `.base` 로 표현 불가. 이 경우 해당 뷰는 `.base` 에서
+ * 누락되므로, 사이드카(`<db>.notion.json`)가 원본 뷰 설정을 무손실 보존한다
+ * (Notion API 는 뷰 생성/수정을 지원하지 않아 뷰는 pull-authoritative — push 로 되돌릴 수
+ * 없으므로 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다).
+ */
+export const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
   table: "table",
   gallery: "cards",
   list: "list",
@@ -29,6 +37,11 @@ const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
   map: null,
   dashboard: null,
 };
+
+/** Notion 뷰 타입의 Bases 대응 타입을 돌려준다. 미지원/미상 타입은 `null`. */
+export function basesViewTypeOf(notionType: string): BasesViewType | null {
+  return NOTION_TO_BASES_VIEW[notionType] ?? null;
+}
 
 export class BaseFileGenerator {
   generate(options: BaseFileOptions): string {

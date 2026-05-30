@@ -1,7 +1,14 @@
 export { ViewDataProvider } from "./view-data-provider.js";
 export { EntryEditor } from "./entry-editor.js";
-export { BaseFileGenerator } from "./base-file-generator.js";
-export type { BasePropertySchema, BaseFileOptions } from "./base-file-generator.js";
+export { BaseFileGenerator, basesViewTypeOf, NOTION_TO_BASES_VIEW } from "./base-file-generator.js";
+export type { BasePropertySchema, BaseFileOptions, BasesViewType } from "./base-file-generator.js";
+export { SidecarGenerator } from "./sidecar-generator.js";
+export type {
+  NotionSidecar,
+  SidecarProperty,
+  SidecarView,
+  DegradeNote,
+} from "./sidecar-generator.js";
 export {
   sortEntries,
   groupEntries,
