@@ -10,6 +10,7 @@ import type {
   LocalChange,
   RemoteChange,
   Conflict,
+  ConflictStrategy,
   FailedOperation,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
@@ -26,6 +27,8 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict } from "./conflict-detector.js";
+import { ConflictResolver } from "../conflict/resolver.js";
+import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
@@ -47,6 +50,20 @@ type DiscoveredDbOutcome =
 /** 접근 불가 DB denylist 를 보존하는 상태 메타 키. */
 const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
 
+/** 전략 → 선택지 매핑. propagateResolution 이 push 방향을 정할 때 사용. */
+function strategyToChoice(strategy: ConflictStrategy): ResolutionChoice {
+  switch (strategy) {
+    case "local-first":
+      return "local";
+    case "remote-first":
+      return "remote";
+    case "duplicate":
+      return "duplicate";
+    case "manual":
+      return "merge";
+  }
+}
+
 export class SyncOrchestrator {
   private readonly changeDetector: ChangeDetector;
   private readonly pipeline: ConversionPipeline;
@@ -55,6 +72,7 @@ export class SyncOrchestrator {
   private readonly fileHandler: FileHandler;
   private readonly databaseSyncer: DatabaseSyncer;
   private readonly propertyMapper: PropertyMapper;
+  private readonly conflictResolver: ConflictResolver;
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
@@ -115,6 +133,7 @@ export class SyncOrchestrator {
     });
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
+    this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
   }
 
   async push(options?: PushOptions): Promise<PushResult> {
@@ -1189,6 +1208,76 @@ export class SyncOrchestrator {
         aliases,
       });
     });
+  }
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // 충돌 해소 (I8) — 해소 결과를 로컬에만 쓰지 않고 Notion 으로 재push + notionLastEdited
+  // 재조정까지 한 트랜잭션으로 묶는다. ConflictResolver 단독은 로컬 write + updateHash 만
+  // 수행하므로(merge 결과가 Notion 에 반영되지 않음) 다음 pull 이 원격으로 덮어써 영구
+  // 유실·충돌 루프가 발생한다. 해소 → 전파(propagate)를 오케스트레이터에서 봉합해 무손실
+  // 보장. 변환 파이프라인이 필요한 push 는 기존 엔터프라이즈 경로(pushUpdate)를 재사용한다.
+  // ──────────────────────────────────────────────────────────────────────────
+
+  /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
+  async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
+    const result = await this.conflictResolver.resolve(conflict, choice);
+    await this.propagateResolution(conflict, choice, result);
+    return result;
+  }
+
+  /** 단일 충돌을 전략(manual/local-first/remote-first/duplicate)으로 해소 + Notion 전파. */
+  async resolveConflictByStrategy(
+    conflict: Conflict,
+    strategy: ConflictStrategy,
+  ): Promise<ResolutionResult> {
+    const result = await this.conflictResolver.resolveByStrategy(conflict, strategy);
+    await this.propagateResolution(conflict, strategyToChoice(strategy), result);
+    return result;
+  }
+
+  /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. */
+  async resolveAllConflicts(
+    conflicts: Conflict[],
+    strategy: ConflictStrategy,
+  ): Promise<ResolutionResult[]> {
+    const results: ResolutionResult[] = [];
+    for (const conflict of conflicts) {
+      results.push(await this.resolveConflictByStrategy(conflict, strategy));
+    }
+    return results;
+  }
+
+  /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */
+  generateConflictDiff(conflict: Conflict): string {
+    return this.conflictResolver.generateDiff(conflict);
+  }
+
+  /**
+   * 해소 결과를 Notion 으로 전파해 로컬↔원격 일관성을 봉합한다.
+   * - remote 선택: 로컬이 원격으로 갱신됐을 뿐이므로 push 불필요. notionLastEdited 만
+   *   원격 변경의 lastEdited 로 재조정 → 다음 pull 이 같은 변경을 재충돌로 보지 않음.
+   * - merge 실패(충돌 마커 잔존): 사용자가 직접 풀어야 하므로 conflict 상태 유지·push 안 함.
+   * - local / merge(성공) / duplicate: 해소된 로컬 내용을 Notion 에 재push(pushUpdate 가
+   *   변환·이미지·속성·해시·notionLastEdited 를 한 트랜잭션으로 재조정) → 무손실 수렴.
+   */
+  private async propagateResolution(
+    conflict: Conflict,
+    choice: ResolutionChoice,
+    result: ResolutionResult,
+  ): Promise<void> {
+    const record = conflict.syncRecord;
+    if (!record.notionPageId) return;
+
+    if (choice === "remote") {
+      this.stateDb.setNotionLastEdited(record.id, conflict.remoteChange.lastEdited);
+      return;
+    }
+
+    // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
+    if (!result.success) return;
+
+    // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push.
+    await this.pushUpdate(record.obsidianPath);
   }
 
   // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.

@@ -24,7 +24,9 @@ import { computeHash } from "../../src/utils/hash.js";
  *   - 겹침 편집  → 명시적 충돌 마커, status 는 conflict 유지(**조용한 덮어쓰기 금지**)
  *   - 무내용 last_edited 변경(remote==base) → 충돌 아님, 로컬 보존(detector 단계 단락)
  *   - 양측 동일 변경(local==remote) → 충돌 아님(write 로 수렴)
- *   - 해소 후 재pull → 충돌 재발 0(**영구 충돌 루프 0**)
+ *   - raw resolver 병합은 Notion 미반영 → 다음 pull 이 옛 원격으로 병합본을 덮어쓸 위험
+ *     (이 레이어 경계가 orchestrator.resolveConflict 의 재push 를 필요로 하는 이유.
+ *      실제 무손실 루프-프리는 conflict-resolve-push.test.ts 가 orchestrator 수준에서 잠근다)
  */
 
 /** updateHash/updateStatus 변이를 실제로 적재해 다시 읽을 수 있는 최소 인메모리 StateDB. */
@@ -245,7 +247,7 @@ describe("I8 통합: pull base 스냅샷 → 3-way 병합 전 구간", () => {
     expect(decision.conflict).toBeUndefined();
   });
 
-  it("영구 충돌 루프 0: 자동 병합 해소 후 재pull 하면 충돌 재발하지 않는다", async () => {
+  it("raw resolver 병합은 Notion 미반영 — 다음 pull 의 'write' 가 옛 원격으로 병합본을 덮어쓸 위험(orchestrator 재push 필요성 입증)", async () => {
     const base = "# 감자\n\n상태: 진행\n메모: 없음";
     const local = "# 감자\n\n상태: 진행\n메모: 로컬 추가";
     const remote = "# 감자\n\n상태: 완료\n메모: 없음";
@@ -254,7 +256,7 @@ describe("I8 통합: pull base 스냅샷 → 3-way 병합 전 구간", () => {
     const stateDb = new InMemoryStateDb(record);
     const vaultFs = createMemoryVaultFs({ [record.obsidianPath]: local });
 
-    // 1차: 비겹침 충돌 → 자동 병합.
+    // 1차: 비겹침 충돌 → 자동 병합(로컬 파일 + contentHash 만 갱신, Notion push 는 없음).
     const first = await detectAndResolve({
       record,
       localContent: local,
@@ -266,19 +268,39 @@ describe("I8 통합: pull base 스냅샷 → 3-way 병합 전 구간", () => {
 
     const merged = vaultFs.files.get(record.obsidianPath)!;
     const resolvedRecord = stateDb.get();
-    // 해소 후 base 스냅샷과 contentHash 가 병합 결과로 갱신됨.
+    // 해소 후 base 스냅샷과 contentHash 가 병합 결과로 갱신됨 → 로컬은 '미수정' 상태가 된다.
     expect(resolvedRecord.baseSnapshot!.toString("utf-8")).toBe(merged);
     expect(resolvedRecord.contentHash).toBe(computeHash(merged));
+    // 병합본은 양측 편집을 모두 보존.
+    expect(merged).toContain("상태: 완료");
+    expect(merged).toContain("메모: 로컬 추가");
 
-    // 2차 pull: Notion 이 병합본을 반영(remote==merged), 로컬도 병합본 그대로 → 충돌 재발 없음.
-    const second = resolvePullConflict({
+    // 2차 pull(정직한 원격): raw resolver 는 Notion 에 push 하지 않았으므로 원격은 여전히
+    // 옛 remote 다. 로컬은 병합 직후라 contentHash 가 일치 → '미수정'으로 판정돼 write 로 분기.
+    const secondHonest = resolvePullConflict({
       record: resolvedRecord,
       localContent: merged,
-      remoteContent: merged,
+      remoteContent: remote, // ← 정직한 원격: 병합본을 모른다(push 안 됐으므로).
       remoteChange,
       strategy: "manual",
     });
-    expect(second.action).toBe("write"); // 로컬 미수정 → 조용히 정리, 충돌 0
-    expect(second.conflict).toBeUndefined();
+    expect(secondHonest.action).toBe("write");
+    // 그 write 가 '옛 remote'(병합본과 다름)로 로컬을 덮어쓰면 로컬 편집이 사라진다 — 즉
+    // raw resolver 단독으로는 무손실이 보장되지 않는다. remote 와 merged 가 다름을 명시.
+    expect(remote).not.toBe(merged);
+    expect(remote).not.toContain("메모: 로컬 추가");
+
+    // 대조: orchestrator.resolveConflict 가 병합본을 Notion 에 push 한 뒤라면 원격이 merged 와
+    // 같아져 동일한 write 가 merged→merged no-op(무손실)이 된다. 그 무손실 수렴은
+    // conflict-resolve-push.test.ts 가 orchestrator(실 StateDB·mock NotionClient) 수준에서 잠근다.
+    const secondReconciled = resolvePullConflict({
+      record: resolvedRecord,
+      localContent: merged,
+      remoteContent: merged, // orchestrator push 후 원격 == 병합본.
+      remoteChange,
+      strategy: "manual",
+    });
+    expect(secondReconciled.action).toBe("write");
+    expect(secondReconciled.conflict).toBeUndefined();
   });
 });

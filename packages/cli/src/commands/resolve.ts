@@ -6,7 +6,6 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
-  ConflictResolver,
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 
@@ -24,7 +23,6 @@ export const resolveCommand = new Command("resolve")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
 
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
-      const resolver = new ConflictResolver(stateDb, vaultFs);
 
       await orchestrator.status();
       const conflictRecords = stateDb.getByStatus("conflict");
@@ -49,7 +47,7 @@ export const resolveCommand = new Command("resolve")
         }
 
         const pullResult = await orchestrator.pull();
-        const results = await resolver.resolveAll(pullResult.conflicts, strategy);
+        const results = await orchestrator.resolveAllConflicts(pullResult.conflicts, strategy);
 
         for (const result of results) {
           const icon = result.success ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
@@ -59,7 +57,7 @@ export const resolveCommand = new Command("resolve")
         const pullResult = await orchestrator.pull();
 
         for (const conflict of pullResult.conflicts) {
-          await resolveInteractive(conflict, resolver);
+          await resolveInteractive(conflict, orchestrator);
         }
       }
 
@@ -71,14 +69,17 @@ export const resolveCommand = new Command("resolve")
     }
   });
 
-async function resolveInteractive(conflict: Conflict, resolver: ConflictResolver): Promise<void> {
+async function resolveInteractive(
+  conflict: Conflict,
+  orchestrator: SyncOrchestrator,
+): Promise<void> {
   const path = conflict.syncRecord.obsidianPath;
 
   console.log(`\n${"─".repeat(60)}`);
   console.log(`파일: \x1b[1m${path}\x1b[0m`);
   console.log(`${"─".repeat(60)}`);
 
-  const diff = resolver.generateDiff(conflict);
+  const diff = orchestrator.generateConflictDiff(conflict);
   const diffLines = diff.split("\n");
   for (const line of diffLines) {
     if (line.startsWith("- ")) {
@@ -102,7 +103,7 @@ async function resolveInteractive(conflict: Conflict, resolver: ConflictResolver
     ],
   });
 
-  const result = await resolver.resolve(conflict, choice);
+  const result = await orchestrator.resolveConflict(conflict, choice);
 
   if (result.success) {
     console.log(`\x1b[32m✓ ${path} → ${choice}로 해결\x1b[0m`);
