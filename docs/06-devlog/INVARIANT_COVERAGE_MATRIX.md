@@ -3,7 +3,7 @@ type: report
 title: "불변식 I1~I12 커버리지 매트릭스 (이원 도달성)"
 created: 2026-05-30
 updated: 2026-05-30
-status: draft
+status: active
 tags: ["project/im-nobsidian", "type/coverage", "sync/fidelity"]
 related: ["[[SYNC_FIDELITY_GOAL]]"]
 summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(오프라인 결정론 / 라이브 Notion) 매핑과 완료조건 체크리스트. /goal 종료 전 사용자 승인용 SSOT."
@@ -22,7 +22,7 @@ summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(�
 | 1   | 불변식 I1~I12 자동테스트가 **골든 코퍼스 전체**에서 GREEN                           | 🟢 GREEN     | B절 매핑 전부 충족 — 오프라인 907 pass / 11 skip + **라이브 13/13 GREEN**(실 Notion, 2026-05-30)                                                                                             |
 | 2   | 드리프트/멱등성/삭제 스크립트 clean (diff 0·churn 0·resurrection 0)                 | 🟢 clean     | D절 — drift==empty·idempotency 수렴(churn 0)·deletion resurrection 0 + E2E repull/pushdry churn 0 (실측)                                                                                     |
 | 3   | 회귀 0 (기준 777+), lint/typecheck 클린, skip baseline(11) 불증가·불변식 skip 0     | 🟢 GREEN     | **오프라인 합계 907 pass / 11 skip** (core 727+11, cli 31, plugin 149) — 기준 777+ 충족·skip baseline 동일(불변식 무력화 skip 0). typecheck 클린(3패키지)·lint 클린(2026-05-30, dev 머지 후) |
-| 4   | 커버리지 이원화(도달 가능=실노트, 도달 불가=합성 픽스처) **사용자 승인 1회로 잠금** | ⏳ 승인 대기 | C절 분류표 — 사용자 승인 필요(유일 잔여 게이트)                                                                                                                                              |
+| 4   | 커버리지 이원화(도달 가능=실노트, 도달 불가=합성 픽스처) **사용자 승인 1회로 잠금** | 🟢 잠금 완료 | C절 분류표 — **사용자 승인 완료(2026-05-30): "승인 — 분류 잠금"**. 이후 normalize 화이트리스트/분류 변경은 재승인 필요                                                                       |
 
 ## B. 불변식 → 자동테스트 → 이원 도달성
 
