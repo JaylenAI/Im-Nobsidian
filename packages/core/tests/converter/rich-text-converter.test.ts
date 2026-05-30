@@ -59,12 +59,20 @@ describe("rich-text-converter", () => {
   });
 
   describe("formatMention — 멘션 환원 + 미처리 타입 보존", () => {
-    it("page 멘션 → 위키링크(id)", () => {
-      expect(formatMention({ type: "page", page: { id: "abc" } }, "제목")).toBe("[[abc]]");
+    // rank20(I3): 블록 폴백 경로의 멘션도 markdown-api 경로와 동일한 정규형
+    // `[[notion:<32hex>]]`(하이픈 제거·소문자)으로 내보내야 오케스트레이터가 제목으로 복원한다.
+    it("page 멘션 → 정규형 [[notion:<32hex>]] (하이픈 제거)", () => {
+      const id = "12345678-1234-1234-1234-123456789ABC";
+      expect(formatMention({ type: "page", page: { id } }, "제목")).toBe(
+        "[[notion:12345678123412341234123456789abc]]",
+      );
     });
 
-    it("database 멘션 → 위키링크(id)", () => {
-      expect(formatMention({ type: "database", database: { id: "db1" } }, "DB")).toBe("[[db1]]");
+    it("database 멘션 → 정규형 [[notion:<32hex>]] (하이픈 제거)", () => {
+      const id = "abcdef00-0000-0000-0000-000000000001";
+      expect(formatMention({ type: "database", database: { id } }, "DB")).toBe(
+        "[[notion:abcdef00000000000000000000000001]]",
+      );
     });
 
     it("date 멘션 — 시작/종료", () => {

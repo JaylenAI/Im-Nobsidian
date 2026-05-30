@@ -6,6 +6,7 @@
  * 책임만 가진다(SRP). Notion API·notion-to-md 에 의존하지 않는다.
  */
 import { compactMarker } from "../constants/markers.js";
+import { compactNotionId } from "../utils/id.js";
 
 /** caption 등 서식 없는 rich_text 의 최소 형태. */
 export type RichTextItem = { plain_text: string; href?: string | null };
@@ -79,7 +80,10 @@ export function formatMention(
 ): string {
   switch (mention.type) {
     case "page":
-      return mention.page ? `[[${mention.page.id}]]` : plainText;
+      // 블록 폴백 경로도 markdown-api 경로(convertPageMentions)와 동일한 정규형
+      // `[[notion:<32hex>]]` 로 내보낸다. 과거의 `[[<하이픈 id>]]` 는 오케스트레이터의
+      // 멘션 해소 정규식과 맞지 않아 제목으로 복원되지 못하고 고아 위키링크로 남았다(rank20/I3).
+      return mention.page ? `[[notion:${compactNotionId(mention.page.id)}]]` : plainText;
     case "date": {
       if (!mention.date) return plainText;
       const start = mention.date.start;
@@ -88,7 +92,7 @@ export function formatMention(
     case "user":
       return mention.user?.name ? `@${mention.user.name}` : plainText || "@user";
     case "database":
-      return mention.database ? `[[${mention.database.id}]]` : plainText;
+      return mention.database ? `[[notion:${compactNotionId(mention.database.id)}]]` : plainText;
     default:
       return plainText;
   }

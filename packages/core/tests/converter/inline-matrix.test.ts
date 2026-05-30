@@ -20,6 +20,7 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../../src/converter/enhanced-md-converter.js";
+import { formatMention } from "../../src/converter/rich-text-converter.js";
 
 /** enhanced 중간형 → Obsidian 마커형 → 다시 enhanced 중간형 왕복. */
 function roundtrip(notionForm: string): string {
@@ -82,5 +83,22 @@ describe("I3 인라인 조합·중첩 span 라운드트립 (오프라인 결정�
     expect(twice).toBe(once);
     // 마커형엔 더 이상 <span> 태그가 없어야 한다(완전 환원).
     expect(once).not.toContain("<span");
+  });
+
+  // ── rank20(I3): 멘션 두 경로의 정규형 수렴 ──
+  // 같은 Notion 페이지 멘션이 블록 폴백 경로(formatMention)와 markdown-api 경로
+  // (notionEnhancedToObsidian 의 <mention-page url=.../>)를 통과해도 **동일한**
+  // `[[notion:<32hex>]]` 로 수렴해야 한다. 과거 블록 경로는 `[[<하이픈 id>]]` 를 내보내
+  // 두 경로가 갈라졌고, 그 형태는 오케스트레이터 해소 정규식과 맞지 않아 제목 복원에서 누락됐다.
+  it("page 멘션 — 블록 경로와 markdown-api 경로가 동일 정규형으로 수렴", () => {
+    const hex32 = "12345678123412341234123456789abc";
+    const hyphenated = "12345678-1234-1234-1234-123456789abc";
+    const fromBlockPath = formatMention({ type: "page", page: { id: hyphenated } }, "제목");
+    const fromMarkdownApi = notionEnhancedToObsidian(
+      `<mention-page url="https://www.notion.so/${hex32}"/>`,
+    );
+    expect(fromBlockPath).toBe(`[[notion:${hex32}]]`);
+    expect(fromMarkdownApi).toBe(`[[notion:${hex32}]]`);
+    expect(fromBlockPath).toBe(fromMarkdownApi); // 수렴 단언
   });
 });
