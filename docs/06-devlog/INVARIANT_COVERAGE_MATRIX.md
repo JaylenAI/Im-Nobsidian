@@ -55,7 +55,7 @@ summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(�
 > 완료 조건 #4. **도달 가능** = Notion API/플랜으로 생성 가능 → 골든 코퍼스에 실노트로 포함.
 > **도달 불가** = API/현 플랜으로 생성·재현 불가 → 사유 명시 + 고정 JSON 합성 픽스처로 변환 경로만 검증.
 
-### C-1. 도달 가능 (실노트 — 골든 코퍼스 **1,153 노트 / 90 DB / 724+ 첨부**에 포함)
+### C-1. 도달 가능 (실노트 — 골든 코퍼스 **1,165 노트 / 90 DB / 724+ 첨부**에 포함)
 
 - **블록:** paragraph, heading 1/2/3, bulleted/numbered/to_do, toggle, quote, callout, code,
   equation, divider, table, column_list/column, child_page, child_database, embed, bookmark,
