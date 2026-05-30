@@ -5,7 +5,7 @@
  * 수식, 멘션, 색상 보존 마커 등 rich_text 한 배열을 마크다운 문자열로 환원하는
  * 책임만 가진다(SRP). Notion API·notion-to-md 에 의존하지 않는다.
  */
-import { spacedMarker, SPACED_END } from "../constants/markers.js";
+import { compactMarker } from "../constants/markers.js";
 
 /** caption 등 서식 없는 rich_text 의 최소 형태. */
 export type RichTextItem = { plain_text: string; href?: string | null };
@@ -57,7 +57,10 @@ export function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): s
 
       const color = a?.color as string | undefined;
       if (color && color !== "default") {
-        text = `${spacedMarker(`color:${color}`)}${text}${SPACED_END}`;
+        // 압축형 정본(`%%im-nobsidian:color:X%%text%%/color%%`)으로 통일한다.
+        // enhanced-md-converter 의 restoreColorSpans 가 이 형태만 인식하므로, 공백형을
+        // 내보내면 블록 폴백 경로의 색상이 push 시 silent 손실된다(rank15/I3).
+        text = `${compactMarker(`color:${color}`)}${text}%%/color%%`;
       }
 
       return text;

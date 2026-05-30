@@ -35,10 +35,14 @@ describe("rich-text-converter", () => {
       );
     });
 
-    it("색상은 보존 마커로 감싼다", () => {
+    // rank15(I3): block-API 폴백 경로(richTextToMarkdown)의 color 출력이 코드베이스 정본인
+    // 압축형 마커(`%%im-nobsidian:color:red%%text%%/color%%`)와 정확히 일치해야 한다.
+    // 과거엔 공백형(`%% im-nobsidian:color:red %%text%% im-nobsidian:end %%`)을 내보내
+    // enhanced-md-converter 의 restoreColorSpans(압축형 전용) 정규식에 미매칭 → 블록 폴백
+    // 산출 색상이 push 시 silent 손실됐다. 부분일치(toContain) 가 아닌 전체 문자열 toBe 로 잠근다.
+    it("색상은 압축형 보존 마커로 정확히 감싼다(블록 폴백 정본 일치)", () => {
       const out = richTextToMarkdown([{ plain_text: "빨강", annotations: { color: "red" } }]);
-      expect(out).toContain("im-nobsidian:color:red");
-      expect(out).toContain("빨강");
+      expect(out).toBe("%%im-nobsidian:color:red%%빨강%%/color%%");
     });
 
     it("default 색상은 마커를 붙이지 않는다", () => {

@@ -20,7 +20,6 @@ const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
 const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
 const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
-const NOTION_UNDERLINE_RE = /<span underline="true">([\s\S]*?)<\/span>/g;
 
 export function notionEnhancedToObsidian(enhanced: string): string {
   let result = enhanced;
@@ -38,8 +37,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = preserveUnknownBlocks(result);
   result = convertNotionMath(result);
   result = convertNotionTables(result);
-  result = convertColorSpans(result);
-  result = convertUnderlineSpans(result);
+  result = convertSpans(result);
   result = convertColumnBlocks(result);
   result = convertDatabaseBlocks(result);
   result = cleanInlineColorAttrs(result);
@@ -282,11 +280,32 @@ function convertTabBlocks(content: string): string {
   });
 }
 
-// 2C: <span underline> → 보존 마커
-function convertUnderlineSpans(content: string): string {
-  return content.replace(NOTION_UNDERLINE_RE, (_match, text: string) => {
-    return `${compactMarker("underline")}${text}%%/underline%%`;
-  });
+// 2C: <span underline> / <span color> → 보존 마커 (균형 매칭, 중첩 안전)
+//
+// 비탐욕 단일 정규식(`<span ...>([\s\S]*?)</span>`)은 중첩 span 에서 첫 `</span>` 에
+// 멈춰 바깥 span 의 닫는 토큰 순서를 뒤집는다(rank6/I3 — 사용자가 보는 Obsidian 마커가
+// `%%/color%%%%/underline%%` 처럼 잘못 중첩됨). 대신 **안쪽(중첩 없는) span 부터** 마커로
+// 치환한다: 마커엔 `<span` 이 없으므로 다음 패스에서 바깥 span 이 다시 innermost 가 되어
+// 임의 깊이 중첩이 올바른 순서로 환원된다. body 패턴 `(?:(?!<span )[\s\S])*?` 가 내부에
+// 또 다른 span 시작이 없음을 보장해 "가장 안쪽"만 매칭한다.
+const INNERMOST_SPAN_RE =
+  /<span (?:underline="true"|color="([^"]+)")>((?:(?!<span )[\s\S])*?)<\/span>/g;
+
+function convertSpans(content: string): string {
+  let result = content;
+  let safety = 0;
+  while (safety++ < 1000) {
+    const next = result.replace(
+      INNERMOST_SPAN_RE,
+      (_match, color: string | undefined, inner: string) =>
+        color !== undefined
+          ? `${compactMarker(`color:${color}`)}${inner}%%/color%%`
+          : `${compactMarker("underline")}${inner}%%/underline%%`,
+    );
+    if (next === result) break;
+    result = next;
+  }
+  return result;
 }
 
 function convertTogglesToHtml(content: string): string {
@@ -424,7 +443,6 @@ function escapeRegex(str: string): string {
 }
 
 const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
-const NOTION_COLOR_SPAN_RE = /<span color="([^"]+)">([\s\S]*?)<\/span>/g;
 const NOTION_EMPTY_BLOCK_RE = /^(?:>[\t ]*)*[\t ]*<empty-block\/>\n?/gm;
 
 function convertPageLinks(content: string): string {
@@ -432,14 +450,6 @@ function convertPageLinks(content: string): string {
     const cleaned = text.replace(/\*\*/g, "").trim();
     return `[[${cleaned}]]`;
   });
-}
-
-// 2C: <span color> → 보존 마커 (색상 제거 대신 보존)
-function convertColorSpans(content: string): string {
-  return content.replace(
-    NOTION_COLOR_SPAN_RE,
-    (_match, color: string, text: string) => `${compactMarker(`color:${color}`)}${text}%%/color%%`,
-  );
 }
 
 function convertDatabaseBlocks(content: string): string {
