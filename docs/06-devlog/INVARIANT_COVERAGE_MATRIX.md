@@ -48,7 +48,15 @@ summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(�
 † I4/I7 사이드카 테스트는 `feature/i4-i7-view-fidelity` (7c9afcf·56fe9c2) — **dev 머지 완료**(2026-05-30, --no-ff). db-fidelity 라이브 불변식 동반.
 ‡ I8/I9 통합·UIUX 테스트는 `feature/i8-i9-integration-tests` (412f4a5·8ec37ce) — **dev 머지 완료**(2026-05-30, --no-ff).
 
-**라이브 불변식 스위트 합계:** 8 파일 / **13 케이스**(attachment 1·block-roundtrip 1·crash-resume 2·db-fidelity 2·deep-nesting 1·deletion 2·drift 1·idempotency 3), 전부 `skipIf(SKIP)`. **재실행 결과 13/13 GREEN**(실 Notion, 2026-05-30).
+**라이브 불변식 스위트 합계:** 8 파일 / **13 케이스**(attachment 1·block-roundtrip 1·crash-resume 2·db-fidelity 2·deep-nesting 1·deletion 2·drift 1·idempotency 3), 전부 `skipIf(SKIP)`. **재실행 결과 13/13 GREEN, 99.14s**(실 Notion, 2026-05-30).
+
+> **수정 이력(결함12, #63~#65 · 커밋 d757f5f):** 직전 재실행에서 **I10 `deleteSync=true` 가
+> 180s 타임아웃으로 hang** → 그 시점 라이브는 사실상 **12/13**. 근본 원인은 페이지 모드 pull
+> 발견이 `searchAllPages`(워크스페이스 전체 6,187 페이지/~93s) + `filterPagesUnderRoot` 라
+> 비용이 동기화 대상과 무관하게 워크스페이스 전체에 비례(단일 pull ~148s, deleteSync 2-pull
+> ≈296s). `getChildPagesRecursive(root)` 서브트리 순회로 교체(순 -110줄) → **I10 186s→11.9s**,
+> 실사용 perf 버그 동시 해소. 이 수정으로 **비로소 진짜 13/13**. (1차 재실행의 idempotency 셋업
+> `UND_ERR_CONNECT_TIMEOUT` 1건은 단독 3/3 재실행으로 네트워크 플레이크 확정 → 전체 클린 13/13.)
 
 ## C. 이원 도달성 타입 분류 (★ 사용자 승인 1회 필요)
 
