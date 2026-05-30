@@ -244,24 +244,34 @@ export class NotionClient {
     )) as unknown as {
       title?: unknown;
       properties?: Record<string, unknown>;
-      data_sources?: Array<{ id: string }>;
+      data_sources?: Array<{ id: string; name?: string }>;
     };
 
-    let properties: Record<string, unknown> = db.properties ?? {};
-    const dataSourceId = db.data_sources?.[0]?.id;
-    if (dataSourceId) {
+    // 신 모델(2025-09-03): 한 database 가 2개 이상의 data source 를 가질 수 있고, 각 data
+    // source 가 자체 스키마(properties)를 갖는다. 1차 data source 만 읽으면 2번째+ 의 컬럼이
+    // 침묵 유실되므로 접근 가능한 전 data source 의 properties 를 union 병합한다(이름 충돌은
+    // 첫 정의 우선 — 동일 컬럼이 여러 소스에 중복돼도 안정적). 어떤 data source 도 접근
+    // 불가하면 database 객체의 properties 로 폴백(제목은 이미 확보).
+    const dataSources = db.data_sources ?? [];
+    const merged: Record<string, unknown> = {};
+    let anyAccessible = false;
+    for (const ds of dataSources) {
       try {
-        const ds = (await this.withRateLimit(() =>
-          this.client.dataSources.retrieve({ data_source_id: dataSourceId }),
+        const dsObj = (await this.withRateLimit(() =>
+          this.client.dataSources.retrieve({ data_source_id: ds.id }),
         )) as unknown as { properties?: Record<string, unknown> };
-        if (ds.properties && Object.keys(ds.properties).length > 0) {
-          properties = ds.properties;
+        if (dsObj.properties && Object.keys(dsObj.properties).length > 0) {
+          anyAccessible = true;
+          for (const [name, prop] of Object.entries(dsObj.properties)) {
+            if (!(name in merged)) merged[name] = prop;
+          }
         }
       } catch {
-        // data source 접근 불가 → database 객체 properties 로 폴백(제목은 이미 확보)
+        // 접근 불가 data source 건너뜀 — 나머지 소스로 계속.
       }
     }
 
+    const properties: Record<string, unknown> = anyAccessible ? merged : (db.properties ?? {});
     return { title: db.title, properties };
   }
 
@@ -374,14 +384,14 @@ export class NotionClient {
     return schema;
   }
 
-  async queryDatabase(
-    databaseId: string,
+  /** 특정 data source 1개를 직접 쿼리한다(저수준). 다중 data source 순회의 빌딩블록. */
+  private async queryDataSource(
+    dataSourceId: string,
     options?: { startCursor?: string; pageSize?: number; filter?: unknown },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
-    const dsId = await this.getDataSourceId(databaseId);
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
-        data_source_id: dsId,
+        data_source_id: dataSourceId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? this.defaultPageSize,
         filter: options?.filter as never,
@@ -393,29 +403,74 @@ export class NotionClient {
     };
   }
 
-  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
-    const all: PageObjectResponse[] = [];
-    let cursor: string | undefined;
+  /**
+   * database 의 1차 data source 1페이지를 쿼리한다(증분 detect 등 단일 소스 경로용).
+   * 전 행을 빠짐없이 받으려면 {@link queryAllDatabasePages} 를 쓴다(전 data source 순회).
+   */
+  async queryDatabase(
+    databaseId: string,
+    options?: { startCursor?: string; pageSize?: number; filter?: unknown },
+  ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    const dsId = await this.getDataSourceId(databaseId);
+    return this.queryDataSource(dsId, options);
+  }
 
-    do {
-      const response = await this.queryDatabase(databaseId, {
-        startCursor: cursor,
-        pageSize: this.defaultPageSize,
-        filter,
-      });
-      all.push(...response.results);
-      cursor = response.nextCursor ?? undefined;
-    } while (cursor);
+  /**
+   * database 의 **모든 data source** 행을 빠짐없이 조회한다(2025-09-03 신 모델).
+   * 한 database 가 2개 이상의 data source(각자 행 집합)를 가질 수 있어, 1차 data source 만
+   * 페이지네이션하면 2번째+ 의 행이 통째 침묵 유실된다. 전 data source 를 순회·페이지네이션
+   * 하고 page_id 로 디듀프(소스 간 동일 페이지 방어)한 뒤 합친다. 다중 소스면 1회 경고해
+   * "소스별 탭 구분이 한 폴더로 병합"되는 점을 비침묵으로 알린다.
+   */
+  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
+    const metas = await this.getDataSourceMetas(databaseId);
+    if (metas.length > 1) {
+      const label = metas.map((m) => m.name || m.id).join(", ");
+      getLogger().warn(
+        `[Notion] DB ${databaseId} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
+      );
+    }
+
+    const all: PageObjectResponse[] = [];
+    const seen = new Set<string>();
+    for (const meta of metas) {
+      let cursor: string | undefined;
+      do {
+        const response = await this.queryDataSource(meta.id, {
+          startCursor: cursor,
+          pageSize: this.defaultPageSize,
+          filter,
+        });
+        for (const page of response.results) {
+          const key = normalizeNotionId(page.id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(page);
+        }
+        cursor = response.nextCursor ?? undefined;
+      } while (cursor);
+    }
 
     return all;
   }
 
+  /** database 의 1차 data source id(없으면 databaseId 폴백). 단일 소스 경로 호환용. */
   async getDataSourceId(databaseId: string): Promise<string> {
-    const db = await this.withRateLimit(() =>
+    const metas = await this.getDataSourceMetas(databaseId);
+    return metas[0]?.id ?? databaseId;
+  }
+
+  /**
+   * database 의 전 data source 메타(id + 이름)를 반환한다. data source 가 없으면(레거시/단일)
+   * databaseId 자체를 단일 소스로 폴백해 호출처가 항상 ≥1 개를 받게 한다.
+   */
+  async getDataSourceMetas(databaseId: string): Promise<Array<{ id: string; name: string }>> {
+    const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
-    );
-    const dataSources = (db as unknown as { data_sources?: Array<{ id: string }> }).data_sources;
-    return dataSources?.[0]?.id ?? databaseId;
+    )) as unknown as { data_sources?: Array<{ id: string; name?: string }> };
+    const list = db.data_sources ?? [];
+    if (list.length === 0) return [{ id: databaseId, name: "" }];
+    return list.map((ds) => ({ id: ds.id, name: ds.name ?? "" }));
   }
 
   async archivePage(pageId: string): Promise<void> {
