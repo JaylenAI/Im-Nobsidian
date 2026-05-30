@@ -232,6 +232,62 @@ describe("ViewDataProvider", () => {
       const companyA = entries.find((e) => e.title === "A사");
       expect(companyA?.cover).toBe("attachments/a-cover.jpg");
     });
+
+    /**
+     * rank22b 회귀(I9 뷰 크래시 차단): 따옴표 없는 숫자 제목(`title: 2026`)은 js-yaml 이
+     * **number** 로 파싱한다. 과거 `fm.title as string` 캐스팅 + `filter-engine` 의
+     * `entry.title.toLowerCase()` 조합이 `toLowerCase is not a function` 으로 검색 전체를
+     * 크래시시켰다 — number 가 문자열 제목으로 안전 변환됨을 결정적으로 잠근다.
+     */
+    it("숫자 제목(YAML number)은 문자열로 강제되어 검색 크래시를 막는다", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Year.md": ["---", "title: 2026", "---", "", "숫자 제목 행"].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs"))[0]!;
+      expect(typeof entry.title).toBe("string");
+      expect(entry.title).toBe("2026");
+      // filter-engine 의 title.toLowerCase() 가 던지지 않아야 한다.
+      expect(() => entry.title.toLowerCase()).not.toThrow();
+    });
+
+    it("배열 제목은 첫 비공백 문자열로 degrade(없으면 파일명 폴백)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Arr.md": ["---", "title:", "  - 1순위", "  - 2순위", "---", "", "배열 제목"].join(
+            "\n",
+          ),
+          "jobs/Empty.md": ["---", "title: []", "---", "", "빈 배열 제목"].join("\n"),
+        }),
+      );
+      const entries = await p.collectEntries("jobs");
+      expect(entries.find((e) => e.path.includes("Arr"))?.title).toBe("1순위");
+      // 빈 배열 → undefined → 파일명("Empty")으로 폴백.
+      expect(entries.find((e) => e.path.includes("Empty"))?.title).toBe("Empty");
+    });
+
+    it("배열 아이콘은 첫 문자열로 degrade(카드 깨짐 방지)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Icn.md": [
+            "---",
+            "title: 아이콘행",
+            "icon:",
+            "  - 🏢",
+            "  - 🔬",
+            "---",
+            "",
+            "본문",
+          ].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "아이콘행")!;
+      expect(entry.icon).toBe("🏢");
+    });
   });
 
   describe("buildViewData", () => {

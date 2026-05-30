@@ -128,8 +128,8 @@ function parseEntry(path: string, content: string): DBEntry | null {
     const parsed = matter(content);
     const fm = parsed.data as Record<string, unknown>;
 
-    const title = (fm.title as string) ?? extractTitleFromPath(path);
-    const icon = fm.icon as string | undefined;
+    const title = coerceString(fm.title) ?? extractTitleFromPath(path);
+    const icon = coerceString(fm.icon);
     const cover = coerceCover(fm.cover);
 
     const properties: Record<string, PropertyValue> = {};
@@ -175,6 +175,30 @@ function coerceCover(raw: unknown): string | undefined {
     return undefined;
   }
   return firstUrl(raw);
+}
+
+/**
+ * `DBEntry` 의 스칼라 문자열 필드(`title`/`icon`)를 **렌더·검색 안전한 단일 문자열**로
+ * 강제 변환한다(없으면 undefined → 호출처에서 파일명 등으로 폴백).
+ *
+ * 프론트매터는 다형값을 흘려보낼 수 있다:
+ *   - `title: 2026` → js-yaml 이 **number** 로 파싱(따옴표 없는 숫자 제목은 흔함).
+ *   - `title: [a, b]` / 수동 오편집 → **배열**.
+ * 과거 `fm.title as string` 캐스팅은 이를 string 으로 **거짓 단언**했고, 뒤따르는
+ * `filter-engine` 의 `entry.title.toLowerCase()` 가 `X.toLowerCase is not a function` 으로
+ * **뷰 검색 전체를 크래시**시켰다(I9 위반 — rank22 의 커버 배열 깨짐과 동일 계열).
+ * number/boolean 은 문자열화, 배열은 첫 비공백 문자열로 degrade 하여 타입을 런타임 보증한다.
+ */
+function coerceString(raw: unknown): string | undefined {
+  if (typeof raw === "string") return raw.trim() || undefined;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const s = coerceString(item);
+      if (s) return s; // 다중값 → 첫 렌더 가능한 문자열로 degrade
+    }
+  }
+  return undefined;
 }
 
 function normalizePropertyValue(value: unknown): PropertyValue {
