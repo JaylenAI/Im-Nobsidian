@@ -188,6 +188,50 @@ describe("ViewDataProvider", () => {
       // 중첩 행 제목은 어떤 것도 새어 들지 않았다.
       expect(entries.some((e) => e.path.includes("SubDB"))).toBe(false);
     });
+
+    /**
+     * rank22 회귀(갤러리 커버 multivalue degrade): files 속성 커버가 복수 파일이면
+     * 프론트매터의 `cover` 가 **URL 배열**로 직렬화된다. 카드 `<img src>` 는 스칼라만
+     * 받으므로 배열이 그대로 흐르면 `src="url1,url2"` 로 깨진다 — 첫 URL 로 degrade 됨을
+     * 결정적으로 잠근다(런타임에서 `cover` 가 항상 string|undefined).
+     */
+    it("multivalue 커버(URL 배열)는 첫 URL 스칼라로 degrade 된다", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Multi.md": [
+            "---",
+            "title: 멀티커버",
+            "cover:",
+            "  - https://example.com/first.png",
+            "  - https://example.com/second.png",
+            "---",
+            "",
+            "복수 파일 커버",
+          ].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "멀티커버")!;
+      expect(typeof entry.cover).toBe("string");
+      expect(entry.cover).toBe("https://example.com/first.png");
+    });
+
+    it("빈 커버 배열은 undefined(깨진 No-cover 가 아니라 정상 빈 커버)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Empty.md": ["---", "title: 빈커버", "cover: []", "---", "", "본문"].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "빈커버")!;
+      expect(entry.cover).toBeUndefined();
+    });
+
+    it("단일 문자열 커버는 그대로 유지(degrade 가 정상 케이스를 건드리지 않음)", async () => {
+      const entries = await provider.collectEntries("jobs");
+      const companyA = entries.find((e) => e.title === "A사");
+      expect(companyA?.cover).toBe("attachments/a-cover.jpg");
+    });
   });
 
   describe("buildViewData", () => {

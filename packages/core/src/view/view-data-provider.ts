@@ -130,7 +130,7 @@ function parseEntry(path: string, content: string): DBEntry | null {
 
     const title = (fm.title as string) ?? extractTitleFromPath(path);
     const icon = fm.icon as string | undefined;
-    const cover = fm.cover as string | undefined;
+    const cover = coerceCover(fm.cover);
 
     const properties: Record<string, PropertyValue> = {};
     for (const [key, value] of Object.entries(fm)) {
@@ -142,6 +142,39 @@ function parseEntry(path: string, content: string): DBEntry | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 갤러리 커버 값을 **렌더 가능한 단일 URL 스칼라**로 강제 변환한다(없으면 undefined).
+ *
+ * Notion `files` 속성을 갤러리 커버로 쓰면 행마다 파일 수가 달라, property-mapper 는 단일
+ * 파일은 스칼라 문자열로·복수 파일은 **URL 배열**로 직렬화한다(데이터 보존). 그러나 카드
+ * 커버 `<img src>` 는 스칼라만 받으므로, 배열이 그대로 흘러들면 `src="url1,url2"` 로
+ * 합쳐져 **깨진 이미지**가 된다. Notion 도 다중 파일 커버는 **첫 파일**을 쓰므로 동일하게
+ * 첫 렌더 가능한 URL 로 degrade 한다. 파일 객체(`{url}`/`{external:{url}}`)도 방어적으로 처리.
+ *
+ * `DBEntry.cover: string` 타입을 런타임에서 보증한다(과거: `as string` 캐스팅이 배열을
+ * 문자열로 단언해 타입이 거짓이었다).
+ */
+function coerceCover(raw: unknown): string | undefined {
+  const firstUrl = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.trim() || undefined;
+    if (v && typeof v === "object") {
+      const o = v as { url?: unknown; external?: { url?: unknown } };
+      const url = o.url ?? o.external?.url;
+      if (typeof url === "string") return url.trim() || undefined;
+    }
+    return undefined;
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const url = firstUrl(item);
+      if (url) return url; // 다중값 → 첫 렌더 가능한 URL 로 degrade
+    }
+    return undefined;
+  }
+  return firstUrl(raw);
 }
 
 function normalizePropertyValue(value: unknown): PropertyValue {
