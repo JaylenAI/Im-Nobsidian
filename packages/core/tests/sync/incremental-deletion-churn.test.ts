@@ -78,7 +78,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     expect(notion.searchRecentPages).toHaveBeenCalled();
   });
 
-  it("deleteSync ON: 증분을 우회해 전체 스캔(searchAllPages)으로 삭제를 전파한다", async () => {
+  it("deleteSync ON: 증분을 우회해 전체 스캔(서브트리 순회)으로 삭제를 전파한다", async () => {
     const gone: MutableRecord = {
       id: 1,
       obsidianPath: "gone.md",
@@ -98,17 +98,17 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     );
     stateDb.getAll.mockReturnValue([gone]);
     stateDb.getByNotionId.mockImplementation((id: string) => (id === "gone-page" ? gone : null));
-    // 원격에 더 이상 존재하지 않음(in_trash → search 결과에서 사라짐).
-    notion.searchAllPages.mockResolvedValue([]);
+    // 원격에 더 이상 존재하지 않음(in_trash/archived → 서브트리 순회 결과에서 사라짐).
+    notion.getChildPagesRecursive.mockResolvedValue([]);
 
     const orch = makeOrchestrator(
       createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: true } }),
     );
     const result = await orch.pull();
 
-    // 증분이 아니라 전체 스캔으로 라우팅됐고, 사라진 페이지가 삭제로 전파됐다.
+    // 증분이 아니라 전체 스캔(서브트리 순회)으로 라우팅됐고, 사라진 페이지가 삭제로 전파됐다.
     expect(notion.searchRecentPages).not.toHaveBeenCalled();
-    expect(notion.searchAllPages).toHaveBeenCalled();
+    expect(notion.getChildPagesRecursive).toHaveBeenCalled();
     expect(result.deleted).toBe(1);
     expect(vaultFs.deleteFile).toHaveBeenCalledWith("gone.md");
   });

@@ -1,20 +1,20 @@
 /**
- * 검색 페이지네이션 중복 회귀 잠금 — "고아 + folder-note 위치오류 + push churn" 결함 재발 방지.
+ * 발견 중복 회귀 잠금 — "고아 + folder-note 위치오류 + push churn" 결함 재발 방지.
  *
- * 결함: 대형 워크스페이스에서 Notion search API 는 페이지네이션 사이 인덱스 재정렬로 같은
- * 페이지를 두 번 이상 반환한다. searchAllPages/detectRemoteChanges 가 page_id 로 디듀프하지
- * 않으면 한 페이지가 created 변경으로 2건 새고, 거대한 변경 목록의 멀리 떨어진 두 위치에서
- * pullCreate 가 2회 실행된다. 1회차는 클린 경로('X.md')에 기록·등록하고, 2회차는
- * resolveUniqueFilePath 충돌로 'X (1).md' 에 기록하며 page_id 키 upsert 가 DB 를 '(1)' 로
- * 재지정 → 클린 파일이 sync_state 에 없는 고아가 된다. 그 고아는 push 가 신규 로컬 파일로
- * 오인해 Notion 에 중복 페이지를 만들고(churn), folder-note 의 클린 이름을 고아가 선점해
+ * 결함: 원격 발견이 같은 페이지를 두 번 이상 내놓으면(과거 search API 페이지네이션 재정렬,
+ * 또는 순회 경로 중복 등) detectRemoteChanges 가 page_id 로 디듀프하지 않을 때 한 페이지가
+ * created 변경으로 2건 새고, 거대한 변경 목록의 멀리 떨어진 두 위치에서 pullCreate 가 2회
+ * 실행된다. 1회차는 클린 경로('X.md')에 기록·등록하고, 2회차는 resolveUniqueFilePath
+ * 충돌로 'X (1).md' 에 기록하며 page_id 키 upsert 가 DB 를 '(1)' 로 재지정 → 클린 파일이
+ * sync_state 에 없는 고아가 된다. 그 고아는 push 가 신규 로컬 파일로 오인해 Notion 에 중복
+ * 페이지를 만들고(churn), folder-note 의 클린 이름을 고아가 선점해
  * '<folder>/<basename> (1).md' 위치오류를 만든다.
  *
- * 수정: (1) searchAllPages 가 id 로 디듀프 (2) detectRemoteChanges 가 원격 목록을 id 로
- * 디듀프(페이지·DB 양 모드 차단점) (3) pullCreate 가 기록↔등록 사이에 throw 가능한 원격
- * 호출을 두지 않음(원자적 등록).
+ * 수정: detectRemoteChanges 가 발견 목록을 page_id 로 디듀프(페이지·DB 양 모드 차단점) +
+ * pullCreate 가 기록↔등록 사이에 throw 가능한 원격 호출을 두지 않음(원자적 등록). 발견을
+ * 서브트리 순회(getChildPagesRecursive)로 바꾼 뒤에도 이 단일 차단점은 그대로 유효하다.
  *
- * 본 테스트는 search 가 같은 페이지를 중복 반환하는 구조를 mock 으로 재현하고, pull 이
+ * 본 테스트는 발견이 같은 페이지를 중복 반환하는 구조를 mock 으로 재현하고, pull 이
  * 페이지를 정확히 1회 생성하며 고아·충돌접미사·중복 레코드가 0 임을 단언한다.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
@@ -69,7 +69,7 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     vi.restoreAllMocks();
   });
 
-  async function setup(searchResults: PageObjectResponse[]): Promise<{
+  async function setup(discoveredPages: PageObjectResponse[]): Promise<{
     orchestrator: SyncOrchestrator;
     vault: string;
     db: StateDB;
@@ -80,7 +80,7 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
 
     const client = new NotionClient({ token: "offline-test" });
-    vi.spyOn(client, "searchAllPages").mockResolvedValue(searchResults);
+    vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue(discoveredPages);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       if (id === HUB) return HUB_PAGE;
       if (id === LEAF) return LEAF_PAGE;

@@ -355,7 +355,7 @@ describe("SyncOrchestrator", () => {
     });
 
     it("새 원격 페이지 로컬에 생성", async () => {
-      mockNotionClient.searchAllPages.mockResolvedValue([
+      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
         {
           id: "new-page",
           last_edited_time: "2026-01-01T00:00:00.000Z",
@@ -397,7 +397,7 @@ describe("SyncOrchestrator", () => {
       );
       mockStateDb.getAll.mockReturnValue([existingRecord]);
 
-      mockNotionClient.searchAllPages.mockResolvedValue([
+      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
         {
           id: "mod-page",
           last_edited_time: "2026-06-01T00:00:00.000Z",
@@ -448,7 +448,7 @@ describe("SyncOrchestrator", () => {
       );
       mockStateDb.getAll.mockReturnValue([existingRecord]);
 
-      mockNotionClient.searchAllPages.mockResolvedValue([
+      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
         {
           id: "conflict-page",
           last_edited_time: "2026-06-01T00:00:00.000Z",
@@ -474,7 +474,7 @@ describe("SyncOrchestrator", () => {
     });
 
     it("dryRun 모드에서 예정 수량 반환", async () => {
-      mockNotionClient.searchAllPages.mockResolvedValue([
+      mockNotionClient.getChildPagesRecursive.mockResolvedValue([
         {
           id: "new-page",
           last_edited_time: "2026-01-01T00:00:00.000Z",

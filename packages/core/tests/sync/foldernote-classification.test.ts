@@ -79,7 +79,9 @@ describe("폴더노트 분류 — 컨테이너 중첩 자식 (본문분리 회�
     const client = new NotionClient({ token: "offline-test" });
 
     // 네트워크 메서드만 stub — extractTitle/extractParentId 등 순수 로직은 실제 사용.
-    vi.spyOn(client, "searchAllPages").mockResolvedValue([HUB_PAGE, LEAF_PAGE]);
+    // 발견은 root 서브트리 순회 → 순회 결과의 각 페이지 부모를 해소하며 _childParentIds 구성
+    // (LEAF 의 block_id 부모는 getBlock 으로 HUB 까지 거슬러 올라가 폴더 판정에 반영된다).
+    vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([HUB_PAGE, LEAF_PAGE]);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       if (id === HUB) return HUB_PAGE;
       if (id === LEAF) return LEAF_PAGE;

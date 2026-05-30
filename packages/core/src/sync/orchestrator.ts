@@ -1375,11 +1375,23 @@ export class SyncOrchestrator {
       } while (cursor);
       remotePages = allPages;
     } else {
-      // search API로 접근 가능한 전체 페이지를 일괄 조회한 뒤 root subtree만 ancestry 필터링.
-      // 블록 트리를 페이지별로 직렬 재귀하던 getChildPagesRecursive(호출 수가 페이지 수의
-      // 수십 배) 대비 API 호출 수를 페이지 수/100 수준으로 줄여 첫 pull/전체 스캔을 가속한다.
-      const allAccessible = await this.notionClient.searchAllPages();
-      const underRoot = await this.filterPagesUnderRoot(allAccessible);
+      // root 서브트리만 직접 순회한다(getChildPagesRecursive). 과거엔 searchAllPages 로
+      // 워크스페이스 전체를 조회한 뒤 ancestry 로 root 하위만 필터링했는데, 이는 동기화
+      // 대상(서브트리)이 아무리 작아도 비용이 **워크스페이스 전체 페이지 수**에 비례했다
+      // (수천 페이지 워크스페이스에서 2-파일 볼트 pull 이 100s+ 소요 → deleteSync pull 이
+      // 매번 전체 스캔이라 I10 라이브 불변식이 타임아웃). 서브트리 순회는 비용을 실제
+      // 동기화 대상에만 비례시키며, search 가 못 보는 archive/in_trash 페이지는 자연히
+      // 제외돼 orphan(삭제) 판정도 동일하게 성립한다.
+      const underRoot = await this.notionClient.getChildPagesRecursive(
+        this.config.notion.rootPageId,
+      );
+      // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
+      // 부모가 page_id 면 추가 API 호출 없이 즉시 해석(공통 경로), block 중첩만 1회 조회.
+      this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
+      for (const page of underRoot) {
+        const parentId = await this.extractParentId(page);
+        if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
+      }
       remotePages = underRoot.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     }
 
@@ -1479,91 +1491,6 @@ export class SyncOrchestrator {
   private isTrackedParent(parentId: string): boolean {
     if (notionIdsEqual(parentId, this.config.notion.rootPageId)) return true;
     return !!this.stateDb.getByNotionId(parentId);
-  }
-
-  /**
-   * search API로 받은 전체 접근 가능 페이지 중 rootPageId 하위(자손)만 남긴다.
-   * 각 페이지의 parent 체인을 root에 닿을 때까지 거슬러 올라가며 판정한다.
-   * - 부모가 이미 받은 페이지면 추가 API 호출 없이 메모리에서 해석(공통 경로)
-   * - 부모가 검색 결과에 없으면(데이터베이스·미공유 조상 등) getPage로 1회 조회 후 캐시
-   * - 조회 불가/순환/깊이 초과 시 보수적으로 root 하위가 아님으로 판정
-   * 판정 결과는 체인 전체에 메모이즈해 형제 페이지 처리 시 재사용한다.
-   */
-  private async filterPagesUnderRoot(
-    allPages: PageObjectResponse[],
-  ): Promise<PageObjectResponse[]> {
-    const root = normalizeNotionId(this.config.notion.rootPageId);
-    const byId = new Map<string, PageObjectResponse>();
-    for (const p of allPages) byId.set(normalizeNotionId(p.id), p);
-
-    const verdict = new Map<string, boolean>();
-
-    const isUnderRoot = async (start: PageObjectResponse): Promise<boolean> => {
-      const chain: string[] = [];
-      let current: PageObjectResponse | null = start;
-      let result = false;
-
-      while (current) {
-        const id = normalizeNotionId(current.id);
-        if (id === root) {
-          result = true;
-          break;
-        }
-        const memo = verdict.get(id);
-        if (memo !== undefined) {
-          result = memo;
-          break;
-        }
-        if (chain.includes(id)) {
-          result = false; // 순환 방지
-          break;
-        }
-        chain.push(id);
-
-        const parentId = await this.extractParentId(current);
-        if (!parentId) {
-          result = false;
-          break;
-        }
-        const pid = normalizeNotionId(parentId);
-        // current(id) 는 pid 의 자식 → pid 는 "자식을 가진 페이지"(폴더). 발견 단계에서
-        // 전 페이지의 직속 부모를 해소하므로, 이 집합은 폴더 판정의 단일 신뢰 원천이 된다.
-        this._childParentIds.add(pid);
-        if (pid === root) {
-          result = true;
-          break;
-        }
-        const memoParent = verdict.get(pid);
-        if (memoParent !== undefined) {
-          result = memoParent;
-          break;
-        }
-
-        let parentPage = byId.get(pid) ?? null;
-        if (!parentPage) {
-          try {
-            parentPage = await this.notionClient.getPage(parentId);
-            byId.set(pid, parentPage);
-          } catch {
-            // 부모가 데이터베이스이거나 미공유 → root 도달 불가로 간주(보수적)
-            result = false;
-            break;
-          }
-        }
-        current = parentPage;
-      }
-
-      for (const id of chain) verdict.set(id, result);
-      return result;
-    };
-
-    const out: PageObjectResponse[] = [];
-    for (const p of allPages) {
-      // 루트 페이지 자체는 볼트 컨테이너이므로 콘텐츠 파일로 동기화하지 않는다(자손만 대상).
-      if (normalizeNotionId(p.id) === root) continue;
-      if (await isUnderRoot(p)) out.push(p);
-    }
-    return out;
   }
 
   private async pullCreate(pageId: string): Promise<string> {
@@ -1676,7 +1603,7 @@ export class SyncOrchestrator {
    * 놓쳐 폴더노트가 file 로 오분류되고, 본문이 폴더 밖 최상위로 밀려 resolveUniqueFilePath
    * 충돌(' (1).md')로 쪼개졌다.
    *
-   * 1차: 발견 단계(filterPagesUnderRoot/증분)에서 전 페이지의 부모를 해소하며 만든
+   * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
    *      _childParentIds 집합으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
    * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
    *       재귀 탐색해 child_page·child_database 를 직접 확인한다.

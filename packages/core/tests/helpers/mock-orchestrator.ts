@@ -115,7 +115,6 @@ export function createMockNotionClient() {
     movePage: vi.fn().mockResolvedValue({}),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
     searchRecentPages: vi.fn().mockResolvedValue([]),
-    searchAllPages: vi.fn().mockResolvedValue([]),
   };
 }
 

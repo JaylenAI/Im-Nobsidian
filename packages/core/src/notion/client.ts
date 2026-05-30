@@ -667,42 +667,6 @@ export class NotionClient {
     return results;
   }
 
-  /**
-   * 통합이 접근 가능한 모든 페이지를 search API로 일괄 조회한다(요청당 최대 100건).
-   * 블록 트리를 페이지별로 재귀 순회하는 getChildPagesRecursive 대비 API 호출 수가
-   * 페이지 수의 수십분의 1로 줄어든다. search API는 휴지통(in_trash) 페이지를 반환하지 않는다.
-   * 반환 객체에는 parent 정보가 포함되어 호출 측에서 root subtree ancestry 필터링이 가능하다.
-   */
-  async searchAllPages(): Promise<PageObjectResponse[]> {
-    const results: PageObjectResponse[] = [];
-    // 대형 워크스페이스에서 search API 는 페이지네이션 사이 인덱스 재정렬로 같은 페이지를
-    // 두 번 이상 반환할 수 있다. id 로 디듀프하지 않으면 한 페이지가 pull create 대상으로
-    // 중복 진입해 동일 콘텐츠가 두 경로(클린·`(1)`)에 기록되고 첫 파일이 고아가 된다.
-    const seen = new Set<string>();
-    let cursor: string | undefined;
-
-    do {
-      const response = await this.withRateLimit(() =>
-        this.client.search({
-          filter: { property: "object", value: "page" },
-          start_cursor: cursor,
-          page_size: this.defaultPageSize,
-        }),
-      );
-      for (const page of response.results) {
-        // 부분 응답(properties 없는 객체) 제외 — 완전한 PageObjectResponse만 수집
-        if (!("properties" in page)) continue;
-        const key = normalizeNotionId(page.id);
-        if (seen.has(key)) continue;
-        seen.add(key);
-        results.push(page as PageObjectResponse);
-      }
-      cursor = response.next_cursor ?? undefined;
-    } while (cursor);
-
-    return results;
-  }
-
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
     const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
