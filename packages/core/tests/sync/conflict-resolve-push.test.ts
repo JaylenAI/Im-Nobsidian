@@ -110,6 +110,14 @@ describe("충돌 해소 재push — 영구 유실·충돌 루프 회귀 잠금 (
     vi.spyOn(client, "updatePageProperties").mockResolvedValue({
       last_edited_time: REMOTE_EDITED,
     } as never);
+    // 본문만 바뀌는 경로(속성 갱신 없음)에서 pushUpdate 는 Notion 권위 last_edited 를
+    // getPage 로 1회 조회해 notionLastEdited 에 저장한다(I5). offline mock 으로 권위값 제공.
+    vi.spyOn(client, "getPage").mockResolvedValue({
+      id: PAGE,
+      last_edited_time: REMOTE_EDITED,
+      parent: { type: "page_id", page_id: ROOT },
+      properties: { title: { type: "title", title: [{ plain_text: "Note" }] } },
+    } as never);
 
     const config: Config = {
       ...DEFAULT_CONFIG,

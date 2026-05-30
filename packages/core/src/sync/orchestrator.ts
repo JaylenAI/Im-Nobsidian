@@ -359,10 +359,19 @@ export class SyncOrchestrator {
 
     const lastPull = this.stateDb.getMeta("last_pull_at") ?? this.stateDb.getMeta("last_sync_at");
     const trackedCount = this.stateDb.getAll().length;
-    const remoteChanges =
-      !this.isDatabaseMode && lastPull && trackedCount > 0 && !options?.force
-        ? await this.detectRemoteChangesIncremental(lastPull)
-        : await this.detectRemoteChanges();
+    // 증분(searchRecentPages) 은 in_trash 페이지를 못 보므로 삭제를 감지하지 못한다(I10).
+    // deleteSync 가 켜진 경우엔 삭제 전파가 필요하니 반드시 전체 스캔(detectRemoteChanges)을
+    // 타게 해 사라진 추적 페이지를 잡는다. 꺼진 경우엔 어차피 삭제를 전파하지 않으므로 빠른
+    // 증분 경로가 안전하다(누락해도 사용자 설정상 무동작).
+    const canUseIncremental =
+      !this.isDatabaseMode &&
+      !!lastPull &&
+      trackedCount > 0 &&
+      !options?.force &&
+      !this.config.sync.deleteSync;
+    const remoteChanges = canUseIncremental
+      ? await this.detectRemoteChangesIncremental(lastPull!)
+      : await this.detectRemoteChanges();
 
     const filtered = options?.paths
       ? remoteChanges.filter((c) => {
@@ -459,7 +468,9 @@ export class SyncOrchestrator {
           const result = await this.pullUpdate(change);
           if (result.conflict) {
             conflicts.push(result.conflict);
-          } else if (result.path) {
+          } else if (result.path && !result.unchanged) {
+            // unchanged=true 는 content_hash 동일 no-op(가짜 수정) — 파일 재기록·churn 없음.
+            // updated 카운트에 넣지 않아 보고가 정직해진다(I5).
             writtenPaths.push(result.path);
             counts.updated++;
           }
@@ -599,9 +610,12 @@ export class SyncOrchestrator {
     const files = await this.vaultFs.listMarkdownFiles();
     const localChanges = this.changeDetector.detectLocalChanges(files);
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
-    const remoteChanges = lastSyncAt
-      ? await this.detectRemoteChangesIncremental(lastSyncAt)
-      : await this.detectRemoteChanges();
+    // 증분은 삭제(in_trash)를 못 본다(I10). deleteSync 시 status 가 원격 삭제를 보고할 수
+    // 있도록 전체 스캔으로 우회한다. 꺼진 경우엔 삭제를 행동에 옮기지 않으므로 증분으로 충분.
+    const remoteChanges =
+      lastSyncAt && !this.config.sync.deleteSync
+        ? await this.detectRemoteChangesIncremental(lastSyncAt)
+        : await this.detectRemoteChanges();
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
     const conflicts: Conflict[] = await this.buildConflictsFromRecords(
@@ -1180,13 +1194,21 @@ export class SyncOrchestrator {
       };
     }
 
-    let lastEditedTime = new Date().toISOString();
+    // notionLastEdited 는 반드시 Notion 서버가 돌려준 값으로 저장한다. 로컬 시각
+    // (new Date())을 쓰면 서버 시각과 클록 스큐·네트워크 지연만큼 어긋나 다음 pull 이
+    // 가짜 modified 로 오인 → 불필요 재조회·집계(false-churn). 속성 갱신이 있으면 그
+    // 응답이 최종 mutation 이라 권위값이고, 없으면(블록/이미지만 변경) 1회 getPage 로
+    // 권위값을 받아 진짜 fixpoint 를 만든다. (I5 — pull 측 content_hash 가드와 이중 차단)
+    let lastEditedTime: string;
     if (propsToUpdate && Object.keys(propsToUpdate).length > 0) {
       const updatedPage = await this.notionClient.updatePageProperties(
         record.notionPageId,
         propsToUpdate,
       );
       lastEditedTime = updatedPage.last_edited_time;
+    } else {
+      const refreshed = await this.notionClient.getPage(record.notionPageId);
+      lastEditedTime = refreshed.last_edited_time;
     }
 
     const hash = computeHash(content);
@@ -1409,6 +1431,13 @@ export class SyncOrchestrator {
     return changes;
   }
 
+  /**
+   * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
+   * 만든다. **삭제는 의도적으로 감지하지 않는다**: search API 는 in_trash/archived 페이지를
+   * 반환하지 않아(=사라진 것을 증분만으로는 구분 불가) 삭제 판정에는 전체 enumeration 이
+   * 필수다. 따라서 호출부는 `deleteSync` 가 켜진 경우 이 fast-path 를 쓰지 않고
+   * `detectRemoteChanges`(전체 스캔, 삭제 diff 포함)로 우회한다. (I10)
+   */
   private async detectRemoteChangesIncremental(since: string): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
@@ -1662,7 +1691,9 @@ export class SyncOrchestrator {
     }
   }
 
-  private async pullUpdate(change: RemoteChange): Promise<{ path?: string; conflict?: Conflict }> {
+  private async pullUpdate(
+    change: RemoteChange,
+  ): Promise<{ path?: string; conflict?: Conflict; unchanged?: boolean }> {
     const record = this.stateDb.getByNotionId(change.pageId);
     if (!record) return {};
 
@@ -1726,6 +1757,30 @@ export class SyncOrchestrator {
     if (resolution.action === "conflict") {
       this.stateDb.updateStatus(record.id, "conflict");
       return { conflict: resolution.conflict };
+    }
+
+    // I5 false-churn 차단: 리모트 변환 결과가 디스크 내용과 바이트 동일하면 Notion 이
+    // last_edited 만 갱신한 '가짜 수정'이다. 파일을 재기록하면 mtime 이 바뀌어 다음 push 가
+    // 로컬 수정으로 오인 → push↔pull 무한 churn. 파일은 건드리지 않고 추적 메타
+    // (notionLastEdited)만 현재 원격값으로 정렬해 재감지를 멈춘다. content_hash 비교로
+    // 진짜 변경과 가짜 변경을 구분하는 핵심 멱등 지점이다.
+    if (remoteContent === localContent) {
+      const stat = await this.vaultFs.getFileStat(record.obsidianPath);
+      this.stateDb.upsert({
+        obsidianPath: record.obsidianPath,
+        notionPageId: change.pageId,
+        notionParentId: record.notionParentId,
+        contentHash: computeHash(remoteContent),
+        notionLastEdited: page.last_edited_time,
+        localLastModified: record.localLastModified,
+        syncDirection: record.syncDirection,
+        fileType: record.fileType,
+        status: "synced",
+        baseSnapshot: Buffer.from(remoteContent, "utf-8"),
+        localMtime: stat?.mtime ?? record.localMtime ?? null,
+        localFileSize: stat?.size ?? record.localFileSize ?? null,
+      });
+      return { path: record.obsidianPath, unchanged: true };
     }
 
     await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
