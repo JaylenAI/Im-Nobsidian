@@ -645,9 +645,15 @@ export class BlockConverter {
 
     if (block.type === "image") {
       const img = block.image as
-        | { external?: { url: string }; caption?: Array<{ text?: { content: string } }> }
+        | {
+            external?: { url: string };
+            file?: { url: string };
+            caption?: Array<{ text?: { content: string } }>;
+          }
         | undefined;
-      url = img?.external?.url ?? "";
+      // video/audio/file/pdf 핸들러와 동일하게 external·file(업로드) 양쪽 URL 을 수용한다.
+      // file 만 있는 업로드 이미지의 video/embed 승격이 누락되던 비대칭 결함을 봉합(rank17/I3).
+      url = img?.external?.url ?? img?.file?.url ?? "";
       caption = img?.caption?.[0]?.text?.content;
     } else if (block.type === "paragraph") {
       const para = block.paragraph as

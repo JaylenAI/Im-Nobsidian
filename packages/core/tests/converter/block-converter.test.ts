@@ -125,6 +125,25 @@ describe("BlockConverter", () => {
       expect(data.external.url).toContain("youtube.com");
     });
 
+    // rank17(I3): Notion 에 **업로드된(file-hosted)** 이미지 블록도 video/embed 로 승격돼야 한다.
+    // 과거엔 image 핸들러가 external.url 만 읽어(video/audio/file/pdf 핸들러는 file 도 읽음)
+    // 업로드 이미지의 URL 을 ""로 무시 → 승격 누락. markdown 경로(martian)는 external 만 만들어
+    // 이 분기를 직접 태울 수 없으므로 승격 함수를 직접 검증한다(파일형 → video).
+    it("file-hosted(업로드) 이미지의 video URL 도 video 블록으로 승격", () => {
+      const converter = new BlockConverter();
+      const block = {
+        type: "image",
+        image: { type: "file", file: { url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } },
+      };
+      const promoted = (
+        converter as unknown as {
+          convertImageToVideoOrEmbed(b: Record<string, unknown>): { type?: string } | null;
+        }
+      ).convertImageToVideoOrEmbed(block);
+      expect(promoted).not.toBeNull();
+      expect(promoted!.type).toBe("video");
+    });
+
     it("youtu.be 단축 URL도 video로 변환", () => {
       const converter = new BlockConverter();
       const md = "![](https://youtu.be/dQw4w9WgXcQ)";
