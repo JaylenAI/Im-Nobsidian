@@ -14,6 +14,7 @@ import { PropertyMapper } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
+import { normalizeNotionId } from "../utils/id.js";
 
 /**
  * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
@@ -619,6 +620,10 @@ export class NotionClient {
    */
   async searchAllPages(): Promise<PageObjectResponse[]> {
     const results: PageObjectResponse[] = [];
+    // 대형 워크스페이스에서 search API 는 페이지네이션 사이 인덱스 재정렬로 같은 페이지를
+    // 두 번 이상 반환할 수 있다. id 로 디듀프하지 않으면 한 페이지가 pull create 대상으로
+    // 중복 진입해 동일 콘텐츠가 두 경로(클린·`(1)`)에 기록되고 첫 파일이 고아가 된다.
+    const seen = new Set<string>();
     let cursor: string | undefined;
 
     do {
@@ -631,9 +636,11 @@ export class NotionClient {
       );
       for (const page of response.results) {
         // 부분 응답(properties 없는 객체) 제외 — 완전한 PageObjectResponse만 수집
-        if ("properties" in page) {
-          results.push(page as PageObjectResponse);
-        }
+        if (!("properties" in page)) continue;
+        const key = normalizeNotionId(page.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        results.push(page as PageObjectResponse);
       }
       cursor = response.next_cursor ?? undefined;
     } while (cursor);

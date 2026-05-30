@@ -1272,7 +1272,16 @@ export class SyncOrchestrator {
       remotePages = underRoot.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     }
 
+    // 원격 페이지 목록을 page_id 로 디듀프한다. search API(페이지 모드)·queryDatabase(DB 모드)
+    // 모두 페이지네이션 사이 재정렬로 같은 페이지를 중복 반환할 수 있고, 중복이 changes 로
+    // 새면 같은 page_id 가 두 번 create 되어 동일 콘텐츠가 클린·`(1)` 두 경로에 기록(첫 파일
+    // 고아화)된다. 여기가 페이지·DB 양 모드를 함께 막는 단일 차단점이다.
+    const seenRemoteIds = new Set<string>();
     for (const page of remotePages) {
+      const key = normalizeNotionId(page.id);
+      if (seenRemoteIds.has(key)) continue;
+      seenRemoteIds.add(key);
+
       const record = this.stateDb.getByNotionId(page.id);
 
       if (!record) {
@@ -1503,11 +1512,16 @@ export class SyncOrchestrator {
       { properties },
     );
 
+    // 부모 해소는 파일 기록 전에 끝낸다. parent 가 block 일 때 resolveBlockToPageId 가
+    // API 를 호출(429 가능)하는데, 이를 writeFile 뒤에 두면 기록만 되고 sync_state 등록 전에
+    // throw → 재시도 시 같은 페이지가 `(1)` 로 재생성되며 첫 파일이 고아가 된다. 기록↔등록
+    // 사이에는 throw 가능한 원격 호출을 두지 않는다(원자적 등록 보장).
+    const resolvedParentId = await this.extractParentId(page);
+
     await this.vaultFs.writeFile(filePath, finalContent);
 
     const hash = computeHash(finalContent);
     const pullStat = await this.vaultFs.getFileStat(filePath);
-    const resolvedParentId = await this.extractParentId(page);
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: filePath,
