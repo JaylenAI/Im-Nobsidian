@@ -1,28 +1,36 @@
 import { describe, it, expect, vi } from "vitest";
 import { Command } from "commander";
 
-const { mockPull, mockStatus, mockGetByStatus, mockResolveAll, mockClose } = vi.hoisted(() => ({
-  mockPull: vi.fn().mockResolvedValue({
-    created: 0,
-    updated: 0,
-    deleted: 0,
-    conflicts: [],
-    writtenPaths: [],
-    failed: [],
-    duration: 100,
-  }),
-  mockStatus: vi.fn().mockResolvedValue({
-    localChanges: [],
-    remoteChanges: [],
-    conflicts: [],
-    conflictRecords: [],
-    pendingOperations: 0,
-    lastSyncAt: null,
-  }),
-  mockGetByStatus: vi.fn().mockReturnValue([]),
-  mockResolveAll: vi.fn().mockResolvedValue([]),
-  mockClose: vi.fn(),
-}));
+// resolve 명령은 충돌 해소를 SyncOrchestrator.resolveAllConflicts / resolveConflict 로
+// 라우팅한다(rank1/I8 — 해소 후 Notion 재push·notionLastEdited 재조정까지 봉합). 따라서
+// 목은 ConflictResolver 가 아니라 orchestrator 의 해소 메서드를 제공해야 실제 명령 경로와
+// 일치한다. (옛 ConflictResolver.resolveAll 목은 명령 변경 후 죽은 매핑이었다.)
+const { mockPull, mockStatus, mockGetByStatus, mockResolveAll, mockResolveConflict, mockClose } =
+  vi.hoisted(() => ({
+    mockPull: vi.fn().mockResolvedValue({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: 100,
+    }),
+    mockStatus: vi.fn().mockResolvedValue({
+      localChanges: [],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+    }),
+    mockGetByStatus: vi.fn().mockReturnValue([]),
+    mockResolveAll: vi.fn().mockResolvedValue([]),
+    mockResolveConflict: vi
+      .fn()
+      .mockResolvedValue({ path: "a.md", choice: "local", success: true }),
+    mockClose: vi.fn(),
+  }));
 
 vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
@@ -46,11 +54,11 @@ vi.mock("@im-nobsidian/core", () => ({
   SyncOrchestrator: vi.fn().mockImplementation(() => ({
     pull: mockPull,
     status: mockStatus,
+    resolveAllConflicts: mockResolveAll,
+    resolveConflict: mockResolveConflict,
+    generateConflictDiff: vi.fn().mockReturnValue(""),
   })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
-  ConflictResolver: vi.fn().mockImplementation(() => ({
-    resolveAll: mockResolveAll,
-  })),
 }));
 
 vi.mock("@inquirer/prompts", () => ({
