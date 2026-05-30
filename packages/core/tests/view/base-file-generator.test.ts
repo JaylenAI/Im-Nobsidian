@@ -818,3 +818,73 @@ describe("BaseFileGenerator — 스키마 진화(삭제·이름변경) 반영 (r
     expect(/(^|\W)s1(\W|$)/.test(result)).toBe(false);
   });
 });
+
+// ───────────────────────────────────────────────────────────────────────────
+// rank18 — .base 결정론: (1) 같은 입력 → 바이트 동일(재생성 멱등, 입력 비변형),
+// (2) 동명 뷰 dedupe 의 유일성 불변식이 입력 순열과 무관하게 보존됨.
+//
+// generate 가 입력을 in-place 변형하면 반복 호출·재생성이 산출물 드리프트(중복 .base
+// churn)를 일으킨다. dedupe 가 순서 의존적이면서도 유일성은 항상 N개 distinct 여야
+// Bases 가 뷰를 합치거나 잃지 않는다. 둘 다 수치/바이트로 잠근다.
+// ───────────────────────────────────────────────────────────────────────────
+describe("BaseFileGenerator — 결정론·dedupe 유일성 (rank18)", () => {
+  const generator = new BaseFileGenerator();
+
+  /** 출력에서 view name 라인을 순서대로 추출(따옴표 제거). */
+  function viewNames(output: string): string[] {
+    return [...output.matchAll(/^ {4}name: (.+)$/gm)].map((m) => {
+      const raw = m[1]!;
+      return raw.startsWith('"') ? raw.slice(1, -1) : raw;
+    });
+  }
+
+  /** 모두 같은 이름("Untitled")인 뷰 N개를 주어진 타입 순서로 만든다(dedupe 충돌 유발). */
+  function makeCollidingOptions(types: Array<"table" | "gallery" | "list">): BaseFileOptions {
+    return makeOptions({
+      viewsConfig: {
+        databaseId: "db-123",
+        databaseName: "Tasks",
+        lastSynced: "2026-01-01T00:00:00.000Z",
+        views: types.map((type, i) => ({ id: `view-${i}`, name: "Untitled", type })),
+      },
+    });
+  }
+
+  it("같은 입력으로 두 번 생성하면 바이트 단위로 동일하다(재생성 멱등)", () => {
+    // 매번 새 옵션 — 순수성 확인.
+    expect(generator.generate(makeOptions())).toBe(generator.generate(makeOptions()));
+
+    // 같은 옵션 객체 재사용 — in-place dedupe 가 입력을 오염시키면 2회차가 달라진다.
+    const opts = makeCollidingOptions(["table", "gallery", "list"]);
+    const first = generator.generate(opts);
+    const second = generator.generate(opts);
+    expect(second).toBe(first);
+
+    // 입력 옵션의 뷰 이름은 변형되지 않았다(convertView 가 복제 → generate 는 부수효과 없음).
+    expect(opts.viewsConfig.views.map((v) => v.name)).toEqual(["Untitled", "Untitled", "Untitled"]);
+  });
+
+  it("동명 뷰 dedupe — 고정 순서에서 첫 뷰가 기본명, 이후 ' 2',' 3' 접미(결정적)", () => {
+    const result = generator.generate(makeCollidingOptions(["table", "gallery", "list"]));
+    // 출력 순서를 그대로 따른다: 첫 뷰는 기본명 유지, 이후 위치순 접미.
+    expect(viewNames(result)).toEqual(["Untitled", "Untitled 2", "Untitled 3"]);
+  });
+
+  it("dedupe 유일성 불변식 — 입력 순열이 바뀌어도 항상 3개 distinct 한 동일 집합", () => {
+    const permutations: Array<Array<"table" | "gallery" | "list">> = [
+      ["table", "gallery", "list"],
+      ["list", "gallery", "table"],
+      ["gallery", "table", "list"],
+      ["list", "table", "gallery"],
+    ];
+    const EXPECTED_SET = ["Untitled", "Untitled 2", "Untitled 3"];
+    for (const perm of permutations) {
+      const names = viewNames(generator.generate(makeCollidingOptions(perm)));
+      // 충돌이 N개 모두 유일화됐다(합쳐지거나 누락 0).
+      expect(names).toHaveLength(3);
+      expect(new Set(names).size).toBe(3);
+      // 순서와 무관하게 산출 이름 집합은 동일하다(유일성 불변식).
+      expect([...names].sort()).toEqual(EXPECTED_SET);
+    }
+  });
+});
