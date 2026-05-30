@@ -4,11 +4,12 @@
 #
 #   ./run.sh [phase ...]        지정 단계만 (기본: 안전 베이스라인)
 #   ./run.sh                    기본 = reset init pull analyze repull pushdry
-#   ./run.sh full               안전 베이스라인 + 격리 probe 실쓰기 왕복(roundtrip)
+#   ./run.sh full               안전 베이스라인 + sync(양방향 멱등) + 격리 probe 왕복
 #   IM_TEST_VAULT=/path ./run.sh   볼트 경로 재정의
 #
 # 안전 규칙:
 #   · pull/repull/analyze/pushdry 는 Notion 쓰기 0 (읽기·드라이런).
+#   · sync 는 fresh pull 직후 실행 → 로컬==원격이라 푸시 변경 0(멱등). 기존 노트 불변.
 #   · 실쓰기(roundtrip)는 __e2e_probe__ 네임스페이스에 격리, 자기정리. 기존 노트 불변.
 #   · deleteSync 기본 false → 파괴적 전파 없음.
 #   · 토큰은 절대 출력되지 않음(redact.mjs 통과).
@@ -82,6 +83,15 @@ p_pushdry() {
   if [[ "$churn" == "0" ]]; then ok "push 멱등 (churn 0, 쓰기 없음)"; RESULTS[pushdry]="멱등(0)"; else warn "push 예정 변경 churn=$churn"; RESULTS[pushdry]="churn=$churn"; fi
 }
 
+# 양방향 동기화 명령 멱등성 — fresh pull 직후 로컬==원격이므로 변경 0 기대.
+# (CLI `sync` = Pull → Push 의 단일 명령 검증. 실제 push 경로를 타되 변경분이 없어 비파괴.)
+p_sync() {
+  phase "SYNC — 양방향(Pull→Push) 멱등성(변경 0 기대)"
+  nobsi sync | tee "$LOGDIR/sync.log"
+  local churn; churn=$(churn_of "$LOGDIR/sync.log")
+  if [[ "$churn" == "0" ]]; then ok "sync 멱등 (churn 0)"; RESULTS[sync]="멱등(0)"; else warn "sync churn=$churn"; RESULTS[sync]="churn=$churn"; fi
+}
+
 # 격리 실쓰기 왕복 — __e2e_probe__ 안에서만. 기존 노트 불변.
 p_roundtrip() {
   phase "ROUNDTRIP — 격리 probe 실쓰기 왕복(create→push→repull→검증→정리)"
@@ -107,7 +117,7 @@ p_summary() {
   phase "요약"
   echo "  로그: $LOGDIR"
   local k
-  for k in reset init pull analyze repull pushdry roundtrip; do
+  for k in reset init pull analyze repull pushdry sync roundtrip; do
     if [[ -n "${RESULTS[$k]:-}" ]]; then
       printf "  %-10s %s\n" "$k" "${RESULTS[$k]}"
     fi
@@ -140,7 +150,7 @@ main() {
   if [[ ${#phases[@]} -eq 0 ]]; then
     phases=(reset init pull analyze repull pushdry)
   elif [[ "${phases[0]}" == "full" ]]; then
-    phases=(reset init pull analyze repull pushdry roundtrip)
+    phases=(reset init pull analyze repull pushdry sync roundtrip)
   fi
 
   log "테스트 볼트: $VAULT"
@@ -153,6 +163,7 @@ main() {
       analyze)   p_analyze ;;
       repull)    p_repull ;;
       pushdry)   p_pushdry ;;
+      sync)      p_sync ;;
       roundtrip) p_roundtrip ;;
       *) err "알 수 없는 단계: $ph"; exit 2 ;;
     esac
