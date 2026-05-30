@@ -5,6 +5,42 @@ export interface PathOwner {
   notionPageId: string | null;
 }
 
+/** {@link selectDbRowFiles} 입력의 최소 형태(경로만 필요). */
+export interface VaultPathRef {
+  readonly path: string;
+}
+
+/**
+ * DB 폴더의 **직속(depth 1)** 행 파일만 고른다 — 중첩 하위 폴더는 제외한다.
+ *
+ * DB 행은 항상 `localFolder/<name>.md` 로 **평탄하게** 기록된다({@link resolveDbRowPath}).
+ * 하위 폴더(`localFolder/SubDB/...`)는 **별도 child_database** 이거나 자식 페이지 본문이라
+ * 부모 DB 의 행이 아니다. `path.startsWith(prefix)` 단순 매칭은 이 중첩 파일까지 부모 행으로
+ * **오포함(over-inclusion)** 한다:
+ *   - 뷰(I9): 하위 DB 의 행이 부모 갤러리/테이블/보드에 카드로 새어 든다.
+ *   - push: 하위 DB 행을 부모 DB 로 잘못 밀어 중복 생성·오배치를 낸다.
+ * `selectStaleDbArtifacts` 와 동일한 "직속만 — 중첩 DB 보호" 규칙(`rel` 에 `/` 없음)을 적용한다.
+ * 폴더 경계도 정확히 본다: `localFolder` 가 `databases/tasks` 면 형제 폴더
+ * `databases/tasks2/x.md` 는 `databases/tasks/` prefix 에 걸리지 않아 자연히 제외된다.
+ *
+ * 입력은 이미 마크다운으로 필터된 목록을 가정한다(확장자 재검증 안 함). 결정적: 입력 순서
+ * 보존, 부수효과 없음.
+ *
+ * @param files       볼트의 마크다운 파일 참조 목록(경로 기준)
+ * @param localFolder DB 폴더 경로(확장자·후행 슬래시 무관)
+ */
+export function selectDbRowFiles<T extends VaultPathRef>(
+  files: ReadonlyArray<T>,
+  localFolder: string,
+): T[] {
+  const prefix = localFolder.endsWith("/") ? localFolder : `${localFolder}/`;
+  return files.filter((file) => {
+    if (!file.path.startsWith(prefix)) return false;
+    const rel = file.path.slice(prefix.length);
+    return rel.length > 0 && !rel.includes("/");
+  });
+}
+
 /**
  * DB 행 파일 경로를 충돌 없이 결정한다.
  *

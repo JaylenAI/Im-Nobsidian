@@ -11,7 +11,7 @@ import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict } from "./conflict-detector.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
-import { resolveDbRowPath } from "../utils/db-row-path.js";
+import { resolveDbRowPath, selectDbRowFiles } from "../utils/db-row-path.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
@@ -456,10 +456,9 @@ export class DatabaseSyncer {
     this.propertyMapper.loadSchema(schema);
 
     const allFiles = await this.vaultFs.listMarkdownFiles();
-    const prefix = dbConfig.localFolder.endsWith("/")
-      ? dbConfig.localFolder
-      : dbConfig.localFolder + "/";
-    const dbFiles = allFiles.filter((f) => f.path.startsWith(prefix));
+    // 직속 행 파일만 — 중첩 하위 폴더(별도 child_database)의 행은 각자의 DB push 가 관리하므로
+    // 부모 DB 로 잘못 밀어 중복·오배치하지 않는다(오포함 차단).
+    const dbFiles = selectDbRowFiles(allFiles, dbConfig.localFolder);
 
     // rename 감지용 고아 레코드(로컬 파일이 사라진 추적 레코드) 인덱스.
     // 새 경로의 파일이 어떤 고아의 내용 해시와 일치하면 신규 페이지 생성이 아니라 rename 으로 처리.

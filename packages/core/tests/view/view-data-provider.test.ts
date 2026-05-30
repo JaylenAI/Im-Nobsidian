@@ -162,6 +162,32 @@ describe("ViewDataProvider", () => {
       const companyC = entries.find((e) => e.path.includes("CompanyC"));
       expect(companyC?.title).toBe("C사");
     });
+
+    /**
+     * rank21 회귀(I9 오포함 차단): DB 폴더에 **중첩 하위 폴더**(별도 child_database 나
+     * 자식 페이지 본문)가 있어도 그 안의 .md 는 부모 DB 의 행이 아니다. `startsWith(prefix)`
+     * 단순 매칭은 이를 카드로 새게 했다 — 직속 행만 수집됨을 결정적으로 잠근다.
+     */
+    it("중첩 하위 폴더(child_database)의 .md 는 부모 DB 행으로 새지 않는다", async () => {
+      const nestedProvider = new ViewDataProvider(
+        createMockVaultFs({
+          ...sampleFiles,
+          // jobs/ 직속 행 3개(sampleFiles) + 중첩 sub-DB 행 2개 + 더 깊은 중첩 1개.
+          "jobs/SubDB/Nested A.md": ["---", "title: 중첩A", "---", "", "중첩 DB 행"].join("\n"),
+          "jobs/SubDB/Nested B.md": ["---", "title: 중첩B", "---", "", "중첩 DB 행"].join("\n"),
+          "jobs/SubDB/Deeper/Leaf.md": ["---", "title: 더깊은", "---", "", "더 깊은 중첩"].join(
+            "\n",
+          ),
+        }),
+      );
+      const entries = await nestedProvider.collectEntries("jobs");
+      // 직속 3개만 — 중첩 3개는 전부 제외.
+      expect(entries).toHaveLength(3);
+      const titles = entries.map((e) => e.title).sort();
+      expect(titles).toEqual(["A사", "B사", "C사"]);
+      // 중첩 행 제목은 어떤 것도 새어 들지 않았다.
+      expect(entries.some((e) => e.path.includes("SubDB"))).toBe(false);
+    });
   });
 
   describe("buildViewData", () => {

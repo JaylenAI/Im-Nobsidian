@@ -5,6 +5,7 @@ import { sortEntries, groupEntries, extractCalendarEntries } from "./filter-engi
 import { getVisibleProperties } from "./filter-engine.js";
 import matter from "gray-matter";
 import { DB_VIEWS_PATH } from "../constants/paths.js";
+import { selectDbRowFiles } from "../utils/db-row-path.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -25,8 +26,9 @@ export class ViewDataProvider {
 
   async collectEntries(folderPath: string): Promise<DBEntry[]> {
     const allFiles = await this.vaultFs.listMarkdownFiles();
-    const prefix = folderPath.endsWith("/") ? folderPath : folderPath + "/";
-    const dbFiles = allFiles.filter((f) => f.path.startsWith(prefix));
+    // 직속 행 파일만 — 중첩 하위 폴더(별도 child_database·자식 페이지 본문)는 부모 DB 의
+    // 행이 아니므로 카드로 새어 들지 않게 제외한다(I9 오포함 차단).
+    const dbFiles = selectDbRowFiles(allFiles, folderPath);
 
     const entries: DBEntry[] = [];
 
