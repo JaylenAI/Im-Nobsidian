@@ -389,3 +389,183 @@ describe("underline/color 왕복 fixpoint (I3)", () => {
     });
   }
 });
+
+// P1(결함①) 회귀 가드 — 토글/콜아웃 내부 코드블록의 cascade 차단.
+//
+// Notion Markdown API 는 <details>/callout 직계 자식을 탭으로 들여쓴다. 과거에는 본문에
+// `> ` 만 덧붙여 닫는 펜스가 `> \t``` ` 형태가 됐고, CommonMark 닫는-펜스 규칙(들여쓰기
+// ≤3칸, 탭=4칸) 위반으로 코드블록이 닫히지 않아 이후 본문 전체를 삼켰다(Blog.md L8~597,
+// 589줄 오염). 아래 가드는 변환 출력의 코드펜스가 항상 균형을 이룸을 단언한다.
+describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
+  // blockquote 마커(`> ` 반복)를 벗긴 뒤 CommonMark 펜스 규칙으로 균형을 검증한다.
+  function fencesBalanced(md: string): boolean {
+    let open = false;
+    let openLen = 0;
+    for (const raw of md.split("\n")) {
+      const stripped = raw.replace(/^(?:>\s?)+/, "");
+      const m = /^([\t ]*)(`{3,}|~{3,})(.*)$/.exec(stripped);
+      if (!m) continue;
+      const indentCols = m[1]!.replace(/\t/g, "    ").length; // 탭 = 4칸
+      const len = m[2]!.length;
+      const hasInfo = m[3]!.trim().length > 0;
+      if (!open) {
+        if (indentCols <= 3) {
+          open = true;
+          openLen = len;
+        }
+      } else if (!hasInfo && indentCols <= 3 && len >= openLen) {
+        open = false;
+        openLen = 0;
+      }
+    }
+    return !open; // EOF 에서 미닫힘 코드블록이 없어야 한다
+  }
+
+  // 닫는 펜스가 `> ` + 탭/4칸+ 들여쓰기 + 백틱 형태(=깨진 펜스)로 새지 않아야 한다.
+  const BROKEN_FENCE_RE = /(?:>\s?)+(?:\t| {4,})(?:`{3,}|~{3,})/;
+
+  it("탭 들여쓰기 코드 자식을 가진 토글 → 펜스 균형 + 깨진 펜스 없음", () => {
+    const notion = [
+      "<details>",
+      "<summary>코드 토글</summary>",
+      "\t```javascript",
+      "\tconst x = 1;",
+      "\tconsole.log(x);",
+      "\t```",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 코드 토글");
+    expect(out).toContain("> ```javascript");
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).not.toMatch(BROKEN_FENCE_RE);
+  });
+
+  it("토글 뒤 본문이 코드블록에 삼켜지지 않는다 (cascade)", () => {
+    const notion = [
+      "<details>",
+      "<summary>T</summary>",
+      "\t```js",
+      "\tdoStuff();",
+      "\t```",
+      "</details>",
+      "",
+      "# 삼켜지면 안 되는 제목",
+      "",
+      "본문 단락입니다.",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(fencesBalanced(out)).toBe(true);
+    // 제목/단락이 코드펜스 바깥에 평문으로 남아야 한다
+    expect(out).toContain("# 삼켜지면 안 되는 제목");
+    expect(out).toContain("본문 단락입니다.");
+  });
+
+  it("중첩 토글의 내부 코드도 펜스 균형 유지", () => {
+    const notion = [
+      "<details>",
+      "<summary>외부</summary>",
+      "\t외부 내용",
+      "\t<details>",
+      "\t<summary>내부</summary>",
+      "\t\t```bash",
+      "\t\techo hi",
+      "\t\t```",
+      "\t</details>",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 외부");
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).not.toMatch(BROKEN_FENCE_RE);
+  });
+
+  it("리스트형 토글-코드(normalizeCodeBlockToggles) 2탭 중첩도 변환", () => {
+    const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 중첩 코드 토글");
+    expect(out).toContain("echo nested");
+    expect(fencesBalanced(out)).toBe(true);
+  });
+
+  it("코드 본문에 백틱 펜스가 있으면 더 긴 펜스로 감싼다 (동적 펜스 길이)", () => {
+    const notion = [
+      "- 마크다운 예제",
+      "\t````markdown",
+      "\t```js",
+      "\tconst x = 1;",
+      "\t```",
+      "\t````",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).toContain("> ````markdown"); // 4-백틱 외부 펜스 보존
+    expect(out).toContain("> ```js"); // 3-백틱은 내부 콘텐츠
+  });
+
+  // 실데이터(Empowerment/Blog) 회귀 가드 — Notion 실제 출력의 **비대칭 들여쓰기**:
+  // 펜스 줄만 탭으로 들여쓰고 코드 본문은 열 0 에 둔다. 공통-들여쓰기 dedent 는 최소값이
+  // 0(본문)이라 무변경 → 펜스의 탭이 살아남아 `> \t``` ` 로 깨졌다. 코드블록 인식 dedent 로
+  // 펜스만 열 0 정렬해 차단. (위 균등-들여쓰기 케이스로는 잡히지 않던 실데이터 결함)
+  it("비대칭 들여쓰기(펜스만 탭, 본문 열0) 토글 → 펜스 균형", () => {
+    const notion = [
+      "<details>",
+      "<summary>블로그 작성용 프롬프트 예시</summary>",
+      "\t```javascript",
+      "월급쟁이부자들 블로그 매체 매뉴얼",
+      "",
+      "1. 고객 가치",
+      "\t```",
+      "</details>",
+      "",
+      "## 뒤따르는 제목",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 블로그 작성용 프롬프트 예시");
+    expect(out).toContain("> ```javascript");
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).not.toMatch(BROKEN_FENCE_RE);
+    // cascade 없음 — 뒤 제목이 코드로 삼켜지지 않는다
+    expect(out).toContain("## 뒤따르는 제목");
+  });
+
+  it("비대칭 들여쓰기 + 연속 토글(닫힘→열림) → 펜스 균형", () => {
+    // 실데이터 L1213~1216 재현: 코드 토글이 닫히자마자 다음 코드 토글이 열리는 인접 배치.
+    const notion = [
+      "<details>",
+      "<summary>클로드 스킬#1</summary>",
+      "\t```javascript",
+      "const a = 1;",
+      "</script>",
+      "\t```",
+      "</details>",
+      "<details>",
+      "<summary>클로드 스킬#2</summary>",
+      "\t```python",
+      "name: blog-writer",
+      "\t```",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 클로드 스킬#1");
+    expect(out).toContain("> [!toggle]- 클로드 스킬#2");
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).not.toMatch(BROKEN_FENCE_RE);
+  });
+
+  it("코드블록 내부의 의미적 들여쓰기는 보존(파이썬)", () => {
+    const notion = [
+      "<details>",
+      "<summary>파이썬</summary>",
+      "\t```python",
+      "def foo():",
+      "    return 1", // 4칸 의미적 들여쓰기 — 보존되어야 함
+      "\t```",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(fencesBalanced(out)).toBe(true);
+    expect(out).not.toMatch(BROKEN_FENCE_RE);
+    expect(out).toContain(">     return 1"); // 콜아웃 prefix + 보존된 4칸
+  });
+});

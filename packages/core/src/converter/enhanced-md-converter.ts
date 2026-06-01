@@ -8,7 +8,6 @@ import {
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_CALLOUT_TAG_RE = /<callout[^>]*>\n?([\s\S]*?)<\/callout>/g;
-const NOTION_TOGGLE_RE = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/gs;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
 const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
 const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
@@ -109,40 +108,142 @@ function restoreWikilinkPreserveLinks(content: string): string {
   });
 }
 
+/**
+ * 코드펜스 본문에 나타나는 가장 긴 백틱 런보다 1 이상 긴 펜스를 만든다(최소 3).
+ *
+ * CommonMark fenced-code 규칙: 본문에 펜스와 같은 길이의 백틱 런이 있으면 그 지점에서
+ * 코드블록이 조기 종료된다. 토글/콜아웃 본문에 마크다운 예제(펜스 포함)가 들어가는 경우
+ * 3-백틱 고정 펜스는 깨지므로, 본문을 스캔해 안전한 펜스 길이를 동적으로 결정한다.
+ */
+function fenceFor(body: string): string {
+  let longest = 0;
+  const re = /`+/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(body)) !== null) longest = Math.max(longest, m[0].length);
+  return "`".repeat(Math.max(3, longest + 1));
+}
+
+/**
+ * 컨테이너(토글/콜아웃) 본문을 blockquote(`> `)로 감싸기 전에 적용하는 dedent.
+ *
+ * Notion Markdown API 는 `<details>`/callout 의 직계 자식을 중첩 깊이만큼 탭으로
+ * 들여쓴다. 특히 **코드블록은 펜스 줄만 탭으로 들여쓰고 내부 코드 텍스트는 열 0 에
+ * 그대로 둔다(비대칭 들여쓰기)** — 실제 Notion 출력에서 확인된 구조다:
+ *
+ * ```
+ * <details>
+ * <summary>제목</summary>
+ * \t```javascript      ← 펜스만 탭 들여쓰기
+ * 코드 본문 (열 0)      ← 내부 텍스트는 들여쓰기 없음
+ * \t```
+ * </details>
+ * ```
+ *
+ * 이 들여쓰기를 둔 채 `> ` 를 붙이면 펜스가 `> \t``` ` 가 되어 CommonMark 펜스 규칙
+ * (들여쓰기 ≤3칸, 탭=4칸)을 위반한다. 그러면 코드블록이 열리거나 닫히지 않아 렌더링이
+ * 깨지고, 닫는 펜스가 무시되면 이후 본문 전체를 코드로 삼키는 cascade 가 된다(결함①).
+ *
+ * 공통 선행 들여쓰기만 제거하는 단순 dedent 는 이 비대칭 구조를 고치지 못한다(코드
+ * 본문이 열 0 이라 공통 최소값이 0 → 무변경). 따라서 코드블록을 인식해 다르게 처리한다:
+ *  - **코드펜스 줄**: 선행 들여쓰기를 모두 제거해 열 0 으로 정렬(펜스 문자·길이는 보존).
+ *  - **코드블록 내부**: 의미적 들여쓰기이므로 원문 그대로 보존.
+ *  - **그 외(산문)**: 공통 선행 들여쓰기만 제거(중첩 리스트 등 상대 들여쓰기는 보존).
+ * 앞뒤 빈 줄은 정리하고, 공백만 있는 줄은 비운다.
+ */
+function dedentContainerBody(text: string): string {
+  const lines = text.split("\n");
+  while (lines.length && lines[0]!.trim() === "") lines.shift();
+  while (lines.length && lines[lines.length - 1]!.trim() === "") lines.pop();
+
+  // 1패스: 코드블록 경계를 추적해 각 줄을 분류한다.
+  type LineKind = "fence" | "code" | "prose";
+  const kinds: LineKind[] = [];
+  let inCode = false;
+  let fenceChar = "";
+  let fenceLen = 0;
+  for (const line of lines) {
+    const m = /^[\t ]*(`{3,}|~{3,})(.*)$/.exec(line);
+    if (!inCode) {
+      if (m) {
+        inCode = true;
+        fenceChar = m[1]![0]!;
+        fenceLen = m[1]!.length;
+        kinds.push("fence");
+      } else {
+        kinds.push("prose");
+      }
+    } else if (m && m[1]![0] === fenceChar && m[1]!.length >= fenceLen && m[2]!.trim() === "") {
+      inCode = false;
+      kinds.push("fence");
+    } else {
+      kinds.push("code");
+    }
+  }
+
+  // 2패스: 산문 줄의 공통 선행 들여쓰기 계산(상대 들여쓰기 보존 — textwrap.dedent 의미론).
+  let min = Infinity;
+  lines.forEach((l, i) => {
+    if (kinds[i] !== "prose" || l.trim() === "") return;
+    min = Math.min(min, /^[\t ]*/.exec(l)![0].length);
+  });
+  if (!Number.isFinite(min)) min = 0;
+
+  // 3패스: fence→열0 정렬, code→원문 보존, prose→공통 들여쓰기 제거.
+  return lines
+    .map((l, i) => {
+      if (l.trim() === "") return "";
+      if (kinds[i] === "code") return l;
+      if (kinds[i] === "fence") return l.replace(/^[\t ]+/, "");
+      return l.slice(min);
+    })
+    .join("\n");
+}
+
 function normalizeCodeBlockToggles(content: string): string {
+  // 여는/닫는 펜스의 들여쓰기를 가변(`[\t ]*`)으로 일반화하고, 펜스 길이(`{3,}`)를
+  // 백레퍼런스로 대칭 매칭한다. 중첩 토글(두 탭 들여쓰기)·긴 펜스 케이스도 변환된다.
   return content.replace(
-    /^- (.+)\n\t```(\w*)\n([\s\S]*?)\n\t```$/gm,
-    (_match, title: string, lang: string, body: string) => {
-      const langTag = lang ? lang : "";
-      return `<details>\n<summary>${title.trim()}</summary>\n\`\`\`${langTag}\n${body}\n\`\`\`\n</details>`;
+    /^[\t ]*- (.+)\n[\t ]*(`{3,})(\w*)\n([\s\S]*?)\n[\t ]*\2[\t ]*$/gm,
+    (_match, title: string, _open: string, lang: string, rawBody: string) => {
+      const body = dedentContainerBody(rawBody);
+      const fence = fenceFor(body);
+      return `<details>\n<summary>${title.trim()}</summary>\n${fence}${lang}\n${body}\n${fence}\n</details>`;
     },
   );
 }
 
+// 가장 안쪽(중첩 없는) <details> 만 매칭한다. body 패턴 `(?:(?!<details>)[\s\S])*?` 가
+// 내부에 또 다른 <details> 시작이 없음을 보장하므로, 비탐욕 단일 정규식이 중첩을 잘못
+// 짝짓는 문제(바깥 열림 ↔ 안쪽 닫힘)를 피한다. innermost 부터 치환하면 다음 패스에서
+// 바깥 토글이 새로운 innermost 가 되어 임의 깊이 중첩이 올바른 순서로 환원된다.
+const INNERMOST_TOGGLE_RE =
+  /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>((?:(?!<details>)[\s\S])*?)<\/details>/;
+
 function convertToggles(content: string): string {
-  function replaceToggle(match: string): string {
-    const m = /[\t ]*<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/s.exec(match);
-    if (!m) return match;
-
-    const title = m[1]!.trim();
-    let body = m[2]!.trim();
-
-    body = convertToggles(body);
-
-    const calloutBody = body
-      .split("\n")
-      .map((line) => (line ? `> ${line}` : ">"))
-      .join("\n");
-    return `> [!toggle]- ${title}\n${calloutBody}`;
+  let result = content;
+  let safety = 0;
+  while (result.includes("<details>") && safety++ < 1000) {
+    const next = result.replace(INNERMOST_TOGGLE_RE, (_match, title: string, rawBody: string) => {
+      // 구조적 들여쓰기를 dedent 로 제거한 뒤 `> ` 를 덧붙인다. 평면·중첩·혼합 본문 모두에서
+      // 코드펜스가 열 0칸으로 정렬돼 `> \t``` ` cascade 를 차단하고, 바깥 토글이 다음 패스에서
+      // 이 줄들에 다시 `> ` 를 입히면 `> > ` 형태의 올바른 Obsidian 중첩 콜아웃이 된다.
+      const body = dedentContainerBody(rawBody);
+      const calloutBody = body
+        .split("\n")
+        .map((line) => (line.trim() ? `> ${line}` : ">"))
+        .join("\n");
+      return `> [!toggle]- ${title.trim()}\n${calloutBody}`;
+    });
+    if (next === result) break;
+    result = next;
   }
-
-  return content.replace(NOTION_TOGGLE_RE, replaceToggle);
+  return result;
 }
 
 function calloutBodyToObsidian(body: string): string {
-  const lines = body
+  // 콜아웃 본문도 토글과 동일한 코드펜스 cascade 위험이 있으므로 같은 dedent 를 적용한다.
+  const lines = dedentContainerBody(body)
     .split("\n")
-    .map((l) => l.replace(/^\t/, ""))
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
   const firstLine = lines[0] ?? "";
 
