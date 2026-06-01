@@ -569,3 +569,140 @@ describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
     expect(out).toContain(">     return 1"); // 콜아웃 prefix + 보존된 4칸
   });
 });
+
+// P2(결함②) 회귀 가드 — 중첩 prefix/탭 누적 폭주 차단.
+//
+// Notion Markdown API 는 <callout>/<columns> 를 탭으로 들여쓴 직계 자식으로 표현한다.
+// 과거 변환은 (1) 평면 비탐욕 정규식이 중첩 콜아웃을 잘못 짝지어 고아 태그를 남기고,
+// (2) 안쪽 컨테이너를 풀며 선행 들여쓰기를 열 0 으로 당겨 부모 dedent 공통최소값을 0 으로
+// 만들어 구조적 탭이 살아남았다(`> > \t\t…`). 칼럼은 탭 하나만 벗겨 깊은 구조 탭이 남았다.
+// 통합 innermost-first 변환(선행 들여쓰기 캡처→재적용)으로 폭주를 차단한다. 실데이터
+// portfolio(깊이 6)·checkup(탭 73) 오펜더를 합성으로 재현한다.
+describe("중첩 prefix/탭 누적 폭주 차단 (P2)", () => {
+  // blockquote prefix(`> ` 반복) 뒤에 구조적 탭이 남으면 폭주. 산문 전용 픽스처에선
+  // 코드 본문 탭이 없으므로 prefix 뒤 어떤 탭이든 구조적 폭주로 간주한다.
+  const STRUCT_TAB_RE = /(?:>\s?)+[^\n]*\t/;
+  // 컨테이너 원시 태그가 출력에 새어나오면 안 된다.
+  const RAW_CONTAINER_RE = /<\/?(?:details|summary|callout|columns|column)\b[^>]*>/;
+
+  it("중첩 콜아웃 → > > 올바른 깊이, 고아 태그·탭 폭주 없음", () => {
+    const notion = [
+      "<callout>",
+      "\t상위 콜아웃 본문",
+      "\t<callout>",
+      "\t\t하위 콜아웃 본문",
+      "\t</callout>",
+      "</callout>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!note] 상위 콜아웃 본문");
+    expect(out).toContain("> > [!note] 하위 콜아웃 본문");
+    expect(out).not.toMatch(RAW_CONTAINER_RE);
+    expect(out).not.toMatch(STRUCT_TAB_RE);
+  });
+
+  it("칼럼 안 콜아웃 → 평탄화 + 구조적 탭 제거", () => {
+    const notion = [
+      "<columns>",
+      "\t<column>",
+      "\t\t<callout>",
+      "\t\t\t콜아웃 in 칼럼",
+      "\t\t</callout>",
+      "\t</column>",
+      "\t<column>",
+      "\t\t둘째 칼럼 본문",
+      "\t</column>",
+      "</columns>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!note] 콜아웃 in 칼럼");
+    expect(out).toContain("둘째 칼럼 본문");
+    expect(out).not.toMatch(RAW_CONTAINER_RE);
+    expect(out).not.toMatch(STRUCT_TAB_RE);
+  });
+
+  it("교차 중첩(콜아웃-in-칼럼-in-토글, 깊이 6) → 정확한 중첩, 폭주 없음", () => {
+    const notion = [
+      "<details>",
+      "<summary>포트폴리오</summary>",
+      "\t<columns>",
+      "\t\t<column>",
+      "\t\t\t<callout>",
+      "\t\t\t\t깊은 콜아웃",
+      "\t\t\t\t<callout>",
+      "\t\t\t\t\t더 깊은 콜아웃",
+      "\t\t\t\t</callout>",
+      "\t\t\t</callout>",
+      "\t\t</column>",
+      "\t</columns>",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 포트폴리오");
+    expect(out).toContain("> > [!note] 깊은 콜아웃");
+    expect(out).toContain("> > > [!note] 더 깊은 콜아웃");
+    expect(out).not.toMatch(RAW_CONTAINER_RE);
+    expect(out).not.toMatch(STRUCT_TAB_RE);
+  });
+
+  it("중첩 토글 → 외부 본문 탭이 prefix 뒤에 남지 않는다", () => {
+    const notion = [
+      "<details>",
+      "<summary>외부</summary>",
+      "\t외부 내용",
+      "\t<details>",
+      "\t<summary>내부</summary>",
+      "\t\t내부 내용",
+      "\t</details>",
+      "</details>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!toggle]- 외부");
+    expect(out).toContain("> 외부 내용"); // `> \t외부 내용` 아님
+    expect(out).toContain("> > [!toggle]- 내부");
+    expect(out).toContain("> > 내부 내용");
+    expect(out).not.toMatch(STRUCT_TAB_RE);
+  });
+
+  it("깊은 콜아웃 본문(탭 다수) → prefix 뒤 구조적 탭 없음", () => {
+    // checkup 실데이터(`> > \t\t> > \t\t…`) 재현: 칼럼>콜아웃 깊은 들여쓰기 본문.
+    const notion = [
+      "<columns>",
+      "\t<column>",
+      "\t\t<callout>",
+      "\t\t\t첫 줄",
+      "\t\t\t둘째 줄",
+      "\t\t\t셋째 줄",
+      "\t\t</callout>",
+      "\t</column>",
+      "</columns>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    expect(out).toContain("> [!note] 첫 줄");
+    expect(out).toContain("> 둘째 줄");
+    expect(out).toContain("> 셋째 줄");
+    expect(out).not.toMatch(STRUCT_TAB_RE);
+  });
+
+  it("콜아웃 안 코드블록(비대칭 들여쓰기) → 펜스 균형 유지(P1 합류)", () => {
+    const notion = [
+      "<callout>",
+      "\t코드 포함 콜아웃",
+      "\t```python",
+      "def foo():",
+      "    return 1",
+      "\t```",
+      "</callout>",
+    ].join("\n");
+    const out = notionEnhancedToObsidian(notion);
+    // 코드 본문의 의미적 4칸 들여쓰기는 보존(코드블록 내부는 STRUCT_TAB 검사 제외)
+    expect(out).toContain("> [!note] 코드 포함 콜아웃");
+    expect(out).toContain("> ```python");
+    let open = false;
+    for (const raw of out.split("\n")) {
+      const stripped = raw.replace(/^(?:>\s?)+/, "");
+      if (/^[\t ]*(`{3,}|~{3,})/.test(stripped)) open = !open;
+    }
+    expect(open).toBe(false); // 펜스 균형
+  });
+});
