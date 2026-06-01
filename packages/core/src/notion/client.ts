@@ -28,6 +28,21 @@ export function isNotionObjectNotFound(error: unknown): boolean {
   return e.code === "object_not_found" || e.status === 404;
 }
 
+/**
+ * 서브트리 직접 순회(getChildPagesRecursive) 비용이 시간 예산을 초과했을 때 던지는 신호.
+ * 순회 비용은 **서브트리 전체 블록 수**에 비례(중첩 페이지 무손실 탐색을 위해 모든 블록을
+ * 깊이 순회)하므로, 콘텐츠가 많은 대규모 서브트리에서는 워크스페이스 search 기반 디스커버리
+ * (비용이 워크스페이스 페이지 수에 비례·예측가능)가 더 저렴하다. 이 오류를 받은 호출측은
+ * search 기반 폴백(getPagesUnderRootViaSearch)으로 전환한다. 작은 볼트는 예산 안에서
+ * 순회가 끝나 폴백 없이 빠르게 완료된다(이중 전략의 분기점).
+ */
+export class DiscoveryTooLargeError extends Error {
+  constructor(elapsedMs: number) {
+    super(`subtree discovery exceeded time budget (${elapsedMs}ms)`);
+    this.name = "DiscoveryTooLargeError";
+  }
+}
+
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
@@ -692,14 +707,29 @@ export class NotionClient {
     return children.filter((b) => b.type === "child_database").map((b) => b.id);
   }
 
-  async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {
+  /**
+   * root 서브트리를 직접 BFS 순회해 하위 페이지를 모두 수집한다(중첩 깊이 무관·무손실).
+   * 비용은 서브트리 전체 블록 수에 비례한다.
+   *
+   * @param opts.deadlineMs `Date.now()` 기준 마감 시각. 각 페이지 처리 전 초과를 검사해
+   *   초과 시 {@link DiscoveryTooLargeError}를 던진다(대규모 서브트리 → search 폴백 유도).
+   *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
+   */
+  async getChildPagesRecursive(
+    parentId: string,
+    opts?: { deadlineMs?: number },
+  ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
+    const start = Date.now();
 
     while (currentLevel.length > 0) {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
+        if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
+          throw new DiscoveryTooLargeError(Date.now() - start);
+        }
         let children: PageObjectResponse[];
         try {
           children = await this.getChildPages(id);
@@ -723,6 +753,127 @@ export class NotionClient {
     }
 
     return all;
+  }
+
+  /** 워크스페이스에서 통합에 공유된 모든 페이지를 bulk search 로 열거한다(100/요청). */
+  async searchAllPages(): Promise<PageObjectResponse[]> {
+    const pages: PageObjectResponse[] = [];
+    let cursor: string | undefined;
+    do {
+      const r = await this.search({
+        filter: { property: "object", value: "page" },
+        startCursor: cursor,
+      });
+      pages.push(...r.results);
+      cursor = r.nextCursor ?? undefined;
+    } while (cursor);
+    return pages;
+  }
+
+  /**
+   * root 하위 페이지를 **search 기반**으로 디스커버리한다(대규모 서브트리용 폴백).
+   *
+   * 전략: 워크스페이스 전체 페이지를 1회 bulk search 로 열거(비용 ∝ 워크스페이스 페이지 수,
+   * 예측가능·유한)한 뒤, 각 페이지의 부모 체인을 따라 root 도달 여부를 판정한다. page_id
+   * 부모는 메모리 맵으로 추가 호출 없이 즉시 해석하고, block_id 부모(컬럼·토글 등 레이아웃에
+   * 중첩된 페이지)만 getBlock 으로 소유 페이지를 해석(memo)한다. search 는 중첩 깊이와 무관하게
+   * 모든 페이지를 반환하므로 직접 순회와 동일하게 **무손실**이다.
+   *
+   * getChildPagesRecursive 와 동일 집합을 보장하기 위해:
+   *  - DB 행(parent=data_source_id/database_id)은 child_page 로 도달 불가 → 제외
+   *  - 휴지통/보관(in_trash/archived) 페이지 제외
+   *  - root 자신은 제외(직접 순회도 root 의 *자식*부터 수집)
+   */
+  async getPagesUnderRootViaSearch(rootId: string): Promise<PageObjectResponse[]> {
+    const all = await this.searchAllPages();
+    const rootN = normalizeNotionId(rootId);
+    const byId = new Map<string, PageObjectResponse>();
+    for (const p of all) byId.set(normalizeNotionId(p.id), p);
+
+    type Parent = {
+      type: string;
+      page_id?: string;
+      block_id?: string;
+      data_source_id?: string;
+      database_id?: string;
+    };
+
+    // block_id → 소유 페이지 id(없으면 null). 같은 블록 재해석을 막는 memo.
+    const blockOwner = new Map<string, string | null>();
+    const resolveBlockOwner = async (blockId: string): Promise<string | null> => {
+      let bid = blockId;
+      const seen = new Set<string>();
+      for (let i = 0; i < 20 && bid && !seen.has(bid); i++) {
+        seen.add(bid);
+        const cached = blockOwner.get(bid);
+        if (cached !== undefined) return cached;
+        let bp: Parent;
+        try {
+          bp = ((await this.getBlock(bid)) as unknown as { parent: Parent }).parent;
+        } catch {
+          blockOwner.set(bid, null);
+          return null;
+        }
+        if (bp.type === "page_id" && bp.page_id) {
+          const owner = bp.page_id;
+          blockOwner.set(blockId, owner);
+          return owner;
+        }
+        if (bp.type === "block_id" && bp.block_id) {
+          bid = bp.block_id;
+          continue;
+        }
+        blockOwner.set(blockId, null);
+        return null; // data_source_id/database_id/workspace → 페이지 소유자 아님
+      }
+      return null;
+    };
+
+    // pageId(normalized) → root 하위 여부. 체인 전체를 한 번에 memo 한다.
+    const memo = new Map<string, boolean>();
+    const isUnderRoot = async (startId: string): Promise<boolean> => {
+      const chain: string[] = [];
+      let cur: string | null = normalizeNotionId(startId);
+      const seen = new Set<string>();
+      let result = false;
+      while (cur && !seen.has(cur)) {
+        if (cur === rootN) {
+          result = true;
+          break;
+        }
+        const cached = memo.get(cur);
+        if (cached !== undefined) {
+          result = cached;
+          break;
+        }
+        seen.add(cur);
+        chain.push(cur);
+        const pg = byId.get(cur);
+        if (!pg) break; // 부모가 열거 집합 밖(root 위/미공유) → root 하위 아님
+        const parent = pg.parent as Parent;
+        if (parent.type === "page_id" && parent.page_id) {
+          cur = normalizeNotionId(parent.page_id);
+        } else if (parent.type === "block_id" && parent.block_id) {
+          const owner = await resolveBlockOwner(parent.block_id);
+          cur = owner ? normalizeNotionId(owner) : null;
+        } else {
+          cur = null; // workspace/data_source_id/database_id → 체인 종료
+        }
+      }
+      for (const c of chain) memo.set(c, result);
+      return result;
+    };
+
+    const out: PageObjectResponse[] = [];
+    for (const p of all) {
+      const pid = normalizeNotionId(p.id);
+      if (pid === rootN) continue; // root 자신 제외
+      const ptype = (p.parent as Parent).type;
+      if (ptype === "data_source_id" || ptype === "database_id") continue; // DB 행 제외
+      if (NotionClient.isTrashedOrArchived(p)) continue;
+      if (await isUnderRoot(p.id)) out.push(p);
+    }
+    return out;
   }
 
   // ─── Views API ───

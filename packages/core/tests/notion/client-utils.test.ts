@@ -510,6 +510,57 @@ describe("NotionClient - getChildPagesRecursive: 접근 불가 서브트리 grac
   });
 });
 
+describe("NotionClient - getPagesUnderRootViaSearch: search 기반 무손실 디스커버리(대규모 폴백)", () => {
+  function pg(id: string, parent: any, opts: { archived?: boolean; in_trash?: boolean } = {}) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent,
+      archived: opts.archived ?? false,
+      in_trash: opts.in_trash ?? false,
+      properties: {},
+    } as any;
+  }
+
+  it("page체인·block중첩은 포함, DB행·archived·root자신·서브트리 밖은 제외", async () => {
+    const client = createClient();
+    // 워크스페이스 전체 페이지 집합(search 결과 모킹)
+    vi.spyOn(client, "searchAllPages").mockResolvedValue([
+      pg("root", { type: "workspace", workspace: true }), // root 자신 → 제외
+      pg("a", { type: "page_id", page_id: "root" }), // 직속 자식 → 포함
+      pg("ab", { type: "page_id", page_id: "a" }), // 손자(page체인) → 포함
+      pg("blocknested", { type: "block_id", block_id: "blk1" }), // 컬럼/토글 중첩 → 포함
+      pg("dbrow", { type: "data_source_id", data_source_id: "ds1" }), // DB 행 → 제외
+      pg("archivedchild", { type: "page_id", page_id: "root" }, { archived: true }), // 보관 → 제외
+      pg("outside", { type: "page_id", page_id: "elsewhere" }), // 서브트리 밖 → 제외
+    ] as any);
+    // block 중첩 페이지의 소유 페이지 해석: blk1 → page "a"
+    vi.spyOn(client, "getBlock").mockImplementation(async (id: string) => {
+      if (id === "blk1") return { parent: { type: "page_id", page_id: "a" } } as any;
+      throw new Error("unexpected block " + id);
+    });
+
+    const pages = await client.getPagesUnderRootViaSearch("root");
+    expect(pages.map((p) => p.id).sort()).toEqual(["a", "ab", "blocknested"]);
+  });
+
+  it("block 부모를 여러 홉 거쳐 root 도달 시 포함(다단 컨테이너 중첩)", async () => {
+    const client = createClient();
+    vi.spyOn(client, "searchAllPages").mockResolvedValue([
+      pg("root", { type: "workspace", workspace: true }),
+      pg("deep", { type: "block_id", block_id: "inner" }),
+    ] as any);
+    vi.spyOn(client, "getBlock").mockImplementation(async (id: string) => {
+      if (id === "inner") return { parent: { type: "block_id", block_id: "outer" } } as any;
+      if (id === "outer") return { parent: { type: "page_id", page_id: "root" } } as any;
+      throw new Error("unexpected block " + id);
+    });
+
+    const pages = await client.getPagesUnderRootViaSearch("root");
+    expect(pages.map((p) => p.id)).toEqual(["deep"]);
+  });
+});
+
 describe("isNotionObjectNotFound — 404 권위 판별 (결함9)", () => {
   it("code=object_not_found 면 true", () => {
     expect(isNotionObjectNotFound({ code: "object_not_found", status: 404 })).toBe(true);

@@ -97,6 +97,8 @@ export function createMockNotionClient() {
     uploadFile: vi.fn().mockResolvedValue("file-upload-id"),
     listChildren: vi.fn().mockResolvedValue({ results: [] }),
     getChildPagesRecursive: vi.fn().mockResolvedValue([]),
+    searchAllPages: vi.fn().mockResolvedValue([]),
+    getPagesUnderRootViaSearch: vi.fn().mockResolvedValue([]),
     getInternalClient: vi.fn().mockReturnValue({
       blocks: {
         children: {

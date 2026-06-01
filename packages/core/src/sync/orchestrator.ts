@@ -16,7 +16,7 @@ import type {
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
-import { isNotionObjectNotFound } from "../notion/client.js";
+import { isNotionObjectNotFound, DiscoveryTooLargeError } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { ChangeDetector } from "./change-detector.js";
@@ -86,6 +86,12 @@ export class SyncOrchestrator {
   // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
   // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
   private _childParentIds = new Set<string>();
+
+  // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
+  // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
+  // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
+  // 이 예산 안에서 순회가 끝나 폴백 없이 빠르게 완료된다. (단위: ms)
+  private static readonly DISCOVERY_RECURSIVE_BUDGET_MS = 90_000;
 
   constructor(
     private readonly config: Config,
@@ -1375,16 +1381,29 @@ export class SyncOrchestrator {
       } while (cursor);
       remotePages = allPages;
     } else {
-      // root 서브트리만 직접 순회한다(getChildPagesRecursive). 과거엔 searchAllPages 로
-      // 워크스페이스 전체를 조회한 뒤 ancestry 로 root 하위만 필터링했는데, 이는 동기화
-      // 대상(서브트리)이 아무리 작아도 비용이 **워크스페이스 전체 페이지 수**에 비례했다
-      // (수천 페이지 워크스페이스에서 2-파일 볼트 pull 이 100s+ 소요 → deleteSync pull 이
-      // 매번 전체 스캔이라 I10 라이브 불변식이 타임아웃). 서브트리 순회는 비용을 실제
-      // 동기화 대상에만 비례시키며, search 가 못 보는 archive/in_trash 페이지는 자연히
-      // 제외돼 orphan(삭제) 판정도 동일하게 성립한다.
-      const underRoot = await this.notionClient.getChildPagesRecursive(
-        this.config.notion.rootPageId,
-      );
+      // 디스커버리 이중 전략(비용 상한 하이브리드):
+      //  1) 기본 — root 서브트리 직접 BFS 순회(getChildPagesRecursive). 비용이 실제 동기화
+      //     대상(서브트리)에 비례해, 작은 볼트가 수천 페이지 워크스페이스에 있어도 빠르다
+      //     (I10: 2-파일 볼트 pull ~12s). 단 비용은 서브트리 **전체 블록 수**에 비례하므로,
+      //  2) 콘텐츠가 많은 대규모 서브트리에서는 시간 예산(DISCOVERY_RECURSIVE_BUDGET_MS)을
+      //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리로 폴백한다(비용이
+      //     워크스페이스 페이지 수에 비례·예측가능·유한). 두 경로 모두 중첩 깊이와 무관하게
+      //     모든 하위 페이지를 찾으므로 **무손실**이며, DB 행·archive/in_trash 를 동일하게
+      //     제외해 orphan(삭제) 판정도 일관된다.
+      let underRoot: PageObjectResponse[];
+      try {
+        underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
+          deadlineMs: Date.now() + SyncOrchestrator.DISCOVERY_RECURSIVE_BUDGET_MS,
+        });
+      } catch (error) {
+        if (!(error instanceof DiscoveryTooLargeError)) throw error;
+        getLogger().info(
+          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 워크스페이스 search 기반 디스커버리로 전환`,
+        );
+        underRoot = await this.notionClient.getPagesUnderRootViaSearch(
+          this.config.notion.rootPageId,
+        );
+      }
       // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
       // 부모가 page_id 면 추가 API 호출 없이 즉시 해석(공통 경로), block 중첩만 1회 조회.
       this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
