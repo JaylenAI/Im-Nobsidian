@@ -487,6 +487,56 @@ describe("SyncOrchestrator", () => {
       expect(result.created).toBe(1);
       expect(mockVaultFs.writeFile).not.toHaveBeenCalled();
     });
+
+    it("M2: 본문 변경 0·설정 DB 0 이어도 디스커버리된 DB 행에 링크 후처리를 실행한다", async () => {
+      // 본문 변경 없음 + 설정 DB 없음 → 디스커버리 전용 조기 반환 경로.
+      // 과거엔 이 경로가 resolveNotionLinks 를 건너뛰어, 디스커버리된 행의 본문 링크·
+      // frontmatter relation 이 UUID 그대로 남았다(M2). finalize() 가 기록된 경로로
+      // 반드시 후처리를 돌려야 한다.
+      const resolveSpy = vi
+        .spyOn(
+          orchestrator as unknown as { resolveNotionLinks: (p: string[]) => Promise<number> },
+          "resolveNotionLinks",
+        )
+        .mockResolvedValue(3);
+      vi.spyOn(
+        orchestrator as unknown as {
+          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
+        },
+        "pullDiscoveredDatabases",
+      ).mockImplementation(async (wp: string[]) => {
+        wp.push("databases/wiki/Row.md");
+        return { created: 1, updated: 0 };
+      });
+
+      const result = await orchestrator.pull();
+
+      expect(resolveSpy).toHaveBeenCalledWith(["databases/wiki/Row.md"]);
+      expect(result.created).toBe(1);
+      expect(result.linkCount).toBe(3);
+      expect(result.writtenPaths).toEqual(["databases/wiki/Row.md"]);
+    });
+
+    it("M2: 디스커버리 기록이 0건이면 후처리를 호출하지 않고 빈 결과로 마감한다", async () => {
+      const resolveSpy = vi
+        .spyOn(
+          orchestrator as unknown as { resolveNotionLinks: (p: string[]) => Promise<number> },
+          "resolveNotionLinks",
+        )
+        .mockResolvedValue(0);
+      vi.spyOn(
+        orchestrator as unknown as {
+          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
+        },
+        "pullDiscoveredDatabases",
+      ).mockResolvedValue({ created: 0, updated: 0 });
+
+      const result = await orchestrator.pull();
+
+      expect(resolveSpy).not.toHaveBeenCalled();
+      expect(result.created).toBe(0);
+      expect(result.linkCount).toBe(0);
+    });
   });
 
   describe("sync", () => {
