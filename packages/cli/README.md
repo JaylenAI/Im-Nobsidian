@@ -13,9 +13,9 @@ Edit in Obsidian, see it in Notion — and back. Run `nobsi sync` and both sides
 ## Install
 
 ```bash
-npm install -g nobsi
+npm install -g im-nobsidian
 # or run without installing
-npx nobsi --help
+npx im-nobsidian --help
 ```
 
 The binary is available as both `nobsi` and `im-nobsidian`.
