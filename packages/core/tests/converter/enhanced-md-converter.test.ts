@@ -10,6 +10,34 @@ describe("notionEnhancedToObsidian", () => {
     expect(notionEnhancedToObsidian(input)).toBe("See [[My Note]] for details");
   });
 
+  // M6: url 기반 page mention 의 라벨 동반형(breadcrumb 콜아웃 등)도 해소한다.
+  // 기존엔 self-closing(`/>`)만 처리해 라벨형이 raw <mention-page> 로 잔존했다.
+  it("<mention-page url=../> (self-closing) → [[notion:id]] (회귀가드)", () => {
+    const id = "36413b18d38280869a16d92c1b2239cc";
+    expect(
+      notionEnhancedToObsidian(`앞 <mention-page url="https://www.notion.so/${id}"/> 뒤`),
+    ).toBe(`앞 [[notion:${id}]] 뒤`);
+  });
+
+  it("<mention-page url=..>label</mention-page> (라벨형) → [[notion:id]] (M6)", () => {
+    const id = "36f13b18d382806587b2e8b7ccb303bc";
+    const input = `> [!note] <mention-page url="https://www.notion.so/${id}">AI Engineer (1)</mention-page> | [[ETC]]`;
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain(`[[notion:${id}]]`);
+    expect(result).not.toContain("<mention-page");
+    expect(result).toContain("[[ETC]]"); // 같은 줄 기존 위키링크 보존
+  });
+
+  it("한 줄 다중 라벨형 mention-page 모두 해소 (lazy 과잉소비 방지)", () => {
+    const a = "36f13b18d382806587b2e8b7ccb303bc";
+    const b = "a7713b18d38282c292ab8158f069bd7f";
+    const input = `> [!note] <mention-page url="https://www.notion.so/${a}">AI Engineer (1)</mention-page> | [[ETC]] | <mention-page url="https://www.notion.so/${b}">Study</mention-page>`;
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain(`[[notion:${a}]]`);
+    expect(result).toContain(`[[notion:${b}]]`);
+    expect(result).not.toContain("<mention-page");
+  });
+
   it("<mention-user> → @name", () => {
     const input = '<mention-user id="user-1">John</mention-user>';
     expect(notionEnhancedToObsidian(input)).toBe("@John");

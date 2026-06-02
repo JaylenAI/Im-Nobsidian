@@ -367,8 +367,15 @@ function convertPageMentions(content: string): string {
     const cleaned = text.trim();
     return `[[${cleaned}]]`;
   });
+  // url 기반 page mention 은 두 형태로 온다:
+  //   - self-closing            `<mention-page url="..32hex.."/>`
+  //   - 라벨 동반(breadcrumb 등) `<mention-page url="..32hex..">제목</mention-page>`
+  // 둘 다 page id 로 환원해 `[[notion:id]]` 로 만들고, 후처리 resolveNotionLinks 가 정식
+  // 제목으로 해소한다. mention 라벨은 항상 대상 페이지의 현재 제목이므로 id 해소가 SSOT —
+  // 라벨을 버려도 무손실이며, 같은 줄의 다른 위키링크와 일관된 표현이 된다.
+  // (`[^>]*?` 는 `>` 를 넘지 않는 lazy 매치, alternation 으로 self-closing/라벨형을 한 번에 처리)
   result = result.replace(
-    /<mention-page\s+url="https?:\/\/(?:www\.)?notion\.so\/([a-f0-9]{32})"[^>]*\/>/g,
+    /<mention-page\s+url="https?:\/\/(?:www\.)?notion\.so\/([a-f0-9]{32})"[^>]*?(?:\/>|>[\s\S]*?<\/mention-page>)/g,
     (_match, id: string) => `[[notion:${id}]]`,
   );
   return result;
