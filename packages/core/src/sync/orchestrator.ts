@@ -29,7 +29,7 @@ import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict } from "./conflict-detector.js";
 import { ConflictResolver } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
-import { PropertyMapper } from "../notion/property-mapper.js";
+import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
@@ -135,16 +135,21 @@ export class SyncOrchestrator {
       this.pipeline,
       this.imageHandler,
     );
-    this.propertyMapper.setWikilinkResolver({
+    // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 위키링크
+    // 텍스트를 만든다. 원시 제목(.title)을 쓰면 슬래시·콜론 등 파일명 금지문자
+    // 때문에 단일 패스 링크가 실제 파일을 못 가리키는 불일치가 생겼다.
+    // M1: 동일 resolver 를 페이지 모드 변환 경로(notionClient.extractProperties)에도
+    // 주입한다. 주입하지 않으면 페이지 모드 relation 이 raw UUID 로 남아 매 pull 마다
+    // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 this.propertyMapper 가 처리).
+    const wikilinkResolver: WikilinkResolver = {
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
-      // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 위키링크
-      // 텍스트를 만든다. 원시 제목(.title)을 쓰면 슬래시·콜론 등 파일명 금지문자
-      // 때문에 단일 패스 링크가 실제 파일을 못 가리키는 불일치가 생겼다.
       resolvePageId: (pageId: string) => {
         const entry = stateDb.resolvePageId(pageId);
         return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
       },
-    });
+    };
+    this.propertyMapper.setWikilinkResolver(wikilinkResolver);
+    this.notionClient.setWikilinkResolver(wikilinkResolver);
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
     this.conflictResolver = new ConflictResolver(stateDb, vaultFs);

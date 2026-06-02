@@ -9,6 +9,7 @@ import {
   createMockNotionClient,
   createConfig,
 } from "../helpers/mock-orchestrator.js";
+import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
 
 describe("SyncOrchestrator", () => {
   let orchestrator: SyncOrchestrator;
@@ -29,6 +30,45 @@ describe("SyncOrchestrator", () => {
       mockNotionClient as any,
       mockVaultFs,
     );
+  });
+
+  describe("M1 — 페이지 모드 relation resolver 배선", () => {
+    // 페이지 모드 pull(notionClient.extractProperties)이 raw UUID 대신 [[제목]]으로
+    // relation 을 해소하려면, orchestrator 가 생성 시 동일 resolver 를 client 에도
+    // 주입해야 한다. 주입이 끊기면 매 pull 마다 relation 이 raw UUID 로 재생성되는
+    // 2-write churn 이 재발한다(DB 모드는 자체 mapper 가 면역이라 이 회귀를 못 잡는다).
+    const capturedResolver = (): WikilinkResolver =>
+      (mockNotionClient.setWikilinkResolver as ReturnType<typeof vi.fn>).mock
+        .calls[0][0] as WikilinkResolver;
+
+    it("orchestrator 생성 시 notionClient 에 resolver 를 주입한다", () => {
+      expect(mockNotionClient.setWikilinkResolver).toHaveBeenCalledTimes(1);
+    });
+
+    it("resolvePageId 는 페이지 id 를 원시 제목이 아니라 파일 basename 으로 해소한다 (M4 SSOT)", () => {
+      mockStateDb.resolvePageId.mockReturnValue({
+        obsidianPath: "DB/돈키호테 CEO.md",
+        notionPageId: "pid-1",
+        title: "돈키호테 CEO_", // 원시 제목(끝 언더스코어) — 이것이 아니라 파일명이 쓰여야 함
+        aliases: [],
+      });
+      expect(capturedResolver().resolvePageId("pid-1")).toBe("돈키호테 CEO");
+    });
+
+    it("매핑 없는 페이지 id 는 null 을 반환해 후처리 안전망에 위임한다", () => {
+      mockStateDb.resolvePageId.mockReturnValue(null);
+      expect(capturedResolver().resolvePageId("unknown-id")).toBeNull();
+    });
+
+    it("resolve 는 위키링크 제목을 notionPageId 로 해소한다", () => {
+      mockStateDb.resolveWikilink.mockReturnValue({
+        obsidianPath: "X.md",
+        notionPageId: "pid-x",
+        title: "X",
+        aliases: [],
+      });
+      expect(capturedResolver().resolve("X")).toBe("pid-x");
+    });
   });
 
   describe("push", () => {

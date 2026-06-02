@@ -108,6 +108,7 @@ export function createMockNotionClient() {
     }),
     extractTitle: vi.fn().mockReturnValue("Test Page"),
     extractProperties: vi.fn().mockReturnValue({}),
+    setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
     getDatabaseSyncability: vi.fn().mockResolvedValue({ title: "Test DB", queryable: true }),
     getDatabaseTitle: vi.fn().mockResolvedValue("Test DB"),
