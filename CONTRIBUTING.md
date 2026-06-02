@@ -87,16 +87,16 @@ packages/
 │   │   └── utils/         # Utilities / 유틸리티
 │   └── tests/
 ├── cli/               # im-nobsidian CLI (nobsi command) / CLI 도구
-└── obsidian-plugin/   # Obsidian community plugin (v0.5.0) / 플러그인
+└── obsidian-plugin/   # Obsidian community plugin / 플러그인
 ```
 
 ## Obsidian Plugin / 옵시디언 플러그인
 
-The Obsidian plugin is under development and will be released as v0.5.0.
-It requires a sql.js (WASM) database adapter instead of better-sqlite3.
+The Obsidian plugin ships with every release (current: v0.2.0) and uses a sql.js (WASM)
+database adapter instead of better-sqlite3. Community-plugin submission is in progress.
 
-옵시디언 플러그인은 개발 중이며 v0.5.0으로 배포 예정입니다.
-better-sqlite3 대신 sql.js (WASM) DB 어댑터가 필요합니다.
+옵시디언 플러그인은 매 릴리스에 함께 배포되며(현재 v0.2.0), better-sqlite3 대신
+sql.js (WASM) DB 어댑터를 사용합니다. 커뮤니티 플러그인 공식 제출은 진행 중입니다.
 
 ## Code of Conduct
 

@@ -1,13 +1,14 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-05-23
+> Last updated: 2026-06-02
 
-## Current State (v0.1.11)
+## Current State (v0.2.0)
 
-v0.1.11 릴리스. 플러그인 테스트 115개 추가, better-sqlite3 완전 제거, push 버그 수정.
-sql.js WASM 어댑터, 동기화 사이드바, 양방향 변경 감지, DB 뷰 6종, .base 자동 생성.
-CLI 8 commands + `--full` 옵션. 696 tests (Core 550 + CLI 31 + Plugin 115).
-25+ block types bidirectional, 21 property read / 15 write types.
+v0.2.0 릴리스. "100% 무손실·멱등·수렴" 미션 달성에 집중.
+라운드트립 deep-equal 충실도 검증(I1) + 불변식 안전망(드리프트·멱등성·삭제)을 CI에 상시 잠금.
+무손실 push 확장(blockquote·번호목록·underline/color·breadcrumb/TOC·DB 사이드카),
+변환 정본화(I3), 증분 멱등(I5/I10), 중첩 cascade 폭주 차단(#72/#73), 대용량 발견 성능(#71).
+1038 tests (Core 858 + CLI 31 + Plugin 149). 25+ block types bidirectional, 21 property read / 15 write types.
 
 ---
 
@@ -31,11 +32,14 @@ v0.1.10 ─── ✅ Bases 갤러리 커버 이미지 동기화 (2026-05-22)
 v0.1.11 ─── ✅ 플러그인 테스트 + 빌드 최적화 (2026-05-23)
             115 플러그인 테스트, better-sqlite3 제거, push 버그 수정, 696 tests
 
-v0.2.0  ─── 커뮤니티 플러그인 등록 + npm 배포 (예정)
-            obsidianmd/obsidian-releases PR, BRAT 베타
+v0.1.12 ─── ✅ Pull 충실도 + 동기화 안정성 (2026-05-29)
+            중첩 DB→Bases, 갤러리 커버 렌더, 데이터 손실 경로 다수 제거, 777 tests
 
-v1.0.0  ─── 안정 릴리스 (예정)
-            multi-workspace, 1000+ notes, 성능 최적화
+v0.2.0  ─── ✅ 무손실·멱등·수렴 (2026-06-02)
+            충실도 측정 인프라(I1) + 불변식 안전망, 무손실 push 확장, 변환 정본화(I3), 1038 tests
+
+v1.0.0  ─── 커뮤니티 등록 + 안정 릴리스 (예정)
+            obsidian-releases PR, BRAT 베타, multi-workspace, 1000+ notes
 ```
 
 ---
@@ -95,13 +99,23 @@ v1.0.0  ─── 안정 릴리스 (예정)
 
 ---
 
-## v0.2.0 — 플러그인 테스트 강화 + 커뮤니티 제출
+## v0.2.0 — 무손실·멱등·수렴 (✅ 2026-06-02)
 
-### Tasks
+### Done
 
-- [ ] 플러그인 테스트 50+ (SqlJsStateDB, VaultAdapter, Svelte 컴포넌트)
+- [x] 충실도 측정 인프라 — 본문 링크 분류기 + 멱등성 감사 러너 + 라운드트립 deep-equal(I1) (#77)
+- [x] 불변식 안전망 — 드리프트/멱등성/삭제 상시 잠금
+- [x] 무손실 push 확장 — blockquote·번호목록·underline/color·breadcrumb/TOC·DB 사이드카(`.notion.json`)
+- [x] 변환 정본화(I3) — 멘션 정규형 수렴, 마커 원위치 복원, span/color 통일
+- [x] 멱등·수렴 — 증분 삭제 전파(I10)·content_hash 멱등(I5)·다중 소스 무손실(I4)
+- [x] cascade 폭주 차단(#72/#73) + 대용량 발견 성능(#71)
+- [x] 1038 tests (core 858 + CLI 31 + plugin 149)
+
+### 다음 (→ v1.0.0)
+
 - [ ] BRAT 베타 릴리스
 - [ ] Obsidian 커뮤니티 플러그인 공식 제출
+- [ ] 라이브 push 왕복 E2E (#68, 쓰기 게이트)
 
 ---
 
