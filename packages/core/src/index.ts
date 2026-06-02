@@ -174,9 +174,19 @@ export type {
   DegradeNote,
 } from "./view/index.js";
 
+// Audit — 충실도 측정 인프라(회귀 상시 잠금)
+export { classifyBodyFidelity, summarizeFidelity } from "./audit/index.js";
+export type {
+  FidelityDefect,
+  FidelityDefectForm,
+  FidelityClassification,
+  FidelityContext,
+  FidelitySummary,
+} from "./audit/index.js";
+
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
-export { generateId, normalizeNotionId, notionIdsEqual } from "./utils/id.js";
+export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
