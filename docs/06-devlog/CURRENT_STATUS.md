@@ -9,19 +9,27 @@
 
 **6-Phase 로드맵:**
 
-| Phase | 범위                                                          | 분기                                | 상태                        |
-| ----- | ------------------------------------------------------------- | ----------------------------------- | --------------------------- |
-| 1     | Frontmatter/Relation 충실도 (M2/M3/M4 + cover-URL + relation) | `fix/pull-resolution-fidelity`      | ✅ 커밋 완료, dev 머지 대기 |
-| 2     | 본문 컨테이너 1급화 (#74)                                     | `feature/body-container-firstclass` | ⚪ 대기                     |
-| 3     | DB↔Bases 인라인 임베드 (#75)                                  | `feature/inline-db-bases`           | ⚪ 대기                     |
-| 4     | 충실도 측정 인프라 (#77)                                      | `feature/fidelity-metrics`          | ⚪ 대기                     |
-| 5     | 라이브 전수 검증 (fresh E2E)                                  | —                                   | ⚪ 대기                     |
-| 6     | dev→main 릴리스 + v0.2.0 태그 (#78)                           | —                                   | ⚪ 승인 대기                |
+| Phase | 범위                                                           | 분기                                | 상태                        |
+| ----- | -------------------------------------------------------------- | ----------------------------------- | --------------------------- |
+| 1     | Frontmatter/Relation 충실도 (M2/M3/M4 + cover-URL + relation)  | `fix/pull-resolution-fidelity`      | ✅ 커밋 완료, dev 머지 대기 |
+| 2     | P0 relation 잔여 봉합 (M1 페이지모드 resolver + M5 대괄호)     | `fix/p0-relation-residual`          | ✅ 커밋 완료, dev 머지 대기 |
+| 3     | 본문 컨테이너 1급화 (#74, UX/시각 트랙 — 데이터는 이미 무손실) | `feature/body-container-firstclass` | ⚪ 대기 (범위 확인 필요)    |
+| 4     | DB↔Bases 인라인 임베드 (#75)                                   | `feature/inline-db-bases`           | ⚪ 대기                     |
+| 5     | 충실도 측정 인프라 (#77) + 라이브 전수 검증 (fresh E2E)        | `feature/fidelity-metrics`          | ⚪ 대기                     |
+| 6     | dev→main 릴리스 + v0.2.0 태그 (#78)                            | —                                   | ⚪ 승인 대기                |
 
 **Phase 1 (2026-06-02):** M2(디스커버리 조기반환의 링크 후처리 누락)·M3(후처리 대상
 슬라이스 추정→실측)·M4(단일/후처리 패스 위키링크 불일치)·cover-URL(원격 URL 오래핑)
 봉합 + relation 후처리 배선. 회귀 테스트 15건 추가, **836 테스트 통과**.
 상세: `journal/2026-06-02.md`, `adr/007-fix-forward-vs-rollback.md`.
+
+**Phase 2 (2026-06-02):** M1(페이지 모드 pull 의 relation/people 이 resolver 미주입으로
+매 pull 마다 raw UUID 로 재생성 → 후처리에만 의존하는 2-write churn) 봉합 — orchestrator 가
+단일 resolver 를 `propertyMapper` 와 `notionClient` 양쪽에 주입(DB 모드는 이미 면역).
+M5(제목의 대괄호 `[`/`]` 가 `[[..]]` 위키링크를 첫 `]]` 에서 조기 종료시켜 깨진 링크 생성)
+봉합 — 파일명 SSOT `sanitizeFileName` 에서 대괄호를 `_` 로 치환(원본 제목은 frontmatter
+`title` 에 보존되어 무손실). 회귀 테스트 7건 추가(M1 4 + M5 3), **843 테스트 통과**.
+상세: `journal/2026-06-02.md`.
 
 ---
 
