@@ -430,6 +430,138 @@ describe("DatabaseSyncer", () => {
     });
   });
 
+  describe("writtenPaths (M3 — 후처리 대상 실측)", () => {
+    it("생성된 행의 실제 경로를 writtenPaths 로 돌려준다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+
+      const result = await syncer.pullAll();
+
+      expect(result.created).toBe(1);
+      // 슬라이스 추정이 아니라 디스크에 실제 기록된 경로 그대로
+      expect(result.writtenPaths).toEqual(["databases/tasks/Task One.md"]);
+    });
+
+    it("스킵된 행은 writtenPaths 에 포함되지 않는다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        { id: "page-1", last_edited_time: "2026-05-16T00:00:00.000Z" },
+      ]);
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Existing.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "hash1",
+      });
+
+      const result = await syncer.pullAll();
+
+      expect(result.updated).toBe(0);
+      expect(result.writtenPaths).toEqual([]);
+    });
+
+    it("업데이트된 행의 경로를 writtenPaths 로 돌려준다", async () => {
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Updated Task" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: computeHash("LOCAL UNCHANGED"),
+      });
+
+      const result = await syncer.pullAll();
+
+      expect(result.updated).toBe(1);
+      expect(result.writtenPaths).toEqual(["databases/tasks/Updated Task.md"]);
+    });
+
+    it("writtenPaths 길이는 항상 created+updated 와 일치한다(불변식)", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "p1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "A" }] } },
+        },
+        {
+          id: "p2",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "B" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValueOnce("A").mockReturnValueOnce("B");
+
+      const result = await syncer.pullAll();
+
+      expect(result.writtenPaths).toHaveLength(result.created + result.updated);
+    });
+  });
+
+  describe("cover-URL 위키링크 가드", () => {
+    function coverContent(): string {
+      const calls = (mockVaultFs.writeFile as any).mock.calls.filter(
+        (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
+      );
+      return calls.map((c: any[]) => String(c[1])).join("\n");
+    }
+
+    it("다운로드가 로컬 경로로 치환하면 cover 를 위키링크로 감싼다", async () => {
+      mockNotionClient.extractCover.mockReturnValue({ url: "https://notion.so/img.png" });
+      (mockImageHandler.downloadAllImages as any).mockResolvedValue({
+        content: "![cover](attachments/Task One-cover.png)",
+        downloads: [{ localPath: "attachments/Task One-cover.png" }],
+      });
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+
+      await syncer.pullAll();
+
+      const content = coverContent();
+      expect(content).toContain("[[attachments/Task One-cover.png]]");
+    });
+
+    it("다운로드가 비활성/실패해 원격 URL 이 그대로면 평문 URL 로 두고 `[[..]]` 로 감싸지 않는다", async () => {
+      // 회귀: 원격 https URL 을 `[[https://..]]` 로 감싸면 존재하지 않는 파일을 가리키는
+      // 깨진 위키링크가 된다(cover-URL).
+      mockNotionClient.extractCover.mockReturnValue({ url: "https://notion.so/remote-cover.png" });
+      // 기본 imageHandler 목은 입력 마크다운을 그대로 반환 → 원격 URL 미치환
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+
+      await syncer.pullAll();
+
+      const content = coverContent();
+      expect(content).not.toContain("[[https://");
+      expect(content).toContain("https://notion.so/remote-cover.png");
+    });
+  });
+
   describe("pushAll", () => {
     it("databases가 비어있으면 빈 결과 반환", async () => {
       const config = createConfig([]);

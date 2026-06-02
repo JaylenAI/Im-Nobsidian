@@ -12,6 +12,7 @@ import { resolvePullConflict } from "./conflict-detector.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath, selectDbRowFiles } from "../utils/db-row-path.js";
+import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
@@ -29,6 +30,13 @@ export interface DatabaseSyncResult {
   /** Pull 시 로컬·리모트 동시 수정으로 발생한 충돌 (push 는 항상 빈 배열). */
   conflicts: Conflict[];
   failed: FailedOperation[];
+  /**
+   * 이번 pull 에서 실제로 디스크에 기록한 db-row 파일 경로(SSOT).
+   * 오케스트레이터의 링크 해소(resolveNotionLinks) 대상은 반드시 이 목록으로 정한다 —
+   * 과거의 `getByStatus("synced").slice(-N)` 휴리스틱은 ORDER BY 가 없어 증분 pull 에서
+   * 엉뚱한 행을 골라 정작 바뀐 행의 relation UUID 를 영영 해소하지 못했다(M3). push 경로는 항상 빈 배열.
+   */
+  writtenPaths: string[];
 }
 
 /** {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. */
@@ -52,20 +60,26 @@ export class DatabaseSyncer {
   ) {
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
-      resolvePageId: (pageId: string) => stateDb.resolvePageId(pageId)?.title ?? null,
+      // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 해소 — 원시 제목과
+      // sanitize 된 파일명의 불일치로 인한 깨진/이중 위키링크 차단.
+      resolvePageId: (pageId: string) => {
+        const entry = stateDb.resolvePageId(pageId);
+        return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
+      },
     });
   }
 
   async pullAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [] };
+      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
     let updated = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
+    const writtenPaths: string[] = [];
 
     for (const dbConfig of databases) {
       try {
@@ -74,6 +88,7 @@ export class DatabaseSyncer {
         updated += result.updated;
         conflicts.push(...result.conflicts);
         failed.push(...result.failed);
+        writtenPaths.push(...result.writtenPaths);
       } catch (error) {
         getLogger().warn(`[DB Sync] DB ${dbConfig.databaseId} pull 실패:`, error);
         failed.push({
@@ -84,13 +99,13 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts, failed };
+    return { created, updated, conflicts, failed, writtenPaths };
   }
 
   async pushAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [] };
+      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
@@ -113,7 +128,7 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts: [], failed };
+    return { created, updated, conflicts: [], failed, writtenPaths: [] };
   }
 
   async pullDatabase(dbConfig: DatabaseSyncConfig): Promise<DatabaseSyncResult> {
@@ -134,6 +149,9 @@ export class DatabaseSyncer {
     let updated = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
+    // M3: 실제로 디스크에 기록된 DB 행 경로 — 후처리 링크 해소(resolveNotionLinks)가
+    // 정확히 이 파일들만 재방문하도록 슬라이스 추정 대신 실측 수집한다.
+    const writtenPaths: string[] = [];
 
     for (const page of pages) {
       try {
@@ -145,13 +163,17 @@ export class DatabaseSyncer {
           const outcome = await this.pullDatabasePage(page, dbConfig);
           if (outcome.action === "written") {
             updated++;
+            writtenPaths.push(outcome.path);
           } else if (outcome.action === "conflict") {
             conflicts.push(outcome.conflict);
           }
           // skipped(local-first): 카운트하지 않음
         } else {
-          await this.pullDatabasePage(page, dbConfig);
+          const outcome = await this.pullDatabasePage(page, dbConfig);
           created++;
+          if (outcome.action === "written") {
+            writtenPaths.push(outcome.path);
+          }
         }
       } catch (error) {
         failed.push({
@@ -165,7 +187,7 @@ export class DatabaseSyncer {
     getLogger().debug(
       `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${conflicts.length} 충돌`,
     );
-    return { created, updated, conflicts, failed };
+    return { created, updated, conflicts, failed, writtenPaths };
   }
 
   private async pullDatabaseViews(
@@ -325,9 +347,12 @@ export class DatabaseSyncer {
           `![cover](${cover.url})`,
           `${safeName}-cover`,
         );
-        const localUrlMatch = coverResult.content.match(/!\[cover\]\((.+?)\)/);
-        if (localUrlMatch?.[1]) {
-          properties.cover = `[[${localUrlMatch[1]}]]`;
+        // 이미지 핸들러가 실제 로컬 첨부 경로로 치환했을 때만 위키링크로 감싼다.
+        // 다운로드 비활성/실패 시엔 원격 URL이 그대로 돌아오는데, 이를 `[[..]]` 로
+        // 감싸면 존재하지 않는 `[[https://..]]` 파일을 가리키는 깨진 링크가 된다(cover-URL).
+        const resolved = coverResult.content.match(/!\[cover\]\((.+?)\)/)?.[1];
+        if (resolved && !/^https?:\/\//i.test(resolved)) {
+          properties.cover = `[[${resolved}]]`;
         } else {
           properties.cover = cover.url;
         }
@@ -584,7 +609,7 @@ export class DatabaseSyncer {
     }
 
     getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
-    return { created, updated, conflicts: [], failed };
+    return { created, updated, conflicts: [], failed, writtenPaths: [] };
   }
 
   /**

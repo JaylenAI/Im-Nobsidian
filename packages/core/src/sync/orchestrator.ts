@@ -29,12 +29,14 @@ import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict } from "./conflict-detector.js";
 import { ConflictResolver } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
-import { PropertyMapper } from "../notion/property-mapper.js";
+import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual, normalizeNotionId } from "../utils/id.js";
 import { runPool } from "../utils/pool.js";
+import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
 import type { VaultFS } from "./vault-fs.js";
 import {
   notionEnhancedToObsidian,
@@ -133,10 +135,21 @@ export class SyncOrchestrator {
       this.pipeline,
       this.imageHandler,
     );
-    this.propertyMapper.setWikilinkResolver({
+    // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 위키링크
+    // 텍스트를 만든다. 원시 제목(.title)을 쓰면 슬래시·콜론 등 파일명 금지문자
+    // 때문에 단일 패스 링크가 실제 파일을 못 가리키는 불일치가 생겼다.
+    // M1: 동일 resolver 를 페이지 모드 변환 경로(notionClient.extractProperties)에도
+    // 주입한다. 주입하지 않으면 페이지 모드 relation 이 raw UUID 로 남아 매 pull 마다
+    // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 this.propertyMapper 가 처리).
+    const wikilinkResolver: WikilinkResolver = {
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
-      resolvePageId: (pageId: string) => stateDb.resolvePageId(pageId)?.title ?? null,
-    });
+      resolvePageId: (pageId: string) => {
+        const entry = stateDb.resolvePageId(pageId);
+        return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
+      },
+    };
+    this.propertyMapper.setWikilinkResolver(wikilinkResolver);
+    this.notionClient.setWikilinkResolver(wikilinkResolver);
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
     this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
@@ -363,6 +376,33 @@ export class SyncOrchestrator {
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
 
+    // M2: pull 의 모든 종료 경로가 동일하게 마감되도록 단일 헬퍼로 모은다 —
+    // 기록된 파일(writtenPaths)의 본문 링크·frontmatter relation 후처리(resolveNotionLinks)와
+    // 메타 마킹을 빠짐없이 거친다. 과거엔 디스커버리 DB 전용 조기 반환 경로가 이 후처리를
+    // 건너뛰어, 그 행들의 위키링크/relation 이 UUID 그대로 남았다.
+    const finalize = async (
+      created: number,
+      updated: number,
+      deleted: number,
+    ): Promise<PullResult> => {
+      const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
+      this.stateDb.setMeta("last_pull_at", new Date().toISOString());
+      this.stateDb.setMeta("last_sync_at", new Date().toISOString());
+      this.stateDb.setMeta("pull_in_progress", "");
+      return {
+        created,
+        updated,
+        deleted,
+        conflicts,
+        writtenPaths,
+        failed,
+        duration: Date.now() - startTime,
+        imageCount: this._pullImageCount,
+        fileCount: this._pullFileCount,
+        linkCount,
+      };
+    };
+
     const lastPull = this.stateDb.getMeta("last_pull_at") ?? this.stateDb.getMeta("last_sync_at");
     const trackedCount = this.stateDb.getAll().length;
     // 증분(searchRecentPages) 은 in_trash 페이지를 못 보므로 삭제를 감지하지 못한다(I10).
@@ -387,28 +427,11 @@ export class SyncOrchestrator {
       : remoteChanges;
 
     if (filtered.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
-      const hasDbResults = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
-      if (!hasDbResults.created && !hasDbResults.updated) {
-        this.stateDb.setMeta("last_pull_at", new Date().toISOString());
-        this.stateDb.setMeta("last_sync_at", new Date().toISOString());
-        this.stateDb.setMeta("pull_in_progress", "");
-        return emptyResult;
-      }
-      this.stateDb.setMeta("last_pull_at", new Date().toISOString());
-      this.stateDb.setMeta("last_sync_at", new Date().toISOString());
-      this.stateDb.setMeta("pull_in_progress", "");
-      return {
-        created: hasDbResults.created,
-        updated: hasDbResults.updated,
-        deleted: 0,
-        conflicts,
-        writtenPaths,
-        failed,
-        duration: Date.now() - startTime,
-        imageCount: 0,
-        fileCount: 0,
-        linkCount: 0,
-      };
+      // 본문 페이지 변경이 없어도 디스커버리된 DB 행은 새로 기록될 수 있다. 그 행들의
+      // 본문 링크·frontmatter relation 을 finalize() 의 resolveNotionLinks 가 해소한다(M2).
+      // (기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감 — emptyResult 와 동일)
+      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
+      return finalize(dbDiscovery.created, dbDiscovery.updated, 0);
     }
     if (filtered.length === 0) {
       return emptyResult;
@@ -555,13 +578,10 @@ export class SyncOrchestrator {
         counts.updated += dbResult.updated;
         conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
-        if (dbResult.created + dbResult.updated > 0) {
-          const dbPaths = this.stateDb
-            .getByStatus("synced")
-            .filter((r) => r.fileType === "db-row")
-            .map((r) => r.obsidianPath);
-          writtenPaths.push(...dbPaths.slice(-dbResult.created - dbResult.updated));
-        }
+        // M3: 후처리 대상은 실제 기록된 행 경로를 그대로 받는다. 과거엔 "synced 상태의
+        // db-row 중 마지막 N개" 라는 슬라이스 추정을 썼는데, 정렬·기존행 혼입 때문에
+        // 엉뚱한 파일을 후처리하거나 갓 쓴 행을 놓쳐 링크가 미해소로 남았다.
+        writtenPaths.push(...dbResult.writtenPaths);
       } catch (error) {
         getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
       }
@@ -573,26 +593,7 @@ export class SyncOrchestrator {
       counts.updated += dbDiscovery.updated;
     }
 
-    const linkTargetPaths = writtenPaths.length > 0 ? writtenPaths : [];
-    const linkCount =
-      linkTargetPaths.length > 0 ? await this.resolveNotionLinks(linkTargetPaths) : 0;
-
-    this.stateDb.setMeta("last_pull_at", new Date().toISOString());
-    this.stateDb.setMeta("last_sync_at", new Date().toISOString());
-    this.stateDb.setMeta("pull_in_progress", "");
-
-    return {
-      created: counts.created,
-      updated: counts.updated,
-      deleted: counts.deleted,
-      conflicts,
-      writtenPaths,
-      failed,
-      duration: Date.now() - startTime,
-      imageCount: this._pullImageCount,
-      fileCount: this._pullFileCount,
-      linkCount,
-    };
+    return finalize(counts.created, counts.updated, counts.deleted);
   }
 
   async sync(options?: SyncOptions): Promise<SyncResult> {
@@ -913,13 +914,8 @@ export class SyncOrchestrator {
           updated += dbResult.updated;
           conflicts.push(...dbResult.conflicts);
           failed.push(...dbResult.failed);
-          if (dbResult.created + dbResult.updated > 0) {
-            const dbPaths = this.stateDb
-              .getByStatus("synced")
-              .filter((r) => r.fileType === "db-row")
-              .map((r) => r.obsidianPath);
-            writtenPaths.push(...dbPaths.slice(-dbResult.created - dbResult.updated));
-          }
+          // M3: 슬라이스 추정 대신 실제 기록된 행 경로를 후처리 대상으로 받는다.
+          writtenPaths.push(...dbResult.writtenPaths);
           stillSyncable.push(dbConfig);
         } catch (error) {
           if (isNotionObjectNotFound(error)) {
@@ -953,7 +949,8 @@ export class SyncOrchestrator {
     const idToTitle = new Map<string, string>();
     for (const r of allRecords) {
       if (r.notionPageId && r.obsidianPath) {
-        const title = r.obsidianPath.replace(/\.md$/, "").split("/").pop() ?? "";
+        // M4: 단일 변환 패스(resolvePageId)와 동일한 규칙으로 위키링크 텍스트를 만든다.
+        const title = wikilinkTitleFromPath(r.obsidianPath);
         const cleanId = r.notionPageId.replace(/-/g, "");
         idToTitle.set(cleanId, title);
         idToTitle.set(r.notionPageId, title);
@@ -993,6 +990,15 @@ export class SyncOrchestrator {
           },
         );
         content = resolved2;
+
+        // frontmatter 의 relation/people 원시 UUID → `[[제목]]`. 변환 시점에는 대상
+        // 페이지가 미등록이라 UUID 로 남지만, 이 post-pass 시점엔 맵이 완성돼 해소된다.
+        const fm = resolveFrontmatterRelations(content, idToTitle);
+        if (fm.count > 0) {
+          content = fm.content;
+          totalResolved += fm.count;
+          changed = true;
+        }
 
         if (changed) {
           await this.vaultFs.writeFile(filePath, content);

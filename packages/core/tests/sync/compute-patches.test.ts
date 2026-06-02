@@ -96,6 +96,7 @@ function createMockNotionClient() {
     }),
     extractTitle: vi.fn().mockReturnValue("Test"),
     extractProperties: vi.fn().mockReturnValue({}),
+    setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),

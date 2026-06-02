@@ -10,7 +10,7 @@ import type {
   DataSourceViewObjectResponse,
   ListDatabaseViewsResponse,
 } from "@notionhq/client/build/src/api-endpoints/views.js";
-import { PropertyMapper } from "./property-mapper.js";
+import { PropertyMapper, type WikilinkResolver } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
@@ -993,6 +993,17 @@ export class NotionClient {
       }
     }
     return "제목 없음";
+  }
+
+  /**
+   * 페이지 모드 pull(extractProperties)의 relation/people 속성을 raw Notion UUID 가
+   * 아니라 [[제목]] 위키링크로 해소하도록 resolver 를 주입한다. 주입하지 않으면 매
+   * pull 마다 relation 이 raw UUID 로 재생성돼, 후처리(resolveNotionLinks)에만 의존하는
+   * 2-write churn 이 남는다(M1). DB 모드는 orchestrator/DatabaseSyncer 의 자체 mapper 가
+   * 이미 resolver 를 주입받아 면역이다.
+   */
+  setWikilinkResolver(resolver: WikilinkResolver): void {
+    this.propertyMapper.setWikilinkResolver(resolver);
   }
 
   extractProperties(page: PageObjectResponse): Record<string, unknown> {
