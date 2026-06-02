@@ -1,7 +1,7 @@
 # 현재 진행 상황
 
 > 마지막 업데이트: 2026-06-02
-> 버전: v0.1.12 (작업본, 미릴리스) · 마지막 정식 릴리스 v0.1.11
+> 버전: v0.2.0 (릴리스 준비 완료, 태그 대기) · 마지막 정식 릴리스 v0.1.12
 
 ## 현재 미션 — 동기화 충실도 회복 (`/goal`)
 
@@ -11,12 +11,12 @@
 
 | Phase | 범위                                                           | 분기                                | 상태                            |
 | ----- | -------------------------------------------------------------- | ----------------------------------- | ------------------------------- |
-| 1     | Frontmatter/Relation 충실도 (M2/M3/M4 + cover-URL + relation)  | `fix/pull-resolution-fidelity`      | ✅ 커밋 완료, dev 머지 대기     |
-| 2     | P0 relation 잔여 봉합 (M1 페이지모드 resolver + M5 대괄호)     | `fix/p0-relation-residual`          | ✅ 커밋 완료, dev 머지 대기     |
-| 3     | 본문 컨테이너 1급화 (#74, UX/시각 트랙 — 데이터는 이미 무손실) | `feature/body-container-firstclass` | ⚪ 대기 (범위 확인 필요)        |
-| 4     | DB↔Bases 인라인 임베드 (#75)                                   | `feature/inline-db-bases`           | ⚪ 대기                         |
-| 5     | 충실도 측정 인프라 (#77) + 라이브 전수 검증 (fresh E2E)        | `feature/fidelity-metrics`          | ✅ 인프라 커밋 · 라이브 검증 중 |
-| 6     | dev→main 릴리스 + v0.2.0 태그 (#78)                            | —                                   | ⚪ 승인 대기                    |
+| 1     | Frontmatter/Relation 충실도 (M2/M3/M4 + cover-URL + relation)  | `fix/pull-resolution-fidelity`      | ✅ dev 머지 완료                |
+| 2     | P0 relation 잔여 봉합 (M1 페이지모드 resolver + M5 대괄호)     | `fix/p0-relation-residual`          | ✅ dev 머지 완료                |
+| 3     | 본문 컨테이너 1급화 (#74, UX/시각 트랙 — 데이터는 이미 무손실) | `feature/body-container-firstclass` | ⏸ v1.0.0 이연 (데이터 무손실)   |
+| 4     | DB↔Bases 인라인 임베드 (#75)                                   | `feature/inline-db-bases`           | ⏸ v1.0.0 이연                   |
+| 5     | 충실도 측정 인프라 (#77) + 라이브 전수 검증 (fresh E2E)        | `feature/fidelity-metrics`          | ✅ dev 머지 완료 (858 테스트)   |
+| 6     | dev→main 릴리스 + v0.2.0 태그 (#78)                            | `docs/release-v0.2.0`               | 🔄 진행 중 (문서/버전범프 완료) |
 
 > **P0 추가 봉합 — M6 (`fix/mention-page-labeled`, cf08b19):** Phase 2 의 P0 relation 잔여
 > 중 마지막 한 형태(라벨 동반 `<mention-page url>제목</mention-page>` breadcrumb 미변환).
@@ -49,14 +49,14 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 전체 상태 (릴리스 이력)
 
-**v0.1.11 릴리스.** 플러그인 테스트 115개 추가, better-sqlite3 완전 제거, push 버그 수정, styles.css 테마 호환 개선.
+**v0.2.0 릴리스 준비 완료.** 무손실·멱등·수렴 미션 봉합 — 충실도 측정 인프라(I1) + 불변식 안전망, 무손실 push 확장, 변환 정본화(I3). 1038 테스트.
 
-| 항목                     | 상태                                         |
-| ------------------------ | -------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.1.11                                      |
-| npm `im-nobsidian` (CLI) | v0.1.11                                      |
-| GitHub Release           | v0.1.11 tagged                               |
-| Obsidian Plugin          | v0.1.11 (BRAT 설치 가능, 커뮤니티 제출 예정) |
+| 항목                     | 상태                                        |
+| ------------------------ | ------------------------------------------- |
+| npm `@im-nobsidian/core` | v0.1.12 (→ v0.2.0 태그 시 배포)             |
+| npm `im-nobsidian` (CLI) | v0.1.12 (→ v0.2.0 태그 시 배포)             |
+| GitHub Release           | v0.1.12 tagged (v0.2.0 태그 대기)           |
+| Obsidian Plugin          | v0.2.0 (BRAT 설치 가능, 커뮤니티 제출 예정) |
 
 ## Phase 진행률
 
@@ -125,10 +125,10 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 테스트 현황
 
-- **Core 테스트**: 550개 통과
+- **Core 테스트**: 858개 통과
 - **CLI 테스트**: 31개 통과
-- **Plugin 테스트**: 115개 통과
-- **전체**: 696개 통과 (0 실패)
+- **Plugin 테스트**: 149개 통과
+- **전체**: 1038개 통과 (11 skip, 0 실패)
 - **TypeScript 타입 체크**: 클린 (에러 0)
 - **플러그인 빌드**: 620KB (better-sqlite3 제거), sql-wasm.wasm 644KB 별도
 
@@ -152,6 +152,6 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 다음 목표
 
-1. **npm publish** — `@im-nobsidian/core` + `im-nobsidian` CLI npm 배포
-2. **GitHub Release** — v0.1.11 태그 + BRAT 설치 가능 아티팩트
-3. **커뮤니티 플러그인 제출** — `obsidianmd/obsidian-releases` PR
+1. **v0.2.0 릴리스** — docs→dev→main 머지 + v0.2.0 태그 (npm publish core+CLI 자동)
+2. **GitHub Release EN/KR** — v0.2.0 노트 등록 + v0.1.12 자동생성 노트 EN/KR 재작성
+3. **커뮤니티 플러그인 제출** — BRAT 베타 + `obsidianmd/obsidian-releases` PR

@@ -3,6 +3,75 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.0] - 2026-06-02
+
+> "100% 무손실·멱등·수렴" 미션에 집중한 릴리스.
+> 라운드트립 deep-equal 충실도 검증(I1)과 불변식 안전망(드리프트·멱등성·삭제)을 CI에 상시 잠그고,
+> 무손실 push를 blockquote·번호목록·underline/color·breadcrumb/TOC·DB 사이드카까지 확장했으며,
+> 변환 정본화(I3)·증분 멱등(I5/I10)·중첩 cascade 폭주 차단(#72/#73)으로 데이터 손실 경로를 제거했다.
+
+### Added
+
+- **충실도 측정 인프라** — 본문 링크 분류기 + 멱등성 감사 러너 + 라운드트립 deep-equal 검증(I1)으로 회귀 상시 잠금 (#77)
+- **불변식 안전망** — 드리프트/멱등성/삭제 불변식 인프라 + `deleteSync=false` 삭제 카운트 정직화
+- **DB 사이드카 `.notion.json`** — Obsidian 미표현 뷰/메타를 각 DB 옆에 무손실 보존 (#45·#33, I4·I7)
+- **오프라인 블록 라운드트립 잠금**(I2) + blockquote·번호목록 무손실 push
+- **인라인 underline/color 무손실 push** (#47)
+- **breadcrumb·TOC 블록** 단일라인 마커 push 복원
+- **frontmatter wikilink 복원**(I3)
+- **데드 테이블 활성화** — 첨부 dedup(I6) + 크래시 복구 WAL(I12)
+
+### Fixed
+
+#### 변환 정본화 (I3)
+
+- **멘션 정규형 수렴** — 두 경로를 `[[notion:<32hex>]]` 정본으로 통일
+- **PreserveMarkerInjector** — 마커를 원래 `startIndex` 위치에 복원
+- **file-hosted 이미지** — video/embed 승격 URL 수용
+- **인라인 span/color 마커** — 단일 정본으로 통일
+- **rich-text 변환 분리** + 미처리 멘션 `plain_text` 보존
+- 페이지 모드 pull **relation/people resolver 배선**(M1)
+- 제목 **대괄호가 위키링크를 조기 종료**하던 문제 봉합(M5)
+- 라벨 동반형 **mention-page breadcrumb 위키링크화**(M6)
+- pull 링크 해소 충실도 (M2/M3/M4 + cover-URL + relation)
+
+#### 멱등 · 수렴
+
+- **증분 삭제 전파**(I10) + **`content_hash` 멱등**(I5)
+- **다중 data source 무손실 병합** — 전 소스의 행·컬럼 동기화(I4)
+- **충돌 해소 결과 Notion 재push** + `notionLastEdited` 재조정(I8)
+- **검색 페이지네이션 디듀프** — 고아·folder-note 위치오류·push churn 근본 수정
+- **폴더노트 fixpoint 위반** — `resolveNotionLinks` 해시 동기화 + 자식 페이지 삭제 가드
+- **DB행 8자 prefix 충돌** 데이터 손실 + 영구 churn 제거(결함11)
+- 본문이 **`---`로 시작할 때 frontmatter 유실** 수정
+
+#### cascade 폭주 · 견고화
+
+- **토글/콜아웃 코드펜스 cascade** — 비대칭 들여쓰기 dedent로 차단(#72)
+- **중첩 컨테이너 prefix/탭 누적 폭주** — 내부우선 통합 변환 + 테이블 인식 dedent로 차단(#73)
+- **대용량 워크스페이스 발견 성능** — deadline 재귀 + search 폴백, root 서브트리 한정(#71)
+- 접근 불가 링크드/미공유 **DB graceful degrade**(결함9)
+- **`extractValue` 비배열 속성값** 전수 하드닝(결함10)
+- DB 자동발견 충실도 — `extractTitle` 크래시 가드 + 신모델 fetch(결함7·8)
+- 갤러리 커버 **multivalue degrade** — 배열 커버를 첫 URL 스칼라로(rank22)
+- 뷰 엔트리 **title·icon 스칼라 강제** — 숫자/배열 프론트매터 검색 크래시 차단(rank22b, I9)
+- DB rename 시 **고아 `.base`/`.notion.json` 정리** + 스키마 진화 반영(rank14)
+
+#### 빌드 · CI
+
+- **루트 vitest 워크스페이스 정합** — plugin 2프로젝트(node/components)를 펼쳐 dev CI 복구
+- E2E 하니스 종료코드 누수 수정(`scripts/e2e/run.sh`)
+- `.base` 뷰 이름 유일성 보장 + E2E 하니스 정확도 개선
+
+### Changed
+
+- 테스트: **1038개 통과** (core 858 + CLI 31 + plugin 149) — v0.1.12 대비 **+261**
+- lint / typecheck 클린, CI(node 20·22) GREEN
+
+### Notes
+
+- DB 사이드카 `.notion.json`이 각 동기화 DB 옆에 새로 생성된다(표현 불가 뷰/메타 보존용). 기존 볼트는 다음 pull 시 자동 생성.
+
 ## [0.1.12] - 2026-05-29
 
 > Notion → Obsidian pull 충실도와 동기화 안정성에 집중한 릴리스.
