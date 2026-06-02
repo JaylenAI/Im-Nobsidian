@@ -16,7 +16,9 @@ const COMPONENT_TESTS = [
 
 export default defineWorkspace([
   // node 프로젝트 — 로직/컨트롤러 테스트(svelte·sql.js 는 mock). 기존 동작 그대로.
+  // root 를 명시해야 루트 워크스페이스가 이 프로젝트를 펼쳐도 include 가 plugin 기준으로 잡힌다.
   {
+    root: here,
     plugins: [svelte({ hot: false })],
     resolve: { alias: obsidianAlias },
     test: {
@@ -30,6 +32,7 @@ export default defineWorkspace([
   },
   // components 프로젝트 — Svelte 컴포넌트 실제 마운트(happy-dom + browser 컨디션).
   {
+    root: here,
     plugins: [svelte({ hot: false })],
     resolve: { alias: obsidianAlias, conditions: ["browser"] },
     test: {
