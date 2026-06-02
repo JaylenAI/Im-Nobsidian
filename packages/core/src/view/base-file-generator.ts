@@ -15,9 +15,17 @@ export interface BaseFileOptions {
   readonly folderPath: string;
 }
 
-type BasesViewType = "table" | "cards" | "list";
+export type BasesViewType = "table" | "cards" | "list";
 
-const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
+/**
+ * Notion 뷰 타입 → Obsidian Bases 뷰 타입 매핑(SSOT).
+ *
+ * `null` = Bases 에 대응 뷰가 없어 `.base` 로 표현 불가. 이 경우 해당 뷰는 `.base` 에서
+ * 누락되므로, 사이드카(`<db>.notion.json`)가 원본 뷰 설정을 무손실 보존한다
+ * (Notion API 는 뷰 생성/수정을 지원하지 않아 뷰는 pull-authoritative — push 로 되돌릴 수
+ * 없으므로 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다).
+ */
+export const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
   table: "table",
   gallery: "cards",
   list: "list",
@@ -29,6 +37,11 @@ const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
   map: null,
   dashboard: null,
 };
+
+/** Notion 뷰 타입의 Bases 대응 타입을 돌려준다. 미지원/미상 타입은 `null`. */
+export function basesViewTypeOf(notionType: string): BasesViewType | null {
+  return NOTION_TO_BASES_VIEW[notionType] ?? null;
+}
 
 export class BaseFileGenerator {
   generate(options: BaseFileOptions): string {
@@ -104,6 +117,11 @@ export class BaseFileGenerator {
       return;
     }
 
+    // Obsidian Bases 는 뷰 이름 유일성을 요구한다. Notion 은 이름 없는 뷰를 'Untitled'로
+    // 반환하므로(동명 다수 발생) 중복 시 ' 2','3'… 접미사로 유일화한다. 미적용 시 Bases 가
+    // 동명 뷰를 하나로 합치거나 무시해 갤러리·표 뷰가 사라진다.
+    this.dedupeViewNames(basesViews);
+
     lines.push("views:");
     for (const view of basesViews) {
       lines.push(`  - type: ${view.type}`);
@@ -136,6 +154,24 @@ export class BaseFileGenerator {
       if (view.image) {
         lines.push(`    image: ${this.propRef(view.image)}`);
       }
+    }
+  }
+
+  /**
+   * 뷰 이름을 Bases 요구사항대로 유일화한다(in-place). 동명 충돌 시 ' 2',' 3'… 를 붙이되
+   * 이미 존재하는 이름과 다시 충돌하지 않을 때까지 증가시킨다.
+   */
+  private dedupeViewNames(views: Array<{ name: string }>): void {
+    const used = new Set<string>();
+    for (const v of views) {
+      let name = v.name;
+      if (used.has(name)) {
+        let n = 2;
+        while (used.has(`${v.name} ${n}`)) n++;
+        name = `${v.name} ${n}`;
+      }
+      used.add(name);
+      v.name = name;
     }
   }
 

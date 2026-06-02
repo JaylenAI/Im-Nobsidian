@@ -5,6 +5,7 @@ import { sortEntries, groupEntries, extractCalendarEntries } from "./filter-engi
 import { getVisibleProperties } from "./filter-engine.js";
 import matter from "gray-matter";
 import { DB_VIEWS_PATH } from "../constants/paths.js";
+import { selectDbRowFiles } from "../utils/db-row-path.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -25,8 +26,9 @@ export class ViewDataProvider {
 
   async collectEntries(folderPath: string): Promise<DBEntry[]> {
     const allFiles = await this.vaultFs.listMarkdownFiles();
-    const prefix = folderPath.endsWith("/") ? folderPath : folderPath + "/";
-    const dbFiles = allFiles.filter((f) => f.path.startsWith(prefix));
+    // 직속 행 파일만 — 중첩 하위 폴더(별도 child_database·자식 페이지 본문)는 부모 DB 의
+    // 행이 아니므로 카드로 새어 들지 않게 제외한다(I9 오포함 차단).
+    const dbFiles = selectDbRowFiles(allFiles, folderPath);
 
     const entries: DBEntry[] = [];
 
@@ -126,9 +128,9 @@ function parseEntry(path: string, content: string): DBEntry | null {
     const parsed = matter(content);
     const fm = parsed.data as Record<string, unknown>;
 
-    const title = (fm.title as string) ?? extractTitleFromPath(path);
-    const icon = fm.icon as string | undefined;
-    const cover = fm.cover as string | undefined;
+    const title = coerceString(fm.title) ?? extractTitleFromPath(path);
+    const icon = coerceString(fm.icon);
+    const cover = coerceCover(fm.cover);
 
     const properties: Record<string, PropertyValue> = {};
     for (const [key, value] of Object.entries(fm)) {
@@ -140,6 +142,63 @@ function parseEntry(path: string, content: string): DBEntry | null {
   } catch {
     return null;
   }
+}
+
+/**
+ * 갤러리 커버 값을 **렌더 가능한 단일 URL 스칼라**로 강제 변환한다(없으면 undefined).
+ *
+ * Notion `files` 속성을 갤러리 커버로 쓰면 행마다 파일 수가 달라, property-mapper 는 단일
+ * 파일은 스칼라 문자열로·복수 파일은 **URL 배열**로 직렬화한다(데이터 보존). 그러나 카드
+ * 커버 `<img src>` 는 스칼라만 받으므로, 배열이 그대로 흘러들면 `src="url1,url2"` 로
+ * 합쳐져 **깨진 이미지**가 된다. Notion 도 다중 파일 커버는 **첫 파일**을 쓰므로 동일하게
+ * 첫 렌더 가능한 URL 로 degrade 한다. 파일 객체(`{url}`/`{external:{url}}`)도 방어적으로 처리.
+ *
+ * `DBEntry.cover: string` 타입을 런타임에서 보증한다(과거: `as string` 캐스팅이 배열을
+ * 문자열로 단언해 타입이 거짓이었다).
+ */
+function coerceCover(raw: unknown): string | undefined {
+  const firstUrl = (v: unknown): string | undefined => {
+    if (typeof v === "string") return v.trim() || undefined;
+    if (v && typeof v === "object") {
+      const o = v as { url?: unknown; external?: { url?: unknown } };
+      const url = o.url ?? o.external?.url;
+      if (typeof url === "string") return url.trim() || undefined;
+    }
+    return undefined;
+  };
+
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const url = firstUrl(item);
+      if (url) return url; // 다중값 → 첫 렌더 가능한 URL 로 degrade
+    }
+    return undefined;
+  }
+  return firstUrl(raw);
+}
+
+/**
+ * `DBEntry` 의 스칼라 문자열 필드(`title`/`icon`)를 **렌더·검색 안전한 단일 문자열**로
+ * 강제 변환한다(없으면 undefined → 호출처에서 파일명 등으로 폴백).
+ *
+ * 프론트매터는 다형값을 흘려보낼 수 있다:
+ *   - `title: 2026` → js-yaml 이 **number** 로 파싱(따옴표 없는 숫자 제목은 흔함).
+ *   - `title: [a, b]` / 수동 오편집 → **배열**.
+ * 과거 `fm.title as string` 캐스팅은 이를 string 으로 **거짓 단언**했고, 뒤따르는
+ * `filter-engine` 의 `entry.title.toLowerCase()` 가 `X.toLowerCase is not a function` 으로
+ * **뷰 검색 전체를 크래시**시켰다(I9 위반 — rank22 의 커버 배열 깨짐과 동일 계열).
+ * number/boolean 은 문자열화, 배열은 첫 비공백 문자열로 degrade 하여 타입을 런타임 보증한다.
+ */
+function coerceString(raw: unknown): string | undefined {
+  if (typeof raw === "string") return raw.trim() || undefined;
+  if (typeof raw === "number" || typeof raw === "boolean") return String(raw);
+  if (Array.isArray(raw)) {
+    for (const item of raw) {
+      const s = coerceString(item);
+      if (s) return s; // 다중값 → 첫 렌더 가능한 문자열로 degrade
+    }
+  }
+  return undefined;
 }
 
 function normalizePropertyValue(value: unknown): PropertyValue {

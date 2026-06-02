@@ -11,8 +11,12 @@ import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict } from "./conflict-detector.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
+import { resolveDbRowPath, selectDbRowFiles } from "../utils/db-row-path.js";
+import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
+import { SidecarGenerator } from "../view/sidecar-generator.js";
+import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import {
   notionEnhancedToObsidian,
@@ -26,6 +30,13 @@ export interface DatabaseSyncResult {
   /** Pull 시 로컬·리모트 동시 수정으로 발생한 충돌 (push 는 항상 빈 배열). */
   conflicts: Conflict[];
   failed: FailedOperation[];
+  /**
+   * 이번 pull 에서 실제로 디스크에 기록한 db-row 파일 경로(SSOT).
+   * 오케스트레이터의 링크 해소(resolveNotionLinks) 대상은 반드시 이 목록으로 정한다 —
+   * 과거의 `getByStatus("synced").slice(-N)` 휴리스틱은 ORDER BY 가 없어 증분 pull 에서
+   * 엉뚱한 행을 골라 정작 바뀐 행의 relation UUID 를 영영 해소하지 못했다(M3). push 경로는 항상 빈 배열.
+   */
+  writtenPaths: string[];
 }
 
 /** {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. */
@@ -37,6 +48,7 @@ type PullPageOutcome =
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
   private readonly baseFileGenerator = new BaseFileGenerator();
+  private readonly sidecarGenerator = new SidecarGenerator();
 
   constructor(
     private readonly config: Config,
@@ -48,20 +60,26 @@ export class DatabaseSyncer {
   ) {
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
-      resolvePageId: (pageId: string) => stateDb.resolvePageId(pageId)?.title ?? null,
+      // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 해소 — 원시 제목과
+      // sanitize 된 파일명의 불일치로 인한 깨진/이중 위키링크 차단.
+      resolvePageId: (pageId: string) => {
+        const entry = stateDb.resolvePageId(pageId);
+        return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
+      },
     });
   }
 
   async pullAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [] };
+      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
     let updated = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
+    const writtenPaths: string[] = [];
 
     for (const dbConfig of databases) {
       try {
@@ -70,6 +88,7 @@ export class DatabaseSyncer {
         updated += result.updated;
         conflicts.push(...result.conflicts);
         failed.push(...result.failed);
+        writtenPaths.push(...result.writtenPaths);
       } catch (error) {
         getLogger().warn(`[DB Sync] DB ${dbConfig.databaseId} pull 실패:`, error);
         failed.push({
@@ -80,13 +99,13 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts, failed };
+    return { created, updated, conflicts, failed, writtenPaths };
   }
 
   async pushAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [] };
+      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
@@ -109,7 +128,7 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts: [], failed };
+    return { created, updated, conflicts: [], failed, writtenPaths: [] };
   }
 
   async pullDatabase(dbConfig: DatabaseSyncConfig): Promise<DatabaseSyncResult> {
@@ -130,6 +149,9 @@ export class DatabaseSyncer {
     let updated = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
+    // M3: 실제로 디스크에 기록된 DB 행 경로 — 후처리 링크 해소(resolveNotionLinks)가
+    // 정확히 이 파일들만 재방문하도록 슬라이스 추정 대신 실측 수집한다.
+    const writtenPaths: string[] = [];
 
     for (const page of pages) {
       try {
@@ -141,13 +163,17 @@ export class DatabaseSyncer {
           const outcome = await this.pullDatabasePage(page, dbConfig);
           if (outcome.action === "written") {
             updated++;
+            writtenPaths.push(outcome.path);
           } else if (outcome.action === "conflict") {
             conflicts.push(outcome.conflict);
           }
           // skipped(local-first): 카운트하지 않음
         } else {
-          await this.pullDatabasePage(page, dbConfig);
+          const outcome = await this.pullDatabasePage(page, dbConfig);
           created++;
+          if (outcome.action === "written") {
+            writtenPaths.push(outcome.path);
+          }
         }
       } catch (error) {
         failed.push({
@@ -161,7 +187,7 @@ export class DatabaseSyncer {
     getLogger().debug(
       `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${conflicts.length} 충돌`,
     );
-    return { created, updated, conflicts, failed };
+    return { created, updated, conflicts, failed, writtenPaths };
   }
 
   private async pullDatabaseViews(
@@ -216,24 +242,87 @@ export class DatabaseSyncer {
         dbConfig.localFolder.split("/").pop() ||
         "Database";
 
+      const resolvedViews: DatabaseViewsConfig = viewsConfig ?? {
+        databaseId: dbConfig.databaseId,
+        databaseName: dbName,
+        lastSynced: new Date().toISOString(),
+        views: [{ id: "default", name: "Table", type: "table" }],
+      };
+
       const baseContent = this.baseFileGenerator.generate({
         databaseId: dbConfig.databaseId,
         databaseName: dbName,
         schema: schemaFull,
-        viewsConfig: viewsConfig ?? {
-          databaseId: dbConfig.databaseId,
-          databaseName: dbName,
-          lastSynced: new Date().toISOString(),
-          views: [{ id: "default", name: "Table", type: "table" }],
-        },
+        viewsConfig: resolvedViews,
         folderPath: dbConfig.localFolder,
       });
 
-      const basePath = `${dbConfig.localFolder}/${sanitizeFileName(dbName)}.base`;
+      const safeName = sanitizeFileName(dbName);
+      const basePath = `${dbConfig.localFolder}/${safeName}.base`;
       await this.vaultFs.writeFile(basePath, baseContent);
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
+
+      await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
+      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
+    }
+  }
+
+  /**
+   * DB 제목이 바뀌면 `.base`/`.notion.json` 파일명(safeName)이 바뀌어 옛 이름의 산출물이
+   * 같은 폴더에 고아로 잔존한다(drift·부활 원인). DB 폴더 **직속**의 산출물 중 현재 이름이
+   * 아닌 것을 삭제해 멱등을 보장한다. 하위 폴더(중첩 DB)의 산출물은 보호한다.
+   */
+  private async cleanupStaleDbArtifacts(localFolder: string, safeName: string): Promise<void> {
+    try {
+      const keep = new Set([
+        `${localFolder}/${safeName}.base`,
+        `${localFolder}/${safeName}.notion.json`,
+      ]);
+      const files = await this.vaultFs.listNonMarkdownFiles();
+      const stale = selectStaleDbArtifacts(files, localFolder, keep);
+      for (const path of stale) {
+        await this.vaultFs.deleteFile(path);
+        getLogger().info(`[DB Sync] 고아 DB 산출물 삭제(rename): ${path}`);
+      }
+    } catch (error) {
+      getLogger().warn(`[DB Sync] 고아 .base/.notion.json 정리 실패 (계속 진행):`, error);
+    }
+  }
+
+  /**
+   * `.base` 가 표현하지 못하는 Notion DB 메타데이터(미지원 뷰·필터식·커버크기 등)를
+   * 사이드카 `<db>.notion.json` 으로 무손실 보존하고, degrade 된 항목을 정직하게 로그한다.
+   * 결정적 직렬화라 동일 DB 상태 → 동일 바이트 → 멱등(drift/churn 0).
+   */
+  private async generateSidecar(
+    dbConfig: DatabaseSyncConfig,
+    dbName: string,
+    safeName: string,
+    schemaFull: Record<string, { id: string; type: string; options?: Array<{ name: string }> }>,
+    resolvedViews: DatabaseViewsConfig,
+  ): Promise<void> {
+    try {
+      const sidecar = this.sidecarGenerator.build({
+        databaseId: dbConfig.databaseId,
+        databaseName: dbName,
+        schema: schemaFull,
+        viewsConfig: resolvedViews,
+      });
+      const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
+      await this.vaultFs.writeFile(sidecarPath, this.sidecarGenerator.serialize(sidecar));
+
+      if (sidecar.degraded.length > 0) {
+        const unrep = sidecar.degraded.filter((d) => d.kind === "view-unrepresentable").length;
+        const dropped = sidecar.degraded.length - unrep;
+        getLogger().info(
+          `[DB Sync] '${dbName}' degrade ${sidecar.degraded.length}건` +
+            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}.notion.json 보존`,
+        );
+      }
+    } catch (error) {
+      getLogger().warn(`[DB Sync] 사이드카 생성 실패 (계속 진행):`, error);
     }
   }
 
@@ -258,9 +347,12 @@ export class DatabaseSyncer {
           `![cover](${cover.url})`,
           `${safeName}-cover`,
         );
-        const localUrlMatch = coverResult.content.match(/!\[cover\]\((.+?)\)/);
-        if (localUrlMatch?.[1]) {
-          properties.cover = `[[${localUrlMatch[1]}]]`;
+        // 이미지 핸들러가 실제 로컬 첨부 경로로 치환했을 때만 위키링크로 감싼다.
+        // 다운로드 비활성/실패 시엔 원격 URL이 그대로 돌아오는데, 이를 `[[..]]` 로
+        // 감싸면 존재하지 않는 `[[https://..]]` 파일을 가리키는 깨진 링크가 된다(cover-URL).
+        const resolved = coverResult.content.match(/!\[cover\]\((.+?)\)/)?.[1];
+        if (resolved && !/^https?:\/\//i.test(resolved)) {
+          properties.cover = `[[${resolved}]]`;
         } else {
           properties.cover = cover.url;
         }
@@ -304,11 +396,9 @@ export class DatabaseSyncer {
     if (existingRecord?.obsidianPath) {
       filePath = existingRecord.obsidianPath;
     } else {
-      filePath = `${dbConfig.localFolder}/${safeName}.md`;
-      const existingByPath = this.stateDb.getByPath(filePath);
-      if (existingByPath && existingByPath.notionPageId !== page.id) {
-        filePath = `${dbConfig.localFolder}/${safeName} (${page.id.slice(0, 8)}).md`;
-      }
+      filePath = resolveDbRowPath(dbConfig.localFolder, safeName, page.id, (p) =>
+        this.stateDb.getByPath(p),
+      );
     }
 
     const finalContent = this.pipeline.convertToMarkdown(
@@ -391,10 +481,9 @@ export class DatabaseSyncer {
     this.propertyMapper.loadSchema(schema);
 
     const allFiles = await this.vaultFs.listMarkdownFiles();
-    const prefix = dbConfig.localFolder.endsWith("/")
-      ? dbConfig.localFolder
-      : dbConfig.localFolder + "/";
-    const dbFiles = allFiles.filter((f) => f.path.startsWith(prefix));
+    // 직속 행 파일만 — 중첩 하위 폴더(별도 child_database)의 행은 각자의 DB push 가 관리하므로
+    // 부모 DB 로 잘못 밀어 중복·오배치하지 않는다(오포함 차단).
+    const dbFiles = selectDbRowFiles(allFiles, dbConfig.localFolder);
 
     // rename 감지용 고아 레코드(로컬 파일이 사라진 추적 레코드) 인덱스.
     // 새 경로의 파일이 어떤 고아의 내용 해시와 일치하면 신규 페이지 생성이 아니라 rename 으로 처리.
@@ -520,7 +609,7 @@ export class DatabaseSyncer {
     }
 
     getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
-    return { created, updated, conflicts: [], failed };
+    return { created, updated, conflicts: [], failed, writtenPaths: [] };
   }
 
   /**

@@ -325,6 +325,75 @@ describe("PropertyMapper", () => {
     });
   });
 
+  // 결함10: Notion 이 빈 배열형 속성을 문서화된 `[]` 가 아니라 빈 객체 `{}` 로 돌려주는
+  // 행이 실제로 존재한다(data source 분리 모델). 가드가 없으면 `{}.map` → "X.map is not
+  // a function" 으로 그 행 전체가 pull 실패 → 영구 손실 + repull churn. 모든 배열 추출이
+  // 어떤 형태에도 크래시 없이 안전한 빈/스칼라 값으로 강등돼야 한다.
+  describe("fromNotionProperties — 비배열 속성값 하드닝 (결함10)", () => {
+    it("multi_select 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const call = () =>
+        mapper.fromNotionProperties({ tags: { type: "multi_select", multi_select: {} } });
+      expect(call).not.toThrow();
+      expect(call().tags).toEqual([]);
+    });
+
+    it("rich_text 가 빈 객체 {} 여도 크래시 없이 null", () => {
+      const result = mapper.fromNotionProperties({
+        note: { type: "rich_text", rich_text: {} },
+      });
+      expect(result.note).toBeNull(); // 빈 rich_text 의 기존 동작과 동일
+    });
+
+    it("people 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        assignee: { type: "people", people: {} },
+      });
+      expect(result.assignee).toEqual([]);
+    });
+
+    it("relation 이 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        rel: { type: "relation", relation: {} },
+      });
+      expect(result.rel).toEqual([]);
+    });
+
+    it("files 가 빈 객체 {} 여도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        docs: { type: "files", files: {} },
+      });
+      expect(result.docs).toEqual([]);
+    });
+
+    it("rollup.array 가 비배열이어도 크래시 없이 빈 배열", () => {
+      const result = mapper.fromNotionProperties({
+        sum: { type: "rollup", rollup: { type: "array", array: {} } },
+      });
+      expect(result.sum).toEqual([]);
+    });
+
+    it("unique_id 가 빈 객체 {} 면 'undefined' 문자열이 새지 않고 null", () => {
+      const result = mapper.fromNotionProperties({
+        id: { type: "unique_id", unique_id: {} },
+      });
+      expect(result.id).toBeNull(); // "undefined" 문자열이 아니라 null 이어야 한다
+    });
+
+    it("여러 비배열 속성이 섞인 행 전체가 크래시 없이 매핑된다(실Notion 프로덕트위키 케이스)", () => {
+      const call = () =>
+        mapper.fromNotionProperties({
+          tags: { type: "multi_select", multi_select: {} },
+          note: { type: "rich_text", rich_text: {} },
+          assignee: { type: "people", people: {} },
+          done: { type: "checkbox", checkbox: false },
+        });
+      expect(call).not.toThrow();
+      const r = call();
+      expect(r.tags).toEqual([]);
+      expect(r.done).toBe(false); // 정상 속성은 그대로 보존
+    });
+  });
+
   describe("toNotionProperties — 입력 검증/하드닝 (Phase 2b)", () => {
     beforeEach(() => {
       mapper.loadSchema({
@@ -426,6 +495,110 @@ describe("PropertyMapper", () => {
       expect(back.priority).toEqual({ number: 0 });
       expect(back.done).toEqual({ checkbox: false });
       expect(back.due).toEqual({ date: { start: "2026-06-30", end: null } });
+    });
+  });
+
+  describe("라운드트립 충실도 — 전 writable 타입 홀리스틱 (B3 · I3)", () => {
+    // Notion READ props → fromNotionProperties → frontmatter → toNotionProperties → WRITE props.
+    // READ/WRITE 형식이 다르므로(`{type,select}` vs `{select}`) 의미가 보존되는지 WRITE 페이로드로
+    // 단언한다. relation(양방향 해석)·date-with-end·files 까지 한 번에 검증해 무손실을 잠근다.
+    const PID_A = "11111111-1111-1111-1111-111111111111";
+    const PID_B = "22222222-2222-2222-2222-222222222222";
+    const ID_TO_TITLE: Record<string, string> = {
+      [PID_A]: "Project Plan",
+      [PID_B]: "Architecture",
+    };
+    const TITLE_TO_ID: Record<string, string> = {
+      "Project Plan": PID_A,
+      Architecture: PID_B,
+    };
+
+    beforeEach(() => {
+      mapper.setWikilinkResolver({
+        resolve: (t) => TITLE_TO_ID[t] ?? null,
+        resolvePageId: (i) => ID_TO_TITLE[i] ?? null,
+      });
+      mapper.loadSchema({
+        note: { id: "1", type: "rich_text" },
+        priority: { id: "2", type: "number" },
+        status: { id: "3", type: "select" },
+        tags: { id: "4", type: "multi_select" },
+        done: { id: "5", type: "checkbox" },
+        due: { id: "6", type: "date" },
+        span: { id: "7", type: "date" },
+        link: { id: "8", type: "url" },
+        mail: { id: "9", type: "email" },
+        tel: { id: "10", type: "phone_number" },
+        phase: { id: "11", type: "status" },
+        related: { id: "12", type: "relation" },
+        cover: { id: "13", type: "files" },
+      });
+    });
+
+    function readToWrite(read: Record<string, unknown>): Record<string, unknown> {
+      const fm = mapper.fromNotionProperties(read);
+      const write = mapper.toNotionProperties(fm, "T");
+      delete write.title; // title 은 본문에서 옴 — 속성 왕복 대상 아님
+      return write;
+    }
+
+    it("13개 writable 타입 한 번에 무손실(deep-equal)", () => {
+      const read = {
+        note: { type: "rich_text", rich_text: [{ plain_text: "텍스트 2026-05-29 마감" }] },
+        priority: { type: "number", number: 0 },
+        status: { type: "select", select: { name: "active" } },
+        tags: { type: "multi_select", multi_select: [{ name: "a" }, { name: "b" }] },
+        done: { type: "checkbox", checkbox: false },
+        due: { type: "date", date: { start: "2026-06-30" } },
+        span: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
+        link: { type: "url", url: "https://x.com" },
+        mail: { type: "email", email: "a@b.com" },
+        tel: { type: "phone_number", phone_number: "010-1234-5678" },
+        phase: { type: "status", status: { name: "In Progress" } },
+        related: { type: "relation", relation: [{ id: PID_A }, { id: PID_B }] },
+        cover: {
+          type: "files",
+          files: [{ name: "n", type: "external", external: { url: "https://cdn.x/a.jpg" } }],
+        },
+      };
+
+      expect(readToWrite(read)).toEqual({
+        note: { rich_text: [{ text: { content: "텍스트 2026-05-29 마감" } }] },
+        priority: { number: 0 },
+        status: { select: { name: "active" } },
+        tags: { multi_select: [{ name: "a" }, { name: "b" }] },
+        done: { checkbox: false },
+        due: { date: { start: "2026-06-30", end: null } },
+        span: { date: { start: "2026-01-01", end: "2026-12-31" } },
+        link: { url: "https://x.com" },
+        mail: { email: "a@b.com" },
+        tel: { phone_number: "010-1234-5678" },
+        phase: { status: { name: "In Progress" } },
+        related: { relation: [{ id: PID_A }, { id: PID_B }] },
+        // files 의 name 은 URL 로 직렬화된다(Bases image 렌더 호환) — url 자체는 보존.
+        cover: {
+          files: [
+            {
+              type: "external",
+              name: "https://cdn.x/a.jpg",
+              external: { url: "https://cdn.x/a.jpg" },
+            },
+          ],
+        },
+      });
+    });
+
+    it("relation: 해석기 없어도 raw id 로 왕복(미인덱싱 페이지 보존)", () => {
+      mapper.setWikilinkResolver({ resolve: () => null, resolvePageId: () => null });
+      const read = { related: { type: "relation", relation: [{ id: PID_A }] } };
+      // 해석기가 title 을 못 찾으면 from 은 raw id 를 남기고, to 는 uuid 를 그대로 전송.
+      expect(readToWrite(read)).toEqual({ related: { relation: [{ id: PID_A }] } });
+    });
+
+    it("date with time/timezone: 초·밀리초·타임존 보존", () => {
+      const iso = "2026-05-29T14:30:00.000+09:00";
+      const read = { due: { type: "date", date: { start: iso } } };
+      expect(readToWrite(read)).toEqual({ due: { date: { start: iso, end: null } } });
     });
   });
 });

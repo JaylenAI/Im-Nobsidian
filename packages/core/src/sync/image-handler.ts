@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Sema } from "async-sema";
 import type { VaultFS } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { ImageReference } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -23,6 +24,9 @@ export interface ImageDownloadResult {
 export interface ImageUploadResult {
   readonly localPath: string;
   readonly fileUploadId: string;
+  /** 업로드한 이미지의 전체 sha256 — file_registry 비교 키(FileHandler 와 동일 산식). */
+  readonly fileHash: string;
+  readonly fileSize: number;
 }
 
 const IMAGE_EXTENSIONS: Record<string, string> = {
@@ -60,6 +64,7 @@ export class ImageHandler {
     private readonly notionClient?: NotionClient,
     customFetch?: typeof globalThis.fetch,
     options?: MediaOptions,
+    private readonly stateDb?: IStateDB,
   ) {
     this.customFetch = customFetch;
     this.concurrency = options?.concurrency ?? 3;
@@ -191,8 +196,11 @@ export class ImageHandler {
     const contentType = this.getContentTypeFromPath(filename);
     const blob = new Blob([buffer], { type: contentType });
     const fileUploadId = await this.notionClient.uploadFile(blob, filename, contentType);
+    // FileHandler.pushAllFiles 의 dedup 비교(전체 sha256)와 동일 산식으로 계산해 두 경로가
+    // 같은 첨부를 동일 키로 인식하게 한다.
+    const fileHash = createHash("sha256").update(buffer).digest("hex");
 
-    return { localPath, fileUploadId };
+    return { localPath, fileUploadId, fileHash, fileSize: buffer.length };
   }
 
   async uploadAndAppendImages(
@@ -225,6 +233,29 @@ export class ImageHandler {
 
     if (imageBlocks.length > 0) {
       await this.notionClient.appendChildren(pageId, imageBlocks);
+      // 업로드 성공분을 file_registry 에 등록한다. 노트 임베드 이미지는 여기서(노트 페이지에)
+      // 처리되므로, 이후 FileHandler.pushAllFiles 가 같은 첨부를 폴더 페이지에 standalone
+      // 으로 재업로드하는 중복(I6 "중복 업로드 0" 위반)을 공유 레지스트리로 차단한다.
+      // 단, replace_content(기본 push)는 노트 블록을 매번 wipe 하므로 임베드 이미지 블록은
+      // 노트 본문이 바뀔 때마다 재업로드+재append 가 불가피하다(file_upload 1회용 + atomic
+      // replace). 이는 블록 더블링/데이터 손실이 아니며, 무변경 재sync 는 변경감지가 스킵해
+      // 재업로드 0 을 보장한다.
+      if (this.stateDb) {
+        for (const r of results) {
+          try {
+            this.stateDb.registerFile({
+              localPath: r.localPath,
+              notionPageId: pageId,
+              fileUploadId: r.fileUploadId,
+              fileType: "image",
+              fileHash: r.fileHash,
+              fileSize: r.fileSize,
+            });
+          } catch (error) {
+            getLogger().warn(`이미지 레지스트리 등록 실패 (${r.localPath}):`, error);
+          }
+        }
+      }
     }
 
     return results;

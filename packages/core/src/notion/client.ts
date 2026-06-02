@@ -10,10 +10,38 @@ import type {
   DataSourceViewObjectResponse,
   ListDatabaseViewsResponse,
 } from "@notionhq/client/build/src/api-endpoints/views.js";
-import { PropertyMapper } from "./property-mapper.js";
+import { PropertyMapper, type WikilinkResolver } from "./property-mapper.js";
 import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
+import { normalizeNotionId } from "../utils/id.js";
+
+/**
+ * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
+ * 페이지/DB 의 **권위적 신호**다. 그래야 일시적/실제 오류(검증·rate limit·5xx)와 구분해
+ * 행 동기화 불가를 정직히 강등(스택트레이스 대신 1줄 + denylist)할 수 있다.
+ * SDK 의 `APIResponseError` 는 `code`/`status` 를 노출한다.
+ */
+export function isNotionObjectNotFound(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: unknown; status?: unknown };
+  return e.code === "object_not_found" || e.status === 404;
+}
+
+/**
+ * 서브트리 직접 순회(getChildPagesRecursive) 비용이 시간 예산을 초과했을 때 던지는 신호.
+ * 순회 비용은 **서브트리 전체 블록 수**에 비례(중첩 페이지 무손실 탐색을 위해 모든 블록을
+ * 깊이 순회)하므로, 콘텐츠가 많은 대규모 서브트리에서는 워크스페이스 search 기반 디스커버리
+ * (비용이 워크스페이스 페이지 수에 비례·예측가능)가 더 저렴하다. 이 오류를 받은 호출측은
+ * search 기반 폴백(getPagesUnderRootViaSearch)으로 전환한다. 작은 볼트는 예산 안에서
+ * 순회가 끝나 폴백 없이 빠르게 완료된다(이중 전략의 분기점).
+ */
+export class DiscoveryTooLargeError extends Error {
+  constructor(elapsedMs: number) {
+    super(`subtree discovery exceeded time budget (${elapsedMs}ms)`);
+    this.name = "DiscoveryTooLargeError";
+  }
+}
 
 export interface NotionClientOptions {
   readonly token: string;
@@ -31,10 +59,7 @@ export interface NotionClientOptions {
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
-  private readonly token: string;
   private readonly propertyMapper = new PropertyMapper();
-
-  private readonly customFetch?: typeof globalThis.fetch;
 
   private readonly minRequestInterval: number;
   private readonly maxRetries: number;
@@ -50,8 +75,6 @@ export class NotionClient {
       logLevel: LogLevel.ERROR,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-    this.token = options.token;
-    this.customFetch = options.fetch;
     this.sema = new Sema(options.concurrency ?? 3);
     this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
     this.maxRetries = options.maxRetries ?? 5;
@@ -220,34 +243,81 @@ export class NotionClient {
 
   // ─── Database / DataSource ───
 
-  private async fetchDatabaseLegacy(databaseId: string): Promise<Record<string, unknown>> {
-    const cleanId = databaseId.replace(/-/g, "");
-    const formatted = `${cleanId.slice(0, 8)}-${cleanId.slice(8, 12)}-${cleanId.slice(12, 16)}-${cleanId.slice(16, 20)}-${cleanId.slice(20)}`;
-    const resp = await this.withRateLimit(async () => {
-      const doFetch = this.customFetch ?? globalThis.fetch;
-      const r = await doFetch(`https://api.notion.com/v1/databases/${formatted}`, {
-        headers: {
-          Authorization: `Bearer ${this.token}`,
-          "Notion-Version": "2022-06-28",
-          "Content-Type": "application/json",
-        },
-      });
-      if (!r.ok) throw new Error(`Database fetch failed: ${r.status}`);
-      return (await r.json()) as Record<string, unknown>;
-    });
-    return resp;
+  /**
+   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다.
+   * - title: database 객체에 그대로 존재한다.
+   * - properties(스키마): 신 모델에선 data source 에 있으므로 1차 data source 를 조회해 채운다.
+   *   data source 접근 불가(링크드 DB 등)면 database 객체의 properties 로 폴백한다(제목은 보존).
+   *
+   * 폐기한 레거시 raw fetch(`GET /v1/databases/{id}`, Notion-Version 2022-06-28)는 신 모델로
+   * 업그레이드된 다수 DB에 400 을 반환해 자동 발견 DB 가 통째 드롭(내용 손실)되던 원인이었다.
+   * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
+   */
+  private async fetchDatabaseModern(databaseId: string): Promise<Record<string, unknown>> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      title?: unknown;
+      properties?: Record<string, unknown>;
+      data_sources?: Array<{ id: string; name?: string }>;
+    };
+
+    // 신 모델(2025-09-03): 한 database 가 2개 이상의 data source 를 가질 수 있고, 각 data
+    // source 가 자체 스키마(properties)를 갖는다. 1차 data source 만 읽으면 2번째+ 의 컬럼이
+    // 침묵 유실되므로 접근 가능한 전 data source 의 properties 를 union 병합한다(이름 충돌은
+    // 첫 정의 우선 — 동일 컬럼이 여러 소스에 중복돼도 안정적). 어떤 data source 도 접근
+    // 불가하면 database 객체의 properties 로 폴백(제목은 이미 확보).
+    const dataSources = db.data_sources ?? [];
+    const merged: Record<string, unknown> = {};
+    let anyAccessible = false;
+    for (const ds of dataSources) {
+      try {
+        const dsObj = (await this.withRateLimit(() =>
+          this.client.dataSources.retrieve({ data_source_id: ds.id }),
+        )) as unknown as { properties?: Record<string, unknown> };
+        if (dsObj.properties && Object.keys(dsObj.properties).length > 0) {
+          anyAccessible = true;
+          for (const [name, prop] of Object.entries(dsObj.properties)) {
+            if (!(name in merged)) merged[name] = prop;
+          }
+        }
+      } catch {
+        // 접근 불가 data source 건너뜀 — 나머지 소스로 계속.
+      }
+    }
+
+    const properties: Record<string, unknown> = anyAccessible ? merged : (db.properties ?? {});
+    return { title: db.title, properties };
   }
 
   async getDatabaseTitle(databaseId: string): Promise<string> {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const titleArr = db.title as Array<{ plain_text: string }> | undefined;
     return titleArr?.[0]?.plain_text ?? "";
+  }
+
+  /**
+   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 1회 호출로 판별한다.
+   * 신 모델(2025-09-03)에서 링크드 DB·미공유 데이터 소스·삭제 DB 는 `data_sources` 가
+   * 비어, 행 조회(`dataSources.query`)가 404 로 실패하고 그 전에 생성된 빈 폴더/`.base` 만
+   * 남긴다. 발견 단계에서 미리 걸러 **빈 폴더/.base 오염 + 매 pull 의 404 노이즈**를 차단한다.
+   * 제목은 함께 반환해 호출처가 추가 조회 없이 폴더명을 잡게 한다.
+   */
+  async getDatabaseSyncability(databaseId: string): Promise<{ title: string; queryable: boolean }> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      title?: Array<{ plain_text: string }>;
+      data_sources?: Array<{ id: string }>;
+    };
+    const title = Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "";
+    return { title, queryable: (db.data_sources?.length ?? 0) > 0 };
   }
 
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
     if (!properties) return {};
     const schema: Record<string, { id: string; type: string }> = {};
@@ -268,7 +338,7 @@ export class NotionClient {
       }
     >
   > {
-    const db = await this.fetchDatabaseLegacy(databaseId);
+    const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
     if (!properties) return {};
 
@@ -329,14 +399,14 @@ export class NotionClient {
     return schema;
   }
 
-  async queryDatabase(
-    databaseId: string,
+  /** 특정 data source 1개를 직접 쿼리한다(저수준). 다중 data source 순회의 빌딩블록. */
+  private async queryDataSource(
+    dataSourceId: string,
     options?: { startCursor?: string; pageSize?: number; filter?: unknown },
   ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
-    const dsId = await this.getDataSourceId(databaseId);
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
-        data_source_id: dsId,
+        data_source_id: dataSourceId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? this.defaultPageSize,
         filter: options?.filter as never,
@@ -348,29 +418,74 @@ export class NotionClient {
     };
   }
 
-  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
-    const all: PageObjectResponse[] = [];
-    let cursor: string | undefined;
+  /**
+   * database 의 1차 data source 1페이지를 쿼리한다(증분 detect 등 단일 소스 경로용).
+   * 전 행을 빠짐없이 받으려면 {@link queryAllDatabasePages} 를 쓴다(전 data source 순회).
+   */
+  async queryDatabase(
+    databaseId: string,
+    options?: { startCursor?: string; pageSize?: number; filter?: unknown },
+  ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    const dsId = await this.getDataSourceId(databaseId);
+    return this.queryDataSource(dsId, options);
+  }
 
-    do {
-      const response = await this.queryDatabase(databaseId, {
-        startCursor: cursor,
-        pageSize: this.defaultPageSize,
-        filter,
-      });
-      all.push(...response.results);
-      cursor = response.nextCursor ?? undefined;
-    } while (cursor);
+  /**
+   * database 의 **모든 data source** 행을 빠짐없이 조회한다(2025-09-03 신 모델).
+   * 한 database 가 2개 이상의 data source(각자 행 집합)를 가질 수 있어, 1차 data source 만
+   * 페이지네이션하면 2번째+ 의 행이 통째 침묵 유실된다. 전 data source 를 순회·페이지네이션
+   * 하고 page_id 로 디듀프(소스 간 동일 페이지 방어)한 뒤 합친다. 다중 소스면 1회 경고해
+   * "소스별 탭 구분이 한 폴더로 병합"되는 점을 비침묵으로 알린다.
+   */
+  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
+    const metas = await this.getDataSourceMetas(databaseId);
+    if (metas.length > 1) {
+      const label = metas.map((m) => m.name || m.id).join(", ");
+      getLogger().warn(
+        `[Notion] DB ${databaseId} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
+      );
+    }
+
+    const all: PageObjectResponse[] = [];
+    const seen = new Set<string>();
+    for (const meta of metas) {
+      let cursor: string | undefined;
+      do {
+        const response = await this.queryDataSource(meta.id, {
+          startCursor: cursor,
+          pageSize: this.defaultPageSize,
+          filter,
+        });
+        for (const page of response.results) {
+          const key = normalizeNotionId(page.id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          all.push(page);
+        }
+        cursor = response.nextCursor ?? undefined;
+      } while (cursor);
+    }
 
     return all;
   }
 
+  /** database 의 1차 data source id(없으면 databaseId 폴백). 단일 소스 경로 호환용. */
   async getDataSourceId(databaseId: string): Promise<string> {
-    const db = await this.withRateLimit(() =>
+    const metas = await this.getDataSourceMetas(databaseId);
+    return metas[0]?.id ?? databaseId;
+  }
+
+  /**
+   * database 의 전 data source 메타(id + 이름)를 반환한다. data source 가 없으면(레거시/단일)
+   * databaseId 자체를 단일 소스로 폴백해 호출처가 항상 ≥1 개를 받게 한다.
+   */
+  async getDataSourceMetas(databaseId: string): Promise<Array<{ id: string; name: string }>> {
+    const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
-    );
-    const dataSources = (db as unknown as { data_sources?: Array<{ id: string }> }).data_sources;
-    return dataSources?.[0]?.id ?? databaseId;
+    )) as unknown as { data_sources?: Array<{ id: string; name?: string }> };
+    const list = db.data_sources ?? [];
+    if (list.length === 0) return [{ id: databaseId, name: "" }];
+    return list.map((ds) => ({ id: ds.id, name: ds.name ?? "" }));
   }
 
   async archivePage(pageId: string): Promise<void> {
@@ -567,36 +682,6 @@ export class NotionClient {
     return results;
   }
 
-  /**
-   * 통합이 접근 가능한 모든 페이지를 search API로 일괄 조회한다(요청당 최대 100건).
-   * 블록 트리를 페이지별로 재귀 순회하는 getChildPagesRecursive 대비 API 호출 수가
-   * 페이지 수의 수십분의 1로 줄어든다. search API는 휴지통(in_trash) 페이지를 반환하지 않는다.
-   * 반환 객체에는 parent 정보가 포함되어 호출 측에서 root subtree ancestry 필터링이 가능하다.
-   */
-  async searchAllPages(): Promise<PageObjectResponse[]> {
-    const results: PageObjectResponse[] = [];
-    let cursor: string | undefined;
-
-    do {
-      const response = await this.withRateLimit(() =>
-        this.client.search({
-          filter: { property: "object", value: "page" },
-          start_cursor: cursor,
-          page_size: this.defaultPageSize,
-        }),
-      );
-      for (const page of response.results) {
-        // 부분 응답(properties 없는 객체) 제외 — 완전한 PageObjectResponse만 수집
-        if ("properties" in page) {
-          results.push(page as PageObjectResponse);
-        }
-      }
-      cursor = response.next_cursor ?? undefined;
-    } while (cursor);
-
-    return results;
-  }
-
   async getChildPages(parentId: string): Promise<PageObjectResponse[]> {
     const blocks = await this.fetchAllChildrenDeep(parentId);
     const childPageBlocks = blocks.filter((b) => b.type === "child_page");
@@ -622,14 +707,29 @@ export class NotionClient {
     return children.filter((b) => b.type === "child_database").map((b) => b.id);
   }
 
-  async getChildPagesRecursive(parentId: string): Promise<PageObjectResponse[]> {
+  /**
+   * root 서브트리를 직접 BFS 순회해 하위 페이지를 모두 수집한다(중첩 깊이 무관·무손실).
+   * 비용은 서브트리 전체 블록 수에 비례한다.
+   *
+   * @param opts.deadlineMs `Date.now()` 기준 마감 시각. 각 페이지 처리 전 초과를 검사해
+   *   초과 시 {@link DiscoveryTooLargeError}를 던진다(대규모 서브트리 → search 폴백 유도).
+   *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
+   */
+  async getChildPagesRecursive(
+    parentId: string,
+    opts?: { deadlineMs?: number },
+  ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
+    const start = Date.now();
 
     while (currentLevel.length > 0) {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
+        if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
+          throw new DiscoveryTooLargeError(Date.now() - start);
+        }
         let children: PageObjectResponse[];
         try {
           children = await this.getChildPages(id);
@@ -653,6 +753,127 @@ export class NotionClient {
     }
 
     return all;
+  }
+
+  /** 워크스페이스에서 통합에 공유된 모든 페이지를 bulk search 로 열거한다(100/요청). */
+  async searchAllPages(): Promise<PageObjectResponse[]> {
+    const pages: PageObjectResponse[] = [];
+    let cursor: string | undefined;
+    do {
+      const r = await this.search({
+        filter: { property: "object", value: "page" },
+        startCursor: cursor,
+      });
+      pages.push(...r.results);
+      cursor = r.nextCursor ?? undefined;
+    } while (cursor);
+    return pages;
+  }
+
+  /**
+   * root 하위 페이지를 **search 기반**으로 디스커버리한다(대규모 서브트리용 폴백).
+   *
+   * 전략: 워크스페이스 전체 페이지를 1회 bulk search 로 열거(비용 ∝ 워크스페이스 페이지 수,
+   * 예측가능·유한)한 뒤, 각 페이지의 부모 체인을 따라 root 도달 여부를 판정한다. page_id
+   * 부모는 메모리 맵으로 추가 호출 없이 즉시 해석하고, block_id 부모(컬럼·토글 등 레이아웃에
+   * 중첩된 페이지)만 getBlock 으로 소유 페이지를 해석(memo)한다. search 는 중첩 깊이와 무관하게
+   * 모든 페이지를 반환하므로 직접 순회와 동일하게 **무손실**이다.
+   *
+   * getChildPagesRecursive 와 동일 집합을 보장하기 위해:
+   *  - DB 행(parent=data_source_id/database_id)은 child_page 로 도달 불가 → 제외
+   *  - 휴지통/보관(in_trash/archived) 페이지 제외
+   *  - root 자신은 제외(직접 순회도 root 의 *자식*부터 수집)
+   */
+  async getPagesUnderRootViaSearch(rootId: string): Promise<PageObjectResponse[]> {
+    const all = await this.searchAllPages();
+    const rootN = normalizeNotionId(rootId);
+    const byId = new Map<string, PageObjectResponse>();
+    for (const p of all) byId.set(normalizeNotionId(p.id), p);
+
+    type Parent = {
+      type: string;
+      page_id?: string;
+      block_id?: string;
+      data_source_id?: string;
+      database_id?: string;
+    };
+
+    // block_id → 소유 페이지 id(없으면 null). 같은 블록 재해석을 막는 memo.
+    const blockOwner = new Map<string, string | null>();
+    const resolveBlockOwner = async (blockId: string): Promise<string | null> => {
+      let bid = blockId;
+      const seen = new Set<string>();
+      for (let i = 0; i < 20 && bid && !seen.has(bid); i++) {
+        seen.add(bid);
+        const cached = blockOwner.get(bid);
+        if (cached !== undefined) return cached;
+        let bp: Parent;
+        try {
+          bp = ((await this.getBlock(bid)) as unknown as { parent: Parent }).parent;
+        } catch {
+          blockOwner.set(bid, null);
+          return null;
+        }
+        if (bp.type === "page_id" && bp.page_id) {
+          const owner = bp.page_id;
+          blockOwner.set(blockId, owner);
+          return owner;
+        }
+        if (bp.type === "block_id" && bp.block_id) {
+          bid = bp.block_id;
+          continue;
+        }
+        blockOwner.set(blockId, null);
+        return null; // data_source_id/database_id/workspace → 페이지 소유자 아님
+      }
+      return null;
+    };
+
+    // pageId(normalized) → root 하위 여부. 체인 전체를 한 번에 memo 한다.
+    const memo = new Map<string, boolean>();
+    const isUnderRoot = async (startId: string): Promise<boolean> => {
+      const chain: string[] = [];
+      let cur: string | null = normalizeNotionId(startId);
+      const seen = new Set<string>();
+      let result = false;
+      while (cur && !seen.has(cur)) {
+        if (cur === rootN) {
+          result = true;
+          break;
+        }
+        const cached = memo.get(cur);
+        if (cached !== undefined) {
+          result = cached;
+          break;
+        }
+        seen.add(cur);
+        chain.push(cur);
+        const pg = byId.get(cur);
+        if (!pg) break; // 부모가 열거 집합 밖(root 위/미공유) → root 하위 아님
+        const parent = pg.parent as Parent;
+        if (parent.type === "page_id" && parent.page_id) {
+          cur = normalizeNotionId(parent.page_id);
+        } else if (parent.type === "block_id" && parent.block_id) {
+          const owner = await resolveBlockOwner(parent.block_id);
+          cur = owner ? normalizeNotionId(owner) : null;
+        } else {
+          cur = null; // workspace/data_source_id/database_id → 체인 종료
+        }
+      }
+      for (const c of chain) memo.set(c, result);
+      return result;
+    };
+
+    const out: PageObjectResponse[] = [];
+    for (const p of all) {
+      const pid = normalizeNotionId(p.id);
+      if (pid === rootN) continue; // root 자신 제외
+      const ptype = (p.parent as Parent).type;
+      if (ptype === "data_source_id" || ptype === "database_id") continue; // DB 행 제외
+      if (NotionClient.isTrashedOrArchived(p)) continue;
+      if (await isUnderRoot(p.id)) out.push(p);
+    }
+    return out;
   }
 
   // ─── Views API ───
@@ -763,12 +984,26 @@ export class NotionClient {
       { type: string; title?: Array<{ plain_text?: string }> }
     >;
     for (const prop of Object.values(props)) {
-      if (prop.type === "title" && prop.title) {
+      // 빈 제목 행은 Notion 이 title 을 배열이 아닌 빈 객체({})로 돌려주기도 한다.
+      // Array.isArray 가드 없이 .map 을 호출하면 "title.map is not a function" 으로
+      // 그 행 전체가 pull 실패→손실되고 매 pull 마다 churn 이 남는다(멱등성 위반).
+      if (prop.type === "title" && Array.isArray(prop.title)) {
         const joined = prop.title.map((t) => t.plain_text ?? "").join("");
         if (joined) return joined;
       }
     }
     return "제목 없음";
+  }
+
+  /**
+   * 페이지 모드 pull(extractProperties)의 relation/people 속성을 raw Notion UUID 가
+   * 아니라 [[제목]] 위키링크로 해소하도록 resolver 를 주입한다. 주입하지 않으면 매
+   * pull 마다 relation 이 raw UUID 로 재생성돼, 후처리(resolveNotionLinks)에만 의존하는
+   * 2-write churn 이 남는다(M1). DB 모드는 orchestrator/DatabaseSyncer 의 자체 mapper 가
+   * 이미 resolver 를 주입받아 면역이다.
+   */
+  setWikilinkResolver(resolver: WikilinkResolver): void {
+    this.propertyMapper.setWikilinkResolver(resolver);
   }
 
   extractProperties(page: PageObjectResponse): Record<string, unknown> {

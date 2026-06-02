@@ -52,7 +52,13 @@ export { ConfigManager } from "./config/index.js";
 // State
 export { StateDB } from "./state/index.js";
 export type { IStateDB } from "./state/index.js";
-export type { UpsertSyncRecord, FileRegistryEntry, RegisterFileInput } from "./state/index.js";
+export type {
+  UpsertSyncRecord,
+  FileRegistryEntry,
+  RegisterFileInput,
+  PendingOperation,
+  RecordPendingInput,
+} from "./state/index.js";
 
 // Notion
 export { NotionClient, NotionBlockBuilder, PropertyMapper } from "./notion/index.js";
@@ -105,7 +111,7 @@ export {
   UnsupportedBlockStripper,
   PropertiesTableInjector,
   PropertiesTableRestorer,
-  HtmlAnnotationStripper,
+  InlineAnnotationPreserver,
 } from "./converter/index.js";
 
 // Conflict
@@ -136,6 +142,9 @@ export {
   ViewDataProvider,
   EntryEditor,
   BaseFileGenerator,
+  basesViewTypeOf,
+  NOTION_TO_BASES_VIEW,
+  SidecarGenerator,
   sortEntries,
   groupEntries,
   extractCalendarEntries,
@@ -158,11 +167,26 @@ export type {
   FilterCondition,
   BasePropertySchema,
   BaseFileOptions,
+  BasesViewType,
+  NotionSidecar,
+  SidecarProperty,
+  SidecarView,
+  DegradeNote,
 } from "./view/index.js";
+
+// Audit — 충실도 측정 인프라(회귀 상시 잠금)
+export { classifyBodyFidelity, summarizeFidelity } from "./audit/index.js";
+export type {
+  FidelityDefect,
+  FidelityDefectForm,
+  FidelityClassification,
+  FidelityContext,
+  FidelitySummary,
+} from "./audit/index.js";
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
-export { generateId, normalizeNotionId, notionIdsEqual } from "./utils/id.js";
+export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";

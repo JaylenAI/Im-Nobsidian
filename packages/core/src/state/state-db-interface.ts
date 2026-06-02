@@ -1,5 +1,11 @@
 import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
-import type { UpsertSyncRecord, FileRegistryEntry, RegisterFileInput } from "./state-db.js";
+import type {
+  UpsertSyncRecord,
+  FileRegistryEntry,
+  RegisterFileInput,
+  PendingOperation,
+  RecordPendingInput,
+} from "./state-db.js";
 
 export interface IStateDB {
   close(): void;
@@ -36,6 +42,17 @@ export interface IStateDB {
   getFilesByPageId(notionPageId: string): FileRegistryEntry[];
   registerFile(entry: RegisterFileInput): void;
   deleteFileRegistry(localPath: string): void;
+
+  // pending_operations (I12 크래시 복구 WAL)
+  recordPendingOperation(input: RecordPendingInput): string;
+  getIncompletePendingOperations(): PendingOperation[];
+  getIncompleteOpByState(
+    syncStateId: string,
+    operation: PendingOperation["operation"],
+  ): PendingOperation | null;
+  markPendingCompleted(id: string): void;
+  markPendingFailed(id: string, errorMessage: string): void;
+  clearCompletedOperations(): void;
 
   // preserve markers
   storePreserveMarkers(path: string, markers: PreserveMarker[]): void;

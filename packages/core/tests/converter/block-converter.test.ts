@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { BlockConverter } from "../../src/converter/block-converter.js";
+import { TOC_MARKER, BREADCRUMB_MARKER } from "../../src/constants/markers.js";
 
 describe("BlockConverter", () => {
   describe("markdownToNotionBlocks", () => {
@@ -31,6 +32,21 @@ describe("BlockConverter", () => {
       const blocks = converter.markdownToNotionBlocks(md);
 
       expect(blocks.length).toBeGreaterThan(0);
+    });
+
+    it("compact underline/color 마커는 폴백에서 평문으로 강등(리터럴 누출 0)", () => {
+      // 기본 경로(Markdown API)가 실패해 block 폴백을 탈 때, 마커 텍스트가 본문에
+      // 리터럴로 새지 않고 텍스트만 남아야 한다(서식은 degrade, 내용은 보존).
+      const converter = new BlockConverter();
+      const md =
+        "A %%im-nobsidian:underline%%under%%/underline%% and %%im-nobsidian:color:red%%red%%/color%% end";
+      const json = JSON.stringify(converter.markdownToNotionBlocks(md));
+
+      expect(json).not.toContain("im-nobsidian:underline");
+      expect(json).not.toContain("im-nobsidian:color");
+      expect(json).not.toContain("%%/");
+      expect(json).toContain("under");
+      expect(json).toContain("red");
     });
   });
 
@@ -65,6 +81,38 @@ describe("BlockConverter", () => {
     });
   });
 
+  describe("postProcessBlocks — 단일라인 마커(toc/breadcrumb) 복원", () => {
+    it("TOC 마커 문단을 table_of_contents 블록으로 복원", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks(`# Title\n\n${TOC_MARKER}\n\nBody`) as Array<
+        Record<string, unknown>
+      >;
+
+      const toc = blocks.find((b) => b.type === "table_of_contents");
+      expect(toc).toBeDefined();
+      // 마커 텍스트가 일반 문단으로 새어나가지 않아야 한다.
+      const leaked = blocks.some(
+        (b) => b.type === "paragraph" && JSON.stringify(b.paragraph).includes("im-nobsidian:toc"),
+      );
+      expect(leaked).toBe(false);
+    });
+
+    it("breadcrumb 마커 문단을 breadcrumb 블록으로 복원", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks(`${BREADCRUMB_MARKER}\n\n# Title`) as Array<
+        Record<string, unknown>
+      >;
+
+      const crumb = blocks.find((b) => b.type === "breadcrumb");
+      expect(crumb).toBeDefined();
+      const leaked = blocks.some(
+        (b) =>
+          b.type === "paragraph" && JSON.stringify(b.paragraph).includes("im-nobsidian:breadcrumb"),
+      );
+      expect(leaked).toBe(false);
+    });
+  });
+
   describe("postProcessBlocks — video/embed URL 변환", () => {
     it("YouTube URL 이미지를 video 블록으로 변환", () => {
       const converter = new BlockConverter();
@@ -75,6 +123,25 @@ describe("BlockConverter", () => {
       expect(videoBlock).toBeDefined();
       const data = videoBlock!.video as { external: { url: string } };
       expect(data.external.url).toContain("youtube.com");
+    });
+
+    // rank17(I3): Notion 에 **업로드된(file-hosted)** 이미지 블록도 video/embed 로 승격돼야 한다.
+    // 과거엔 image 핸들러가 external.url 만 읽어(video/audio/file/pdf 핸들러는 file 도 읽음)
+    // 업로드 이미지의 URL 을 ""로 무시 → 승격 누락. markdown 경로(martian)는 external 만 만들어
+    // 이 분기를 직접 태울 수 없으므로 승격 함수를 직접 검증한다(파일형 → video).
+    it("file-hosted(업로드) 이미지의 video URL 도 video 블록으로 승격", () => {
+      const converter = new BlockConverter();
+      const block = {
+        type: "image",
+        image: { type: "file", file: { url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" } },
+      };
+      const promoted = (
+        converter as unknown as {
+          convertImageToVideoOrEmbed(b: Record<string, unknown>): { type?: string } | null;
+        }
+      ).convertImageToVideoOrEmbed(block);
+      expect(promoted).not.toBeNull();
+      expect(promoted!.type).toBe("video");
     });
 
     it("youtu.be 단축 URL도 video로 변환", () => {
@@ -149,6 +216,35 @@ describe("BlockConverter", () => {
       >;
 
       expect(blocks[0]?.type).toBe("quote");
+    });
+
+    // 회귀 잠금(rank7): martian 은 blockquote 본문을 자식 paragraph 로 내려보내고 quote.rich_text 를
+    // 비운다. flattenMartianBlockquote 가 이를 끌어올려 본문을 보존한다. 평탄화가 빠지면
+    // rich_text 가 빈 채 자식 문단만 남아 push→pull 시 구조가 갈라진다.
+    it("blockquote 본문이 quote.rich_text 로 평탄화되어 보존된다(자식-중첩 아님)", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks("> 인용문 본문") as Array<
+        Record<string, unknown>
+      >;
+      expect(blocks).toHaveLength(1);
+      const quote = blocks[0]!.quote as {
+        rich_text: Array<{ text?: { content?: string } }>;
+        children?: unknown[];
+      };
+      const text = quote.rich_text.map((r) => r.text?.content ?? "").join("");
+      expect(text).toBe("인용문 본문"); // 본문이 rich_text 에 그대로
+      expect(quote.children ?? []).toHaveLength(0); // 자식으로 새지 않음
+    });
+
+    it("여러 줄 blockquote 는 줄바꿈 rich_text 로 연결되어 본문 보존", () => {
+      const converter = new BlockConverter();
+      const blocks = converter.markdownToNotionBlocks("> 첫 줄\n>\n> 둘째 줄") as Array<
+        Record<string, unknown>
+      >;
+      const quote = blocks[0]!.quote as { rich_text: Array<{ text?: { content?: string } }> };
+      const text = quote.rich_text.map((r) => r.text?.content ?? "").join("");
+      expect(text).toContain("첫 줄");
+      expect(text).toContain("둘째 줄");
     });
   });
 

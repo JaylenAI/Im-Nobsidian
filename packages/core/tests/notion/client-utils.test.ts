@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { NotionClient } from "../../src/notion/client.js";
+import { NotionClient, isNotionObjectNotFound } from "../../src/notion/client.js";
 
 function createClient() {
   return new NotionClient({ token: "ntn_test_fake_token", concurrency: 1, timeoutMs: 1000 });
@@ -45,6 +45,26 @@ describe("NotionClient - extractTitle", () => {
     });
 
     expect(client.extractTitle(page)).toBe("제목 없음");
+  });
+
+  it("빈 제목 행: title이 배열 아닌 빈 객체({})여도 크래시 없이 기본값(결함7)", () => {
+    // Notion 은 제목이 빈 DB 행에서 title 을 빈 객체로 돌려주기도 한다.
+    // 가드 없이 .map 을 호출하면 "title.map is not a function" 으로 행이 통째 손실됐다.
+    const page = createMockPage({
+      Category: { type: "title", title: {} },
+    });
+
+    expect(() => client.extractTitle(page)).not.toThrow();
+    expect(client.extractTitle(page)).toBe("제목 없음");
+  });
+
+  it("비배열 title 이어도 뒤따르는 정상 title 속성을 찾아낸다(결함7)", () => {
+    const page = createMockPage({
+      Broken: { type: "title", title: {} },
+      Name: { type: "title", title: [{ plain_text: "복구된 제목" }] },
+    });
+
+    expect(client.extractTitle(page)).toBe("복구된 제목");
   });
 });
 
@@ -487,5 +507,133 @@ describe("NotionClient - getChildPagesRecursive: 접근 불가 서브트리 grac
     const all = await client.getChildPagesRecursive("root");
     const ids = all.map((p) => p.id).sort();
     expect(ids).toEqual(["bad-1", "ok-1", "ok-2"]); // 3건 모두 수집(bad-1 자체는 포함, 하위만 스킵)
+  });
+});
+
+describe("NotionClient - getPagesUnderRootViaSearch: search 기반 무손실 디스커버리(대규모 폴백)", () => {
+  function pg(id: string, parent: any, opts: { archived?: boolean; in_trash?: boolean } = {}) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent,
+      archived: opts.archived ?? false,
+      in_trash: opts.in_trash ?? false,
+      properties: {},
+    } as any;
+  }
+
+  it("page체인·block중첩은 포함, DB행·archived·root자신·서브트리 밖은 제외", async () => {
+    const client = createClient();
+    // 워크스페이스 전체 페이지 집합(search 결과 모킹)
+    vi.spyOn(client, "searchAllPages").mockResolvedValue([
+      pg("root", { type: "workspace", workspace: true }), // root 자신 → 제외
+      pg("a", { type: "page_id", page_id: "root" }), // 직속 자식 → 포함
+      pg("ab", { type: "page_id", page_id: "a" }), // 손자(page체인) → 포함
+      pg("blocknested", { type: "block_id", block_id: "blk1" }), // 컬럼/토글 중첩 → 포함
+      pg("dbrow", { type: "data_source_id", data_source_id: "ds1" }), // DB 행 → 제외
+      pg("archivedchild", { type: "page_id", page_id: "root" }, { archived: true }), // 보관 → 제외
+      pg("outside", { type: "page_id", page_id: "elsewhere" }), // 서브트리 밖 → 제외
+    ] as any);
+    // block 중첩 페이지의 소유 페이지 해석: blk1 → page "a"
+    vi.spyOn(client, "getBlock").mockImplementation(async (id: string) => {
+      if (id === "blk1") return { parent: { type: "page_id", page_id: "a" } } as any;
+      throw new Error("unexpected block " + id);
+    });
+
+    const pages = await client.getPagesUnderRootViaSearch("root");
+    expect(pages.map((p) => p.id).sort()).toEqual(["a", "ab", "blocknested"]);
+  });
+
+  it("block 부모를 여러 홉 거쳐 root 도달 시 포함(다단 컨테이너 중첩)", async () => {
+    const client = createClient();
+    vi.spyOn(client, "searchAllPages").mockResolvedValue([
+      pg("root", { type: "workspace", workspace: true }),
+      pg("deep", { type: "block_id", block_id: "inner" }),
+    ] as any);
+    vi.spyOn(client, "getBlock").mockImplementation(async (id: string) => {
+      if (id === "inner") return { parent: { type: "block_id", block_id: "outer" } } as any;
+      if (id === "outer") return { parent: { type: "page_id", page_id: "root" } } as any;
+      throw new Error("unexpected block " + id);
+    });
+
+    const pages = await client.getPagesUnderRootViaSearch("root");
+    expect(pages.map((p) => p.id)).toEqual(["deep"]);
+  });
+});
+
+describe("isNotionObjectNotFound — 404 권위 판별 (결함9)", () => {
+  it("code=object_not_found 면 true", () => {
+    expect(isNotionObjectNotFound({ code: "object_not_found", status: 404 })).toBe(true);
+  });
+
+  it("status=404 만 있어도 true", () => {
+    expect(isNotionObjectNotFound({ status: 404 })).toBe(true);
+  });
+
+  it("code=object_not_found 만 있어도 true", () => {
+    expect(isNotionObjectNotFound({ code: "object_not_found" })).toBe(true);
+  });
+
+  it("실 Error 객체에 code 가 붙은 SDK 에러도 인식", () => {
+    const err = Object.assign(new Error("Could not find database"), {
+      code: "object_not_found",
+      status: 404,
+    });
+    expect(isNotionObjectNotFound(err)).toBe(true);
+  });
+
+  it("검증 오류(validation_error)는 false — 일시/실제 오류와 구분", () => {
+    expect(isNotionObjectNotFound({ code: "validation_error", status: 400 })).toBe(false);
+  });
+
+  it("rate limit(429)·5xx 는 false — 재시도 대상", () => {
+    expect(isNotionObjectNotFound({ status: 429 })).toBe(false);
+    expect(isNotionObjectNotFound({ code: "internal_server_error", status: 500 })).toBe(false);
+  });
+
+  it("null·undefined·문자열·숫자는 false (방어)", () => {
+    expect(isNotionObjectNotFound(null)).toBe(false);
+    expect(isNotionObjectNotFound(undefined)).toBe(false);
+    expect(isNotionObjectNotFound("object_not_found")).toBe(false);
+    expect(isNotionObjectNotFound(404)).toBe(false);
+    expect(isNotionObjectNotFound(new Error("network"))).toBe(false);
+  });
+});
+
+describe("NotionClient.getDatabaseSyncability — 접근성 선판별 (결함9)", () => {
+  function stubRetrieve(client: NotionClient, value: unknown): void {
+    // 내부 SDK 클라이언트의 databases.retrieve 를 교체해 네트워크 없이 응답을 주입한다.
+    (client as any).client.databases.retrieve = vi.fn().mockResolvedValue(value);
+  }
+
+  it("data_sources 가 1개 이상이면 queryable=true + 제목 추출", async () => {
+    const client = createClient();
+    stubRetrieve(client, {
+      title: [{ plain_text: "프로덕트 위키" }],
+      data_sources: [{ id: "ds-1" }],
+    });
+    const r = await client.getDatabaseSyncability("db-1");
+    expect(r).toEqual({ title: "프로덕트 위키", queryable: true });
+  });
+
+  it("data_sources 가 빈 배열이면 queryable=false (링크드/미공유 DB)", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: [{ plain_text: "링크드 DB" }], data_sources: [] });
+    const r = await client.getDatabaseSyncability("db-2");
+    expect(r).toEqual({ title: "링크드 DB", queryable: false });
+  });
+
+  it("data_sources 필드 자체가 없으면 queryable=false", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: [{ plain_text: "구모델 DB" }] });
+    const r = await client.getDatabaseSyncability("db-3");
+    expect(r.queryable).toBe(false);
+  });
+
+  it("title 이 비배열({})로 와도 크래시 없이 빈 제목 (결함7 계열 방어)", async () => {
+    const client = createClient();
+    stubRetrieve(client, { title: {}, data_sources: [{ id: "ds-x" }] });
+    const r = await client.getDatabaseSyncability("db-4");
+    expect(r).toEqual({ title: "", queryable: true });
   });
 });

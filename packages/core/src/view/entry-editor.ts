@@ -1,6 +1,7 @@
 import type { VaultFS } from "../sync/vault-fs.js";
 import type { DBEntry, PropertyValue } from "./types.js";
 import matter from "gray-matter";
+import { stringifyFrontmatter } from "../utils/frontmatter.js";
 
 export class EntryEditor {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -15,7 +16,7 @@ export class EntryEditor {
 
     parsed.data[propertyName] = newValue;
 
-    const updated = matter.stringify(parsed.content, parsed.data);
+    const updated = stringifyFrontmatter(parsed.content, parsed.data);
     await this.vaultFs.writeFile(entryPath, updated);
   }
 
@@ -28,7 +29,7 @@ export class EntryEditor {
     const filePath = `${folderPath}/${safeName}.md`;
 
     const frontmatter = { title, ...properties };
-    const content = matter.stringify("", frontmatter);
+    const content = stringifyFrontmatter("", frontmatter);
 
     await this.vaultFs.ensureFolder(folderPath);
     await this.vaultFs.writeFile(filePath, content);

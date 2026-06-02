@@ -5,6 +5,8 @@ import type {
   UpsertSyncRecord,
   FileRegistryEntry,
   RegisterFileInput,
+  PendingOperation,
+  RecordPendingInput,
 } from "@im-nobsidian/core";
 import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "@im-nobsidian/core";
 import { generateId } from "@im-nobsidian/core";
@@ -141,6 +143,19 @@ interface RawFileRegistryRow {
   file_type: string;
   file_hash: string;
   file_size: number;
+}
+
+interface RawPendingRow {
+  id: string;
+  sync_state_id: string;
+  operation: string;
+  direction: string;
+  payload: string | null;
+  retry_count: number;
+  error_message: string | null;
+  status: string;
+  created_at: string;
+  completed_at: string | null;
 }
 
 export class SqlJsStateDB implements IStateDB {
@@ -498,6 +513,56 @@ export class SqlJsStateDB implements IStateDB {
     this.run("DELETE FROM file_registry WHERE local_path = ?", [localPath]);
   }
 
+  // --- pending_operations (I12 크래시 복구 WAL) ---
+
+  recordPendingOperation(input: RecordPendingInput): string {
+    const id = generateId();
+    this.run(
+      `INSERT INTO pending_operations
+        (id, sync_state_id, operation, direction, payload, status)
+      VALUES (?, ?, ?, ?, ?, 'pending')`,
+      [id, input.syncStateId, input.operation, input.direction, input.payload ?? null],
+    );
+    return id;
+  }
+
+  getIncompletePendingOperations(): PendingOperation[] {
+    return this.queryAll<RawPendingRow>(
+      "SELECT * FROM pending_operations WHERE status IN ('pending', 'processing') ORDER BY created_at ASC",
+    ).map((r) => this.mapPendingRow(r));
+  }
+
+  getIncompleteOpByState(
+    syncStateId: string,
+    operation: PendingOperation["operation"],
+  ): PendingOperation | null {
+    const row = this.queryOne<RawPendingRow>(
+      `SELECT * FROM pending_operations
+       WHERE sync_state_id = ? AND operation = ? AND status IN ('pending', 'processing')
+       ORDER BY created_at ASC LIMIT 1`,
+      [syncStateId, operation],
+    );
+    return row ? this.mapPendingRow(row) : null;
+  }
+
+  markPendingCompleted(id: string): void {
+    this.run(
+      "UPDATE pending_operations SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
+      [id],
+    );
+  }
+
+  markPendingFailed(id: string, errorMessage: string): void {
+    this.run(
+      "UPDATE pending_operations SET status = 'failed', retry_count = retry_count + 1, error_message = ?, completed_at = datetime('now') WHERE id = ?",
+      [errorMessage, id],
+    );
+  }
+
+  clearCompletedOperations(): void {
+    this.run("DELETE FROM pending_operations WHERE status IN ('completed', 'failed')");
+  }
+
   // --- preserve markers ---
 
   storePreserveMarkers(path: string, markers: PreserveMarker[]): void {
@@ -574,6 +639,21 @@ export class SqlJsStateDB implements IStateDB {
       fileType: row.file_type,
       fileHash: row.file_hash,
       fileSize: row.file_size,
+    };
+  }
+
+  private mapPendingRow(row: RawPendingRow): PendingOperation {
+    return {
+      id: row.id,
+      syncStateId: row.sync_state_id,
+      operation: row.operation as PendingOperation["operation"],
+      direction: row.direction as PendingOperation["direction"],
+      payload: row.payload,
+      retryCount: row.retry_count,
+      errorMessage: row.error_message,
+      status: row.status as PendingOperation["status"],
+      createdAt: row.created_at,
+      completedAt: row.completed_at,
     };
   }
 }

@@ -214,4 +214,67 @@ describe("ImageHandler — 업로드", () => {
 
     expect(results).toHaveLength(0);
   });
+
+  // I6 배선: 업로드한 이미지를 file_registry 에 전체 content_hash 로 등록해야 FileHandler 가
+  // 같은 첨부를 폴더 페이지에 standalone 으로 중복 업로드하지 않는다. 외부 URL 은 미등록.
+  it("uploadAndAppendImages — 업로드 이미지를 file_registry 에 등록(dedup 배선)", async () => {
+    const registerFile = vi.fn();
+    const handlerWithState = new ImageHandler(
+      mockFs,
+      "attachments",
+      mockNotion,
+      undefined,
+      undefined,
+      {
+        registerFile,
+      } as never,
+    );
+
+    const images: ImageReference[] = [
+      { url: "docs/pic.png", localPath: "docs/pic.png", isExternal: false },
+      { url: "https://example.com/ext.png", isExternal: true },
+    ];
+
+    const results = await handlerWithState.uploadAndAppendImages("page-id-123", images);
+
+    // 로컬 1건만 업로드·등록, 외부 URL 은 업로드/등록 대상 아님.
+    expect(results).toHaveLength(1);
+    expect(registerFile).toHaveBeenCalledTimes(1);
+    expect(registerFile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        localPath: "docs/pic.png",
+        notionPageId: "page-id-123",
+        fileUploadId: "file-upload-id-123",
+        fileType: "image",
+        fileSize: Buffer.byteLength("fake-image-data"),
+      }),
+    );
+    const arg = registerFile.mock.calls[0]![0] as { fileHash: string };
+    expect(arg.fileHash, "전체 sha256(64 hex) 이어야 함").toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("uploadAndAppendImages — registerFile 실패해도 append 는 성공(graceful)", async () => {
+    const registerFile = vi.fn().mockImplementation(() => {
+      throw new Error("registry down");
+    });
+    const handlerWithState = new ImageHandler(
+      mockFs,
+      "attachments",
+      mockNotion,
+      undefined,
+      undefined,
+      {
+        registerFile,
+      } as never,
+    );
+
+    const images: ImageReference[] = [
+      { url: "photo.png", localPath: "photo.png", isExternal: false },
+    ];
+
+    const results = await handlerWithState.uploadAndAppendImages("page-id-123", images);
+
+    expect(results).toHaveLength(1);
+    expect(mockNotion.appendChildren).toHaveBeenCalled();
+  });
 });

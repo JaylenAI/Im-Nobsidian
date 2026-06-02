@@ -1,6 +1,6 @@
 {
   "name": "im-nobsidian",
-  "version": "0.1.12",
+  "version": "0.2.0",
   "private": true,
   "description": "Bidirectional sync between Obsidian and Notion",
   "author": "hanseungheon",
@@ -19,6 +19,7 @@
     "dev": "pnpm -r run dev",
     "test": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:invariants": "vitest run --config packages/core/vitest.invariant.config.ts",
     "lint": "eslint packages/*/src --ext .ts,.tsx",
     "lint:fix": "eslint packages/*/src --ext .ts,.tsx --fix",
     "format": "prettier --write \"packages/*/src/**/*.ts\"",

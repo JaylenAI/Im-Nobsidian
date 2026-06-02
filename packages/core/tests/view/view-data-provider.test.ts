@@ -162,6 +162,132 @@ describe("ViewDataProvider", () => {
       const companyC = entries.find((e) => e.path.includes("CompanyC"));
       expect(companyC?.title).toBe("C사");
     });
+
+    /**
+     * rank21 회귀(I9 오포함 차단): DB 폴더에 **중첩 하위 폴더**(별도 child_database 나
+     * 자식 페이지 본문)가 있어도 그 안의 .md 는 부모 DB 의 행이 아니다. `startsWith(prefix)`
+     * 단순 매칭은 이를 카드로 새게 했다 — 직속 행만 수집됨을 결정적으로 잠근다.
+     */
+    it("중첩 하위 폴더(child_database)의 .md 는 부모 DB 행으로 새지 않는다", async () => {
+      const nestedProvider = new ViewDataProvider(
+        createMockVaultFs({
+          ...sampleFiles,
+          // jobs/ 직속 행 3개(sampleFiles) + 중첩 sub-DB 행 2개 + 더 깊은 중첩 1개.
+          "jobs/SubDB/Nested A.md": ["---", "title: 중첩A", "---", "", "중첩 DB 행"].join("\n"),
+          "jobs/SubDB/Nested B.md": ["---", "title: 중첩B", "---", "", "중첩 DB 행"].join("\n"),
+          "jobs/SubDB/Deeper/Leaf.md": ["---", "title: 더깊은", "---", "", "더 깊은 중첩"].join(
+            "\n",
+          ),
+        }),
+      );
+      const entries = await nestedProvider.collectEntries("jobs");
+      // 직속 3개만 — 중첩 3개는 전부 제외.
+      expect(entries).toHaveLength(3);
+      const titles = entries.map((e) => e.title).sort();
+      expect(titles).toEqual(["A사", "B사", "C사"]);
+      // 중첩 행 제목은 어떤 것도 새어 들지 않았다.
+      expect(entries.some((e) => e.path.includes("SubDB"))).toBe(false);
+    });
+
+    /**
+     * rank22 회귀(갤러리 커버 multivalue degrade): files 속성 커버가 복수 파일이면
+     * 프론트매터의 `cover` 가 **URL 배열**로 직렬화된다. 카드 `<img src>` 는 스칼라만
+     * 받으므로 배열이 그대로 흐르면 `src="url1,url2"` 로 깨진다 — 첫 URL 로 degrade 됨을
+     * 결정적으로 잠근다(런타임에서 `cover` 가 항상 string|undefined).
+     */
+    it("multivalue 커버(URL 배열)는 첫 URL 스칼라로 degrade 된다", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Multi.md": [
+            "---",
+            "title: 멀티커버",
+            "cover:",
+            "  - https://example.com/first.png",
+            "  - https://example.com/second.png",
+            "---",
+            "",
+            "복수 파일 커버",
+          ].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "멀티커버")!;
+      expect(typeof entry.cover).toBe("string");
+      expect(entry.cover).toBe("https://example.com/first.png");
+    });
+
+    it("빈 커버 배열은 undefined(깨진 No-cover 가 아니라 정상 빈 커버)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Empty.md": ["---", "title: 빈커버", "cover: []", "---", "", "본문"].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "빈커버")!;
+      expect(entry.cover).toBeUndefined();
+    });
+
+    it("단일 문자열 커버는 그대로 유지(degrade 가 정상 케이스를 건드리지 않음)", async () => {
+      const entries = await provider.collectEntries("jobs");
+      const companyA = entries.find((e) => e.title === "A사");
+      expect(companyA?.cover).toBe("attachments/a-cover.jpg");
+    });
+
+    /**
+     * rank22b 회귀(I9 뷰 크래시 차단): 따옴표 없는 숫자 제목(`title: 2026`)은 js-yaml 이
+     * **number** 로 파싱한다. 과거 `fm.title as string` 캐스팅 + `filter-engine` 의
+     * `entry.title.toLowerCase()` 조합이 `toLowerCase is not a function` 으로 검색 전체를
+     * 크래시시켰다 — number 가 문자열 제목으로 안전 변환됨을 결정적으로 잠근다.
+     */
+    it("숫자 제목(YAML number)은 문자열로 강제되어 검색 크래시를 막는다", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Year.md": ["---", "title: 2026", "---", "", "숫자 제목 행"].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs"))[0]!;
+      expect(typeof entry.title).toBe("string");
+      expect(entry.title).toBe("2026");
+      // filter-engine 의 title.toLowerCase() 가 던지지 않아야 한다.
+      expect(() => entry.title.toLowerCase()).not.toThrow();
+    });
+
+    it("배열 제목은 첫 비공백 문자열로 degrade(없으면 파일명 폴백)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Arr.md": ["---", "title:", "  - 1순위", "  - 2순위", "---", "", "배열 제목"].join(
+            "\n",
+          ),
+          "jobs/Empty.md": ["---", "title: []", "---", "", "빈 배열 제목"].join("\n"),
+        }),
+      );
+      const entries = await p.collectEntries("jobs");
+      expect(entries.find((e) => e.path.includes("Arr"))?.title).toBe("1순위");
+      // 빈 배열 → undefined → 파일명("Empty")으로 폴백.
+      expect(entries.find((e) => e.path.includes("Empty"))?.title).toBe("Empty");
+    });
+
+    it("배열 아이콘은 첫 문자열로 degrade(카드 깨짐 방지)", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Icn.md": [
+            "---",
+            "title: 아이콘행",
+            "icon:",
+            "  - 🏢",
+            "  - 🔬",
+            "---",
+            "",
+            "본문",
+          ].join("\n"),
+        }),
+      );
+      const entry = (await p.collectEntries("jobs")).find((e) => e.title === "아이콘행")!;
+      expect(entry.icon).toBe("🏢");
+    });
   });
 
   describe("buildViewData", () => {

@@ -27,7 +27,7 @@ function createMockStateDb() {
     getByNotionId: vi.fn().mockReturnValue(null),
     getAll: vi.fn().mockReturnValue([]),
     getByStatus: vi.fn().mockReturnValue([]),
-    upsert: vi.fn(),
+    upsert: vi.fn().mockReturnValue({ id: 1 }),
     upsertWikilink: vi.fn(),
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
@@ -43,6 +43,16 @@ function createMockStateDb() {
     resolveWikilink: vi.fn().mockReturnValue(null),
     resolvePageId: vi.fn().mockReturnValue(null),
     transaction: vi.fn().mockImplementation((fn: () => unknown) => fn()),
+    // B4: pending_operations WAL + file_registry
+    recordPendingOperation: vi.fn().mockReturnValue(100),
+    getIncompletePendingOperations: vi.fn().mockReturnValue([]),
+    getIncompleteOpByState: vi.fn().mockReturnValue(null),
+    markPendingCompleted: vi.fn(),
+    markPendingFailed: vi.fn(),
+    clearCompletedOperations: vi.fn(),
+    registerFile: vi.fn(),
+    getFileRegistry: vi.fn().mockReturnValue(null),
+    isFileRegistered: vi.fn().mockReturnValue(false),
     close: vi.fn(),
   };
 }
@@ -86,6 +96,7 @@ function createMockNotionClient() {
     }),
     extractTitle: vi.fn().mockReturnValue("Test"),
     extractProperties: vi.fn().mockReturnValue({}),
+    setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),

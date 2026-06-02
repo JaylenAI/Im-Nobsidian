@@ -4,17 +4,18 @@ import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
+import { richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
+import type { RichTextItem } from "./rich-text-converter.js";
 import {
   MARKER_BRAND,
-  spacedMarker,
   compactMarker,
-  SPACED_END,
   TOGGLE_START,
   TOGGLE_END,
   COLUMN_LIST_START,
   COLUMN_SEP,
   COLUMN_LIST_END,
   TOC_MARKER,
+  BREADCRUMB_MARKER,
 } from "../constants/markers.js";
 
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
@@ -44,75 +45,6 @@ const EMBED_URL_PATTERNS = [
 
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
-
-type RichTextItem = { plain_text: string; href?: string | null };
-
-function richTextToPlain(richText: RichTextItem[] | undefined): string {
-  if (!richText) return "";
-  return richText.map((t) => t.plain_text).join("");
-}
-
-interface RichTextAnnotated extends RichTextItem {
-  annotations?: Record<string, unknown>;
-  type?: string;
-  equation?: { expression: string };
-  mention?: {
-    type: string;
-    page?: { id: string };
-    date?: { start: string; end?: string | null };
-    user?: { id: string; name?: string };
-    database?: { id: string };
-  };
-}
-
-function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): string {
-  if (!richText) return "";
-  return richText
-    .map((t) => {
-      if (t.type === "equation" && t.equation) {
-        return `$${t.equation.expression}$`;
-      }
-
-      if (t.type === "mention" && t.mention) {
-        return formatMention(t.mention);
-      }
-
-      let text = t.plain_text;
-      const a = t.annotations;
-      if (a?.code) text = `\`${text}\``;
-      if (a?.bold) text = `**${text}**`;
-      if (a?.italic) text = `*${text}*`;
-      if (a?.strikethrough) text = `~~${text}~~`;
-      if (a?.underline) text = `<u>${text}</u>`;
-      if (t.href) text = `[${text}](${t.href})`;
-
-      const color = a?.color as string | undefined;
-      if (color && color !== "default") {
-        text = `${spacedMarker(`color:${color}`)}${text}${SPACED_END}`;
-      }
-
-      return text;
-    })
-    .join("");
-}
-
-function formatMention(mention: NonNullable<RichTextAnnotated["mention"]>): string {
-  switch (mention.type) {
-    case "page":
-      return mention.page ? `[[${mention.page.id}]]` : "";
-    case "date": {
-      if (!mention.date) return "";
-      const start = mention.date.start;
-      return mention.date.end ? `${start} → ${mention.date.end}` : start;
-    }
-    case "user":
-      return mention.user?.name ? `@${mention.user.name}` : "@user";
-    case "database":
-      return mention.database ? `[[${mention.database.id}]]` : "";
-    default:
-      return "";
-  }
 }
 
 export class BlockConverter {
@@ -154,6 +86,45 @@ export class BlockConverter {
     this.registerEmbedTransformer();
     this.registerCalloutTransformer();
     this.registerToggleHeadingTransformers();
+    this.registerNumberedListTransformer();
+  }
+
+  /**
+   * `numbered_list_item` 을 `1.` 마크다운으로 내보내 **번호 목록 타입을 보존**한다(I2 블록 라운드트립).
+   *
+   * notion-to-md 기본 렌더는 `md.bullet(text, block.numbered_list_item.number)` 를 쓰는데
+   * Notion API 는 list item 에 `.number` 를 채워주지 않아 `undefined` → 불릿(`- `)으로 **강등**된다.
+   * 그러면 블록 폴백 경로(notionBlocksToMarkdown)로 pull 한 뒤 다시 push 하면 numbered_list_item 이
+   * bulleted_list_item 으로 **타입 유실**된다(기본 markdown-api 경로는 영향 없음).
+   *
+   * 항상 `1.` 로 내보내면 마크다운이 시각적으로 자동 재번호하므로 표시는 동일하고, martian 이 다시
+   * numbered_list_item 으로 파싱해 타입이 보존된다. 커스텀 트랜스포머 등록은 notion-to-md 의 기본
+   * 자식 처리를 끄므로(라이브러리 설계), 자식은 toggle/callout 과 동일하게 직접 fetch·들여쓰기한다.
+   */
+  private registerNumberedListTransformer(): void {
+    if (!this.n2m) return;
+    const n2m = this.n2m;
+    this.n2m.setCustomTransformer("numbered_list_item", async (block) => {
+      const b = block as unknown as {
+        numbered_list_item: { rich_text: RichTextItem[] };
+      } & BlockObjectResponse;
+      const text = richTextToMarkdown(b.numbered_list_item?.rich_text as never);
+      let result = `1. ${text}`;
+      if (b.has_children) {
+        const children = await n2m.pageToMarkdown(b.id);
+        const childMd =
+          (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
+        if (childMd.trim()) {
+          const indented = childMd
+            .split("\n")
+            .map((l: string) => (l.trim() ? `    ${l}` : ""))
+            .join("\n")
+            .trimEnd();
+          result += "\n" + indented;
+        }
+      }
+      return result;
+    });
   }
 
   private registerToggleTransformer(): void {
@@ -369,7 +340,9 @@ export class BlockConverter {
 
   private registerBreadcrumbTransformer(): void {
     if (!this.n2m) return;
-    this.n2m.setCustomTransformer("breadcrumb", async () => "");
+    // breadcrumb 은 마크다운 표현이 없다. 빈 문자열로 버리면 라운드트립에서 소실되므로
+    // 보존 마커를 남겨 push 시 breadcrumb 블록으로 복원한다(convertSingleLineMarker).
+    this.n2m.setCustomTransformer("breadcrumb", async () => BREADCRUMB_MARKER);
   }
 
   private registerLinkPreviewTransformer(): void {
@@ -473,7 +446,21 @@ export class BlockConverter {
     processed = this.extractColumnBlocks(processed);
     processed = this.replaceDividers(processed);
     processed = processed.replace(/<unknown[^>]*\/>/g, "");
+    processed = this.stripInlineAnnotationMarkers(processed);
     return processed;
+  }
+
+  /**
+   * compact underline/color 보존마커를 평문으로 강등 — block(martian) 폴백 경로 전용.
+   *
+   * 무손실 underline/color 복원은 기본 경로인 Markdown API({@link obsidianToNotionEnhanced})가
+   * 전담한다. martian 은 이 서식을 표현할 수 없으므로, Markdown API 가 실패해 이 폴백을 탈 때는
+   * 마커 텍스트가 본문에 리터럴로 새지 않도록 텍스트만 남기고 마커를 제거한다(서식 degrade).
+   */
+  private stripInlineAnnotationMarkers(markdown: string): string {
+    return markdown
+      .replace(new RegExp(`%%${MARKER_BRAND}:underline%%([\\s\\S]*?)%%\\/underline%%`, "g"), "$1")
+      .replace(new RegExp(`%%${MARKER_BRAND}:color:[^%]+%%([\\s\\S]*?)%%\\/color%%`, "g"), "$1");
   }
 
   private replaceDividers(markdown: string): string {
@@ -577,13 +564,22 @@ export class BlockConverter {
         continue;
       }
 
+      const markerConverted = this.convertSingleLineMarker(block);
+      if (markerConverted) {
+        result.push(markerConverted);
+        continue;
+      }
+
       const videoConverted = this.convertImageToVideoOrEmbed(block);
       if (videoConverted) {
         result.push(videoConverted);
         continue;
       }
 
-      const calloutConverted = this.convertQuoteToCallout(block);
+      // martian 의 blockquote 자식-중첩을 평탄화해 본문을 quote.rich_text 로 복원한 뒤,
+      // 이모지 접두사 quote 의 callout 변환을 적용한다(평탄화 전에는 rich_text 가 비어 no-op).
+      const flattened = this.flattenMartianBlockquote(block);
+      const calloutConverted = this.convertQuoteToCallout(flattened);
       result.push(calloutConverted);
     }
 
@@ -659,15 +655,47 @@ export class BlockConverter {
     return null;
   }
 
+  /**
+   * 단일 라인 보존 마커(목차·breadcrumb)를 원래 블록으로 복원한다.
+   * pull 시 마크다운 표현이 없는 블록을 `%%im-nobsidian:toc%%` /
+   * `%%im-nobsidian:breadcrumb%%` 마커 문단으로 남겨두므로, push 시 이 문단을
+   * 감지해 table_of_contents / breadcrumb 블록으로 되돌린다. 그러지 않으면
+   * 마커 텍스트가 일반 문단으로 Notion 에 기록되는 잠재 손실이 된다.
+   */
+  private convertSingleLineMarker(block: Record<string, unknown>): unknown | null {
+    if (block.type !== "paragraph") return null;
+
+    const para = block.paragraph as
+      | { rich_text?: Array<{ text?: { content: string } }> }
+      | undefined;
+    const texts = para?.rich_text ?? [];
+    if (texts.length !== 1) return null;
+
+    const text = (texts[0]?.text?.content ?? "").trim();
+    if (text === TOC_MARKER) {
+      return NotionBlockBuilder.tableOfContents();
+    }
+    if (text === BREADCRUMB_MARKER) {
+      return NotionBlockBuilder.breadcrumb();
+    }
+    return null;
+  }
+
   private convertImageToVideoOrEmbed(block: Record<string, unknown>): unknown | null {
     let url = "";
     let caption: string | undefined;
 
     if (block.type === "image") {
       const img = block.image as
-        | { external?: { url: string }; caption?: Array<{ text?: { content: string } }> }
+        | {
+            external?: { url: string };
+            file?: { url: string };
+            caption?: Array<{ text?: { content: string } }>;
+          }
         | undefined;
-      url = img?.external?.url ?? "";
+      // video/audio/file/pdf 핸들러와 동일하게 external·file(업로드) 양쪽 URL 을 수용한다.
+      // file 만 있는 업로드 이미지의 video/embed 승격이 누락되던 비대칭 결함을 봉합(rank17/I3).
+      url = img?.external?.url ?? img?.file?.url ?? "";
       caption = img?.caption?.[0]?.text?.content;
     } else if (block.type === "paragraph") {
       const para = block.paragraph as
@@ -693,6 +721,65 @@ export class BlockConverter {
     }
 
     return null;
+  }
+
+  /**
+   * `@tryfabric/martian` 의 blockquote 표현을 **평탄화**한다(I2/I3 무손실 push).
+   *
+   * martian 의 parseBlockquote 는 `notion.blockquote([], children)` 로 본문을 quote 의
+   * **자식 paragraph** 로 내려보내고 quote.rich_text 를 비운다(라이브러리 설계). 그 결과
+   * `> 인용문` 을 push 하면 Notion 에 "빈 인용 줄 + 들여쓴 자식 문단"이 만들어지고, 다시
+   * pull 하면 `> `(빈 줄) 아래에 자식 문단이 매달려 **원문과 구조가 갈라진다**(라운드트립 손실).
+   * 또한 quote.rich_text[0] 이 항상 비어 callout 이모지 감지({@link convertQuoteToCallout})도
+   * 무력화됐다.
+   *
+   * 선두의 연속된 paragraph 자식을 quote.rich_text 로 끌어올리고(문단 사이는 줄바꿈 rich_text
+   * 로 연결 — Notion 네이티브 멀티라인 인용 표현), paragraph 가 아닌 자식(중첩 리스트 등)은
+   * children 으로 남겨 구조를 보존한다. 이미 rich_text 에 본문이 있거나 끌어올릴 paragraph 가
+   * 없으면 원본을 그대로 반환한다(안전 no-op).
+   */
+  private flattenMartianBlockquote(block: Record<string, unknown>): Record<string, unknown> {
+    if (block.type !== "quote") return block;
+    const quote = block.quote as
+      | {
+          rich_text?: Array<Record<string, unknown>>;
+          children?: Array<Record<string, unknown>>;
+        }
+      | undefined;
+    if (!quote) return block;
+
+    const richText = quote.rich_text ?? [];
+    const hasText = richText.some((r) => {
+      const t = r as { text?: { content?: string }; plain_text?: string };
+      return (t.text?.content ?? t.plain_text ?? "") !== "";
+    });
+    const children = quote.children ?? [];
+    // 본문이 이미 rich_text 에 있거나 끌어올릴 자식이 없으면 변형하지 않는다.
+    if (hasText || children.length === 0) return block;
+
+    const hoisted: Array<Record<string, unknown>> = [];
+    let consumed = 0;
+    for (; consumed < children.length; consumed++) {
+      const child = children[consumed] as Record<string, unknown>;
+      if (child.type !== "paragraph") break;
+      const para = child.paragraph as { rich_text?: Array<Record<string, unknown>> } | undefined;
+      const paraRt = para?.rich_text ?? [];
+      if (hoisted.length > 0) {
+        // 문단 사이 줄바꿈을 Notion 네이티브 인용처럼 rich_text 줄바꿈으로 보존.
+        hoisted.push(
+          ...(NotionBlockBuilder.richText("\n") as unknown as Array<Record<string, unknown>>),
+        );
+      }
+      hoisted.push(...paraRt);
+    }
+    // 끌어올릴 선두 paragraph 가 하나도 없으면(리스트 등만 존재) 원본 유지.
+    if (hoisted.length === 0) return block;
+
+    const remaining = children.slice(consumed);
+    const newQuote: Record<string, unknown> = { ...quote, rich_text: hoisted };
+    if (remaining.length > 0) newQuote.children = remaining;
+    else delete newQuote.children;
+    return { ...block, quote: newQuote };
   }
 
   private convertQuoteToCallout(block: Record<string, unknown>): unknown {
@@ -762,6 +849,23 @@ export class BlockConverter {
     const mdBlocks = await this.n2m.pageToMarkdown(pageId);
     const result = this.n2m.toMarkdownString(mdBlocks);
     return result.parent ?? "";
+  }
+
+  /**
+   * **in-memory** 블록 배열을 마크다운으로 변환한다(페이지 fetch 없음). notion-to-md 의
+   * blocksToMarkdown 을 직접 호출하므로, `has_children:false` 인 평면 블록은 Notion 클라이언트를
+   * 전혀 건드리지 않는다 → 고정 픽스처로 **오프라인 결정론** 블록 라운드트립(I2)을 잠글 수 있는
+   * 정식 테스트 시임. children 이 있는 블록(table 행·callout 자식 등)은 클라이언트를 호출하므로
+   * 호출 측이 평면 블록만 넣어야 오프라인이 보장된다.
+   */
+  async notionBlockArrayToMarkdown(blocks: Array<Record<string, unknown>>): Promise<string> {
+    if (!this.n2m) {
+      throw new Error(
+        "NotionToMarkdown이 초기화되지 않았습니다. initNotionToMd()를 먼저 호출하세요.",
+      );
+    }
+    const mdBlocks = await this.n2m.blocksToMarkdown(blocks as never);
+    return this.n2m.toMarkdownString(mdBlocks).parent ?? "";
   }
 }
 
