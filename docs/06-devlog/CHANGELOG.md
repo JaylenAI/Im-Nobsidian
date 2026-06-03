@@ -3,6 +3,21 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.2.1] - 2026-06-03
+
+> `nobsi --version` 정정 + 문서 최신화 패치 릴리스.
+> CLI 버전 출력이 하드코딩(`0.1.1`)이라 모든 릴리스에서 틀리게 표시되던 버그를 `package.json` 동적 읽기로 근본 수정하고,
+> 설치 명령(`im-nobsidian`)·테스트 수(1038)·로드맵 등 문서를 현행화했다.
+
+### Fixed
+
+- **`nobsi --version` 정확화** — 하드코딩된 `0.1.1` 대신 `createRequire`로 `package.json` 버전을 동적으로 읽도록 수정. 이제 모든 릴리스에서 자동으로 올바른 버전을 출력한다.
+- **설치 명령 오타 교정** — README·가이드·시나리오 문서의 `npm install -g nobsi`(E404)를 올바른 패키지명 `im-nobsidian`으로 정정.
+
+### Changed
+
+- **문서 현행화** — 루트/한국어 README의 테스트 수(696→1038), 플러그인 버전(v0.1.11→v0.2.1), 로드맵을 v0.2.x 기준으로 갱신.
+
 ## [0.2.0] - 2026-06-02
 
 > "100% 무손실·멱등·수렴" 미션에 집중한 릴리스.

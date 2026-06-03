@@ -288,7 +288,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.1.11 (BRAT install)                                                                                      |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.2.1 (BRAT install)                                                                                       |
 
 ### Using as a Library
 
@@ -331,11 +331,11 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.1.11 ✅ Current — Plugin tests 115, better-sqlite3 removed, push bug fix, 696 tests
-v0.1.10 Bases gallery cover image sync, formulas auto-generation
-v0.1.9  Obsidian plugin production ready (Phase 1-5), 6 DB views, sync sidebar
-v0.2.0  → Community plugin submission, npm publish, stable release
-v1.0.0  → Multi-workspace, 1000+ notes, performance optimization
+v0.2.1 ✅ Current — --version dynamic read fix, docs refresh, 1038 tests
+v0.2.0  100% lossless·idempotent·convergent, invariant safety net, npm publish
+v0.1.12 Pull fidelity + sync stability, nested DB→Bases, gallery covers, 777 tests
+v0.1.11 Plugin tests 115, better-sqlite3 removed, push bug fix, 696 tests
+v1.0.0  → Community plugin submission, multi-workspace, 1000+ notes
 ```
 
 See [ROADMAP.md](docs/06-devlog/ROADMAP.md) for the full plan.
@@ -347,7 +347,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 696 tests
+pnpm test          # 1038 tests
 pnpm lint
 pnpm typecheck
 

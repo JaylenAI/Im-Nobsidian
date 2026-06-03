@@ -1,10 +1,12 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-06-02
+> Last updated: 2026-06-03
 
-## Current State (v0.2.0)
+## Current State (v0.2.1)
 
-v0.2.0 릴리스. "100% 무손실·멱등·수렴" 미션 달성에 집중.
+v0.2.1 패치 — `nobsi --version` 동적 읽기 정정 + 문서 현행화(테스트 수·플러그인 버전·로드맵). 기능 변경 없음.
+
+기반 v0.2.0 릴리스. "100% 무손실·멱등·수렴" 미션 달성에 집중.
 라운드트립 deep-equal 충실도 검증(I1) + 불변식 안전망(드리프트·멱등성·삭제)을 CI에 상시 잠금.
 무손실 push 확장(blockquote·번호목록·underline/color·breadcrumb/TOC·DB 사이드카),
 변환 정본화(I3), 증분 멱등(I5/I10), 중첩 cascade 폭주 차단(#72/#73), 대용량 발견 성능(#71).
@@ -37,6 +39,9 @@ v0.1.12 ─── ✅ Pull 충실도 + 동기화 안정성 (2026-05-29)
 
 v0.2.0  ─── ✅ 무손실·멱등·수렴 (2026-06-02)
             충실도 측정 인프라(I1) + 불변식 안전망, 무손실 push 확장, 변환 정본화(I3), 1038 tests
+
+v0.2.1  ─── ✅ --version 정정 + 문서 현행화 (2026-06-03)
+            CLI 버전 동적 읽기(createRequire), 설치 명령 교정, README/로드맵 현행화
 
 v1.0.0  ─── 커뮤니티 등록 + 안정 릴리스 (예정)
             obsidian-releases PR, BRAT 베타, multi-workspace, 1000+ notes
