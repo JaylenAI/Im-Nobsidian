@@ -29,7 +29,7 @@
 ```
 # 민수의 터미널
 
-$ npm install -g nobsi
+$ npm install -g im-nobsidian
 $ cd ~/Documents/MyVault
 $ nobsi init
 
@@ -475,7 +475,7 @@ Obsidian에서 개인 노트에 참조:
 → Star 클릭 ⭐
 
 [2단계: 설치 — CLI 사용자]
-$ npm install -g nobsi
+$ npm install -g im-nobsidian
 $ nobsi --version
 im-nobsidian v1.0.0
 

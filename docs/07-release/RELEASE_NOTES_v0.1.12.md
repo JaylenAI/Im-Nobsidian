@@ -141,7 +141,7 @@
 
 ```bash
 # CLI
-npm install -g nobsi@0.1.12
+npm install -g im-nobsidian@0.1.12
 
 # Core (library)
 npm install @im-nobsidian/core@0.1.12

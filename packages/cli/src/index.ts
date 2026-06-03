@@ -1,3 +1,4 @@
+import { createRequire } from "node:module";
 import { Command } from "commander";
 import { initCommand } from "./commands/init.js";
 import { pushCommand } from "./commands/push.js";
@@ -9,12 +10,15 @@ import { fetchCommand } from "./commands/fetch.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { watchCommand } from "./commands/watch.js";
 
+const requireJson = createRequire(import.meta.url);
+const { version } = requireJson("../package.json") as { version: string };
+
 const program = new Command();
 
 program
   .name("im-nobsidian")
   .description("Im-Nobsidian: Obsidian ↔ Notion 양방향 동기화 CLI")
-  .version("0.1.1")
+  .version(version)
   .option("--verbose", "상세 로그 출력")
   .option("--quiet", "최소 출력");
 
