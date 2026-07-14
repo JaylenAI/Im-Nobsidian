@@ -1,16 +1,15 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-06-03
+> Last updated: 2026-07-14
 
-## Current State (v0.2.1)
+## Current State (v0.3.0)
 
-v0.2.1 패치 — `nobsi --version` 동적 읽기 정정 + 문서 현행화(테스트 수·플러그인 버전·로드맵). 기능 변경 없음.
-
-기반 v0.2.0 릴리스. "100% 무손실·멱등·수렴" 미션 달성에 집중.
-라운드트립 deep-equal 충실도 검증(I1) + 불변식 안전망(드리프트·멱등성·삭제)을 CI에 상시 잠금.
-무손실 push 확장(blockquote·번호목록·underline/color·breadcrumb/TOC·DB 사이드카),
-변환 정본화(I3), 증분 멱등(I5/I10), 중첩 cascade 폭주 차단(#72/#73), 대용량 발견 성능(#71).
-1038 tests (Core 858 + CLI 31 + Plugin 149). 25+ block types bidirectional, 21 property read / 15 write types.
+v0.3.0 — 왕복 충실도 일괄 봉합 + 증분 pull 누락 수정 + deps 최신화(Node 22+).
+실코퍼스 심층 감사(F14~F27) 결함 전량 봉합: 옵시디언 주석 push 차단·각주/하이라이트/표정렬
+왕복·블록 간격 복원(D1)·캡션 이미지 다운로드(F14)·증분 워터마크 갭(F20)·child DB
+재발견(F21, `pull --force`)·첨부 dedup(D6)·접근 불가 DB denylist.
+실데이터 실증: 왕복 바이트 delta-0 + 무변경 pull 869-md churn-0 + 충돌 0.
+1151 tests. 25+ block types bidirectional, 21 property read / 15 write types.
 
 ---
 
@@ -42,6 +41,10 @@ v0.2.0  ─── ✅ 무손실·멱등·수렴 (2026-06-02)
 
 v0.2.1  ─── ✅ --version 정정 + 문서 현행화 (2026-06-03)
             CLI 버전 동적 읽기(createRequire), 설치 명령 교정, README/로드맵 현행화
+
+v0.3.0  ─── ✅ 왕복 충실도 일괄 봉합 (2026-07-14)
+            주석/각주/하이라이트/표정렬/블록간격 왕복, F20/F21 증분 누락 수정,
+            pull --force, 첨부 dedup, Node 22+, 1151 tests
 
 v1.0.0  ─── 커뮤니티 등록 + 안정 릴리스 (예정)
             obsidian-releases PR, BRAT 베타, multi-workspace, 1000+ notes

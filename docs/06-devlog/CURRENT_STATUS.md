@@ -1,9 +1,27 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-06-03
-> 버전: v0.2.1 (문서 최신화 패치, 태그 대기) · 마지막 정식 릴리스 v0.2.0
+> 마지막 업데이트: 2026-07-14
+> 버전: v0.3.0 (왕복 충실도 일괄 봉합, 태그 대기) · 마지막 정식 릴리스 v0.2.1
 
-## 현재 미션 — 동기화 충실도 회복 (`/goal`)
+## v0.3.0 — 왕복 충실도 일괄 봉합 + deps 최신화 (`fix/deps-latest-202607`)
+
+**실코퍼스 심층 감사(F14~F27) 결함 전량 봉합 + 실데이터 E2E 실증 완료.**
+
+- **변환 레이어**: 옵시디언 주석 push 차단(F26)·각주 왕복(F25)·하이라이트 왕복(F24)·
+  표 열 정렬 왕복·블록 간격 복원(D1, `notionExportCompact` 메타데이터)·탭 정규화(D4)·
+  frontmatter title/날짜(D2/D3)·보존 마커 앵커 재주입 — 신규 프로세서 7종 + md-regions 유틸
+- **sync 레이어**: 캡션 이미지 다운로드(F14)·증분 워터마크 갭(F20)·child DB 재발견(F21)·
+  `pull --force` CLI 노출(F22)·첨부 dedup(D6)·노트 임베드 삼킴 제거(D5)·
+  접근 불가 DB denylist·ENOENT 노이즈 억제(F23)
+- **deps**: Node 엔진 20 → 22.13+, CI 매트릭스 22/24, @notionhq/client v5,
+  better-sqlite3 v12, chokidar v5 등
+- **실증**(테스트 볼트 875페이지): 고문 노트 왕복 **바이트 delta-0**, `--force` 전체 스캔
+  정상(child DB 발견 + `.base`/`.notion.json`/행 md 생성), 무변경 pull **869개 md
+  churn-0**, 충돌 0
+- **1151 테스트**(11 skip, 0 실패), lint/typecheck/build 클린
+- 상세: `journal/2026-07-14.md`, 릴리스 노트 `../07-release/RELEASE_NOTES_v0.3.0.md`
+
+## 이전 미션 — 동기화 충실도 회복 (`/goal`)
 
 **목표:** 실데이터 복잡 코퍼스에서 Notion↔Obsidian 왕복을 무손실·멱등(churn 0)·fixpoint 수렴으로 만든다. v0.1.12 롤백 대신 전진 수정 확정(ADR-007).
 
@@ -49,14 +67,14 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 전체 상태 (릴리스 이력)
 
-**v0.2.0 릴리스 완료(npm 배포·EN/KR 노트 등록) + v0.2.1 문서 최신화 패치 진행.** 무손실·멱등·수렴 미션 봉합 — 충실도 측정 인프라(I1) + 불변식 안전망, 무손실 push 확장, 변환 정본화(I3). 1038 테스트.
+**v0.2.1 릴리스 완료 + v0.3.0(왕복 충실도 일괄 봉합) 태그 대기.** 실코퍼스 감사 결함 전량 봉합, 실데이터 delta-0/churn-0 실증, Node 22 상향. 1151 테스트.
 
 | 항목                     | 상태                                          |
 | ------------------------ | --------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.2.0 배포 완료 (→ v0.2.1 태그 시 갱신)      |
-| npm `im-nobsidian` (CLI) | v0.2.0 배포 완료 (→ v0.2.1 태그 시 갱신)      |
-| GitHub Release           | v0.2.0 tagged + EN/KR 노트 등록 (v0.2.1 대기) |
-| Obsidian Plugin          | v0.2.1 (BRAT 설치 가능, 커뮤니티 제출 예정)   |
+| npm `@im-nobsidian/core` | v0.2.1 배포 완료 (→ v0.3.0 태그 시 갱신)      |
+| npm `im-nobsidian` (CLI) | v0.2.1 배포 완료 (→ v0.3.0 태그 시 갱신)      |
+| GitHub Release           | v0.2.1 tagged + EN/KR 노트 등록 (v0.3.0 대기) |
+| Obsidian Plugin          | v0.3.0 (BRAT 설치 가능, 커뮤니티 제출 예정)   |
 
 ## Phase 진행률
 
@@ -125,12 +143,10 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 테스트 현황
 
-- **Core 테스트**: 858개 통과
-- **CLI 테스트**: 31개 통과
-- **Plugin 테스트**: 149개 통과
-- **전체**: 1038개 통과 (11 skip, 0 실패)
+- **전체**: 1151개 통과 (11 skip, 0 실패) — 89 테스트 파일 (3 skip)
 - **TypeScript 타입 체크**: 클린 (에러 0)
 - **플러그인 빌드**: 620KB (better-sqlite3 제거), sql-wasm.wasm 644KB 별도
+- **실데이터 E2E**: 875페이지 볼트 — 왕복 delta-0, 무변경 pull churn-0, 충돌 0
 
 ## Obsidian 플러그인 기능
 
@@ -152,6 +168,6 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 다음 목표
 
-1. **v0.2.1 릴리스** — dev→main 머지 + v0.2.1 태그 (npm publish core+CLI 자동)
+1. **v0.3.0 릴리스** — dev→main 머지 + v0.3.0 태그 (npm publish core+CLI 자동)
 2. **커뮤니티 플러그인 제출** — BRAT 베타 + `obsidianmd/obsidian-releases` PR
 3. **v1.0.0** — multi-workspace 지원 + 1000+ 노트 5분 이내 성능 최적화

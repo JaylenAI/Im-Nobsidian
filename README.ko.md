@@ -12,7 +12,7 @@
   <a href="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/v/im-nobsidian" alt="npm version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-20%2B-green" alt="Node.js" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22%2B-green" alt="Node.js" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/dm/im-nobsidian" alt="npm downloads" /></a>
 </p>
 
@@ -68,7 +68,7 @@ irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install
 
 ### 직접 설치
 
-Node.js 20+가 이미 있다면:
+Node.js 22+가 이미 있다면:
 
 ```bash
 npm install -g im-nobsidian
@@ -212,28 +212,32 @@ Obsidian 볼트                          Notion 워크스페이스
 
 ## 지원 변환 기능
 
-| 기능                                   | Push |    Pull     |
-| -------------------------------------- | :--: | :---------: |
-| 제목, 본문, 볼드/이탤릭/취소선         |  ✅  |     ✅      |
-| 코드 블록 (30+ 언어)                   |  ✅  |     ✅      |
-| 순서/비순서/체크박스 리스트            |  ✅  |     ✅      |
-| 링크 및 위키링크                       |  ✅  |     ✅      |
-| 콜아웃 / Notion 콜아웃 블록 (접기)     |  ✅  |     ✅      |
-| 수학 수식 (LaTeX, 인라인 + 블록)       |  ✅  |     ✅      |
-| 테이블                                 |  ✅  |     ✅      |
-| 구분선                                 |  ✅  |     ✅      |
-| 토글 블록                              |  ✅  |     ✅      |
-| 컬럼 레이아웃                          |  ✅  |     ✅      |
-| 색상, 밑줄                             |  ✅  |   ✅ 보존   |
-| 미디어 (audio / video / pdf / file)    |  ✅  |     ✅      |
-| 탭 블록                                |  ✅  |   ✅ 보존   |
-| 비디오 / 임베드 URL                    |  ✅  |     ✅      |
-| 프론트매터 ↔ DB 속성 (21종)            |  ✅  |     ✅      |
-| 이미지                                 |  ✅  | ✅ 다운로드 |
-| 파일 첨부 (xlsx, pdf, ipynb 등)        |  —   | ✅ 다운로드 |
-| 커버 이미지 + 아이콘                   |  —   | ✅ 다운로드 |
-| Notion 전용 블록 (bookmark, embed 등)  |  ✅  |   ✅ 보존   |
-| Notion 전용 블록 (버튼, 폼, 동기 블록) |  —   |   📌 보존   |
+| 기능                                   |       Push       |    Pull     |
+| -------------------------------------- | :--------------: | :---------: |
+| 제목, 본문, 볼드/이탤릭/취소선         |        ✅        |     ✅      |
+| 코드 블록 (30+ 언어)                   |        ✅        |     ✅      |
+| 순서/비순서/체크박스 리스트            |        ✅        |     ✅      |
+| 링크 및 위키링크                       |        ✅        |     ✅      |
+| 콜아웃 / Notion 콜아웃 블록 (접기)     |        ✅        |     ✅      |
+| 수학 수식 (LaTeX, 인라인 + 블록)       |        ✅        |     ✅      |
+| 테이블                                 |        ✅        |     ✅      |
+| 구분선                                 |        ✅        |     ✅      |
+| 토글 블록                              |        ✅        |     ✅      |
+| 컬럼 레이아웃                          |        ✅        |     ✅      |
+| 색상, 밑줄                             |        ✅        |   ✅ 보존   |
+| 미디어 (audio / video / pdf / file)    |        ✅        |     ✅      |
+| 탭 블록                                |        ✅        |   ✅ 보존   |
+| 비디오 / 임베드 URL                    |        ✅        |     ✅      |
+| 프론트매터 ↔ DB 속성 (21종)            |        ✅        |     ✅      |
+| 하이라이트 (`==마크==`)                |        ✅        |     ✅      |
+| 각주 (`[^1]`)                          |        ✅        |   ✅ 왕복   |
+| 표 열 정렬                             |        ✅        |   ✅ 왕복   |
+| 옵시디언 주석 (`%%…%%`)                | ✅ Notion 비노출 |   ✅ 복원   |
+| 이미지                                 |        ✅        | ✅ 다운로드 |
+| 파일 첨부 (xlsx, pdf, ipynb 등)        |        —         | ✅ 다운로드 |
+| 커버 이미지 + 아이콘                   |        —         | ✅ 다운로드 |
+| Notion 전용 블록 (bookmark, embed 등)  |        ✅        |   ✅ 보존   |
+| Notion 전용 블록 (버튼, 폼, 동기 블록) |        —         |   📌 보존   |
 
 ## 설정
 
@@ -279,7 +283,7 @@ due: 2026-06-30 # → Date 속성
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.2.1 (BRAT 설치 가능)                                                                                     |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.3.0 (BRAT 설치 가능)                                                                                     |
 
 ### 라이브러리로 사용하기
 
@@ -303,20 +307,23 @@ await orchestrator.sync({ dryRun: false });
 
 ## 알려진 제한사항
 
-| 제한             | 원인                                                | 대응                                        |
-| ---------------- | --------------------------------------------------- | ------------------------------------------- |
-| Notion 전용 블록 | API가 버튼/폼/동기 블록에 `unsupported` 반환        | 콜아웃 플레이스홀더로 보존                  |
-| Rate limit       | Notion 공식 제한 3 req/s                            | 내장 레이트 리미터 + 지수 백오프            |
-| 빈 줄 압축       | Notion Markdown API가 공백을 정규화                 | 의미적 차이 없음 — 옵시디언에서 동일 렌더링 |
-| 첫 Push 위키링크 | 신규 페이지 간 상호 참조가 첫 동기화 시 미해결 가능 | 다음 동기화에서 자동 해결                   |
+| 제한                      | 원인                                                | 대응                                                 |
+| ------------------------- | --------------------------------------------------- | ---------------------------------------------------- |
+| Notion 전용 블록          | API가 버튼/폼/동기 블록에 `unsupported` 반환        | 콜아웃 플레이스홀더로 보존                           |
+| Rate limit                | Notion 공식 제한 3 req/s                            | 내장 레이트 리미터 + 지수 백오프                     |
+| Soft break 블록 분리      | 단일 개행이 Notion에서 별도 문단 블록이 됨          | 의도적 분리는 빈 줄(문단 구분)로 작성                |
+| 연속 빈 문단 압축         | "빈 문단 N개" 개념이 Notion에 없어 1개로 정규화     | 의미적 차이 없음 — pull 시 블록 간격은 복원됨        |
+| 노트 임베드 (`![[노트]]`) | Notion에 노트 트랜스클루전 개념이 없음              | Notion에서는 페이지 링크로 표현, pull 시 임베드 복원 |
+| 첫 Push 위키링크          | 신규 페이지 간 상호 참조가 첫 동기화 시 미해결 가능 | 다음 동기화에서 자동 해결                            |
 
 ## 로드맵
 
 ```
-v0.2.1 ✅ 현재 — --version 동적 읽기 수정, 문서 현행화, 1038개 테스트
+v0.3.0 ✅ 현재 — 왕복 충실도 일괄 봉합(주석/각주/하이라이트/표정렬/블록간격),
+        증분 pull 누락 수정, --force 전체 스캔, Node 22+, 1151개 테스트
+v0.2.1  --version 동적 읽기 수정, 문서 현행화, 1038개 테스트
 v0.2.0  100% 무손실·멱등·수렴, 불변식 안전망, npm 배포
 v0.1.12 Pull 충실도 + 동기화 안정성, 중첩 DB→Bases, 갤러리 커버, 777개 테스트
-v0.1.11 플러그인 테스트 115개, better-sqlite3 제거, push 버그 수정, 696개 테스트
 v1.0.0  → 커뮤니티 등록, 멀티 워크스페이스, 1000+ 노트
 ```
 
@@ -329,7 +336,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1038개 테스트
+pnpm test          # 1151개 테스트
 pnpm lint
 pnpm typecheck
 ```

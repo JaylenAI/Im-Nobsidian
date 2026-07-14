@@ -15,6 +15,13 @@ export interface ProcessorMetadata {
   readonly properties?: Record<string, unknown>;
   readonly preserveMarkers?: PreserveMarker[];
   readonly images?: ImageReference[];
+  /**
+   * 원시 Notion markdown export 가 압축형(펜스 밖 빈 줄 0)이었는지 — orchestrator 가
+   * `notionEnhancedToObsidian` **이전**에 판정해 전달한다. enhanced 변환의
+   * `<empty-block/>`→빈 줄 치환이 끝난 뒤에는 BlockSpacer 가 스스로 판정할 수 없다(D1).
+   * true: 무조건 재간격 / false: 무동작 / 미지정: 내용 기반 휴리스틱 폴백.
+   */
+  readonly notionExportCompact?: boolean;
   readonly [key: string]: unknown;
 }
 

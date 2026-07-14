@@ -6,6 +6,7 @@ import type {
   PreserveMarker,
 } from "../../types/convert.js";
 import { WIKILINK_PROTOCOL } from "../../constants/markers.js";
+import { computeAnchor } from "../../utils/md-regions.js";
 
 const WIKILINK_REGEX = /(?<!!)\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
 
@@ -28,7 +29,7 @@ export class WikilinkResolver implements Processor {
 
     const resolved = input.content.replace(
       WIKILINK_REGEX,
-      (_match, target: string, display?: string) => {
+      (_match: string, target: string, display: string | undefined, offset: number) => {
         const label = display ?? target;
 
         if (this.resolve) {
@@ -38,10 +39,16 @@ export class WikilinkResolver implements Processor {
           }
         }
 
+        // F28 교훈: startIndex 0 하드코딩은 pull 재삽입 시 프론트매터 앞 오염을
+        // 낳았다. 실제 오프셋 + 텍스트 앵커를 남겨 위치 복원이 가능하게 한다.
+        const params: Record<string, string> = display
+          ? { text: target, display }
+          : { text: target };
+        params.__anchor = computeAnchor(input.content, offset);
         preserveMarkers.push({
           type: "wikilink",
-          params: display ? { text: target, display } : { text: target },
-          startIndex: 0,
+          params,
+          startIndex: offset,
         });
 
         const encodedTarget = encodeURIComponent(target);

@@ -135,8 +135,8 @@ describe("EntryEditor", () => {
 
       await editor.updateDate("test.md", "due", "2026-06-15");
 
-      const updated = matter(vaultFs.files["test.md"]!);
-      expect(updated.data.due).toBe("2026-06-15");
+      // D3: 날짜는 저작 관행대로 따옴표 없이 기록된다(gray-matter 재파싱 시 Date 객체)
+      expect(vaultFs.files["test.md"]).toContain("due: 2026-06-15\n");
     });
   });
 });

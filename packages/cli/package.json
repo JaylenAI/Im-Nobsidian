@@ -1,6 +1,6 @@
 {
   "name": "im-nobsidian",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "CLI tool for Obsidian ↔ Notion bidirectional sync",
   "type": "module",
   "bin": {
@@ -19,14 +19,13 @@
   },
   "dependencies": {
     "@im-nobsidian/core": "workspace:*",
-    "@inquirer/prompts": "^7.0.0",
+    "@inquirer/prompts": "^8.5.2",
     "chalk": "^5.6.2",
-    "commander": "^12.0.0",
+    "commander": "^15.0.0",
     "diff": "^9.0.0",
-    "ora": "^8.0.0"
+    "ora": "^9.4.1"
   },
   "devDependencies": {
-    "@types/diff": "^8.0.0",
     "tsup": "^8.0.0",
     "typescript": "^5.6.0"
   },
@@ -44,7 +43,7 @@
   "author": "hanseungheon",
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "bugs": {
     "url": "https://github.com/JaylenAI/Im-Nobsidian/issues"

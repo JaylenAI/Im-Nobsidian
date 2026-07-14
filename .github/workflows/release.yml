@@ -33,7 +33,16 @@ jobs:
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
+      # Release title = notes H1. Write "# Im-Nobsidian vX.Y.Z — Subtitle" to get a subtitle (falls back to the bare version).
+      - name: Resolve release title from notes
+        id: relmeta
+        run: |
+          NOTES="docs/07-release/RELEASE_NOTES_${{ github.ref_name }}.md"
+          TITLE=$(grep -m1 '^# ' "$NOTES" | sed -E 's/^#[[:space:]]*//; s/^Im-Nobsidian[[:space:]]+//')
+          echo "title=$TITLE" >> "$GITHUB_OUTPUT"
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          name: ${{ steps.relmeta.outputs.title }}
           body_path: docs/07-release/RELEASE_NOTES_${{ github.ref_name }}.md
