@@ -3,6 +3,45 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-07-14
+
+> 왕복 충실도 일괄 봉합 + 증분 pull 누락 수정 릴리스.
+> 실코퍼스 심층 감사(F14~F27)에서 발견된 변환·동기화 결함을 전량 봉합하고,
+> 875페이지 실데이터 E2E로 바이트 단위 왕복 무손실(delta-0)·멱등(churn-0)을 실증했다.
+> Node.js 엔진 요구가 20 → **22.13+** 로 올라간다(의존성 최신화).
+
+### Added
+
+- **`nobsi pull --force`** — 증분 감지를 건너뛰고 전체 스캔. Notion search 인덱싱 지연으로 영구 누락되던 신규 하위 페이지(F20)·신규 child DB(F21)의 사용자 복구 수단 (F22)
+- **옵시디언 주석 push 차단** — 일반 `%%주석%%`이 Notion에 노출되던 정보 유출 봉합. push 전 제거 + 보존 마커로 로컬 무손실 왕복 (F26, comment-stripper)
+- **하이라이트 왕복** — `==마크==` push 시 노션 배경색 매핑 + pull 시 `==` 문법 복원 (F24, highlight-restorer)
+- **각주 왕복** — `[^1]` 참조/정의가 push→pull 후에도 각주 문법으로 생존 (F25, footnote-guard + escape-normalizer)
+- **표 열 정렬 왕복** — `:---:`/`---:` 정렬이 pull 후 복원 (table-alignment + restorer)
+- **블록 간격 복원** — Notion 압축형 export를 원시 export 시점에 판정(`notionExportCompact` 메타데이터)해 문단/제목/리스트 간 빈 줄을 신뢰성 있게 재간격. `<empty-block/>` 유래 빈 줄로 인한 휴리스틱 오판 제거 + 같은 종류 블록 재병합 방지 (D1)
+- **첨부 중복 제거(pull)** — 제자리 quote+마커와 페이지 끝 image block의 이중 표현을 sha256+basename 대조로 감지, 재다운로드·중복 라인 생성 차단 (D6)
+
+### Fixed
+
+- **캡션 이미지 다운로드 누락** — 캡션 달린 이미지가 만료 URL로 잔존하던 문제 봉합, 로컬 다운로드 정상화 (F14)
+- **증분 pull 워터마크 갭** — search 인덱싱 지연 창에서 생성된 신규 하위 페이지가 영구 누락되던 문제 (F20)
+- **신규 child DB 영구 미발견** — 발견 캐시 게이트로 최초 full pull 이후 생긴 child DB에 복구 경로가 없던 문제. `--force` 시 재스캔 (F21)
+- **접근 불가 DB denylist** — 링크드/미공유/삭제 DB를 매 pull마다 404 재시도하며 스택트레이스를 쏟던 노이즈 차단 + 빈 폴더/.base 오염 방지
+- **노트 임베드 삼킴** — `![[노트]]`가 첨부 파일로 오분류되어 사라지던 문제, 첨부 판정을 실제 첨부 확장자로 한정 (D5)
+- **프론트매터 title 미주입·날짜 따옴표** — pull 생성 파일의 frontmatter 정합성 (D2/D3)
+- **탭 들여쓰기 정규화** — Notion export의 탭 중첩 리스트가 4-space로 정규화되어 코드블록 오파싱 제거 (D4)
+- **첨부 폴백 성공 시 ENOENT 스택트레이스 노이즈 억제** (F23)
+- **보존 마커 앵커 복원** — 마커가 원문 위치(앵커 인접)로 정확히 재주입
+
+### Changed
+
+- **Node.js 엔진 20 → 22.13+** — CI 매트릭스 20/22 → 22/24 (⚠️ Node 20 사용자는 업그레이드 필요)
+- **의존성 최신화** — @notionhq/client v5, better-sqlite3 v12, chokidar v5, lint-staged v17, typescript-eslint v8.64 등
+
+### Quality
+
+- **1151 테스트 통과**(11 skip, 0 실패), lint/typecheck/build 클린
+- **실데이터 E2E 실증** — 고문(torture) 노트 push→pull 바이트 단위 delta-0, 875페이지 전체 스캔(`--force`) 정상, 무변경 pull 869개 md 해시 완전 동일(churn-0), 충돌 0
+
 ## [0.2.1] - 2026-06-03
 
 > `nobsi --version` 정정 + 문서 최신화 패치 릴리스.
