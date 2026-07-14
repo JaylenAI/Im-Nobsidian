@@ -23,6 +23,10 @@ export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("-p, --path <paths...>", "특정 경로만 pull")
+  .option(
+    "--force",
+    "증분 감지를 건너뛰고 전체 스캔 (search 인덱싱 지연으로 누락된 신규 페이지·DB 복구)",
+  )
   .action(async (options) => {
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
@@ -41,6 +45,7 @@ export const pullCommand = new Command("pull")
       const result = await orchestrator.pull({
         dryRun: options.dryRun,
         paths: options.path,
+        force: options.force,
         onProgress: (current, total, item) => {
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);

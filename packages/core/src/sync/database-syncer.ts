@@ -22,6 +22,7 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
+import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import matter from "gray-matter";
 
 export interface DatabaseSyncResult {
@@ -366,8 +367,11 @@ export class DatabaseSyncer {
     }
 
     let markdown = "";
+    let exportCompact = false;
     try {
       const mdResult = await this.notionClient.getPageMarkdown(page.id);
+      // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
+      exportCompact = isCompactExport(mdResult.markdown);
       markdown = notionEnhancedToObsidian(mdResult.markdown);
     } catch {
       // Markdown API 실패 시 빈 내용
@@ -409,7 +413,7 @@ export class DatabaseSyncer {
         filePath,
         parentMode: "database",
       },
-      { properties },
+      { properties, notionExportCompact: exportCompact },
     );
 
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.

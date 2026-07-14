@@ -50,6 +50,27 @@ export function canonicalBody(md: string): string {
     .trim();
 }
 
+/**
+ * frontmatter 값 canonicalize — js-yaml 은 따옴표 유무에 따라 같은 날짜를 string/Date 로
+ * 달리 파싱한다. D3 이후 출력은 따옴표 없는 날짜(=Date 파싱)로 통일되므로, 스타일 차이를
+ * 값 비교에서 제거하고 "날짜 값 자체의 보존"만 단언한다. UTC 자정 Date 는 date-only 문자열로.
+ */
+function canonicalValue(v: unknown): unknown {
+  if (v instanceof Date) {
+    const iso = v.toISOString();
+    return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso;
+  }
+  if (Array.isArray(v)) return v.map(canonicalValue);
+  if (v && typeof v === "object") {
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, canonicalValue(x)]));
+  }
+  return v;
+}
+
+export function canonicalData(data: Record<string, unknown>): Record<string, unknown> {
+  return canonicalValue(data) as Record<string, unknown>;
+}
+
 export interface RoundtripResult {
   /** 입력 frontmatter(파싱된 객체). */
   readonly inputData: Record<string, unknown>;
@@ -65,16 +86,19 @@ export interface RoundtripResult {
 export function roundtrip(input: string, options?: PipelineOptions): RoundtripResult {
   const pipeline = createDefaultPipeline(options);
   const push = pipeline.convertToNotion(input, PUSH_CTX);
+  // 프로덕션 배선 재현: push 가 수집한 preserve marker 는 sync.db 에 저장됐다가
+  // pull 변환의 초기 metadata 로 주입된다(orchestrator storePreserveMarkers→convertToMarkdown).
   const output = pipeline.convertToMarkdown(push.content, PULL_CTX, {
     properties: push.properties,
+    preserveMarkers: push.preserveMarkers.length > 0 ? push.preserveMarkers : undefined,
   });
 
   const inParsed = matter(input);
   const outParsed = matter(output);
 
   return {
-    inputData: inParsed.data,
-    outputData: outParsed.data,
+    inputData: canonicalData(inParsed.data),
+    outputData: canonicalData(outParsed.data),
     inputBody: canonicalBody(inParsed.content),
     outputBody: canonicalBody(outParsed.content),
   };

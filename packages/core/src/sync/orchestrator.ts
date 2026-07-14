@@ -42,6 +42,7 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
+import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/접근 불가/일시 오류를 명시적으로 구분한다. */
 type DiscoveredDbOutcome =
@@ -51,6 +52,14 @@ type DiscoveredDbOutcome =
 
 /** 접근 불가 DB denylist 를 보존하는 상태 메타 키. */
 const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
+
+/**
+ * 증분 pull 워터마크 안전창(F20). Notion search 는 인덱싱 지연이 있어 생성 직후 페이지가
+ * 결과에 안 잡히는데, 워터마크를 그대로 쓰면 다음 pull 부터 last_edited < since 로
+ * 영원히 제외된다(실측 재현: 신규 하위 페이지가 편집 전까지 3회 연속 미발견).
+ * 이 창만큼 되돌려 조회하면 지연 인덱싱분을 다음 pull 이 회수한다.
+ */
+const INCREMENTAL_SAFETY_WINDOW_MS = 15 * 60_000;
 
 /** 전략 → 선택지 매핑. propagateResolution 이 push 방향을 정할 때 사용. */
 function strategyToChoice(strategy: ConflictStrategy): ResolutionChoice {
@@ -430,7 +439,12 @@ export class SyncOrchestrator {
       // 본문 페이지 변경이 없어도 디스커버리된 DB 행은 새로 기록될 수 있다. 그 행들의
       // 본문 링크·frontmatter relation 을 finalize() 의 resolveNotionLinks 가 해소한다(M2).
       // (기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감 — emptyResult 와 동일)
-      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
+      const dbDiscovery = await this.pullDiscoveredDatabases(
+        writtenPaths,
+        failed,
+        conflicts,
+        options?.force === true,
+      );
       return finalize(dbDiscovery.created, dbDiscovery.updated, 0);
     }
     if (filtered.length === 0) {
@@ -588,7 +602,12 @@ export class SyncOrchestrator {
     }
 
     {
-      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts);
+      const dbDiscovery = await this.pullDiscoveredDatabases(
+        writtenPaths,
+        failed,
+        conflicts,
+        options?.force === true,
+      );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
     }
@@ -708,7 +727,7 @@ export class SyncOrchestrator {
       let remoteContent = "";
       if (record.notionPageId) {
         try {
-          remoteContent = await this.fetchPageMarkdown(record.notionPageId);
+          remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
         } catch {
           // 페이지가 삭제된 경우
         }
@@ -827,6 +846,7 @@ export class SyncOrchestrator {
     writtenPaths: string[],
     failed: FailedOperation[],
     conflicts: Conflict[],
+    forceRediscovery = false,
   ): Promise<{ created: number; updated: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0 };
 
@@ -870,8 +890,9 @@ export class SyncOrchestrator {
       };
 
       // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
-      //     캐시가 비었을 때(최초 full pull)만 수행한다.
-      if (dbConfigs.length === 0) {
+      //     캐시가 비었을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
+      //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
+      if (dbConfigs.length === 0 || forceRediscovery) {
         const discovered = await this.discoverChildDatabases();
         for (const { dbId, parentPageId } of discovered) {
           const nohyph = dbId.replace(/-/g, "");
@@ -1131,7 +1152,7 @@ export class SyncOrchestrator {
       localFileSize: null,
     });
 
-    await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images);
+    await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images, path);
 
     const hash = computeHash(content);
     const fileStat = await this.vaultFs.getFileStat(path);
@@ -1188,7 +1209,11 @@ export class SyncOrchestrator {
 
     await this.pushUpdatePage(record.notionPageId, conversionResult.content, record.baseSnapshot);
 
-    await this.imageHandler.uploadAndAppendImages(record.notionPageId, conversionResult.images);
+    await this.imageHandler.uploadAndAppendImages(
+      record.notionPageId,
+      conversionResult.images,
+      path,
+    );
 
     let propsToUpdate: Record<string, unknown> | undefined;
     if (
@@ -1478,7 +1503,13 @@ export class SyncOrchestrator {
   private async detectRemoteChangesIncremental(since: string): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
-    const recentPages = await this.notionClient.searchRecentPages(since);
+    // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
+    // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
+    const sinceMs = Date.parse(since);
+    const safeSince = Number.isFinite(sinceMs)
+      ? new Date(sinceMs - INCREMENTAL_SAFETY_WINDOW_MS).toISOString()
+      : since;
+    const recentPages = await this.notionClient.searchRecentPages(safeSince);
 
     for (const page of recentPages) {
       const record = this.stateDb.getByNotionId(page.id);
@@ -1527,7 +1558,7 @@ export class SyncOrchestrator {
 
     const hasChildPages = await this.pageHasChildContainers(pageId);
 
-    const markdown = await this.fetchPageMarkdown(pageId);
+    const { content: markdown, compact: exportCompact } = await this.fetchPageMarkdown(pageId);
     const hasContent = markdown.trim().length > 0;
 
     let filePath: string;
@@ -1558,11 +1589,16 @@ export class SyncOrchestrator {
     } else {
       properties = this.notionClient.extractProperties(page);
     }
-    properties.title = title;
+    // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 —
+    // 원본에 없던 `title:` 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize·`(1)` 접미사로
+    // 파일명이 제목과 달라진 경우만 보존한다(DB 모드 title 은 Name 컬럼 데이터라 항상 유지).
+    if (this.isDatabaseMode || extractTitle(filePath) !== title) {
+      properties.title = title;
+    }
 
     let processedMarkdown = markdown;
     if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
+      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
       processedMarkdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
@@ -1579,7 +1615,7 @@ export class SyncOrchestrator {
         filePath,
         parentMode: this.config.notion.parentMode,
       },
-      { properties },
+      { properties, notionExportCompact: exportCompact },
     );
 
     // 부모 해소는 파일 기록 전에 끝낸다. parent 가 block 일 때 resolveBlockToPageId 가
@@ -1650,7 +1686,8 @@ export class SyncOrchestrator {
     if (!record) return {};
 
     const page = await this.notionClient.getPage(change.pageId);
-    let markdown = await this.fetchPageMarkdown(change.pageId);
+    const fetched = await this.fetchPageMarkdown(change.pageId);
+    let markdown = fetched.content;
 
     const title = this.notionClient.extractTitle(page);
 
@@ -1663,10 +1700,13 @@ export class SyncOrchestrator {
     } else {
       properties = this.notionClient.extractProperties(page);
     }
-    properties.title = title;
+    // D2: pullCreate 와 동일 — 파일명으로 복원 가능한 제목은 주입하지 않는다.
+    if (this.isDatabaseMode || extractTitle(record.obsidianPath) !== title) {
+      properties.title = title;
+    }
 
     if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
+      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, change.pageId);
       markdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
@@ -1684,7 +1724,11 @@ export class SyncOrchestrator {
         filePath: record.obsidianPath,
         parentMode: this.config.notion.parentMode,
       },
-      { properties, preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined },
+      {
+        properties,
+        preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined,
+        notionExportCompact: fetched.compact,
+      },
     );
 
     let localContent: string;
@@ -2005,17 +2049,23 @@ export class SyncOrchestrator {
     );
   }
 
-  private async fetchPageMarkdown(pageId: string): Promise<string> {
+  private async fetchPageMarkdown(pageId: string): Promise<{ content: string; compact: boolean }> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
         this.collectInlineDbRefs(pageId, result.markdown);
-        return this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown));
+        return {
+          content: this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown)),
+          // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
+          // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
+          compact: isCompactExport(result.markdown),
+        };
       } catch {
         // Markdown API 실패 시 blocks API fallback
       }
     }
-    return this.blockConverter.notionBlocksToMarkdown(pageId);
+    // blocks-API 폴백 산출물은 이미 표준 간격 — 재간격 불필요
+    return { content: await this.blockConverter.notionBlocksToMarkdown(pageId), compact: false };
   }
 
   // Markdown API는 인라인 데이터베이스를 다음처럼 렌더한다(컬럼/synced_block 내부 포함):

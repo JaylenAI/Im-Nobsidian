@@ -2,7 +2,7 @@ import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/con
 import { MARKER_BRAND_RE } from "../../constants/markers.js";
 
 const LOCAL_IMAGE_MARKER_REGEX = new RegExp(
-  `>\\s*📎\\s*[^\\n]*\\n>\\s*%%\\s*${MARKER_BRAND_RE}:local-image:([^\\s]+)\\s*%%`,
+  `>\\s*📎\\s*[^\\n]*\\n>\\s*%%\\s*${MARKER_BRAND_RE}:local-(?:image|file):([^\\s]+)\\s*%%`,
   "g",
 );
 

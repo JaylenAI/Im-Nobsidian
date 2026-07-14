@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ImageHandler } from "../../src/sync/image-handler.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
@@ -104,6 +105,92 @@ describe("ImageHandler", () => {
 
     expect(result.downloads).toHaveLength(2);
     expect(mockFs.writeBinary).toHaveBeenCalledTimes(2);
+  });
+});
+
+// D6: push 가 페이지 끝에 append 한 임베드 이미지 사본은 pull 에서 다시 받으면 노트 꼬리에
+// 중복 ![[attachments/...]] 로 유입된다. registry 해시 + 본문 마커 파일명이 모두 일치하면
+// 사본으로 판정해 라인째 버리고 디스크에도 쓰지 않는다.
+describe("ImageHandler — pull 사본 dedup (D6)", () => {
+  const bytes = Buffer.from("probe-image-bytes");
+  const fullHash = createHash("sha256").update(bytes).digest("hex");
+  const tailEmbed = "![](https://prod-files-secure.s3.us-west-2.amazonaws.com/tail-copy.png)";
+  // 원시 Notion export 는 밑줄 등을 백슬래시 이스케이프한다 — unescape 매칭 검증 겸용.
+  const inPlacePair = "> 📎 probe\\_image.png\n> %% im-nobsidian:local-image:probe\\_image.png %%";
+
+  let mockFs: VaultFS;
+
+  beforeEach(() => {
+    mockFs = createMockVaultFs();
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      headers: new Map([["content-type", "image/png"]]),
+      arrayBuffer: () =>
+        Promise.resolve(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength)),
+    });
+  });
+
+  function handlerWith(entries: { localPath: string; fileHash: string }[]): ImageHandler {
+    const stateDb = {
+      getFilesByPageId: vi.fn().mockReturnValue(entries),
+    };
+    return new ImageHandler(
+      mockFs,
+      "attachments",
+      undefined,
+      undefined,
+      undefined,
+      stateDb as never,
+    );
+  }
+
+  it("registry 해시·마커 파일명 일치 시 꼬리 사본 라인을 버리고 저장하지 않는다", async () => {
+    const handler = handlerWith([
+      { localPath: "__e2e_probe__/probe_image.png", fileHash: fullHash },
+    ]);
+    const markdown = `${inPlacePair}\n${tailEmbed}\n`;
+
+    const result = await handler.downloadAllImages(markdown, "테스트", "page-1");
+
+    expect(result.downloads).toHaveLength(0);
+    expect(result.content).not.toContain("prod-files-secure");
+    expect(result.content).not.toContain("attachments/");
+    expect(result.content).toContain(inPlacePair);
+    expect(mockFs.writeBinary).not.toHaveBeenCalled();
+  });
+
+  it("본문에 같은 파일의 마커가 없으면 정상 다운로드한다", async () => {
+    const handler = handlerWith([
+      { localPath: "__e2e_probe__/probe_image.png", fileHash: fullHash },
+    ]);
+
+    const result = await handler.downloadAllImages(`${tailEmbed}\n`, "테스트", "page-1");
+
+    expect(result.downloads).toHaveLength(1);
+    expect(result.content).toContain("![[attachments/");
+  });
+
+  it("해시가 다르면(다른 이미지) 마커가 있어도 정상 다운로드한다", async () => {
+    const handler = handlerWith([
+      { localPath: "__e2e_probe__/probe_image.png", fileHash: "0".repeat(64) },
+    ]);
+    const markdown = `${inPlacePair}\n${tailEmbed}\n`;
+
+    const result = await handler.downloadAllImages(markdown, "테스트", "page-1");
+
+    expect(result.downloads).toHaveLength(1);
+    expect(result.content).toContain("![[attachments/");
+  });
+
+  it("pageId 미전달 시 registry 를 조회하지 않고 기존 동작을 유지한다", async () => {
+    const handler = handlerWith([
+      { localPath: "__e2e_probe__/probe_image.png", fileHash: fullHash },
+    ]);
+    const markdown = `${inPlacePair}\n${tailEmbed}\n`;
+
+    const result = await handler.downloadAllImages(markdown, "테스트");
+
+    expect(result.downloads).toHaveLength(1);
   });
 });
 

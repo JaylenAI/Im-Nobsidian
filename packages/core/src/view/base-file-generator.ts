@@ -21,9 +21,10 @@ export type BasesViewType = "table" | "cards" | "list";
  * Notion 뷰 타입 → Obsidian Bases 뷰 타입 매핑(SSOT).
  *
  * `null` = Bases 에 대응 뷰가 없어 `.base` 로 표현 불가. 이 경우 해당 뷰는 `.base` 에서
- * 누락되므로, 사이드카(`<db>.notion.json`)가 원본 뷰 설정을 무손실 보존한다
- * (Notion API 는 뷰 생성/수정을 지원하지 않아 뷰는 pull-authoritative — push 로 되돌릴 수
- * 없으므로 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다).
+ * 누락되므로, 사이드카(`<db>.notion.json`)가 원본 뷰 설정을 무손실 보존한다.
+ * 뷰는 현재 pull-authoritative — Notion API 가 2026-03-19 뷰 생성/수정/삭제를 열었지만
+ * 본 프로젝트는 아직 뷰 write-back 을 구현하지 않았다(로드맵 항목). push 로 되돌릴 수
+ * 없는 동안 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다.
  */
 export const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
   table: "table",

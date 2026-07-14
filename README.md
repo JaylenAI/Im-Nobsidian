@@ -12,7 +12,7 @@
   <a href="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml"><img src="https://github.com/JaylenAI/Im-Nobsidian/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/v/im-nobsidian" alt="npm version" /></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License: MIT" /></a>
-  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-20%2B-green" alt="Node.js" /></a>
+  <a href="https://nodejs.org"><img src="https://img.shields.io/badge/Node.js-22%2B-green" alt="Node.js" /></a>
   <a href="https://www.npmjs.com/package/im-nobsidian"><img src="https://img.shields.io/npm/dm/im-nobsidian" alt="npm downloads" /></a>
 </p>
 
@@ -70,7 +70,7 @@ irm https://raw.githubusercontent.com/JaylenAI/Im-Nobsidian/main/scripts/install
 
 ### Manual Install
 
-If you already have Node.js 20+:
+If you already have Node.js 22+:
 
 ```bash
 npm install -g im-nobsidian
@@ -214,28 +214,32 @@ When both sides change the same file:
 
 ## Supported Conversions
 
-| Feature                                         | Push |     Pull     |
-| ----------------------------------------------- | :--: | :----------: |
-| Headings, paragraphs, bold/italic/strikethrough |  ✅  |      ✅      |
-| Code blocks (30+ languages)                     |  ✅  |      ✅      |
-| Ordered / unordered / checkbox lists            |  ✅  |      ✅      |
-| Links and wikilinks                             |  ✅  |      ✅      |
-| Callouts / Notion callout blocks (collapsible)  |  ✅  |      ✅      |
-| Math equations (LaTeX, inline + block)          |  ✅  |      ✅      |
-| Tables                                          |  ✅  |      ✅      |
-| Dividers                                        |  ✅  |      ✅      |
-| Toggle blocks                                   |  ✅  |      ✅      |
-| Column layouts                                  |  ✅  |      ✅      |
-| Colors and underlines                           |  ✅  | ✅ Preserved |
-| Media (audio / video / pdf / file)              |  ✅  |      ✅      |
-| Tab blocks                                      |  ✅  | ✅ Preserved |
-| Video / embed URLs                              |  ✅  |      ✅      |
-| Frontmatter ↔ database properties (21 types)    |  ✅  |      ✅      |
-| Images                                          |  ✅  | ✅ Download  |
-| File attachments (xlsx, pdf, ipynb, etc.)       |  —   | ✅ Download  |
-| Cover images + icons                            |  —   | ✅ Download  |
-| Notion-only blocks (bookmark, embed, etc.)      |  ✅  | ✅ Preserved |
-| Notion-only blocks (button, form, synced block) |  —   | 📌 Preserved |
+| Feature                                         |        Push         |     Pull      |
+| ----------------------------------------------- | :-----------------: | :-----------: |
+| Headings, paragraphs, bold/italic/strikethrough |         ✅          |      ✅       |
+| Code blocks (30+ languages)                     |         ✅          |      ✅       |
+| Ordered / unordered / checkbox lists            |         ✅          |      ✅       |
+| Links and wikilinks                             |         ✅          |      ✅       |
+| Callouts / Notion callout blocks (collapsible)  |         ✅          |      ✅       |
+| Math equations (LaTeX, inline + block)          |         ✅          |      ✅       |
+| Tables                                          |         ✅          |      ✅       |
+| Dividers                                        |         ✅          |      ✅       |
+| Toggle blocks                                   |         ✅          |      ✅       |
+| Column layouts                                  |         ✅          |      ✅       |
+| Colors and underlines                           |         ✅          | ✅ Preserved  |
+| Media (audio / video / pdf / file)              |         ✅          |      ✅       |
+| Tab blocks                                      |         ✅          | ✅ Preserved  |
+| Video / embed URLs                              |         ✅          |      ✅       |
+| Frontmatter ↔ database properties (21 types)    |         ✅          |      ✅       |
+| Highlights (`==mark==`)                         |         ✅          |      ✅       |
+| Footnotes (`[^1]`)                              |         ✅          | ✅ Round-trip |
+| Table column alignment                          |         ✅          | ✅ Round-trip |
+| Obsidian comments (`%%…%%`)                     | ✅ Hidden in Notion |  ✅ Restored  |
+| Images                                          |         ✅          |  ✅ Download  |
+| File attachments (xlsx, pdf, ipynb, etc.)       |          —          |  ✅ Download  |
+| Cover images + icons                            |          —          |  ✅ Download  |
+| Notion-only blocks (bookmark, embed, etc.)      |         ✅          | ✅ Preserved  |
+| Notion-only blocks (button, form, synced block) |          —          | 📌 Preserved  |
 
 ## Configuration
 
@@ -288,7 +292,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.2.1 (BRAT install)                                                                                       |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.3.0 (BRAT install)                                                                                       |
 
 ### Using as a Library
 
@@ -321,20 +325,24 @@ await orchestrator.sync({ dryRun: false });
 
 ## Known Limitations
 
-| Limitation             | Reason                                                           | Workaround                                               |
-| ---------------------- | ---------------------------------------------------------------- | -------------------------------------------------------- |
-| Notion-only blocks     | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                        |
-| Rate limit             | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff           |
-| Blank line compression | Notion Markdown API normalizes whitespace                        | No semantic difference — renders identically in Obsidian |
-| First-push wikilinks   | Cross-references between new pages may not resolve on first sync | Resolved automatically on subsequent syncs               |
+| Limitation                | Reason                                                           | Workaround                                                      |
+| ------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
+| Notion-only blocks        | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                               |
+| Rate limit                | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff                  |
+| Soft breaks split blocks  | A single newline becomes a separate paragraph block in Notion    | Use hard paragraph breaks (blank line) for intended splits      |
+| Consecutive blank lines   | Notion has no "N empty paragraphs" concept — collapses to one    | No semantic difference — spacing is restored on pull            |
+| Note embeds (`![[note]]`) | Notion has no note-transclusion concept                          | Represented as a page link in Notion; restored as embed on pull |
+| First-push wikilinks      | Cross-references between new pages may not resolve on first sync | Resolved automatically on subsequent syncs                      |
 
 ## Roadmap
 
 ```
-v0.2.1 ✅ Current — --version dynamic read fix, docs refresh, 1038 tests
+v0.3.0 ✅ Current — round-trip fidelity sweep (comments/footnotes/highlights/table
+        alignment/block spacing), incremental-pull gap fixes, --force full scan,
+        Node 22+, 1151 tests
+v0.2.1  --version dynamic read fix, docs refresh, 1038 tests
 v0.2.0  100% lossless·idempotent·convergent, invariant safety net, npm publish
 v0.1.12 Pull fidelity + sync stability, nested DB→Bases, gallery covers, 777 tests
-v0.1.11 Plugin tests 115, better-sqlite3 removed, push bug fix, 696 tests
 v1.0.0  → Community plugin submission, multi-workspace, 1000+ notes
 ```
 
@@ -347,7 +355,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1038 tests
+pnpm test          # 1151 tests
 pnpm lint
 pnpm typecheck
 

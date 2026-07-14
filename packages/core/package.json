@@ -1,6 +1,6 @@
 {
   "name": "@im-nobsidian/core",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Core sync engine for Obsidian ↔ Notion bidirectional synchronization",
   "author": "hanseungheon",
   "type": "module",
@@ -24,11 +24,11 @@
     "clean": "rm -rf dist *.tsbuildinfo"
   },
   "dependencies": {
-    "@notionhq/client": "^5.21.0",
+    "@notionhq/client": "^5.23.1",
     "@tryfabric/martian": "^1.2.0",
     "async-sema": "^3.1.0",
-    "better-sqlite3": "^11.0.0",
-    "chokidar": "^4.0.0",
+    "better-sqlite3": "^12.11.1",
+    "chokidar": "^5.0.0",
     "gray-matter": "^4.0.0",
     "notion-to-md": "^3.1.0",
     "zod": "^3.23.0"
@@ -52,7 +52,7 @@
   ],
   "license": "MIT",
   "engines": {
-    "node": ">=20"
+    "node": ">=22.13.0"
   },
   "bugs": {
     "url": "https://github.com/JaylenAI/Im-Nobsidian/issues"
