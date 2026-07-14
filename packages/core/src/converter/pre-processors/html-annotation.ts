@@ -1,8 +1,12 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE, compactMarker } from "../../constants/markers.js";
+import { mapOutsideCodeFences } from "../../utils/md-regions.js";
 
 /** `<u>밑줄</u>` (Obsidian·HTML 관용) — push 시 underline 마커로 승격. */
 const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
+
+/** `==하이라이트==` — 같은 줄 내, `===`(3연속)와 구분. */
+const HIGHLIGHT_REGEX = /(?<!=)==([^=\n]+?)==(?!=)/g;
 
 /**
  * 색상 span(`<span class="notion-red">` / `notion-yellow-bg`) — pull(notion-to-md) 경로가 만든
@@ -64,6 +68,16 @@ export class InlineAnnotationPreserver implements Processor {
         const color = bg ? `${base}_background` : base;
         return `${compactMarker(`color:${color}`)}${text}%%/color%%`;
       },
+    );
+
+    // ==하이라이트== → 노랑 배경 (F24). Obsidian 하이라이트의 유일한 자연 대응이
+    // Notion yellow 배경이다. 색상명은 pull 경로(Notion md export)가 쓰는
+    // `yellow_bg` 로 맞춰 HighlightRestorer 와 왕복 대칭을 이룬다.
+    content = mapOutsideCodeFences(content, (segment) =>
+      segment.replace(
+        HIGHLIGHT_REGEX,
+        (_m, text: string) => `${compactMarker("color:yellow_bg")}${text}%%/color%%`,
+      ),
     );
 
     return { content, metadata: input.metadata };
