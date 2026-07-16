@@ -43,6 +43,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = unescapeNotionChars(result);
   result = unescapeWikilinkBrackets(result);
   result = ensureCalloutContinuity(result);
+  result = separateAdjacentCallouts(result);
 
   return result;
 }
@@ -248,15 +249,25 @@ function normalizeCodeBlockToggles(content: string): string {
 
 // body: 내부에 어떤 컨테이너 시작 태그도 없는(=가장 안쪽) 구간. 부정선읽기가 START 태그만
 // 차단하므로 비탐욕 *? 가 자신의 닫는 태그에서 멈춘다(</callout> 등은 차단되지 않음).
-const NO_CONTAINER_BODY = "(?:(?!<details>|<callout|<columns>)[\\s\\S])*?";
+// `<details` 는 `>` 없이 차단한다 — 색상 토글은 `<details color="green_bg">` 처럼 속성이
+// 붙어 오므로(실측: RAG 구축 방법 페이지) 리터럴 `<details>` 만 차단하면 속성형 중첩이
+// innermost 판정을 뚫고 바깥-열림↔안쪽-닫힘 mis-pair 가 된다.
+const NO_CONTAINER_BODY = "(?:(?!<details|<callout|<columns)[\\s\\S])*?";
 
 // <summary> 제목: 첫 </summary> 에서 반드시 멈추고 중첩 컨테이너 시작 태그를 넘지 않는다.
 // 단순 `[\s\S]*?` 는 본문이 닫는 태그에 도달 못 할 때 첫 </summary> 너머로 백트랙해
 // 바깥 토글을 안쪽 </summary>/</details> 와 잘못 짝짓는다(중첩 토글 mis-pair, 결함②).
-const SUMMARY_TITLE = "((?:(?!<\\/summary>|<details>|<summary>)[\\s\\S])*?)";
+const SUMMARY_TITLE = "((?:(?!<\\/summary>|<details|<summary>)[\\s\\S])*?)";
 
+// <summary> 는 선택이다 — 제목 없는 빈 토글은 `<details>\n\n</details>` 로 오고(실측:
+// AI Music 페이지), 색상 토글은 여는 태그에 속성이 붙는다. 둘 다 필수로 요구하면
+// 매치 실패 → 원문 HTML 태그가 볼트에 그대로 누수된다.
+// 여는 태그 뒤는 `[ \t]*\n?` 로 개행 하나만 넘는다 — 무조건 `\s*` 로 삼키면 summary 없는
+// 토글에서 첫 본문 줄의 구조적 탭까지 먹어 dedent 공통최소값을 0 으로 무너뜨린다(실 push
+// 왕복 프로브 실측: `> \t본문` 탭 누수). summary 앞 공백·빈 줄은 옵션 그룹 안에서만
+// 허용한다 — summary 부재 시 그룹 전체가 백트래킹되어 본문 들여쓰기가 온전히 남는다.
 const INNERMOST_DETAILS_RE = new RegExp(
-  `([\\t ]*)<details>\\s*<summary>${SUMMARY_TITLE}<\\/summary>(${NO_CONTAINER_BODY})<\\/details>`,
+  `([\\t ]*)<details[^>]*>[ \\t]*\\n?(?:\\s*<summary>${SUMMARY_TITLE}<\\/summary>)?(${NO_CONTAINER_BODY})<\\/details>`,
   "g",
 );
 const INNERMOST_CALLOUT_RE = new RegExp(
@@ -264,10 +275,11 @@ const INNERMOST_CALLOUT_RE = new RegExp(
   "g",
 );
 const INNERMOST_COLUMNS_RE = new RegExp(
-  `([\\t ]*)<columns>\\n?(${NO_CONTAINER_BODY})<\\/columns>`,
+  `([\\t ]*)<columns[^>]*>\\n?(${NO_CONTAINER_BODY})<\\/columns>`,
   "g",
 );
-const COLUMN_WRAP_RE = /[\t ]*<column>\n?([\s\S]*?)[\t ]*<\/column>\n?/g;
+// `(?!s)` — `<column` 이 `<columns` 를 삼키지 않게 구분(속성 허용은 width_ratio 대비)
+const COLUMN_WRAP_RE = /[\t ]*<column(?!s)[^>]*>\n?([\s\S]*?)[\t ]*<\/column>\n?/g;
 
 // 캡처한 선행 들여쓰기를 변환 결과의 비어있지-않은 모든 줄에 다시 입힌다.
 function reindentLines(text: string, indent: string): string {
@@ -283,11 +295,14 @@ function reindentLines(text: string, indent: string): string {
 // `> > ` 형태의 올바른 Obsidian 중첩이 된다.
 function toggleToCallout(title: string, rawBody: string): string {
   const body = dedentContainerBody(rawBody);
+  // 제목 없는 빈 토글은 머리줄만 남긴다(`> [!toggle]- ` 꼬리 공백·빈 `>` 줄 방지)
+  const head = `> [!toggle]- ${title.trim()}`.trimEnd();
+  if (body.trim() === "") return head;
   const calloutBody = body
     .split("\n")
     .map((line) => (line.trim() ? `> ${line}` : ">"))
     .join("\n");
-  return `> [!toggle]- ${title.trim()}\n${calloutBody}`;
+  return `${head}\n${calloutBody}`;
 }
 
 // <columns>/<column> → 평탄화. Obsidian 엔 칼럼 문법이 없어 각 칼럼 본문을 dedent 로
@@ -313,13 +328,13 @@ function convertContainers(content: string): string {
   let safety = 0;
   while (
     safety++ < 2000 &&
-    (result.includes("<details>") || result.includes("<callout") || result.includes("<columns>"))
+    (result.includes("<details") || result.includes("<callout") || result.includes("<columns"))
   ) {
     const before = result;
     result = result.replace(
       INNERMOST_DETAILS_RE,
-      (_m, indent: string, title: string, body: string) =>
-        reindentLines(toggleToCallout(title, body), indent),
+      (_m, indent: string, title: string | undefined, body: string) =>
+        reindentLines(toggleToCallout(title ?? "", body), indent),
     );
     result = result.replace(INNERMOST_CALLOUT_RE, (_m, indent: string, body: string) =>
       reindentLines(calloutBodyToObsidian(body), indent),
@@ -507,7 +522,9 @@ function convertSpans(content: string): string {
 }
 
 function convertTogglesToHtml(content: string): string {
-  const calloutToggleRe = /^> \[!toggle\]-\s*(.+)\n((?:>.*\n?)*)/gm;
+  // 제목 `(.*)`: 빈 제목 토글(`> [!toggle]-`)도 매치해야 pull 산출물이 왕복 수렴한다.
+  // 간격은 `[ \t]*` — `\s*` 는 빈 제목에서 개행을 삼켜 본문 첫 줄을 제목으로 오파싱한다.
+  const calloutToggleRe = /^> \[!toggle\]-[ \t]*(.*)\n?((?:>.*\n?)*)/gm;
 
   let result = content;
   let prev = "";
@@ -548,6 +565,11 @@ function convertTogglesToHtml(content: string): string {
   }
 
   result = result.replace(startRe, "").replace(endRe, "");
+  // 토글 정규식이 본문 마지막 개행까지 소비하므로, 닫는 태그 직후에 다음 블록이
+  // 개행 없이 붙을 수 있다(`</details>[🎬 video](url)` — 실 push 프로브에서 Notion 이
+  // 그 줄의 video 태그를 통째로 폐기함을 실측). 줄머리 닫는 태그 뒤에 비개행 문자가
+  // 이어지면 개행을 복원한다.
+  result = result.replace(/^(<\/details>)(?!\n|$)/gm, "$1\n");
   return result;
 }
 
@@ -672,6 +694,31 @@ function cleanInlineColorAttrs(content: string): string {
   return content.replace(/\s*\{color="[^"]*"\}/g, "");
 }
 
+// 인접 컨테이너 블록 분리 — Notion markdown 은 블록들을 빈 줄 없이 연속 줄로 내보내므로
+// 변환된 콜아웃/토글이 연달아 붙으면 Obsidian 이 하나의 blockquote 로 융합해 두 번째
+// 콜아웃 헤드가 첫 콜아웃의 본문 텍스트가 된다. 그 상태로 push 하면 두 번째 토글이
+// 첫 토글 안의 리터럴 `\[!toggle\]-` 문단으로 Notion 에 실제 오염된다(실 push 왕복
+// 프로브 실측). 콜아웃 헤드 직전 줄이 같은 깊이 이상의 quote 줄이면 한 단계 얕은
+// quote 구분줄을 삽입한다 — 깊이 1 은 빈 줄, 깊이 2 는 `>` (안쪽만 닫고 바깥은 유지).
+const CALLOUT_HEAD_RE = /^((?:> )*)> \[!\w+\][-+]?/;
+
+function separateAdjacentCallouts(content: string): string {
+  const lines = content.split("\n");
+  const out: string[] = [];
+  for (const line of lines) {
+    const head = CALLOUT_HEAD_RE.exec(line);
+    if (head && out.length > 0) {
+      const parentPrefix = head[1]!;
+      const prev = out[out.length - 1]!;
+      if (prev.startsWith(`${parentPrefix}>`)) {
+        out.push(parentPrefix.trimEnd());
+      }
+    }
+    out.push(line);
+  }
+  return out.join("\n");
+}
+
 function removeEmptyBlocks(content: string): string {
   return content.replace(NOTION_EMPTY_BLOCK_RE, "\n");
 }
@@ -749,21 +796,17 @@ const OBSIDIAN_MEDIA_FILE_RE = /\[📎\s*([^\]]*)\]\(([^)]+)\)/g;
 function restoreMediaTags(content: string): string {
   let result = content;
 
-  result = result.replace(OBSIDIAN_MEDIA_AUDIO_RE, (_match, caption: string, src: string) => {
-    return `<audio src="${src}">${caption}</audio>`;
-  });
+  // pull 은 캡션 없는 미디어에 타입명 플레이스홀더(`[🎬 video](src)`)를 붙인다.
+  // 그대로 복원하면 Notion 에 "video" 캡션이 실제로 생기는 단방향 drift — 빈 캡션으로 환원.
+  const restore = (tag: string) => (_match: string, caption: string, src: string) => {
+    const cap = caption.trim() === tag ? "" : caption;
+    return `<${tag} src="${src}">${cap}</${tag}>`;
+  };
 
-  result = result.replace(OBSIDIAN_MEDIA_VIDEO_RE, (_match, caption: string, src: string) => {
-    return `<video src="${src}">${caption}</video>`;
-  });
-
-  result = result.replace(OBSIDIAN_MEDIA_PDF_RE, (_match, caption: string, src: string) => {
-    return `<pdf src="${src}">${caption}</pdf>`;
-  });
-
-  result = result.replace(OBSIDIAN_MEDIA_FILE_RE, (_match, caption: string, src: string) => {
-    return `<file src="${src}">${caption}</file>`;
-  });
+  result = result.replace(OBSIDIAN_MEDIA_AUDIO_RE, restore("audio"));
+  result = result.replace(OBSIDIAN_MEDIA_VIDEO_RE, restore("video"));
+  result = result.replace(OBSIDIAN_MEDIA_PDF_RE, restore("pdf"));
+  result = result.replace(OBSIDIAN_MEDIA_FILE_RE, restore("file"));
 
   return result;
 }
@@ -771,7 +814,7 @@ function restoreMediaTags(content: string): string {
 const OBSIDIAN_TAB_RE = /^> \[!tab\]\s*(.+)\n((?:> .*\n?)*)/gm;
 
 function restoreTabBlocks(content: string): string {
-  return content.replace(OBSIDIAN_TAB_RE, (_match, title: string, body: string) => {
+  const result = content.replace(OBSIDIAN_TAB_RE, (_match, title: string, body: string) => {
     const unquoted = body
       .split("\n")
       .map((line) => line.replace(/^> /, ""))
@@ -779,6 +822,8 @@ function restoreTabBlocks(content: string): string {
       .trim();
     return `<tab title="${title}">${unquoted}</tab>`;
   });
+  // 토글과 동일한 줄 융합 방지 — 정규식이 마지막 개행을 소비한 채 한 줄 태그로 치환된다.
+  return result.replace(/(<\/tab>)(?!\n|$)/g, "$1\n");
 }
 
 // 앞에 즉시 인접(공백 없음)한 가시 링크 `[label](url)` 가 있으면 마커와 함께 소비한다.

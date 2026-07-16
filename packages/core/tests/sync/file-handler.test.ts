@@ -1,5 +1,12 @@
-import { describe, it, expect } from "vitest";
-import { getBlockType, getMimeType } from "../../src/sync/file-handler.js";
+import { describe, it, expect, vi } from "vitest";
+import { FileHandler, getBlockType, getMimeType } from "../../src/sync/file-handler.js";
+import type { NotionClient } from "../../src/notion/client.js";
+import type { IStateDB } from "../../src/state/state-db-interface.js";
+import {
+  createMockVaultFs,
+  createMockStateDb,
+  createMockNotionClient,
+} from "../helpers/mock-orchestrator.js";
 
 describe("FileHandler", () => {
   describe("getBlockType", () => {
@@ -95,6 +102,51 @@ describe("FileHandler", () => {
       expect(getMimeType("code.py")).toBe("text/x-python");
       expect(getMimeType("data.json")).toBe("application/json");
       expect(getMimeType("data.csv")).toBe("text/csv");
+    });
+  });
+
+  // Obsidian 어댑터는 .base 를 걸러주지 않고, node VaultFS 도 이제 .base 를 반환한다.
+  // FileHandler 가 도구 내부 산출물을 첨부 업로드에서 일괄 차단하는지 잠근다.
+  describe("내부 산출물(.base/.notion.json) 첨부 업로드 차단", () => {
+    it("pushAllFiles: 사이드카·베이스 파일은 업로드하지 않는다", async () => {
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/사진.png", size: 10, mtime: "2026-01-01T00:00:00.000Z" },
+        { path: "para/0. 인박스.base", size: 20, mtime: "2026-01-01T00:00:00.000Z" },
+        { path: "para/0. 인박스.notion.json", size: 30, mtime: "2026-01-01T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      const notion = createMockNotionClient();
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+      );
+      const results = await handler.pushAllFiles();
+
+      expect(results.map((r) => r.localPath)).toEqual(["para/사진.png"]);
+      expect(notion.uploadFile).toHaveBeenCalledTimes(1);
+    });
+
+    it("pushFilesForFolder 도 동일하게 차단한다", async () => {
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/만다라트.base", size: 20, mtime: "2026-01-01T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      const notion = createMockNotionClient();
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+      );
+      const results = await handler.pushFilesForFolder("folder-page-id", "para");
+
+      expect(results).toEqual([]);
+      expect(notion.uploadFile).not.toHaveBeenCalled();
     });
   });
 });

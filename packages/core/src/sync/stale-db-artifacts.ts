@@ -16,6 +16,15 @@ export interface VaultFileRef {
 const ARTIFACT_SUFFIXES = [".base", ".notion.json"] as const;
 
 /**
+ * 동기화 도구 자신이 만드는 내부 산출물(`.base` 뷰 / `.notion.json` 사이드카) 여부.
+ * 첨부파일 push(FileHandler)는 이 파일들을 Notion 에 업로드하면 안 되고, 고아 정리
+ * (cleanupStaleDbArtifacts)는 반대로 이 파일들만 다뤄야 한다 — 판정을 한곳에 둔다.
+ */
+export function isDbArtifactPath(path: string): boolean {
+  return ARTIFACT_SUFFIXES.some((suffix) => path.endsWith(suffix));
+}
+
+/**
  * `localFolder` **직속**의 고아 `.base`/`.notion.json` 경로를 고른다.
  *
  * 규칙:
