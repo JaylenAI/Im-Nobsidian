@@ -4,6 +4,8 @@ import {
   TOGGLE_START,
   TOGGLE_END,
   WIKILINK_PROTOCOL,
+  syncedStartMarker,
+  SYNCED_END,
 } from "../constants/markers.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
@@ -67,6 +69,7 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreUnderlineSpans(result);
   result = convertMentionPageIdToUrl(result);
   result = restoreWikilinkPreserveLinks(result);
+  result = restoreSyncedBlocks(result);
 
   return result;
 }
@@ -433,25 +436,76 @@ function preserveUnknownBlocks(content: string): string {
   return result;
 }
 
+/**
+ * synced block 태그를 마커 쌍으로 보존한다. 과거엔 태그를 벗기고 내용만 남겨,
+ * push 시 일반 블록으로 박제되어 **동기화 참조가 영구히 끊겼다**(실측: 태그를
+ * 그대로 되밀면 replace_content 가 참조를 보존한다 — 동일 내용·주변 수정 모두).
+ * 내용은 마커 사이에 dedent 되어 그대로 노출되므로 Obsidian 에서 자연스럽게 보이고,
+ * 후속 변환 단계(콜아웃·미디어 등)도 간섭 없이 처리한다. url 없는 태그는 복원
+ * 불가능하므로 기존처럼 내용만 남긴다.
+ */
 function convertSyncedBlockRef(content: string): string {
+  const unwrap = (match: string, openRe: RegExp, closeRe: RegExp): string =>
+    match
+      .replace(openRe, "")
+      .replace(closeRe, "")
+      .split("\n")
+      .map((l) => l.replace(/^\t/, ""))
+      .join("\n")
+      .trim();
+
   let result = content.replace(
-    /<synced_block_reference[^>]*>[\s\S]*?<\/synced_block_reference>/g,
-    (match) => {
-      const inner = match
-        .replace(/<synced_block_reference[^>]*>\n?/, "")
-        .replace(/<\/synced_block_reference>/, "")
-        .split("\n")
-        .map((l) => l.replace(/^\t/, ""))
-        .join("\n")
-        .trim();
-      return inner;
+    /<synced_block_reference([^>]*)>[\s\S]*?<\/synced_block_reference>/g,
+    (match, attrs: string) => {
+      const inner = unwrap(match, /<synced_block_reference[^>]*>\n?/, /<\/synced_block_reference>/);
+      const url = /url="([^"]*)"/.exec(attrs)?.[1];
+      if (!url) return inner;
+      return `${syncedStartMarker("ref", url)}\n${inner}\n${SYNCED_END}`;
     },
   );
   result = result.replace(
-    /<synced_block[^>]*>\n?([\s\S]*?)<\/synced_block>/g,
-    (_match, inner: string) => inner.trim(),
+    /<synced_block([^>]*)>[\s\S]*?<\/synced_block>/g,
+    (match, attrs: string) => {
+      const inner = unwrap(match, /<synced_block[^>]*>\n?/, /<\/synced_block>/);
+      const url = /url="([^"]*)"/.exec(attrs)?.[1];
+      if (!url) return inner;
+      return `${syncedStartMarker("orig", url)}\n${inner}\n${SYNCED_END}`;
+    },
   );
   return result;
+}
+
+/**
+ * push 방향: synced 보존 마커 쌍 → `<synced_block[_reference] url="...">` 재조립.
+ * 내용은 NFM 컨테이너 규약대로 탭 1단 들여쓴다. 사용자가 마커를 지웠으면 이 단계가
+ * 매치하지 않아 내용이 일반 블록으로 전송된다(의도된 degrade — 참조 해제로 간주).
+ */
+// params 는 encodeURIComponent 된 URL 을 포함해 `%` 가 섞인다(`https%3A%2F...`) —
+// `[^%]*` 는 첫 `%` 에서 끊기므로 반드시 lazy 매치(개행 전까지)여야 한다.
+const SYNCED_MARKER_PAIR_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:synced:start:(.*?)%%\\n?([\\s\\S]*?)%%${MARKER_BRAND_RE}:synced:end%%`,
+  "g",
+);
+
+function restoreSyncedBlocks(content: string): string {
+  return content.replace(SYNCED_MARKER_PAIR_RE, (_match, params: string, body: string) => {
+    const kind = /kind=(ref|orig)/.exec(params)?.[1] ?? "orig";
+    const encoded = /url=([^&]*)/.exec(params)?.[1] ?? "";
+    let url = encoded;
+    try {
+      url = decodeURIComponent(encoded);
+    } catch {
+      // 잘못 인코딩된 경우 원문 유지
+    }
+    if (!url) return body.trim();
+    const tag = kind === "ref" ? "synced_block_reference" : "synced_block";
+    const indented = body
+      .trim()
+      .split("\n")
+      .map((l) => (l.length > 0 ? `\t${l}` : l))
+      .join("\n");
+    return `<${tag} url="${url}">\n${indented}\n</${tag}>`;
+  });
 }
 
 // 2A: 미디어 태그 → Obsidian 마크다운
