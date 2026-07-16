@@ -51,6 +51,15 @@ export class DatabaseSyncer {
   private readonly baseFileGenerator = new BaseFileGenerator();
   private readonly sidecarGenerator = new SidecarGenerator();
 
+  /**
+   * 이번 프로세스가 실제로 기록한 .base 경로/DB 제목 (databaseId nohyph → info).
+   * placeholder 임베드 재작성(F22)의 SSOT — 폴더명(하이픈 새니타이즈)과 .base 파일명
+   * (sanitizeFileName: 공백·점 보존)은 규칙이 달라 localFolder 로 추측한 경로는 깨진
+   * 임베드가 된다. generateBaseFile 은 매 pull 모든 DB 에 대해 실행되므로 pull 종료
+   * 시점에는 성공한 DB 전체가 채워져 있다.
+   */
+  readonly baseFileInfo = new Map<string, { basePath: string; title: string }>();
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -261,6 +270,7 @@ export class DatabaseSyncer {
       const safeName = sanitizeFileName(dbName);
       const basePath = `${dbConfig.localFolder}/${safeName}.base`;
       await this.vaultFs.writeFile(basePath, baseContent);
+      this.baseFileInfo.set(dbConfig.databaseId.replace(/-/g, ""), { basePath, title: dbName });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
       await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);

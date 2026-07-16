@@ -163,6 +163,27 @@ describe("DatabaseSyncer", () => {
     );
   });
 
+  describe("baseFileInfo — 실제 .base 경로 기록 (F22 SSOT)", () => {
+    it("pull 후 dbId(nohyph)→실제 .base 경로/제목이 기록된다 — 파일명은 sanitizeFileName(제목)", async () => {
+      // 제목 "0. 인박스": 폴더 새니타이저는 "0-인박스"(점 제거·공백→하이픈)로 바꾸지만
+      // .base 파일명은 sanitizeFileName 이라 "0. 인박스.base" — 두 규칙이 달라 폴더명으로
+      // 추측한 임베드는 깨진다(E2E 실측 91/158건). 실경로 기록이 유일한 안전한 출처다.
+      mockNotionClient.getDatabaseTitle.mockResolvedValue("0. 인박스");
+      const config = createDbConfig({ localFolder: "para/0-인박스" });
+
+      await syncer.pullDatabase(config);
+
+      expect(syncer.baseFileInfo.get("db123")).toEqual({
+        basePath: "para/0-인박스/0. 인박스.base",
+        title: "0. 인박스",
+      });
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "para/0-인박스/0. 인박스.base",
+        expect.any(String),
+      );
+    });
+  });
+
   describe("pullAll", () => {
     it("databases가 비어있으면 빈 결과 반환", async () => {
       const config = createConfig([]);
