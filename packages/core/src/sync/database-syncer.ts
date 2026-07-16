@@ -337,6 +337,57 @@ export class DatabaseSyncer {
     }
   }
 
+  /**
+   * DB 행 `files` 속성의 notion-hosted 서명 URL 을 로컬 첨부로 로컬라이즈한다(P3-A).
+   * 서명 URL 은 약 1시간 뒤 만료되어 frontmatter 에 남으면 깨진 링크가 되고, push 로
+   * 되밀면 Notion 원본이 만료 URL 의 external 파일로 오염된다(실측). 다운로드 성공분은
+   * `[[attachments/..]]` 위키링크로 대체한다 — Bases 카드 `image:` 는 위키링크 스칼라를
+   * 렌더하므로 갤러리 커버도 유지된다. 원본 파일명은 raw 속성의 `name` 에서 취한다
+   * (extractValue 는 URL 만 남긴다). 사용자가 넣은 진짜 외부 URL 은 그대로 둔다.
+   */
+  private async localizeFileProperties(
+    rawProps: Record<string, unknown>,
+    properties: Record<string, unknown>,
+    safeName: string,
+  ): Promise<void> {
+    for (const [key, rawProp] of Object.entries(rawProps)) {
+      const prop = rawProp as {
+        type?: string;
+        files?: Array<{
+          name?: string;
+          type?: string;
+          file?: { url?: string };
+          external?: { url?: string };
+        }>;
+      };
+      if (prop?.type !== "files" || !Array.isArray(prop.files) || prop.files.length === 0) {
+        continue;
+      }
+
+      const localized: string[] = [];
+      let changed = false;
+      for (const f of prop.files) {
+        const url = f.type === "file" ? f.file?.url : f.external?.url;
+        if (!url) continue;
+        const caption = f.name?.trim() || `${safeName}-${key}`;
+        try {
+          const localPath = await this.imageHandler.localizeNotionFileUrl(url, caption);
+          if (localPath) {
+            localized.push(`[[${localPath}]]`);
+            changed = true;
+          } else {
+            localized.push(url);
+          }
+        } catch {
+          localized.push(url);
+        }
+      }
+      // extractValue 와 동일한 스칼라/배열 규약(단일=스칼라)으로 덮어써 라운드트립을 유지한다.
+      if (!changed || localized.length === 0) continue;
+      properties[key] = localized.length === 1 ? localized[0] : localized;
+    }
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -348,6 +399,12 @@ export class DatabaseSyncer {
       (page as unknown as { properties: Record<string, unknown> }).properties,
     );
     properties.title = title;
+
+    await this.localizeFileProperties(
+      (page as unknown as { properties: Record<string, unknown> }).properties,
+      properties,
+      safeName,
+    );
 
     const cover = this.notionClient.extractCover(page);
     const icon = this.notionClient.extractIcon(page);

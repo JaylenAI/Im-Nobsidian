@@ -51,6 +51,17 @@ export const COLUMN_SEP = compactMarker("column");
 export const TOC_MARKER = compactMarker("toc");
 
 /**
+ * synced block 보존 마커 쌍. Notion `<synced_block[_reference] url="...">` 태그를
+ * pull 때 벗겨 내용만 남기면 push 때 일반 블록으로 박제되어 **동기화 참조가 끊긴다**
+ * (실측: 태그를 되밀면 참조 보존, 태그 없이 내용만 되밀면 참조 소실).
+ * 시작 마커에 태그 종류(kind)와 원본 url 을 실어 push 때 태그를 재조립한다.
+ */
+export function syncedStartMarker(kind: "ref" | "orig", url: string): string {
+  return compactMarker(`synced:start:kind=${kind}&url=${encodeURIComponent(url)}`);
+}
+export const SYNCED_END = compactMarker("synced:end");
+
+/**
  * breadcrumb 블록 보존 마커. Notion breadcrumb 은 마크다운 표현이 없어 pull 시
  * 빈 문자열로 소실됐다 — 이 마커로 자리를 남겨 push 시 breadcrumb 블록으로 복원한다.
  */

@@ -636,7 +636,22 @@ export class NotionClient {
 
   // ─── File Upload ───
 
+  /** single_part 업로드 상한 (Notion API 규격 20MB) */
+  private static readonly SINGLE_PART_MAX_BYTES = 20 * 1024 * 1024;
+  /** multi_part 파트 크기 — 규격상 마지막 파트 제외 5~20MB, 10MB 고정 사용 */
+  private static readonly MULTI_PART_CHUNK_BYTES = 10 * 1024 * 1024;
+
   async uploadFile(fileData: Blob, filename: string, contentType: string): Promise<string> {
+    // create 에 선언한 content_type 과 Blob 자체 타입이 다르면 send 가 400 으로 거부된다
+    // (실측: "Current file content type ... does not match the original content type").
+    // 호출자가 타입 없는 Blob 을 넘겨도 동작하도록 여기서 정합을 보장한다.
+    if (fileData.type !== contentType) {
+      fileData = new Blob([fileData], { type: contentType });
+    }
+    if (fileData.size > NotionClient.SINGLE_PART_MAX_BYTES) {
+      return this.uploadFileMultiPart(fileData, filename, contentType);
+    }
+
     const upload = await this.withRateLimit(() =>
       this.client.fileUploads.create({ filename, content_type: contentType }),
     );
@@ -656,6 +671,44 @@ export class NotionClient {
         this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
       );
     }
+
+    return fileUploadId;
+  }
+
+  /** 20MB 초과 파일의 multi_part 업로드 — part_number 는 API 규격상 문자열("1"부터) */
+  private async uploadFileMultiPart(
+    fileData: Blob,
+    filename: string,
+    contentType: string,
+  ): Promise<string> {
+    const chunkSize = NotionClient.MULTI_PART_CHUNK_BYTES;
+    const numberOfParts = Math.ceil(fileData.size / chunkSize);
+
+    const upload = await this.withRateLimit(() =>
+      this.client.fileUploads.create({
+        mode: "multi_part",
+        number_of_parts: numberOfParts,
+        filename,
+        content_type: contentType,
+      }),
+    );
+
+    const fileUploadId = (upload as unknown as { id: string }).id;
+
+    for (let part = 1; part <= numberOfParts; part++) {
+      const chunk = fileData.slice((part - 1) * chunkSize, part * chunkSize, contentType);
+      await this.withRateLimit(() =>
+        this.client.fileUploads.send({
+          file_upload_id: fileUploadId,
+          part_number: String(part),
+          file: { data: chunk, filename },
+        }),
+      );
+    }
+
+    await this.withRateLimit(() =>
+      this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
+    );
 
     return fileUploadId;
   }
