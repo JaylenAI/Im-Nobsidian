@@ -650,10 +650,21 @@ function convertPageLinks(content: string): string {
   });
 }
 
+// placeholder 에 databaseId 를 보존 마커로 부착한다. 표시 텍스트만 남기면 pull 후처리
+// (db-placeholder-rewriter)가 어느 .base 로 임베드를 재작성해야 할지 알 수 없다.
+// url 호스트는 www.notion.so / app.notion.com/p 로 갈리는 것이 실측됐으므로 32-hex 만 취한다.
 function convertDatabaseBlocks(content: string): string {
   return content.replace(
-    /<database[^>]*>([\s\S]*?)<\/database>/g,
-    (_match, title: string) => `**${title.trim()}** *(Notion DB)*`,
+    /<database\b([^>]*)>([\s\S]*?)<\/database>/g,
+    (_match, attrs: string, title: string) => {
+      const clean = title.trim();
+      const placeholder = `**${clean}** *(Notion DB)*`;
+      const idMatch = /\burl="[^"]*?([a-f0-9]{32})[^"]*"/.exec(attrs);
+      if (!idMatch?.[1]) return placeholder;
+      return `${placeholder}${compactMarker(
+        `child-database:id=${idMatch[1]}&title=${encodeURIComponent(clean)}`,
+      )}`;
+    },
   );
 }
 

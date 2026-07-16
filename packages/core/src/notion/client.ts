@@ -314,6 +314,35 @@ export class NotionClient {
     return { title, queryable: (db.data_sources?.length ?? 0) > 0 };
   }
 
+  /**
+   * linked database view 컨테이너를 원본 DB 로 해소한다.
+   * 컨테이너 자체는 `data_sources` 가 비어 행 조회가 불가능하지만(getDatabaseSyncability
+   * queryable=false), Views API 의 뷰 상세에는 원본 `data_source_id` 가 실리고 그 data source
+   * 의 parent 가 원본 database 다. 해소 실패(뷰 없음/권한 없음/자기참조)는 null — 호출처가
+   * 기존대로 접근 불가 처리한다.
+   */
+  async resolveLinkedDatabase(
+    databaseId: string,
+  ): Promise<{ originalDbId: string; viewName: string } | null> {
+    try {
+      const views = await this.listDatabaseViews(databaseId);
+      for (const view of views) {
+        if (!view.dataSourceId) continue;
+        const ds = (await this.withRateLimit(() =>
+          this.client.dataSources.retrieve({ data_source_id: view.dataSourceId as string }),
+        )) as unknown as { parent?: { type?: string; database_id?: string } };
+        const originalDbId = ds.parent?.database_id;
+        if (!originalDbId) continue;
+        // 자기 자신을 가리키면 linked 가 아니라 원본이 정말 소스 없는 상태 — 해소 불가.
+        if (originalDbId.replace(/-/g, "") === databaseId.replace(/-/g, "")) continue;
+        return { originalDbId, viewName: view.name ?? "" };
+      }
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   async getDatabaseSchema(
     databaseId: string,
   ): Promise<Record<string, { id: string; type: string }>> {
