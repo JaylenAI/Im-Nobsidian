@@ -67,6 +67,28 @@ export const SYNCED_END = compactMarker("synced:end");
  */
 export const BREADCRUMB_MARKER = compactMarker("breadcrumb");
 
+/**
+ * 디자인 속성 보존 마커 (ADR-008). NFM raw 는 콜아웃 아이콘/색을 태그 속성으로,
+ * 블록 색을 줄 끝 `{color="…"}` 로 내보낸다 — Obsidian 에 대응 문법이 없어 pull 때
+ * 이 마커로 실어 두고 push 때 정준형 속성으로 재조립한다.
+ */
+export function calloutStyleMarker(params: { icon?: string; color?: string }): string {
+  const kv: string[] = [];
+  if (params.icon) kv.push(`icon=${encodeURIComponent(params.icon)}`);
+  if (params.color) kv.push(`color=${encodeURIComponent(params.color)}`);
+  return compactMarker(`callout-style:${kv.join("&")}`);
+}
+
+/** 색상 토글(`<details color="…">`) 보존 마커. */
+export function toggleColorMarker(color: string): string {
+  return compactMarker(`toggle-color:${color}`);
+}
+
+/** 블록 색(`{color="…"}`) 보존 마커. */
+export function blockColorMarker(color: string): string {
+  return compactMarker(`block-color:${color}`);
+}
+
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 

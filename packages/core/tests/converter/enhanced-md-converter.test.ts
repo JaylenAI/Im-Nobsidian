@@ -162,11 +162,14 @@ describe("obsidianToNotionEnhanced", () => {
     expect(result).toContain("</details>");
   });
 
-  it("> [!type] → ::: callout", () => {
+  it("> [!type] → <callout icon> 정준형 태그 (이모지는 본문이 아닌 icon 속성)", () => {
     const input = "> [!warning] Be careful";
     const result = obsidianToNotionEnhanced(input);
-    expect(result).toContain("::: callout");
-    expect(result).toContain("⚠️ Be careful");
+    expect(result).toContain('<callout icon="⚠️">');
+    expect(result).toContain("\tBe careful");
+    // 이모지가 본문 텍스트로 새면 Notion 에 리터럴로 박제된다(실측) — 금지
+    expect(result).not.toContain("⚠️ Be careful");
+    expect(result).not.toContain("::: callout");
   });
 
   // 2A: 미디어 마커 → Enhanced MD
