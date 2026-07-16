@@ -132,11 +132,16 @@ related: "[[My Note]]"
     const obsidian = "> [!warning] 주의사항\n> 이 부분은 중요합니다.";
     const notion = obsidianToNotionEnhanced(obsidian);
 
-    expect(notion).toContain("::: callout");
+    // NFM 정준형: 아이콘은 본문 이모지가 아니라 여는 태그의 icon 속성 (ADR-008)
+    expect(notion).toContain('<callout icon="⚠️">');
+    expect(notion).toContain("\t주의사항");
+    expect(notion).not.toContain("::: callout");
 
     const back = notionEnhancedToObsidian(notion);
+    // 기본 아이콘(type 기본 이모지)은 마커 없이 원문 그대로 수렴해야 한다
     expect(back).toContain("> [!warning] 주의사항");
     expect(back).toContain("> 이 부분은 중요합니다.");
+    expect(back).not.toContain("callout-style");
   });
 
   it("복합 문서 전체 왕복 (등록/미등록/임베드/이미지/코드)", () => {

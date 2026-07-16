@@ -3,9 +3,15 @@ import {
   compactMarker,
   TOGGLE_START,
   TOGGLE_END,
+  COLUMN_LIST_START,
+  COLUMN_SEP,
+  COLUMN_LIST_END,
   WIKILINK_PROTOCOL,
   syncedStartMarker,
   SYNCED_END,
+  calloutStyleMarker,
+  toggleColorMarker,
+  blockColorMarker,
 } from "../constants/markers.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
@@ -39,7 +45,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertNotionTables(result);
   result = convertSpans(result);
   result = convertDatabaseBlocks(result);
-  result = cleanInlineColorAttrs(result);
+  result = convertBlockColorAttrs(result);
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
@@ -66,10 +72,14 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreMediaTags(result);
   result = restoreUnknownBlocks(result);
   result = restoreColorSpans(result);
+  result = restoreBlockColorMarkers(result);
   result = restoreUnderlineSpans(result);
   result = convertMentionPageIdToUrl(result);
   result = restoreWikilinkPreserveLinks(result);
   result = restoreSyncedBlocks(result);
+  // 컬럼 재조립은 마지막 — 영역 내부 내용이 위 모든 변환을 먼저 통과해야 하고,
+  // 잔여 디자인 마커 안전망(strip)도 여기서 함께 처리된다.
+  result = reassembleColumns(result);
 
   return result;
 }
@@ -270,11 +280,11 @@ const SUMMARY_TITLE = "((?:(?!<\\/summary>|<details|<summary>)[\\s\\S])*?)";
 // 왕복 프로브 실측: `> \t본문` 탭 누수). summary 앞 공백·빈 줄은 옵션 그룹 안에서만
 // 허용한다 — summary 부재 시 그룹 전체가 백트래킹되어 본문 들여쓰기가 온전히 남는다.
 const INNERMOST_DETAILS_RE = new RegExp(
-  `([\\t ]*)<details[^>]*>[ \\t]*\\n?(?:\\s*<summary>${SUMMARY_TITLE}<\\/summary>)?(${NO_CONTAINER_BODY})<\\/details>`,
+  `([\\t ]*)<details([^>]*)>[ \\t]*\\n?(?:\\s*<summary>${SUMMARY_TITLE}<\\/summary>)?(${NO_CONTAINER_BODY})<\\/details>`,
   "g",
 );
 const INNERMOST_CALLOUT_RE = new RegExp(
-  `([\\t ]*)<callout[^>]*>\\n?(${NO_CONTAINER_BODY})<\\/callout>`,
+  `([\\t ]*)<callout([^>]*)>\\n?(${NO_CONTAINER_BODY})<\\/callout>`,
   "g",
 );
 const INNERMOST_COLUMNS_RE = new RegExp(
@@ -293,13 +303,24 @@ function reindentLines(text: string, indent: string): string {
     .join("\n");
 }
 
+// 컨테이너 여는 태그의 icon/color 속성 파서 (ADR-008). NFM 정준형:
+// `<callout icon="⚠️" color="red_bg">`, `<details color="green_bg">`.
+function parseDesignAttrs(attrs: string): { icon?: string; color?: string } {
+  const icon = /\bicon="([^"]*)"/.exec(attrs)?.[1];
+  const color = /\bcolor="([^"]*)"/.exec(attrs)?.[1];
+  return { icon: icon || undefined, color: color || undefined };
+}
+
 // <details> → > [!toggle]- (본문은 dedent 후 `> ` prefix). dedent 가 코드펜스를 열 0 으로
 // 정렬해 `> \t``` ` cascade 를 차단하고(결함①), 부모 패스에서 다시 `> ` 가 입혀지면
 // `> > ` 형태의 올바른 Obsidian 중첩이 된다.
-function toggleToCallout(title: string, rawBody: string): string {
+// color 속성(색상 토글)은 마커로 제목 줄에 실어 push 재조립에 쓴다(ADR-008).
+function toggleToCallout(title: string, rawBody: string, color?: string): string {
   const body = dedentContainerBody(rawBody);
   // 제목 없는 빈 토글은 머리줄만 남긴다(`> [!toggle]- ` 꼬리 공백·빈 `>` 줄 방지)
-  const head = `> [!toggle]- ${title.trim()}`.trimEnd();
+  const head = ["> [!toggle]-", title.trim(), color ? toggleColorMarker(color) : ""]
+    .filter((part) => part !== "")
+    .join(" ");
   if (body.trim() === "") return head;
   const calloutBody = body
     .split("\n")
@@ -308,8 +329,9 @@ function toggleToCallout(title: string, rawBody: string): string {
   return `${head}\n${calloutBody}`;
 }
 
-// <columns>/<column> → 평탄화. Obsidian 엔 칼럼 문법이 없어 각 칼럼 본문을 dedent 로
-// 구조적 탭까지 벗긴 뒤 빈 줄로 구분해 이어붙인다(결함②: 탭 하나만 벗기던 기존 동작 교체).
+// <columns>/<column> → 평탄화하되 경계를 컬럼 마커로 남긴다(ADR-008). 마커 어휘는
+// legacy block 경로(block-converter)와 동일 — push 가 <columns> 정준형으로 재조립한다.
+// 각 칼럼 본문은 dedent 로 구조적 탭까지 벗긴다(결함②: 탭 하나만 벗기던 기존 동작 교체).
 function flattenColumns(body: string): string {
   const cols: string[] = [];
   const re = new RegExp(COLUMN_WRAP_RE.source, COLUMN_WRAP_RE.flags);
@@ -323,7 +345,8 @@ function flattenColumns(body: string): string {
   // <column> 래퍼가 전혀 없을 때만 폴백 dedent. 래퍼가 있으나 모두 빈 칼럼이면 cols=[] →
   // "" 반환(태그 제거됨). 폴백을 cols.length===0 으로 걸면 빈 칼럼의 <column> 태그가 샌다.
   if (!matched) return dedentContainerBody(body);
-  return cols.join("\n\n");
+  if (cols.length === 0) return "";
+  return [COLUMN_LIST_START, ...cols.map((c) => `${COLUMN_SEP}\n${c}`), COLUMN_LIST_END].join("\n");
 }
 
 function convertContainers(content: string): string {
@@ -336,33 +359,64 @@ function convertContainers(content: string): string {
     const before = result;
     result = result.replace(
       INNERMOST_DETAILS_RE,
-      (_m, indent: string, title: string | undefined, body: string) =>
-        reindentLines(toggleToCallout(title ?? "", body), indent),
+      (_m, indent: string, attrs: string, title: string | undefined, body: string) =>
+        reindentLines(toggleToCallout(title ?? "", body, parseDesignAttrs(attrs).color), indent),
     );
-    result = result.replace(INNERMOST_CALLOUT_RE, (_m, indent: string, body: string) =>
-      reindentLines(calloutBodyToObsidian(body), indent),
+    result = result.replace(
+      INNERMOST_CALLOUT_RE,
+      (_m, indent: string, attrs: string, body: string) =>
+        reindentLines(calloutBodyToObsidian(body, parseDesignAttrs(attrs)), indent),
     );
     result = result.replace(INNERMOST_COLUMNS_RE, (_m, indent: string, body: string) =>
       reindentLines(flattenColumns(body), indent),
     );
     if (result === before) break;
   }
-  return result;
+  // 컨테이너 안에 중첩됐던 컬럼 마커는 quote prefix 를 얻어 push 재조립이 불가능하다 —
+  // 마커 줄을 걷어내 기존 평탄화로 degrade 한다(Notion 으로 마커 리터럴 누수 방지).
+  return stripQuotedColumnMarkers(result);
 }
 
-function calloutBodyToObsidian(body: string): string {
+const QUOTED_COLUMN_EDGE_RE = new RegExp(
+  `^(?:>[ \\t]?)+%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%[ \\t]*\\n?`,
+  "gm",
+);
+const QUOTED_COLUMN_SEP_RE = new RegExp(
+  `^((?:>[ \\t]?)+)%%${MARKER_BRAND_RE}:column%%[ \\t]*$`,
+  "gm",
+);
+
+function stripQuotedColumnMarkers(content: string): string {
+  return content
+    .replace(QUOTED_COLUMN_EDGE_RE, "")
+    .replace(QUOTED_COLUMN_SEP_RE, (_m, prefix: string) => prefix.trimEnd());
+}
+
+function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
   // 콜아웃 본문도 토글과 동일한 코드펜스 cascade 위험이 있으므로 같은 dedent 를 적용한다.
   const lines = dedentContainerBody(body)
     .split("\n")
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
   const firstLine = lines[0] ?? "";
 
-  const emojiMatch = /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
-  const type = emojiMatch ? emojiToCalloutType(emojiMatch[1]!) : "note";
+  // NFM 정준형은 아이콘을 icon 속성으로 나른다 — 속성이 하나라도 있으면 정준형이므로
+  // 첫 줄 이모지 파싱을 건너뛴다(첫 글자가 이모지인 본문을 아이콘으로 오식하면 소실).
+  // 속성 없는 레거시(<callout>\n💡 제목, ::: callout 펜스)는 첫 줄 이모지 경로를 유지한다.
+  const emojiMatch =
+    style?.icon || style?.color ? null : /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
+  const icon = style?.icon ?? (emojiMatch ? emojiMatch[1]! : undefined);
+  const type = icon ? emojiToCalloutType(icon) : "note";
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
   const rest = lines.slice(1).join("\n").trim();
 
-  const calloutTitle = title ? `> [!${type}] ${title}` : `> [!${type}]`;
+  // icon/color 는 마커로 제목 줄에 실어 push 가 정준형 속성으로 재조립한다(ADR-008).
+  // 단, 아이콘이 type 기본 이모지와 같고 색이 없으면 push 가 type 에서 동일 아이콘을
+  // 재생성하므로 마커를 생략한다 — 흔한 기본 콜아웃에서 볼트 노이즈를 없앤다.
+  // 마커의 icon 부재는 "아이콘 없는 콜아웃"을 뜻하므로, 마커를 낼 때는 실제 속성만 싣는다.
+  const needsMarker =
+    Boolean(style?.color) || (icon !== undefined && calloutTypeToEmoji(type) !== icon);
+  const styleTail = needsMarker ? ` ${calloutStyleMarker({ icon, color: style?.color })}` : "";
+  const calloutTitle = title ? `> [!${type}] ${title}${styleTail}` : `> [!${type}]${styleTail}`;
   const calloutBody = rest
     ? "\n" +
       rest
@@ -575,6 +629,9 @@ function convertSpans(content: string): string {
   return result;
 }
 
+// pull 이 제목 줄에 실은 색상 토글 마커(ADR-008). 값은 Notion 색 토큰([a-z_]).
+const TOGGLE_COLOR_MARKER_RE = new RegExp(`\\s*%%${MARKER_BRAND_RE}:toggle-color:([a-z_]+)%%`);
+
 function convertTogglesToHtml(content: string): string {
   // 제목 `(.*)`: 빈 제목 토글(`> [!toggle]-`)도 매치해야 pull 산출물이 왕복 수렴한다.
   // 간격은 `[ \t]*` — `\s*` 는 빈 제목에서 개행을 삼켜 본문 첫 줄을 제목으로 오파싱한다.
@@ -586,12 +643,16 @@ function convertTogglesToHtml(content: string): string {
   while (result !== prev && safety++ < 100) {
     prev = result;
     result = result.replace(calloutToggleRe, (_match, title: string, body: string) => {
+      // 색상 토글 마커 → <details color> 속성으로 재조립(ADR-008)
+      const colorMatch = TOGGLE_COLOR_MARKER_RE.exec(title);
+      const cleanTitle = colorMatch ? title.replace(TOGGLE_COLOR_MARKER_RE, "") : title;
+      const attrs = colorMatch ? ` color="${colorMatch[1]}"` : "";
       const bodyText = body
         .split("\n")
         .map((line) => line.replace(/^>\s?/, ""))
         .join("\n")
         .trim();
-      return `<details>\n<summary>${title.trim()}</summary>\n\n${bodyText}\n\n</details>`;
+      return `<details${attrs}>\n<summary>${cleanTitle.trim()}</summary>\n\n${bodyText}\n\n</details>`;
     });
   }
 
@@ -650,32 +711,73 @@ function findMatchingEnd(content: string, startFrom: number): number {
   return -1;
 }
 
+// pull 이 제목 줄에 실은 콜아웃 스타일 마커(ADR-008). params 는 encodeURIComponent 된
+// 이모지를 포함해 `%` 가 섞이므로 반드시 lazy 매치여야 한다(P3 synced 마커와 동일 교훈).
+const CALLOUT_STYLE_MARKER_RE = new RegExp(`\\s*%%${MARKER_BRAND_RE}:callout-style:(.*?)%%`);
+
+function parseCalloutStyleParams(params: string): { icon?: string; color?: string } {
+  const style: { icon?: string; color?: string } = {};
+  for (const kv of params.split("&")) {
+    const eq = kv.indexOf("=");
+    if (eq <= 0) continue;
+    const key = kv.slice(0, eq);
+    const value = decodeURIComponent(kv.slice(eq + 1));
+    if (key === "icon") style.icon = value;
+    else if (key === "color") style.color = value;
+  }
+  return style;
+}
+
+// Obsidian 콜아웃 → NFM 정준형 `<callout icon color>` 태그 (ADR-008).
+//
+// 기존 `::: callout` 펜스 + 본문 첫 줄 이모지 방출은 NFM 이 이모지를 아이콘이 아닌
+// **리터럴 본문 텍스트**로 박제함을 실측 — 정준형은 아이콘/색이 여는 태그의 속성이다.
+// pull 이 실은 스타일 마커가 있으면 그대로 재조립하고, 마커 없는 사용자 작성 콜아웃은
+// type→이모지를 icon 속성으로 낸다. 본문은 정준형대로 한 단계 탭 들여쓴다.
+// 중첩 콜아웃·토글은 body 를 재귀 변환해 태그 중첩으로 보존한다(기존 단일 패스는
+// 내부 헤드가 리터럴 `> [!x]` 줄로 새어 나갔다).
 function convertObsidianCallouts(content: string): string {
   const lines = content.split("\n");
   const result: string[] = [];
   let i = 0;
 
   while (i < lines.length) {
-    const headerMatch = /^> \[!(\w+)\]([-+])?\s*(.*)/.exec(lines[i]!);
-    if (headerMatch) {
-      const type = headerMatch[1]!;
-      const title = headerMatch[3]!;
-      const emoji = calloutTypeToEmoji(type) ?? "💡";
-      const calloutTitle = title ? `${emoji} ${title}` : emoji;
+    const headerMatch = /^> \[!(\w+)\]([-+])?[ \t]*(.*)$/.exec(lines[i]!);
+    const type = headerMatch?.[1]?.toLowerCase();
+    // toggle/tab 헤드는 전용 변환기(convertTogglesToHtml/restoreTabBlocks) 소관 —
+    // 콜아웃으로 오변환하지 않는다.
+    if (headerMatch && type !== "toggle" && type !== "tab") {
+      let title = headerMatch[3]!;
+      let style: { icon?: string; color?: string } = {};
+      const styleMatch = CALLOUT_STYLE_MARKER_RE.exec(title);
+      if (styleMatch) {
+        style = parseCalloutStyleParams(styleMatch[1]!);
+        title = title.replace(CALLOUT_STYLE_MARKER_RE, "");
+      } else {
+        style.icon = calloutTypeToEmoji(type!);
+      }
 
       const bodyLines: string[] = [];
       i++;
-      while (i < lines.length && lines[i]!.startsWith("> ")) {
-        bodyLines.push(lines[i]!.slice(2));
+      // 빈 연속줄 `>` 도 본문의 일부다(콜아웃 내 단락 구분) — `> ` 만 받으면 끊긴다.
+      while (i < lines.length && (lines[i] === ">" || lines[i]!.startsWith("> "))) {
+        bodyLines.push(lines[i] === ">" ? "" : lines[i]!.slice(2));
         i++;
       }
+      // 내부에 남은 토글/콜아웃 헤드(원문 깊이 2+)는 quote 한 겹이 벗겨져 이제 깊이 1 —
+      // 전용 변환기를 재귀 적용해 태그 중첩으로 만든다.
+      const innerConverted = convertObsidianCallouts(convertTogglesToHtml(bodyLines.join("\n")));
 
-      result.push("::: callout");
-      result.push(calloutTitle);
-      if (bodyLines.length > 0) {
-        result.push(...bodyLines);
+      const attrs = `${style.icon ? ` icon="${style.icon}"` : ""}${style.color ? ` color="${style.color}"` : ""}`;
+      result.push(`<callout${attrs}>`);
+      const cleanTitle = title.trim();
+      if (cleanTitle) result.push(`\t${cleanTitle}`);
+      if (innerConverted.trim() !== "") {
+        for (const line of innerConverted.split("\n")) {
+          result.push(line === "" ? "" : `\t${line}`);
+        }
       }
-      result.push(":::");
+      result.push("</callout>");
     } else {
       result.push(lines[i]!);
       i++;
@@ -744,8 +846,15 @@ function convertDatabaseBlocks(content: string): string {
   );
 }
 
-function cleanInlineColorAttrs(content: string): string {
-  return content.replace(/\s*\{color="[^"]*"\}/g, "");
+// 블록 색: NFM raw 는 문단/제목/리스트/인용의 색을 줄 끝 `{color="…"}` 로 내보낸다
+// (2026-07-16 실측). Obsidian 에 대응 문법이 없어 줄 끝 형태는 보존 마커로 바꾸고
+// (push 가 `{color=}` 로 재조립, ADR-008), 줄 끝이 아닌 잔여 형태만 기존대로 걷어낸다.
+const TRAILING_BLOCK_COLOR_RE = /[ \t]*\{color="([a-z_]+)"\}(?=[ \t]*$)/gm;
+
+function convertBlockColorAttrs(content: string): string {
+  return content
+    .replace(TRAILING_BLOCK_COLOR_RE, (_m, color: string) => ` ${blockColorMarker(color)}`)
+    .replace(/\s*\{color="[^"]*"\}/g, "");
 }
 
 // 인접 컨테이너 블록 분리 — Notion markdown 은 블록들을 빈 줄 없이 연속 줄로 내보내므로
@@ -918,6 +1027,56 @@ function restoreUnderlineSpans(content: string): string {
   return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {
     return `<span underline="true">${text}</span>`;
   });
+}
+
+// ─── 디자인 마커 재조립 (ADR-008) ───
+
+// 블록 색 마커 → 줄 끝 `{color="…"}` (NFM 정준형)
+const OBSIDIAN_BLOCK_COLOR_RE = new RegExp(
+  `[ \\t]*%%${MARKER_BRAND_RE}:block-color:([a-z_]+)%%`,
+  "g",
+);
+
+function restoreBlockColorMarkers(content: string): string {
+  return content.replace(OBSIDIAN_BLOCK_COLOR_RE, (_m, color: string) => ` {color="${color}"}`);
+}
+
+// 컬럼 마커 영역 → <columns>/<column> 정준형 재조립. 마커 어휘는 legacy block 경로와
+// 공유(markers.ts SSOT). 영역 안 내용은 이미 모든 push 변환이 끝난 상태이므로
+// (파이프라인 마지막에 실행) 정준형대로 탭 한 단계씩 들여쓰기만 하면 된다.
+const COLUMN_REGION_RE = new RegExp(
+  `^${escapeRegex(COLUMN_LIST_START)}[ \\t]*\\n([\\s\\S]*?)\\n?^${escapeRegex(COLUMN_LIST_END)}[ \\t]*$\\n?`,
+  "gm",
+);
+
+function indentColumnLines(text: string): string {
+  return text
+    .split("\n")
+    .map((line) => (line === "" ? "" : `\t${line}`))
+    .join("\n");
+}
+
+function reassembleColumns(content: string): string {
+  const sepRe = new RegExp(`^${escapeRegex(COLUMN_SEP)}[ \\t]*$`, "m");
+  let result = content.replace(COLUMN_REGION_RE, (_m, inner: string) => {
+    const cols = inner
+      .split(new RegExp(sepRe.source, "gm"))
+      .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""))
+      .filter((c) => c.trim() !== "");
+    if (cols.length === 0) return "";
+    const parts = cols.map((c) => `<column>\n${indentColumnLines(c)}\n</column>`).join("\n");
+    return `<columns>\n${indentColumnLines(parts)}\n</columns>\n`;
+  });
+  // 소비되지 않은 잔여 컬럼 마커(quote 중첩 등 재조립 불가 위치)는 줄째 걷어낸다 —
+  // Notion 으로 마커 리터럴이 새는 것보다 평탄화 degrade 가 낫다.
+  result = result.replace(
+    new RegExp(
+      `^[>\\t ]*%%${MARKER_BRAND_RE}:(?:column-list:start|column-list:end|column)%%[ \\t]*\\n?`,
+      "gm",
+    ),
+    "",
+  );
+  return result;
 }
 
 function unescapePipes(content: string): string {
