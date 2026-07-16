@@ -3,6 +3,7 @@ import { Sema } from "async-sema";
 import type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
 
 export type NotionBlockType = "image" | "pdf" | "video" | "audio" | "file";
@@ -137,7 +138,7 @@ export class FileHandler {
   }
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
-    const allFiles = await this.vaultFs.listNonMarkdownFiles();
+    const allFiles = await this.listUploadableFiles();
     const folderFiles = allFiles.filter((f) => getFolderPath(f.path) === folderPath);
 
     if (folderFiles.length === 0) return [];
@@ -167,8 +168,19 @@ export class FileHandler {
     return results;
   }
 
-  async pushAllFiles(): Promise<FileUploadResult[]> {
+  /**
+   * 업로드 후보 목록 — 도구 내부 산출물(`.base`/`.notion.json`)은 제외한다.
+   * node 측 VaultFS 는 과거 `.base` 를 워커에서 빼는 식으로 우회했지만, Obsidian
+   * 어댑터는 모든 파일을 반환하므로 플러그인 push 가 사이드카를 Notion 첨부로
+   * 오염시켰다. 소비자인 여기서 일괄 차단해 구현체 간 동작을 통일한다.
+   */
+  private async listUploadableFiles(): Promise<NonMdFileInfo[]> {
     const allFiles = await this.vaultFs.listNonMarkdownFiles();
+    return allFiles.filter((f) => !isDbArtifactPath(f.path));
+  }
+
+  async pushAllFiles(): Promise<FileUploadResult[]> {
+    const allFiles = await this.listUploadableFiles();
     if (allFiles.length === 0) return [];
 
     const filesByFolder = new Map<string, NonMdFileInfo[]>();
