@@ -38,6 +38,31 @@ describe("notionEnhancedToObsidian", () => {
     expect(result).not.toContain("<mention-page");
   });
 
+  // F27: 신형 URL 호스트/경로(`app.notion.com/p/<id>`)도 해소한다. clean-slate pull
+  // 실측 18건이 전부 이 형식이었고, `notion.so` 만 보던 정규식이 놓쳐 raw 태그가 잔존.
+  it("<mention-page url=app.notion.com/p/..> (신형 호스트) → [[notion:id]] (F27)", () => {
+    const id = "36f13b18d382806587b2e8b7ccb303bc";
+    // self-closing·라벨형 두 형태 모두 신형 호스트로
+    const selfClosing = `앞 <mention-page url="https://app.notion.com/p/${id}"/> 뒤`;
+    expect(notionEnhancedToObsidian(selfClosing)).toBe(`앞 [[notion:${id}]] 뒤`);
+
+    const labeled = `> [!note] <mention-page url="https://app.notion.com/p/${id}">AI Engineer (1)</mention-page> | [[ETC]]`;
+    const result = notionEnhancedToObsidian(labeled);
+    expect(result).toContain(`[[notion:${id}]]`);
+    expect(result).not.toContain("<mention-page");
+    expect(result).toContain("[[ETC]]");
+  });
+
+  it("신형/구형 호스트 혼재 한 줄도 모두 해소 (F27)", () => {
+    const a = "36f13b18d382806587b2e8b7ccb303bc";
+    const b = "a7713b18d38282c292ab8158f069bd7f";
+    const input = `<mention-page url="https://app.notion.com/p/${a}">A</mention-page> | <mention-page url="https://www.notion.so/${b}"/>`;
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain(`[[notion:${a}]]`);
+    expect(result).toContain(`[[notion:${b}]]`);
+    expect(result).not.toContain("<mention-page");
+  });
+
   it("<mention-user> → @name", () => {
     const input = '<mention-user id="user-1">John</mention-user>';
     expect(notionEnhancedToObsidian(input)).toBe("@John");

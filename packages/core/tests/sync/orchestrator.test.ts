@@ -1099,6 +1099,128 @@ describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결�
   });
 });
 
+describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)", () => {
+  // 신 API(2025-09-03)에서 원본이 공유 범위에 있으면 linked view 컨테이너도
+  // databases.retrieve 가 성공하고 data_sources 가 채워져 와, queryable 판정만으로는
+  // 원본처럼 캐시에 오등록된다(실측 8개). 같은 data source 를 2~4개 config 가 각각
+  // pull 하며 행을 폴더 릴레이 재배치해 steady churn(매 pull 66 updated)을 만들었다.
+  type Privates = {
+    buildDiscoveredDbConfig(
+      dbId: string,
+      parentPageId: string,
+    ): Promise<
+      | { kind: "ok"; config: { databaseId: string; localFolder: string; titleProperty: string } }
+      | { kind: "linked"; originalDbId: string }
+      | { kind: "inaccessible" }
+      | { kind: "error" }
+    >;
+    pullDiscoveredDatabases(w: string[], f: unknown[], c: unknown[]): Promise<unknown>;
+  };
+
+  function makeOrchestrator(stateDb?: ReturnType<typeof createMockStateDb>) {
+    const notion = createMockNotionClient();
+    const sdb = stateDb ?? createMockStateDb();
+    const orch = new SyncOrchestrator(
+      createConfig(),
+      sdb as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+    return { orch: orch as unknown as Privates, notion, sdb };
+  }
+
+  it("발견 단계: queryable=true 라도 ds 소유자가 다르면 kind=linked 로 원본 id 전달", async () => {
+    const { orch, notion } = makeOrchestrator();
+    notion.getDatabaseSyncability.mockResolvedValue({
+      title: "습관-목록",
+      queryable: true,
+      linkedOriginalDbId: "db-orig",
+    });
+    const out = await orch.buildDiscoveredDbConfig("db-linked", "");
+    expect(out.kind).toBe("linked");
+    if (out.kind === "linked") expect(out.originalDbId).toBe("db-orig");
+  });
+
+  it("pull 단계 자가 치유: 캐시의 컨테이너가 행 parent 로 판정되면 캐시 제거 + linked_dbs 매핑 기록", async () => {
+    const sdb = createMockStateDb();
+    const meta: Record<string, string | null> = {
+      discovered_dbs: JSON.stringify([
+        { databaseId: "db-orig", localFolder: "루틴/목록", titleProperty: "Name" },
+        { databaseId: "db-linked", localFolder: "루틴/습관-목록", titleProperty: "Name" },
+      ]),
+    };
+    sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+    const setMetaCalls: Array<[string, string]> = [];
+    sdb.setMeta.mockImplementation((k: string, v: string) => {
+      setMetaCalls.push([k, v]);
+    });
+
+    const { orch, notion } = makeOrchestrator(sdb);
+    // 컨테이너(db-linked)의 행 parent 가 원본(db-orig)을 가리킨다 — 추가 API 0회 판정 근거.
+    notion.queryAllDatabasePages.mockImplementation(async (dbId: string) =>
+      dbId === "db-linked"
+        ? [
+            {
+              id: "row-1",
+              parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-orig" },
+              last_edited_time: "2026-01-01T00:00:00.000Z",
+              properties: {},
+            },
+          ]
+        : [],
+    );
+
+    await orch.pullDiscoveredDatabases([], [], []);
+
+    // 컨테이너는 캐시에서 제거되고 원본만 남는다 — 다음 pull 부터 이중 방문 자체가 소멸.
+    const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+    expect(discoveredWrite).toBeDefined();
+    const remaining = JSON.parse(discoveredWrite![1]) as Array<{ databaseId: string }>;
+    expect(remaining.map((c) => c.databaseId)).toEqual(["db-orig"]);
+
+    // 컨테이너 → 원본 매핑 기록(placeholder 임베드가 원본 .base 로 향하게).
+    const linkedWrite = setMetaCalls.filter(([k]) => k === "linked_dbs").pop();
+    expect(linkedWrite).toBeDefined();
+    expect(JSON.parse(linkedWrite![1])).toEqual({ dblinked: "dborig" });
+  });
+
+  it("원본이 캐시/설정에 없으면 컨테이너가 행을 계속 소유(유일 통로 폴백) — 캐시·매핑 불변", async () => {
+    const sdb = createMockStateDb();
+    const meta: Record<string, string | null> = {
+      discovered_dbs: JSON.stringify([
+        { databaseId: "db-linked", localFolder: "루틴/습관-목록", titleProperty: "Name" },
+      ]),
+    };
+    sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+    const setMetaCalls: Array<[string, string]> = [];
+    sdb.setMeta.mockImplementation((k: string, v: string) => {
+      setMetaCalls.push([k, v]);
+    });
+
+    const { orch, notion } = makeOrchestrator(sdb);
+    notion.queryAllDatabasePages.mockResolvedValue([
+      {
+        id: "row-1",
+        parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-orig" },
+        last_edited_time: "2026-01-01T00:00:00.000Z",
+        properties: {},
+      },
+    ]);
+
+    await orch.pullDiscoveredDatabases([], [], []);
+
+    // 정상 pull 경로 진입(행 소유 유지) — 스키마 로드가 그 증거.
+    expect(notion.getDatabaseSchema).toHaveBeenCalledWith("db-linked");
+    // linked 매핑은 기록하지 않고, 캐시 재기록이 있어도 컨테이너는 유지된다.
+    expect(setMetaCalls.find(([k]) => k === "linked_dbs")).toBeUndefined();
+    const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+    if (discoveredWrite) {
+      const remaining = JSON.parse(discoveredWrite[1]) as Array<{ databaseId: string }>;
+      expect(remaining.map((c) => c.databaseId)).toContain("db-linked");
+    }
+  });
+});
+
 describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔여)", () => {
   const A32 = "a".repeat(32);
   const B32 = "b".repeat(32);

@@ -111,6 +111,8 @@ function createMockImageHandler() {
       downloads: [],
     })),
     uploadAndAppendImages: vi.fn().mockResolvedValue(undefined),
+    // 실제 구현은 notion-hosted 가 아니거나 실패 시 null (P3-A)
+    localizeNotionFileUrl: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -540,12 +542,16 @@ describe("DatabaseSyncer", () => {
       return calls.map((c: any[]) => String(c[1])).join("\n");
     }
 
-    it("다운로드가 로컬 경로로 치환하면 cover 를 위키링크로 감싼다", async () => {
-      mockNotionClient.extractCover.mockReturnValue({ url: "https://notion.so/img.png" });
-      (mockImageHandler.downloadAllImages as any).mockResolvedValue({
-        content: "![cover](attachments/Task One-cover.png)",
-        downloads: [{ localPath: "attachments/Task One-cover.png" }],
+    it("notion-hosted 커버는 로컬라이즈해 위키링크로 감싼다 (서명 URL 잔존 금지)", async () => {
+      // 회귀: 기존 구현은 downloadAllImages 결과를 `![cover](..)` 마크다운으로 재매치
+      // 했지만 성공 시 실제 결과는 `![[..]]` 위키링크 — 항상 미스매치 → 다운로드까지
+      // 해놓고 frontmatter 에는 만료 서명 URL 이 남았다(실측: LIFE/WORK).
+      mockNotionClient.extractCover.mockReturnValue({
+        url: "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/cover.png?X-Amz-Signature=x",
       });
+      (mockImageHandler.localizeNotionFileUrl as any).mockResolvedValue(
+        "attachments/Task One-cover.png",
+      );
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
           id: "page-1",
@@ -559,13 +565,17 @@ describe("DatabaseSyncer", () => {
 
       const content = coverContent();
       expect(content).toContain("[[attachments/Task One-cover.png]]");
+      expect(content).not.toContain("X-Amz");
+      expect(mockImageHandler.localizeNotionFileUrl).toHaveBeenCalledWith(
+        "https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/cover.png?X-Amz-Signature=x",
+        "Task One-cover",
+      );
     });
 
-    it("다운로드가 비활성/실패해 원격 URL 이 그대로면 평문 URL 로 두고 `[[..]]` 로 감싸지 않는다", async () => {
+    it("외부 커버(unsplash 등)는 평문 URL 로 두고 `[[..]]` 로 감싸지 않는다", async () => {
       // 회귀: 원격 https URL 을 `[[https://..]]` 로 감싸면 존재하지 않는 파일을 가리키는
-      // 깨진 위키링크가 된다(cover-URL).
+      // 깨진 위키링크가 된다(cover-URL). localizeNotionFileUrl 은 외부 URL 에 null 반환.
       mockNotionClient.extractCover.mockReturnValue({ url: "https://notion.so/remote-cover.png" });
-      // 기본 imageHandler 목은 입력 마크다운을 그대로 반환 → 원격 URL 미치환
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
           id: "page-1",
@@ -580,6 +590,112 @@ describe("DatabaseSyncer", () => {
       const content = coverContent();
       expect(content).not.toContain("[[https://");
       expect(content).toContain("https://notion.so/remote-cover.png");
+    });
+  });
+
+  describe("F24 — 동명 DB 폴더 분리 후 행 재배치", () => {
+    it("레코드 경로가 현 DB 폴더 밖이면 원격 무변경이어도 현 폴더로 재배치한다", async () => {
+      // 옛 공유 폴더의 id 접미사 파일 → 새 폴더의 자연 이름으로 이동 + 레코드/위키링크 이전
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks-shared/Task One (0db13b18).md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: computeHash("LOCAL UNCHANGED"),
+      });
+
+      const result = await syncer.pullAll();
+
+      expect(result.updated).toBe(1);
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "databases/tasks/Task One.md",
+        expect.any(String),
+      );
+      expect(mockStateDb.updatePath).toHaveBeenCalledWith("rec-1", "databases/tasks/Task One.md");
+      expect(mockStateDb.deleteWikilink).toHaveBeenCalledWith(
+        "databases/tasks-shared/Task One (0db13b18).md",
+      );
+      expect(mockVaultFs.deleteFile).toHaveBeenCalledWith(
+        "databases/tasks-shared/Task One (0db13b18).md",
+      );
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: "databases/tasks/Task One.md",
+          notionPageId: "page-1",
+        }),
+      );
+    });
+
+    it("재배치 대상이라도 로컬이 수정됐으면(local-first) 원위치를 보존한다", async () => {
+      (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED");
+      const config: Config = {
+        ...createConfig([createDbConfig()]),
+        sync: { ...DEFAULT_CONFIG.sync, conflictStrategy: "local-first" },
+      };
+      const localFirstSyncer = new DatabaseSyncer(
+        config,
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+        pipeline,
+        mockImageHandler as any,
+      );
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks-shared/Task One (0db13b18).md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "different-hash",
+      });
+
+      const result = await localFirstSyncer.pullAll();
+
+      expect(result.updated).toBe(0);
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) =>
+        String(c[0]).endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
+      expect(mockVaultFs.deleteFile).not.toHaveBeenCalled();
+      expect(mockStateDb.updatePath).not.toHaveBeenCalled();
+    });
+
+    it("직속 경로 레코드는 재배치 없이 기존 fast-path 로 스킵된다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        { id: "page-1", last_edited_time: "2026-05-16T00:00:00.000Z" },
+      ]);
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Existing.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: "hash1",
+      });
+
+      const result = await syncer.pullAll();
+
+      expect(result.updated).toBe(0);
+      expect(mockStateDb.updatePath).not.toHaveBeenCalled();
+      const mdWrites = (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) =>
+        String(c[0]).endsWith(".md"),
+      );
+      expect(mdWrites).toHaveLength(0);
     });
   });
 
@@ -958,6 +1074,29 @@ describe("DatabaseSyncer", () => {
       expect(content).toContain("- type: cards");
     });
 
+    it("사이드카가 디스크와 동일 바이트면 재기록하지 않는다 (degrade 로그 중복 제거)", async () => {
+      // 같은 DB 가 한 번의 pull 에서 임베드 재작성 때마다 재생성돼(실측 최대 67회)
+      // degrade 로그가 그만큼 반복됐다 — 동일 바이트면 쓰기·로그 모두 생략한다.
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+      await syncer.pullAll();
+
+      const sidecarCall = (mockVaultFs.writeFile as any).mock.calls.find((c: any[]) =>
+        String(c[0]).endsWith(".notion.json"),
+      );
+      expect(sidecarCall).toBeDefined();
+
+      (mockVaultFs.readFile as any).mockImplementation(async (p: string) =>
+        p.endsWith(".notion.json") ? sidecarCall[1] : "# Test\n\nContent",
+      );
+      (mockVaultFs.writeFile as any).mockClear();
+      await syncer.pullAll();
+
+      const rewrites = (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) =>
+        String(c[0]).endsWith(".notion.json"),
+      );
+      expect(rewrites).toHaveLength(0);
+    });
+
     it(".base 생성 실패해도 Pull은 계속 진행된다", async () => {
       mockNotionClient.getDatabaseSchemaFull.mockRejectedValue(new Error("Schema fetch failed"));
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
@@ -1019,6 +1158,103 @@ describe("DatabaseSyncer", () => {
           title: "Push Wiki",
         }),
       );
+    });
+  });
+
+  describe("F25 — linked view 컨테이너 행 소유 양보", () => {
+    // 실측(E2E): 원본이 공유 범위에 있으면 linked view 컨테이너도 data_sources 가 채워져
+    // 캐시에 원본처럼 오등록된다. 행 parent.database_id 는 항상 원본이므로 이것으로 판정한다.
+    const linkedPage = (id: string, title: string, ownerDbId: string) => ({
+      id,
+      last_edited_time: "2026-05-16T00:00:00.000Z",
+      parent: { type: "data_source_id", data_source_id: "ds-1", database_id: ownerDbId },
+      properties: {
+        Name: { type: "title", title: [{ plain_text: title }] },
+      },
+    });
+
+    it("행 parent 가 다른 DB 면 행 처리를 건너뛰고 linkedOriginalDbId 를 반환한다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        linkedPage("row-1", "달리기", "db-original"),
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("달리기");
+      const config = createDbConfig({ databaseId: "db-linked", localFolder: "루틴/습관-목록" });
+
+      const result = await syncer.pullDatabase(config, {
+        resolveDbFolder: (dbId) => (dbId === "db-original" ? "루틴/목록" : null),
+      });
+
+      expect(result.linkedOriginalDbId).toBe("db-original");
+      expect(result.created).toBe(0);
+      expect(result.updated).toBe(0);
+      const mdWriteCalls = (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) =>
+        String(c[0]).endsWith(".md"),
+      );
+      expect(mdWriteCalls).toHaveLength(0);
+      expect(mockStateDb.upsert).not.toHaveBeenCalled();
+    });
+
+    it("컨테이너의 .base 는 원본 폴더 필터로 재지향돼 빈 뷰가 되지 않는다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        linkedPage("row-1", "달리기", "db-original"),
+      ]);
+      const config = createDbConfig({ databaseId: "db-linked", localFolder: "루틴/습관-목록" });
+
+      await syncer.pullDatabase(config, {
+        resolveDbFolder: () => "루틴/목록",
+      });
+
+      const baseWrite = (mockVaultFs.writeFile as any).mock.calls.find((c: any[]) =>
+        String(c[0]).endsWith(".base"),
+      );
+      expect(baseWrite).toBeDefined();
+      expect(baseWrite![0]).toBe("루틴/습관-목록/Tasks.base");
+      expect(baseWrite![1]).toContain('file.inFolder("루틴/목록")');
+    });
+
+    it("원본 폴더를 모르면(미발견) 유일한 접근 통로이므로 기존대로 행을 소유한다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        linkedPage("row-1", "달리기", "db-unknown"),
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("달리기");
+      const config = createDbConfig({ databaseId: "db-linked", localFolder: "루틴/습관-목록" });
+
+      const result = await syncer.pullDatabase(config, { resolveDbFolder: () => null });
+
+      expect(result.linkedOriginalDbId).toBeUndefined();
+      expect(result.created).toBe(1);
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "루틴/습관-목록/달리기.md",
+        expect.any(String),
+      );
+    });
+
+    it("행 parent 가 자기 자신이면(원본) 판정 없이 정상 처리한다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        linkedPage("row-1", "달리기", "db-123"),
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("달리기");
+
+      const result = await syncer.pullDatabase(createDbConfig(), {
+        resolveDbFolder: () => {
+          throw new Error("원본 config 에서는 호출되지 않아야 한다");
+        },
+      });
+
+      expect(result.linkedOriginalDbId).toBeUndefined();
+      expect(result.created).toBe(1);
+    });
+
+    it("resolveDbFolder 미주입(명시 설정 경로)이면 기존 동작을 유지한다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        linkedPage("row-1", "달리기", "db-original"),
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("달리기");
+
+      const result = await syncer.pullDatabase(createDbConfig());
+
+      expect(result.linkedOriginalDbId).toBeUndefined();
+      expect(result.created).toBe(1);
     });
   });
 });

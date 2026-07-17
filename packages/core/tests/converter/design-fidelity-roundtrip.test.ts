@@ -306,3 +306,135 @@ describe("디자인 요소 복합 문서 수렴", () => {
     expect(second.pushed).toBe(first.pushed);
   });
 });
+
+describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", () => {
+  // 실측 재현(인사이드 아웃): 콜아웃의 첫 자식이 컬럼이면 innermost 평탄화 순서상
+  // start 마커가 콜아웃 본문 첫 줄 → 제목으로 흡수되어 줄 앵커 strip 을 벗어났다.
+  const CALLOUT_WRAPPING_COLUMNS = [
+    '<callout icon="⚠️" color="gray_bg">',
+    "\t<columns>",
+    "\t\t<column>",
+    "\t\t\t왼쪽 내용",
+    "\t\t</column>",
+    "\t\t<column>",
+    "\t\t\t오른쪽 내용",
+    "\t\t</column>",
+    "\t</columns>",
+    "</callout>",
+  ].join("\n");
+
+  it("pull: 콜아웃 제목으로 흡수된 컬럼 start 마커도 걷어낸다 (평탄화 degrade)", () => {
+    const pulled = notionEnhancedToObsidian(CALLOUT_WRAPPING_COLUMNS);
+
+    expect(pulled).not.toContain("%%im-nobsidian:column");
+    expect(pulled).toContain("왼쪽 내용");
+    expect(pulled).toContain("오른쪽 내용");
+    // 스타일 마커는 유지된다 (아이콘·색 보존)
+    expect(pulled).toContain("callout-style");
+  });
+
+  it("push: 왕복해도 컬럼 마커 리터럴이 Notion 으로 새지 않는다", () => {
+    const { pushed } = roundtrip(CALLOUT_WRAPPING_COLUMNS);
+
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("왼쪽 내용");
+  });
+
+  it("v0.3.0 볼트 잔재(제목에 흡수된 마커 라인) push 시에도 누수가 없다", () => {
+    // 구버전 pull 이 이미 만들어 둔 오염 라인 — push 안전망이 걷어야 한다
+    const legacyVault = [
+      "> [!note] %%im-nobsidian:column-list:start%% %%im-nobsidian:callout-style:color=gray_bg%%",
+      ">",
+      "> 본문 내용",
+    ].join("\n");
+
+    const pushed = obsidianToNotionEnhanced(legacyVault);
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("본문 내용");
+  });
+
+  it("pull: 이중 중첩(콜아웃 안 콜아웃)의 구조적 탭이 남은 컬럼 마커도 걷어낸다", () => {
+    // 실측(루틴 iOS 알림 버전): quote 프리픽스 소비는 `>`+공백 1개 단위라
+    // `> > \t%%..%%` 의 탭이 남아 줄 앵커 규칙(EDGE/SEP)을 벗어났다.
+    const nested = [
+      '<callout icon="💡">',
+      "\t바깥 콜아웃 제목",
+      '\t<callout icon="💡">',
+      "\t\t안쪽 콜아웃 제목",
+      "\t\t<columns>",
+      "\t\t\t<column>",
+      "\t\t\t\t왼쪽",
+      "\t\t\t</column>",
+      "\t\t\t<column>",
+      "\t\t\t\t오른쪽",
+      "\t\t\t</column>",
+      "\t\t</columns>",
+      "\t</callout>",
+      "</callout>",
+    ].join("\n");
+
+    const pulled = notionEnhancedToObsidian(nested);
+    expect(pulled).not.toContain("%%im-nobsidian:column");
+    expect(pulled).toContain("왼쪽");
+    expect(pulled).toContain("오른쪽");
+
+    const pushed = obsidianToNotionEnhanced(pulled);
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+  });
+
+  it("pull: 업로드 이미지(서명 URL) 아이콘은 마커에 싣지 않는다 — 색만 보존", () => {
+    const canonical = [
+      '<callout icon="https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/icon.png?X-Amz-Signature=deadbeef" color="gray_bg">',
+      "\t제목 텍스트",
+      "\t본문",
+      "</callout>",
+    ].join("\n");
+
+    const pulled = notionEnhancedToObsidian(canonical);
+
+    expect(pulled).not.toContain("prod-files-secure");
+    expect(pulled).not.toContain("X-Amz");
+    expect(pulled).not.toContain("icon=");
+    expect(pulled).toContain("%%im-nobsidian:callout-style:color=gray_bg%%");
+    expect(pulled).toContain("> [!note] 제목 텍스트");
+  });
+
+  it("pull: URL 아이콘 + 무색 콜아웃은 마커 없이 평문 콜아웃이 된다", () => {
+    const canonical = [
+      '<callout icon="https://file.notion.so/f/f/space/file/img.png?table=block&id=x">',
+      "\t제목만",
+      "</callout>",
+    ].join("\n");
+
+    const pulled = notionEnhancedToObsidian(canonical);
+
+    expect(pulled).not.toContain("callout-style");
+    expect(pulled).not.toContain("file.notion.so");
+    expect(pulled).toContain("> [!note] 제목만");
+  });
+
+  it("URL 아이콘 콜아웃 왕복: 2차 왕복이 1차와 동일 (churn 0)", () => {
+    const canonical = [
+      '<callout icon="https://prod-files-secure.s3.us-west-2.amazonaws.com/a/b/icon.png?X-Amz-Signature=cafe" color="gray_bg">',
+      "\t제목",
+      "\t본문 줄",
+      "</callout>",
+    ].join("\n");
+
+    const first = roundtrip(canonical);
+    const second = roundtrip(first.pushed);
+
+    expect(second.pushed).toBe(first.pushed);
+    expect(first.pushed).not.toContain("X-Amz");
+    // 마커의 icon 부재 → push 는 icon 속성을 채우지 않는다 (아이콘 없는 콜아웃 degrade)
+    expect(first.pushed).toContain('<callout color="gray_bg">');
+  });
+
+  it("이모지 아이콘 콜아웃은 기존대로 마커에 실린다 (회귀 방지)", () => {
+    const canonical = ['<callout icon="🔥" color="yellow_bg">', "\t제목", "</callout>"].join("\n");
+
+    const pulled = notionEnhancedToObsidian(canonical);
+    expect(pulled).toContain("icon=%F0%9F%94%A5");
+    expect(pulled).toContain("color=yellow_bg");
+  });
+});
