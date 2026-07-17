@@ -9,12 +9,7 @@ export interface DBEntry {
 }
 
 export type PropertyValue =
-  | string
-  | number
-  | boolean
-  | null
-  | string[]
-  | { start: string; end?: string };
+  string | number | boolean | null | string[] | { start: string; end?: string };
 
 export interface GroupedEntries {
   readonly groupName: string;
@@ -29,16 +24,7 @@ export interface CalendarEntry {
 }
 
 export type NotionColor =
-  | "default"
-  | "gray"
-  | "brown"
-  | "orange"
-  | "yellow"
-  | "green"
-  | "blue"
-  | "purple"
-  | "pink"
-  | "red";
+  "default" | "gray" | "brown" | "orange" | "yellow" | "green" | "blue" | "purple" | "pink" | "red";
 
 export interface ViewRenderData {
   readonly databaseId: string;
