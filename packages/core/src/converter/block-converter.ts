@@ -590,8 +590,7 @@ export class BlockConverter {
     if (block.type !== "paragraph") return null;
 
     const para = block.paragraph as
-      | { rich_text?: Array<{ text?: { content: string } }> }
-      | undefined;
+      { rich_text?: Array<{ text?: { content: string } }> } | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
     const toggleMatch = text.match(/%%IM-NOBSIDIAN_TOGGLE_(\d+)%%/);
@@ -622,8 +621,7 @@ export class BlockConverter {
     if (block.type !== "paragraph") return null;
 
     const para = block.paragraph as
-      | { rich_text?: Array<{ text?: { content: string } }> }
-      | undefined;
+      { rich_text?: Array<{ text?: { content: string } }> } | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
     const colMatch = text.match(/%%IM-NOBSIDIAN_COLLIST_(\d+)%%/);
@@ -645,8 +643,7 @@ export class BlockConverter {
     if (block.type !== "paragraph") return null;
 
     const para = block.paragraph as
-      | { rich_text?: Array<{ text?: { content: string } }> }
-      | undefined;
+      { rich_text?: Array<{ text?: { content: string } }> } | undefined;
     const text = para?.rich_text?.[0]?.text?.content ?? "";
 
     if (text.includes("%%IM-NOBSIDIAN_DIVIDER%%")) {
@@ -666,8 +663,7 @@ export class BlockConverter {
     if (block.type !== "paragraph") return null;
 
     const para = block.paragraph as
-      | { rich_text?: Array<{ text?: { content: string } }> }
-      | undefined;
+      { rich_text?: Array<{ text?: { content: string } }> } | undefined;
     const texts = para?.rich_text ?? [];
     if (texts.length !== 1) return null;
 
@@ -699,8 +695,7 @@ export class BlockConverter {
       caption = img?.caption?.[0]?.text?.content;
     } else if (block.type === "paragraph") {
       const para = block.paragraph as
-        | { rich_text?: Array<{ text?: { content: string } }> }
-        | undefined;
+        { rich_text?: Array<{ text?: { content: string } }> } | undefined;
       const texts = para?.rich_text ?? [];
       if (texts.length === 1) {
         const content = texts[0]?.text?.content ?? "";
@@ -969,8 +964,7 @@ function isListBlock(block: Record<string, unknown>): boolean {
 function flattenListDepth(block: Record<string, unknown>, depth: number): Record<string, unknown> {
   const blockType = block.type as string;
   const blockData = block[blockType] as
-    | { children?: Array<Record<string, unknown>>; [key: string]: unknown }
-    | undefined;
+    { children?: Array<Record<string, unknown>>; [key: string]: unknown } | undefined;
   if (!blockData?.children || blockData.children.length === 0) return block;
 
   if (depth >= NOTION_MAX_LIST_DEPTH - 1) {
@@ -1001,8 +995,7 @@ function collectAllDescendants(
   for (const block of blocks) {
     const blockType = block.type as string;
     const blockData = block[blockType] as
-      | { children?: Array<Record<string, unknown>>; [key: string]: unknown }
-      | undefined;
+      { children?: Array<Record<string, unknown>>; [key: string]: unknown } | undefined;
     const children = blockData?.children;
     const blockWithoutChildren = children
       ? { ...block, [blockType]: { ...blockData, children: undefined } }

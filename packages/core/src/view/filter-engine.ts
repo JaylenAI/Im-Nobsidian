@@ -150,14 +150,7 @@ function extractGroupName(val: PropertyValue): string | null {
 export interface FilterCondition {
   property: string;
   operator:
-    | "equals"
-    | "contains"
-    | "startsWith"
-    | "isEmpty"
-    | "isNotEmpty"
-    | "gt"
-    | "lt"
-    | "between";
+    "equals" | "contains" | "startsWith" | "isEmpty" | "isNotEmpty" | "gt" | "lt" | "between";
   value?: string | number | boolean;
   valueTo?: string | number;
 }
