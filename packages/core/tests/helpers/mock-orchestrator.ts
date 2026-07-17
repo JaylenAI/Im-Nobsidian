@@ -110,7 +110,11 @@ export function createMockNotionClient() {
     extractProperties: vi.fn().mockReturnValue({}),
     setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
+    getDatabaseSchemaFull: vi.fn().mockResolvedValue({}),
     getDatabaseSyncability: vi.fn().mockResolvedValue({ title: "Test DB", queryable: true }),
+    // 기본값 null = linked 해소 실패 → 기존 접근 불가 경로 유지(F22 이전 동작과 동일)
+    resolveLinkedDatabase: vi.fn().mockResolvedValue(null),
+    getChildDatabaseIds: vi.fn().mockResolvedValue([]),
     getDatabaseTitle: vi.fn().mockResolvedValue("Test DB"),
     getDatabaseViewsConfig: vi.fn().mockResolvedValue(null),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),

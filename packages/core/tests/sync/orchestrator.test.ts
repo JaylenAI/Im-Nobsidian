@@ -988,11 +988,23 @@ describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결�
       }
     });
 
-    it("queryable=false(링크드/미공유) 면 kind=inaccessible — 빈 폴더/.base 오염 방지", async () => {
+    it("queryable=false + linked 해소 실패(미공유 등) 면 kind=inaccessible — 빈 폴더/.base 오염 방지", async () => {
       const { orch, notion } = makeOrchestrator();
       notion.getDatabaseSyncability.mockResolvedValue({ title: "링크드", queryable: false });
       const out = await orch.buildDiscoveredDbConfig("db-linked", "");
       expect(out.kind).toBe("inaccessible");
+    });
+
+    it("queryable=false 라도 linked view 가 해소되면 kind=linked 로 원본 id 를 전달(F22)", async () => {
+      const { orch, notion } = makeOrchestrator();
+      notion.getDatabaseSyncability.mockResolvedValue({ title: "", queryable: false });
+      notion.resolveLinkedDatabase.mockResolvedValue({
+        originalDbId: "db-orig",
+        viewName: "Project 갤러리",
+      });
+      const out = await orch.buildDiscoveredDbConfig("db-linked", "");
+      expect(out.kind).toBe("linked");
+      if (out.kind === "linked") expect(out.originalDbId).toBe("db-orig");
     });
 
     it("404(삭제된 DB) 면 kind=inaccessible — 재시도하지 않음", async () => {
@@ -1084,5 +1096,276 @@ describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결�
         expect(JSON.parse(discoveredWrite[1])).toHaveLength(1);
       }
     });
+  });
+});
+
+describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)", () => {
+  // 신 API(2025-09-03)에서 원본이 공유 범위에 있으면 linked view 컨테이너도
+  // databases.retrieve 가 성공하고 data_sources 가 채워져 와, queryable 판정만으로는
+  // 원본처럼 캐시에 오등록된다(실측 8개). 같은 data source 를 2~4개 config 가 각각
+  // pull 하며 행을 폴더 릴레이 재배치해 steady churn(매 pull 66 updated)을 만들었다.
+  type Privates = {
+    buildDiscoveredDbConfig(
+      dbId: string,
+      parentPageId: string,
+    ): Promise<
+      | { kind: "ok"; config: { databaseId: string; localFolder: string; titleProperty: string } }
+      | { kind: "linked"; originalDbId: string }
+      | { kind: "inaccessible" }
+      | { kind: "error" }
+    >;
+    pullDiscoveredDatabases(w: string[], f: unknown[], c: unknown[]): Promise<unknown>;
+  };
+
+  function makeOrchestrator(stateDb?: ReturnType<typeof createMockStateDb>) {
+    const notion = createMockNotionClient();
+    const sdb = stateDb ?? createMockStateDb();
+    const orch = new SyncOrchestrator(
+      createConfig(),
+      sdb as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+    return { orch: orch as unknown as Privates, notion, sdb };
+  }
+
+  it("발견 단계: queryable=true 라도 ds 소유자가 다르면 kind=linked 로 원본 id 전달", async () => {
+    const { orch, notion } = makeOrchestrator();
+    notion.getDatabaseSyncability.mockResolvedValue({
+      title: "습관-목록",
+      queryable: true,
+      linkedOriginalDbId: "db-orig",
+    });
+    const out = await orch.buildDiscoveredDbConfig("db-linked", "");
+    expect(out.kind).toBe("linked");
+    if (out.kind === "linked") expect(out.originalDbId).toBe("db-orig");
+  });
+
+  it("pull 단계 자가 치유: 캐시의 컨테이너가 행 parent 로 판정되면 캐시 제거 + linked_dbs 매핑 기록", async () => {
+    const sdb = createMockStateDb();
+    const meta: Record<string, string | null> = {
+      discovered_dbs: JSON.stringify([
+        { databaseId: "db-orig", localFolder: "루틴/목록", titleProperty: "Name" },
+        { databaseId: "db-linked", localFolder: "루틴/습관-목록", titleProperty: "Name" },
+      ]),
+    };
+    sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+    const setMetaCalls: Array<[string, string]> = [];
+    sdb.setMeta.mockImplementation((k: string, v: string) => {
+      setMetaCalls.push([k, v]);
+    });
+
+    const { orch, notion } = makeOrchestrator(sdb);
+    // 컨테이너(db-linked)의 행 parent 가 원본(db-orig)을 가리킨다 — 추가 API 0회 판정 근거.
+    notion.queryAllDatabasePages.mockImplementation(async (dbId: string) =>
+      dbId === "db-linked"
+        ? [
+            {
+              id: "row-1",
+              parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-orig" },
+              last_edited_time: "2026-01-01T00:00:00.000Z",
+              properties: {},
+            },
+          ]
+        : [],
+    );
+
+    await orch.pullDiscoveredDatabases([], [], []);
+
+    // 컨테이너는 캐시에서 제거되고 원본만 남는다 — 다음 pull 부터 이중 방문 자체가 소멸.
+    const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+    expect(discoveredWrite).toBeDefined();
+    const remaining = JSON.parse(discoveredWrite![1]) as Array<{ databaseId: string }>;
+    expect(remaining.map((c) => c.databaseId)).toEqual(["db-orig"]);
+
+    // 컨테이너 → 원본 매핑 기록(placeholder 임베드가 원본 .base 로 향하게).
+    const linkedWrite = setMetaCalls.filter(([k]) => k === "linked_dbs").pop();
+    expect(linkedWrite).toBeDefined();
+    expect(JSON.parse(linkedWrite![1])).toEqual({ dblinked: "dborig" });
+  });
+
+  it("원본이 캐시/설정에 없으면 컨테이너가 행을 계속 소유(유일 통로 폴백) — 캐시·매핑 불변", async () => {
+    const sdb = createMockStateDb();
+    const meta: Record<string, string | null> = {
+      discovered_dbs: JSON.stringify([
+        { databaseId: "db-linked", localFolder: "루틴/습관-목록", titleProperty: "Name" },
+      ]),
+    };
+    sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+    const setMetaCalls: Array<[string, string]> = [];
+    sdb.setMeta.mockImplementation((k: string, v: string) => {
+      setMetaCalls.push([k, v]);
+    });
+
+    const { orch, notion } = makeOrchestrator(sdb);
+    notion.queryAllDatabasePages.mockResolvedValue([
+      {
+        id: "row-1",
+        parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-orig" },
+        last_edited_time: "2026-01-01T00:00:00.000Z",
+        properties: {},
+      },
+    ]);
+
+    await orch.pullDiscoveredDatabases([], [], []);
+
+    // 정상 pull 경로 진입(행 소유 유지) — 스키마 로드가 그 증거.
+    expect(notion.getDatabaseSchema).toHaveBeenCalledWith("db-linked");
+    // linked 매핑은 기록하지 않고, 캐시 재기록이 있어도 컨테이너는 유지된다.
+    expect(setMetaCalls.find(([k]) => k === "linked_dbs")).toBeUndefined();
+    const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+    if (discoveredWrite) {
+      const remaining = JSON.parse(discoveredWrite[1]) as Array<{ databaseId: string }>;
+      expect(remaining.map((c) => c.databaseId)).toContain("db-linked");
+    }
+  });
+});
+
+describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔여)", () => {
+  const A32 = "a".repeat(32);
+  const B32 = "b".repeat(32);
+  const marker = (id: string, title: string) =>
+    `%%im-nobsidian:child-database:id=${id}&title=${encodeURIComponent(title)}%%`;
+
+  type Privates = {
+    rewriteDbPlaceholderEmbeds(
+      paths: string[],
+      dbConfigs: Array<{ databaseId: string; localFolder: string }>,
+      linkedMap: Map<string, string>,
+    ): Promise<void>;
+    pullDiscoveredDatabases(w: string[], f: unknown[], c: unknown[]): Promise<unknown>;
+    buildDiscoveredDbConfig(
+      dbId: string,
+      parentPageId: string,
+    ): Promise<{ kind: string; config?: { localFolder: string } }>;
+    databaseSyncer: {
+      baseFileInfo: Map<string, { basePath: string; title: string }>;
+      pullDatabase: (cfg: unknown) => Promise<unknown>;
+    };
+  };
+
+  function make(stateDb?: ReturnType<typeof createMockStateDb>) {
+    const notion = createMockNotionClient();
+    const sdb = stateDb ?? createMockStateDb();
+    const vaultFs = createMockVaultFs();
+    const orch = new SyncOrchestrator(createConfig(), sdb as any, notion as any, vaultFs);
+    return { orch: orch as unknown as Privates, notion, sdb, vaultFs };
+  }
+
+  it("재작성은 DatabaseSyncer 가 실제 기록한 .base 경로(baseFileInfo)를 쓴다 — 폴더명 추측 금지", async () => {
+    const { orch, sdb, vaultFs } = make();
+    // 폴더명은 "0-인박스"(하이픈 새니타이즈), 실제 .base 는 "0. 인박스.base"(제목 보존)
+    orch.databaseSyncer.baseFileInfo.set(A32, {
+      basePath: "para/0-인박스/0. 인박스.base",
+      title: "0. 인박스",
+    });
+    (vaultFs.exists as ReturnType<typeof vi.fn>).mockImplementation((p: string) =>
+      Promise.resolve(p === "para/0-인박스/0. 인박스.base"),
+    );
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+      `# 노트\n\n**0. 인박스** *(Notion DB)*${marker(A32, "0. 인박스")}\n`,
+    );
+    (sdb.getByPath as ReturnType<typeof vi.fn>).mockReturnValue(null);
+
+    await orch.rewriteDbPlaceholderEmbeds(
+      ["page.md"],
+      [{ databaseId: A32, localFolder: "para/0-인박스" }],
+      new Map(),
+    );
+
+    const write = (vaultFs.writeFile as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([p]) => p === "page.md",
+    );
+    expect(write).toBeDefined();
+    expect(write![1]).toContain("![[para/0-인박스/0. 인박스.base|0. 인박스]]");
+    expect(write![1]).not.toContain("0-인박스/0-인박스.base"); // 추측 경로 회귀 방지
+  });
+
+  it(".base 가 디스크에 없으면 재작성하지 않고 placeholder 를 마커째 보존한다", async () => {
+    const { orch, vaultFs } = make();
+    (vaultFs.exists as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+      `**목록** *(Notion DB)*${marker(A32, "목록")}\n`,
+    );
+
+    await orch.rewriteDbPlaceholderEmbeds(
+      ["page.md"],
+      [{ databaseId: A32, localFolder: "p/목록" }],
+      new Map(),
+    );
+
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
+  });
+
+  it("DB row 본문에 중첩된 child DB 를 라운드 반복으로 발견·등록·동기화한다", async () => {
+    const sdb = createMockStateDb();
+    const meta: Record<string, string | null> = {
+      discovered_dbs: JSON.stringify([
+        { databaseId: "db-a", localFolder: "p/db-a", titleProperty: "Name" },
+      ]),
+    };
+    sdb.getMeta.mockImplementation((key: string) => meta[key] ?? null);
+    const setMetaCalls: Array<[string, string]> = [];
+    sdb.setMeta.mockImplementation((k: string, v: string) => {
+      setMetaCalls.push([k, v]);
+    });
+    // row md → Notion 페이지 역조회(발견된 DB 의 부모가 되는 row 페이지)
+    sdb.getByPath.mockImplementation((p: string) =>
+      p === "p/db-a/row.md" ? { id: 5, notionPageId: "row-page-1", obsidianPath: p } : null,
+    );
+    sdb.getByNotionId.mockImplementation((id: string) =>
+      id === "row-page-1" ? { obsidianPath: "p/db-a/row.md" } : null,
+    );
+
+    const { orch, notion, vaultFs } = make(sdb);
+    notion.getDatabaseSyncability.mockResolvedValue({ title: "중첩 DB", queryable: true });
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation((p: string) =>
+      Promise.resolve(
+        p === "p/db-a/row.md" ? `본문\n\n**중첩 DB** *(Notion DB)*${marker(B32, "중첩 DB")}\n` : "",
+      ),
+    );
+    const pullDatabase = vi
+      .spyOn(orch.databaseSyncer, "pullDatabase")
+      .mockResolvedValueOnce({
+        created: 1,
+        updated: 0,
+        conflicts: [],
+        failed: [],
+        writtenPaths: ["p/db-a/row.md"],
+      })
+      .mockResolvedValue({
+        created: 0,
+        updated: 0,
+        conflicts: [],
+        failed: [],
+        writtenPaths: [],
+      });
+
+    await orch.pullDiscoveredDatabases([], [], []);
+
+    // 라운드 1: db-a 동기화 → row.md 스캔 → B32 발견 → 라운드 2: 중첩 DB 동기화
+    expect(pullDatabase).toHaveBeenCalledTimes(2);
+    const second = pullDatabase.mock.calls[1]![0] as { databaseId: string; localFolder: string };
+    expect(second.databaseId.replace(/-/g, "")).toBe(B32);
+    // row 파일은 folder note 가 아니므로 페이지명 하위로 중첩(형제 row 동명 DB 충돌 방지)
+    expect(second.localFolder).toBe("p/db-a/row/중첩-DB");
+
+    const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
+    expect(discoveredWrite).toBeDefined();
+    expect(JSON.parse(discoveredWrite![1])).toHaveLength(2);
+  });
+
+  it("buildDiscoveredDbConfig — folder note 부모는 기존 폴더, 플레인 md 부모는 페이지명 하위로", async () => {
+    const { orch, notion, sdb } = make();
+    notion.getDatabaseSyncability.mockResolvedValue({ title: "회고", queryable: true });
+
+    sdb.getByNotionId.mockReturnValue({ obsidianPath: "OKR/Key-Results/1주차.md" });
+    const row = await orch.buildDiscoveredDbConfig("db-x", "row-1");
+    expect(row.kind).toBe("ok");
+    expect(row.config?.localFolder).toBe("OKR/Key-Results/1주차/회고");
+
+    sdb.getByNotionId.mockReturnValue({ obsidianPath: "AI Engineer/AI Engineer.md" });
+    const note = await orch.buildDiscoveredDbConfig("db-y", "page-1");
+    expect(note.config?.localFolder).toBe("AI Engineer/회고");
   });
 });

@@ -95,6 +95,21 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
     expect(lines[anchorIdx + 1]).toBe("%%사적 메모%%");
   });
 
+  it("style=html comment 마커는 <!--원문--> 으로 복원 (F26 확장)", () => {
+    const content = "---\ntitle: t\n---\n앞 문단입니다.\n뒤 문단입니다.";
+    const result = run(content, [
+      {
+        type: "comment",
+        params: { text: " 비밀 메모 ", style: "html", __anchor: "앞 문단입니다." },
+        startIndex: 999,
+      },
+    ]);
+    const lines = result.split("\n");
+    const anchorIdx = lines.indexOf("앞 문단입니다.");
+    expect(lines[anchorIdx + 1]).toBe("<!-- 비밀 메모 -->");
+    expect(result).not.toContain("%%");
+  });
+
   it("앵커를 못 찾으면 줄 경계로 삽입하되 단어를 자르지 않음", () => {
     const content = "첫 줄\n둘째 줄";
     const result = run(content, [

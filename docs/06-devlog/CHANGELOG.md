@@ -3,6 +3,24 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.1] - 2026-07-17
+
+> steady churn 근절 + 왕복 충실도 마감 릴리스.
+> v0.3.0부터 매 pull 마다 반복되던 "66 updated"(steady churn)의 진범을 근본 원인까지
+> 규명·수정하고, clean-slate 실데이터 E2E(887 파일)로 churn-0·무손실을 재확정했다.
+
+### Fixed
+
+- **steady churn 근절 (진범: linked view 컨테이너 이중 등록)** — 신 Notion API(2025-09-03)에서 원본 DB가 공유 범위면 linked view 컨테이너도 `databases.retrieve`가 성공하고 `data_sources`가 채워져 응답만으로 원본과 구분 불가했다. 발견·pull 자가치유·orchestrator 3층에서 컨테이너의 행 소유를 원본에 양보하고 `.base`를 원본 폴더 필터로 재지향(캐시 제거·매핑 기록). **v0.3.0부터 지속되던 매 pull "66 updated"가 0으로 종결**
+- **동명 형제 인라인 DB 폴더 충돌 분리** — 같은 부모 아래 같은 제목의 인라인 DB들이 제목 기반 폴더 유도로 한 폴더를 공유해 `.base`·사이드카를 서로 덮어쓰고 행이 섞이던 문제. 폴더 점유 대장으로 결정적 분리(첫 항목 원 폴더 유지, 이후 ` (dbid8)` 접미) — 22쌍 해소
+- **HTML 주석 push 유출** — `%%…%%`에 이어 `<!--…-->`도 push 시 Notion 평문 문단으로 노출되던 정보 유출 봉합. `CommentStripper` HTML 패스 + 보존 마커(`style=html`)로 pull 시 원래 문법 복원
+- **page mention 신형 URL 미해소** — 콜아웃 breadcrumb의 `<mention-page url="app.notion.com/p/<id>">`가 위키링크로 변환되지 않고 raw 태그로 잔존하던 문제. 변환 정규식을 `notion.so/<id>`·`app.notion.com/p/<id>` 양쪽 모두 흡수하도록 일반화(id 32-hex 앵커)
+
+### Quality
+
+- **1285 테스트 통과**(0 실패), lint·typecheck·build 클린
+- **clean-slate 실데이터 E2E** — 볼트 전량 삭제(config만 보존) 후 fresh full pull **887 파일 / 0 실패**(페이지 258 + DB 행 629; linked view 컨테이너 70개를 원본 DB로 해소해 중복 행 파일 제거), audit-vault **결함 0 · 해시 불일치 0 · churn-0 PASS**, 재 pull "no changes"(byte-identical)로 멱등 재확정
+
 ## [0.3.0] - 2026-07-14
 
 > 왕복 충실도 일괄 봉합 + 증분 pull 누락 수정 릴리스.

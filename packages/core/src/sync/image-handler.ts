@@ -6,6 +6,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE } from "../constants/markers.js";
 import { getLogger } from "../utils/logger.js";
+import { isNotionHostedFileUrl, isNotionAttachmentUri } from "../utils/notion-file-url.js";
 
 /** 미디어(이미지/파일) 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface MediaOptions {
@@ -262,6 +263,18 @@ export class ImageHandler {
       (s) => /^https?:\/\//.test(s.url) && this.isNotionImageUrl(s.url),
     );
     const internalMatches = embeds.filter((s) => INTERNAL_FILE_URL_RE.test(s.url));
+
+    // attachment:{id}:{filename} — 통합이 접근할 수 없는 파일의 불투명 참조(실측: 어떤
+    // 공개 API 로도 해소 불가). 다운로드하지 않고 원문을 보존하되, 사용자가 원인을 알 수
+    // 있게 경고만 남긴다.
+    for (const span of embeds) {
+      if (isNotionAttachmentUri(span.url)) {
+        getLogger().warn(
+          `[Im-Nobsidian] 접근 불가 첨부(attachment:) 감지 — Notion 통합에 공유되지 않은 ` +
+            `원본의 파일이라 다운로드할 수 없습니다. 원문을 보존합니다: ${pageTitle}`,
+        );
+      }
+    }
 
     if (notionMatches.length === 0 && internalMatches.length === 0) {
       return { content: markdown, downloads: [] };
@@ -631,7 +644,11 @@ export class ImageHandler {
         const MAX_FILE_SIZE = this.maxFileSizeBytes;
         if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
           const sizeMB = Math.round(parseInt(contentLength, 10) / 1024 / 1024);
-          getLogger().debug(`[Im-Nobsidian] 파일 스킵 — 너무 큼 (${sizeMB}MB): ${caption}`);
+          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다.
+          // push 는 restoreMediaTags 가 태그로 복원해 Notion 블록을 보존한다(실측: 동일 블록 유지).
+          getLogger().info(
+            `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${sizeMB}MB > ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB), Notion 원본 링크 유지: ${caption}`,
+          );
           return { originalUrl: url, localPath: "", hash: "", size: 0 };
         }
 
@@ -662,11 +679,27 @@ export class ImageHandler {
   }
 
   private isNotionFileUrl(url: string): boolean {
-    return (
-      url.includes("secure.notion-static.com") ||
-      url.includes("prod-files-secure") ||
-      url.includes("s3.us-west-2.amazonaws.com/secure.notion-static.com")
-    );
+    return isNotionHostedFileUrl(url);
+  }
+
+  /**
+   * notion-hosted 파일 URL 하나를 로컬 첨부로 로컬라이즈한다(P3-A).
+   * DB 행의 `files` 속성처럼 본문 밖에 있는 서명 URL 용 — 서명 URL 은 약 1시간 뒤
+   * 만료되어 frontmatter 에 남으면 깨진 링크가 되고, push 로 되밀면 Notion 원본이
+   * external(만료 URL)로 오염된다(실측). notion-hosted 가 아닌 URL(사용자가 넣은
+   * 진짜 외부 링크)은 다운로드 대상이 아니므로 null 을 반환한다.
+   *
+   * @returns 로컬 첨부 경로(`attachments/...`), 다운로드 대상이 아니거나 실패 시 null
+   */
+  async localizeNotionFileUrl(url: string, caption: string): Promise<string | null> {
+    if (!/^https?:\/\//.test(url) || !this.isNotionFileUrl(url)) return null;
+    try {
+      const download = await this.downloadFile(url, caption, caption);
+      return download.localPath || null;
+    } catch (error) {
+      getLogger().warn(`[Im-Nobsidian] 속성 파일 다운로드 실패 (${caption}): ${error}`);
+      return null;
+    }
   }
 
   private guessExtension(url: string): string | null {

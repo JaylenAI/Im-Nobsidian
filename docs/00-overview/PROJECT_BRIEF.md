@@ -93,7 +93,7 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 | 영역        | 기술                                |
 | ----------- | ----------------------------------- |
 | 언어        | TypeScript (strict)                 |
-| 런타임      | Node.js 20+                         |
+| 런타임      | Node.js 22.13+                      |
 | 패키지 관리 | pnpm workspaces (monorepo)          |
 | 빌드        | tsup (core, cli) / esbuild (plugin) |
 | 테스트      | vitest                              |

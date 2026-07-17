@@ -297,13 +297,20 @@ export class NotionClient {
   }
 
   /**
-   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 1회 호출로 판별한다.
+   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 판별한다.
    * 신 모델(2025-09-03)에서 링크드 DB·미공유 데이터 소스·삭제 DB 는 `data_sources` 가
    * 비어, 행 조회(`dataSources.query`)가 404 로 실패하고 그 전에 생성된 빈 폴더/`.base` 만
    * 남긴다. 발견 단계에서 미리 걸러 **빈 폴더/.base 오염 + 매 pull 의 404 노이즈**를 차단한다.
    * 제목은 함께 반환해 호출처가 추가 조회 없이 폴더명을 잡게 한다.
+   *
+   * F25: 원본이 같은 공유 범위에 있으면 linked view 컨테이너도 `data_sources` 가 **채워져**
+   * 온다(실측 — 워크스페이스 8건). 이때 data source 의 parent database 는 원본이므로,
+   * 첫 소스의 parent 가 자신이 아니면 `linkedOriginalDbId` 로 알려 컨테이너가 원본과 같은
+   * 행 집합을 이중 pull(폴더 릴레이 재배치 churn)하는 것을 발견 단계에서 차단한다.
    */
-  async getDatabaseSyncability(databaseId: string): Promise<{ title: string; queryable: boolean }> {
+  async getDatabaseSyncability(
+    databaseId: string,
+  ): Promise<{ title: string; queryable: boolean; linkedOriginalDbId?: string }> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
@@ -311,7 +318,50 @@ export class NotionClient {
       data_sources?: Array<{ id: string }>;
     };
     const title = Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "";
-    return { title, queryable: (db.data_sources?.length ?? 0) > 0 };
+    const firstDsId = db.data_sources?.[0]?.id;
+    if (!firstDsId) return { title, queryable: false };
+
+    try {
+      const ds = (await this.withRateLimit(() =>
+        this.client.dataSources.retrieve({ data_source_id: firstDsId }),
+      )) as unknown as { parent?: { type?: string; database_id?: string } };
+      const ownerDbId = ds.parent?.database_id;
+      if (ownerDbId && normalizeNotionId(ownerDbId) !== normalizeNotionId(databaseId)) {
+        return { title, queryable: true, linkedOriginalDbId: ownerDbId };
+      }
+    } catch {
+      // 소유 판정 실패는 기존 동작(원본 취급) 유지 — 일시 오류로 컨테이너를 오강등하지 않는다.
+    }
+    return { title, queryable: true };
+  }
+
+  /**
+   * linked database view 컨테이너를 원본 DB 로 해소한다.
+   * 컨테이너 자체는 `data_sources` 가 비어 행 조회가 불가능하지만(getDatabaseSyncability
+   * queryable=false), Views API 의 뷰 상세에는 원본 `data_source_id` 가 실리고 그 data source
+   * 의 parent 가 원본 database 다. 해소 실패(뷰 없음/권한 없음/자기참조)는 null — 호출처가
+   * 기존대로 접근 불가 처리한다.
+   */
+  async resolveLinkedDatabase(
+    databaseId: string,
+  ): Promise<{ originalDbId: string; viewName: string } | null> {
+    try {
+      const views = await this.listDatabaseViews(databaseId);
+      for (const view of views) {
+        if (!view.dataSourceId) continue;
+        const ds = (await this.withRateLimit(() =>
+          this.client.dataSources.retrieve({ data_source_id: view.dataSourceId as string }),
+        )) as unknown as { parent?: { type?: string; database_id?: string } };
+        const originalDbId = ds.parent?.database_id;
+        if (!originalDbId) continue;
+        // 자기 자신을 가리키면 linked 가 아니라 원본이 정말 소스 없는 상태 — 해소 불가.
+        if (originalDbId.replace(/-/g, "") === databaseId.replace(/-/g, "")) continue;
+        return { originalDbId, viewName: view.name ?? "" };
+      }
+      return null;
+    } catch {
+      return null;
+    }
   }
 
   async getDatabaseSchema(
@@ -607,7 +657,22 @@ export class NotionClient {
 
   // ─── File Upload ───
 
+  /** single_part 업로드 상한 (Notion API 규격 20MB) */
+  private static readonly SINGLE_PART_MAX_BYTES = 20 * 1024 * 1024;
+  /** multi_part 파트 크기 — 규격상 마지막 파트 제외 5~20MB, 10MB 고정 사용 */
+  private static readonly MULTI_PART_CHUNK_BYTES = 10 * 1024 * 1024;
+
   async uploadFile(fileData: Blob, filename: string, contentType: string): Promise<string> {
+    // create 에 선언한 content_type 과 Blob 자체 타입이 다르면 send 가 400 으로 거부된다
+    // (실측: "Current file content type ... does not match the original content type").
+    // 호출자가 타입 없는 Blob 을 넘겨도 동작하도록 여기서 정합을 보장한다.
+    if (fileData.type !== contentType) {
+      fileData = new Blob([fileData], { type: contentType });
+    }
+    if (fileData.size > NotionClient.SINGLE_PART_MAX_BYTES) {
+      return this.uploadFileMultiPart(fileData, filename, contentType);
+    }
+
     const upload = await this.withRateLimit(() =>
       this.client.fileUploads.create({ filename, content_type: contentType }),
     );
@@ -627,6 +692,44 @@ export class NotionClient {
         this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
       );
     }
+
+    return fileUploadId;
+  }
+
+  /** 20MB 초과 파일의 multi_part 업로드 — part_number 는 API 규격상 문자열("1"부터) */
+  private async uploadFileMultiPart(
+    fileData: Blob,
+    filename: string,
+    contentType: string,
+  ): Promise<string> {
+    const chunkSize = NotionClient.MULTI_PART_CHUNK_BYTES;
+    const numberOfParts = Math.ceil(fileData.size / chunkSize);
+
+    const upload = await this.withRateLimit(() =>
+      this.client.fileUploads.create({
+        mode: "multi_part",
+        number_of_parts: numberOfParts,
+        filename,
+        content_type: contentType,
+      }),
+    );
+
+    const fileUploadId = (upload as unknown as { id: string }).id;
+
+    for (let part = 1; part <= numberOfParts; part++) {
+      const chunk = fileData.slice((part - 1) * chunkSize, part * chunkSize, contentType);
+      await this.withRateLimit(() =>
+        this.client.fileUploads.send({
+          file_upload_id: fileUploadId,
+          part_number: String(part),
+          file: { data: chunk, filename },
+        }),
+      );
+    }
+
+    await this.withRateLimit(() =>
+      this.client.fileUploads.complete({ file_upload_id: fileUploadId }),
+    );
 
     return fileUploadId;
   }

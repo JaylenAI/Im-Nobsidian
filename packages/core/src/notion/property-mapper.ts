@@ -1,3 +1,5 @@
+import { isNotionHostedFileUrl } from "../utils/notion-file-url.js";
+
 type NotionPropertySchema = {
   id: string;
   type: string;
@@ -173,6 +175,22 @@ export class PropertyMapper {
 
       case "files": {
         const fileList = Array.isArray(value) ? value : [value];
+        // 로컬 첨부 위키링크([[attachments/..]]) 또는 notion-hosted 서명 URL 이 하나라도
+        // 있으면 속성 전체를 전송하지 않는다(P3-A). files 배열은 부분 갱신이 불가능해
+        // (전송 시 통째 교체) 일부만 보내면 나머지 첨부가 삭제되고, 서명 URL 을 external
+        // 로 되밀면 약 1시간 뒤 만료되는 깨진 파일로 Notion 원본이 오염된다(실측).
+        // 미전송 시 Notion 이 기존 첨부를 그대로 보존하므로 이것이 무손실 경로다.
+        const urls = fileList.map((f) => {
+          if (typeof f === "object" && f !== null && "url" in f) {
+            return String((f as { url?: unknown }).url ?? "");
+          }
+          return String(f);
+        });
+        const hasProtected = urls.some(
+          (u) => WIKILINK_REGEX.test(u.trim()) || isNotionHostedFileUrl(u),
+        );
+        if (hasProtected) return null;
+
         // 빈 URL 파일 항목은 Notion 이 거부하므로 제거한다(잘못된 첨부 전송 방지).
         const filesArr = fileList
           .map((f) => {

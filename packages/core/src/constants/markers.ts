@@ -51,10 +51,43 @@ export const COLUMN_SEP = compactMarker("column");
 export const TOC_MARKER = compactMarker("toc");
 
 /**
+ * synced block 보존 마커 쌍. Notion `<synced_block[_reference] url="...">` 태그를
+ * pull 때 벗겨 내용만 남기면 push 때 일반 블록으로 박제되어 **동기화 참조가 끊긴다**
+ * (실측: 태그를 되밀면 참조 보존, 태그 없이 내용만 되밀면 참조 소실).
+ * 시작 마커에 태그 종류(kind)와 원본 url 을 실어 push 때 태그를 재조립한다.
+ */
+export function syncedStartMarker(kind: "ref" | "orig", url: string): string {
+  return compactMarker(`synced:start:kind=${kind}&url=${encodeURIComponent(url)}`);
+}
+export const SYNCED_END = compactMarker("synced:end");
+
+/**
  * breadcrumb 블록 보존 마커. Notion breadcrumb 은 마크다운 표현이 없어 pull 시
  * 빈 문자열로 소실됐다 — 이 마커로 자리를 남겨 push 시 breadcrumb 블록으로 복원한다.
  */
 export const BREADCRUMB_MARKER = compactMarker("breadcrumb");
+
+/**
+ * 디자인 속성 보존 마커 (ADR-008). NFM raw 는 콜아웃 아이콘/색을 태그 속성으로,
+ * 블록 색을 줄 끝 `{color="…"}` 로 내보낸다 — Obsidian 에 대응 문법이 없어 pull 때
+ * 이 마커로 실어 두고 push 때 정준형 속성으로 재조립한다.
+ */
+export function calloutStyleMarker(params: { icon?: string; color?: string }): string {
+  const kv: string[] = [];
+  if (params.icon) kv.push(`icon=${encodeURIComponent(params.icon)}`);
+  if (params.color) kv.push(`color=${encodeURIComponent(params.color)}`);
+  return compactMarker(`callout-style:${kv.join("&")}`);
+}
+
+/** 색상 토글(`<details color="…">`) 보존 마커. */
+export function toggleColorMarker(color: string): string {
+  return compactMarker(`toggle-color:${color}`);
+}
+
+/** 블록 색(`{color="…"}`) 보존 마커. */
+export function blockColorMarker(color: string): string {
+  return compactMarker(`block-color:${color}`);
+}
 
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;

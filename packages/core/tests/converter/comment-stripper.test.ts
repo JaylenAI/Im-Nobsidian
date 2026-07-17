@@ -67,4 +67,39 @@ describe("CommentStripper (F26)", () => {
     expect(result.content).not.toContain("줄1");
     expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe("줄1\n줄2");
   });
+
+  it("HTML 주석(<!--...-->)도 제거하고 style=html 마커로 보존 (P5 실측 누수)", () => {
+    const result = run("앞 문단.\n\n<!-- 비밀 메모 -->\n\n뒤 문단.");
+    expect(result.content).not.toContain("비밀 메모");
+    expect(result.content).toContain("앞 문단.");
+    expect(result.content).toContain("뒤 문단.");
+    const markers = result.metadata.preserveMarkers ?? [];
+    expect(markers).toHaveLength(1);
+    expect(markers[0]!.type).toBe("comment");
+    expect(markers[0]!.params.style).toBe("html");
+    expect(markers[0]!.params.text).toBe(" 비밀 메모 ");
+    expect(markers[0]!.params.__anchor).toBe("앞 문단.");
+  });
+
+  it("Obsidian·HTML 주석 혼재 시 각각 자기 문법 마커로 수집", () => {
+    const result = run("A %%하나%% B\n\n<!--둘-->\n\nC");
+    const markers = result.metadata.preserveMarkers ?? [];
+    expect(markers.map((m) => [m.params.text, m.params.style ?? "obsidian"])).toEqual([
+      ["하나", "obsidian"],
+      ["둘", "html"],
+    ]);
+  });
+
+  it("코드 펜스 안의 HTML 주석은 건드리지 않음", () => {
+    const content = "```html\n<!-- 코드 예시 주석 -->\n```";
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  it("여러 줄 HTML 주석도 제거·보존", () => {
+    const result = run("앞\n\n<!--줄1\n줄2-->\n\n뒤");
+    expect(result.content).not.toContain("줄1");
+    expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe("줄1\n줄2");
+  });
 });

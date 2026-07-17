@@ -12,6 +12,8 @@ import { resolvePullConflict } from "./conflict-detector.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath, selectDbRowFiles } from "../utils/db-row-path.js";
+import { isDirectDbRowPath } from "../utils/db-folder-path.js";
+import { notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
@@ -38,6 +40,12 @@ export interface DatabaseSyncResult {
    * 엉뚱한 행을 골라 정작 바뀐 행의 relation UUID 를 영영 해소하지 못했다(M3). push 경로는 항상 빈 배열.
    */
   writtenPaths: string[];
+  /**
+   * F25: 이 config 가 linked view 컨테이너로 판정된 경우 data source 원본 database id.
+   * 행 처리는 원본 config 에 양보하고 건너뛰었으므로, 호출처(디스커버리 캐시)는 이 config
+   * 를 제거하고 linked 매핑을 기록해야 다음 pull 부터 이중 방문 자체가 사라진다.
+   */
+  linkedOriginalDbId?: string;
 }
 
 /** {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. */
@@ -50,6 +58,15 @@ export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
   private readonly baseFileGenerator = new BaseFileGenerator();
   private readonly sidecarGenerator = new SidecarGenerator();
+
+  /**
+   * 이번 프로세스가 실제로 기록한 .base 경로/DB 제목 (databaseId nohyph → info).
+   * placeholder 임베드 재작성(F22)의 SSOT — 폴더명(하이픈 새니타이즈)과 .base 파일명
+   * (sanitizeFileName: 공백·점 보존)은 규칙이 달라 localFolder 로 추측한 경로는 깨진
+   * 임베드가 된다. generateBaseFile 은 매 pull 모든 DB 에 대해 실행되므로 pull 종료
+   * 시점에는 성공한 DB 전체가 채워져 있다.
+   */
+  readonly baseFileInfo = new Map<string, { basePath: string; title: string }>();
 
   constructor(
     private readonly config: Config,
@@ -132,7 +149,46 @@ export class DatabaseSyncer {
     return { created, updated, conflicts: [], failed, writtenPaths: [] };
   }
 
-  async pullDatabase(dbConfig: DatabaseSyncConfig): Promise<DatabaseSyncResult> {
+  async pullDatabase(
+    dbConfig: DatabaseSyncConfig,
+    opts?: {
+      /**
+       * F25: database id(하이픈 유무 무관) → 그 DB 행이 사는 로컬 폴더. 디스커버리 캐시가
+       * 아는 DB 만 반환하고 모르면 null. linked view 컨테이너 판정 시 원본 폴더를 아는
+       * 경우에만 행 소유를 양보한다 — 원본이 미발견이면 이 컨테이너가 유일한 접근 통로다.
+       */
+      resolveDbFolder?: (databaseId: string) => string | null;
+    },
+  ): Promise<DatabaseSyncResult> {
+    const pages = await this.notionClient.queryAllDatabasePages(
+      dbConfig.databaseId,
+      dbConfig.pullFilter,
+    );
+
+    // F25: 행 parent 로 data source 의 원본 database 를 검증한다(추가 API 0회). 신 모델에선
+    // linked view 컨테이너도 data_sources 가 채워져 retrieve 만으론 원본과 구분되지 않아
+    // 캐시에 오등록될 수 있는데, 그대로 두면 같은 행 집합을 여러 config 가 각자 자기 폴더로
+    // 릴레이 재배치해 원격 무변경에도 매 pull 재작성이 쌓인다(실측 66건/pull, 행당 최대 4중).
+    // 컨테이너로 판정되면 행은 원본에 양보하고 .base 만 원본 폴더 필터로 재지향해
+    // "같은 데이터의 다른 뷰"라는 Notion 의미를 보존한다.
+    const parent = pages[0]?.parent as { type?: string; database_id?: string } | undefined;
+    const ownerDbId = parent?.database_id;
+    if (ownerDbId && !notionIdsEqual(ownerDbId, dbConfig.databaseId)) {
+      const ownerFolder = opts?.resolveDbFolder?.(ownerDbId) ?? null;
+      if (ownerFolder !== null) {
+        const viewsConfig = await this.pullDatabaseViews(dbConfig);
+        await this.generateBaseFile(dbConfig, viewsConfig, ownerFolder);
+        return {
+          created: 0,
+          updated: 0,
+          conflicts: [],
+          failed: [],
+          writtenPaths: [],
+          linkedOriginalDbId: ownerDbId,
+        };
+      }
+    }
+
     const schema = await this.notionClient.getDatabaseSchema(dbConfig.databaseId);
     this.propertyMapper.loadSchema(schema);
 
@@ -140,11 +196,6 @@ export class DatabaseSyncer {
 
     const viewsConfig = await this.pullDatabaseViews(dbConfig);
     await this.generateBaseFile(dbConfig, viewsConfig);
-
-    const pages = await this.notionClient.queryAllDatabasePages(
-      dbConfig.databaseId,
-      dbConfig.pullFilter,
-    );
 
     let created = 0;
     let updated = 0;
@@ -159,8 +210,11 @@ export class DatabaseSyncer {
         const record = this.stateDb.getByNotionId(page.id);
 
         if (record) {
-          // 리모트가 마지막 동기화 시점과 동일하면 건너뜀.
-          if (page.last_edited_time === record.notionLastEdited) continue;
+          // 리모트가 마지막 동기화 시점과 동일하면 건너뜀. 단 레코드 경로가 현재 DB
+          // 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유 폴더 잔류) 원격 무변경
+          // 이어도 재처리해 현 폴더로 재배치한다.
+          const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
+          if (page.last_edited_time === record.notionLastEdited && !misplaced) continue;
           const outcome = await this.pullDatabasePage(page, dbConfig);
           if (outcome.action === "written") {
             updated++;
@@ -234,6 +288,12 @@ export class DatabaseSyncer {
   private async generateBaseFile(
     dbConfig: DatabaseSyncConfig,
     viewsConfig: DatabaseViewsConfig | null,
+    /**
+     * F25: 행이 실제로 사는 폴더(.base 의 inFolder 필터 대상). linked view 컨테이너의
+     * .base 는 자기 폴더가 아니라 원본 DB 폴더를 가리켜야 행 이관 후에도 빈 뷰가 되지
+     * 않는다. 생략하면 자기 폴더(원본 DB 의 기본 동작).
+     */
+    rowsFolder?: string,
   ): Promise<void> {
     try {
       const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId);
@@ -255,12 +315,13 @@ export class DatabaseSyncer {
         databaseName: dbName,
         schema: schemaFull,
         viewsConfig: resolvedViews,
-        folderPath: dbConfig.localFolder,
+        folderPath: rowsFolder ?? dbConfig.localFolder,
       });
 
       const safeName = sanitizeFileName(dbName);
       const basePath = `${dbConfig.localFolder}/${safeName}.base`;
       await this.vaultFs.writeFile(basePath, baseContent);
+      this.baseFileInfo.set(dbConfig.databaseId.replace(/-/g, ""), { basePath, title: dbName });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
       await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
@@ -312,7 +373,13 @@ export class DatabaseSyncer {
         viewsConfig: resolvedViews,
       });
       const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
-      await this.vaultFs.writeFile(sidecarPath, this.sidecarGenerator.serialize(sidecar));
+      const serialized = this.sidecarGenerator.serialize(sidecar);
+      // 같은 DB 가 한 번의 pull 에서 임베드 재작성 때마다 재생성된다(실측 최대 67회).
+      // 결정적 직렬화라 동일 바이트면 쓰기·degrade 로그 모두 생략 — 로그 노이즈와
+      // 불필요한 IO 를 없애고, 내용이 실제로 바뀔 때만 알린다.
+      const existing = await this.vaultFs.readFile(sidecarPath).catch(() => null);
+      if (existing === serialized) return;
+      await this.vaultFs.writeFile(sidecarPath, serialized);
 
       if (sidecar.degraded.length > 0) {
         const unrep = sidecar.degraded.filter((d) => d.kind === "view-unrepresentable").length;
@@ -324,6 +391,57 @@ export class DatabaseSyncer {
       }
     } catch (error) {
       getLogger().warn(`[DB Sync] 사이드카 생성 실패 (계속 진행):`, error);
+    }
+  }
+
+  /**
+   * DB 행 `files` 속성의 notion-hosted 서명 URL 을 로컬 첨부로 로컬라이즈한다(P3-A).
+   * 서명 URL 은 약 1시간 뒤 만료되어 frontmatter 에 남으면 깨진 링크가 되고, push 로
+   * 되밀면 Notion 원본이 만료 URL 의 external 파일로 오염된다(실측). 다운로드 성공분은
+   * `[[attachments/..]]` 위키링크로 대체한다 — Bases 카드 `image:` 는 위키링크 스칼라를
+   * 렌더하므로 갤러리 커버도 유지된다. 원본 파일명은 raw 속성의 `name` 에서 취한다
+   * (extractValue 는 URL 만 남긴다). 사용자가 넣은 진짜 외부 URL 은 그대로 둔다.
+   */
+  private async localizeFileProperties(
+    rawProps: Record<string, unknown>,
+    properties: Record<string, unknown>,
+    safeName: string,
+  ): Promise<void> {
+    for (const [key, rawProp] of Object.entries(rawProps)) {
+      const prop = rawProp as {
+        type?: string;
+        files?: Array<{
+          name?: string;
+          type?: string;
+          file?: { url?: string };
+          external?: { url?: string };
+        }>;
+      };
+      if (prop?.type !== "files" || !Array.isArray(prop.files) || prop.files.length === 0) {
+        continue;
+      }
+
+      const localized: string[] = [];
+      let changed = false;
+      for (const f of prop.files) {
+        const url = f.type === "file" ? f.file?.url : f.external?.url;
+        if (!url) continue;
+        const caption = f.name?.trim() || `${safeName}-${key}`;
+        try {
+          const localPath = await this.imageHandler.localizeNotionFileUrl(url, caption);
+          if (localPath) {
+            localized.push(`[[${localPath}]]`);
+            changed = true;
+          } else {
+            localized.push(url);
+          }
+        } catch {
+          localized.push(url);
+        }
+      }
+      // extractValue 와 동일한 스칼라/배열 규약(단일=스칼라)으로 덮어써 라운드트립을 유지한다.
+      if (!changed || localized.length === 0) continue;
+      properties[key] = localized.length === 1 ? localized[0] : localized;
     }
   }
 
@@ -339,27 +457,23 @@ export class DatabaseSyncer {
     );
     properties.title = title;
 
+    await this.localizeFileProperties(
+      (page as unknown as { properties: Record<string, unknown> }).properties,
+      properties,
+      safeName,
+    );
+
     const cover = this.notionClient.extractCover(page);
     const icon = this.notionClient.extractIcon(page);
 
     if (cover) {
-      try {
-        const coverResult = await this.imageHandler.downloadAllImages(
-          `![cover](${cover.url})`,
-          `${safeName}-cover`,
-        );
-        // 이미지 핸들러가 실제 로컬 첨부 경로로 치환했을 때만 위키링크로 감싼다.
-        // 다운로드 비활성/실패 시엔 원격 URL이 그대로 돌아오는데, 이를 `[[..]]` 로
-        // 감싸면 존재하지 않는 `[[https://..]]` 파일을 가리키는 깨진 링크가 된다(cover-URL).
-        const resolved = coverResult.content.match(/!\[cover\]\((.+?)\)/)?.[1];
-        if (resolved && !/^https?:\/\//i.test(resolved)) {
-          properties.cover = `[[${resolved}]]`;
-        } else {
-          properties.cover = cover.url;
-        }
-      } catch {
-        properties.cover = cover.url;
-      }
+      // notion-hosted 커버는 서명 URL(약 1시간 만료)이라 frontmatter 에 남기면 깨진
+      // 링크 + 풀마다 서명이 바뀌어 churn 이 된다(실측: LIFE/WORK). files 속성과 같은
+      // 로컬라이즈 경로(P3-A)로 첨부에 내려받고, 외부 URL(unsplash 등)은 원형 유지한다.
+      // (기존 구현은 downloadAllImages 결과를 `![cover](..)` 형태로 재매치했지만 성공
+      // 시 결과가 `![[..]]` 위키링크라 항상 미스매치 → 서명 URL 폴백이 되는 버그였다)
+      const local = await this.imageHandler.localizeNotionFileUrl(cover.url, `${safeName}-cover`);
+      properties.cover = local ? `[[${local}]]` : cover.url;
     }
 
     if (icon) {
@@ -396,9 +510,14 @@ export class DatabaseSyncer {
     }
 
     const existingRecord = this.stateDb.getByNotionId(page.id);
+    // F24: 동명 형제 DB 폴더 분리 후 레코드가 옛 공유 폴더를 가리키면(직속 아님) 현재
+    // 폴더 기준으로 경로를 재산정해 재배치한다. 파일 이동은 overwrite 확정 후에만 —
+    // local-first 스킵/충돌이면 원위치를 보존한다. 재산정은 resolveDbRowPath 를 그대로
+    // 타므로 충돌 시절 붙은 id 접미사도 새 폴더에서 자연 이름으로 되돌아온다.
+    const recordPath = existingRecord?.obsidianPath;
     let filePath: string;
-    if (existingRecord?.obsidianPath) {
-      filePath = existingRecord.obsidianPath;
+    if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
+      filePath = recordPath;
     } else {
       filePath = resolveDbRowPath(dbConfig.localFolder, safeName, page.id, (p) =>
         this.stateDb.getByPath(p),
@@ -421,7 +540,9 @@ export class DatabaseSyncer {
     if (existingRecord) {
       let localContent = "";
       try {
-        localContent = await this.vaultFs.readFile(filePath);
+        // 재배치 대상이면 로컬 내용은 아직 옛 경로에 있다 — 실제 위치에서 읽어야
+        // local-first/충돌 판정이 빈 파일로 오판되지 않는다.
+        localContent = await this.vaultFs.readFile(recordPath ?? filePath);
       } catch {
         localContent = "";
       }
@@ -440,13 +561,17 @@ export class DatabaseSyncer {
       });
 
       if (resolution.action === "skip") {
-        // local-first: 로컬 보존, 리모트 변경 무시
-        return { action: "skipped", path: filePath };
+        // local-first: 로컬 보존, 리모트 변경 무시(재배치 대상이어도 파일은 원위치 유지)
+        return { action: "skipped", path: recordPath ?? filePath };
       }
       if (resolution.action === "conflict") {
         // 양쪽 모두 수정됨 → 충돌로 표시하고 로컬 보존 (사용자 해소 대기)
         this.stateDb.updateStatus(existingRecord.id, "conflict");
-        return { action: "conflict", path: filePath, conflict: resolution.conflict! };
+        return {
+          action: "conflict",
+          path: recordPath ?? filePath,
+          conflict: resolution.conflict!,
+        };
       }
       // resolution.action === "write" → 아래로 진행하여 덮어쓰기
     }
@@ -454,8 +579,15 @@ export class DatabaseSyncer {
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
     await this.vaultFs.writeFile(filePath, finalContent);
 
+    const rehomed = existingRecord && recordPath && recordPath !== filePath;
     const hash = computeHash(finalContent);
     this.stateDb.transaction(() => {
+      if (rehomed) {
+        // 재배치: upsert 는 obsidianPath 키라 경로를 먼저 옮겨야 같은 notion_page_id 의
+        // 중복 INSERT(UNIQUE 위반)가 안 난다. 옛 경로 위키링크도 함께 제거.
+        this.stateDb.updatePath(existingRecord.id, filePath);
+        this.stateDb.deleteWikilink(recordPath);
+      }
       this.stateDb.upsert({
         obsidianPath: filePath,
         notionPageId: page.id,
@@ -476,6 +608,13 @@ export class DatabaseSyncer {
         aliases: extractAliases(properties),
       });
     });
+    if (rehomed) {
+      try {
+        await this.vaultFs.deleteFile(recordPath);
+      } catch {
+        // 옛 파일 삭제 실패는 재배치 자체를 무르지 않는다(다음 pull 재시도 여지).
+      }
+    }
 
     return { action: "written", path: filePath };
   }

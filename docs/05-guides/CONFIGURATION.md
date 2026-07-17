@@ -14,7 +14,7 @@
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "ask" | "local-wins" | "remote-wins" | "manual"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "autoSync": false, // watch 모드 시 자동 동기화
     "autoSyncInterval": 300, // 자동 동기화 간격 (초)
     "deleteSync": false, // 삭제 동기화 여부
@@ -34,7 +34,7 @@
     "concurrency": 3, // 동시 API 요청 수
     "maxRetries": 5, // API 재시도 횟수
     "timeoutMs": 30000, // API 타임아웃 (ms)
-    "batchSize": 50, // 배치 처리 크기
+    "batchSize": 100, // 배치 처리 크기
   },
 }
 ```
@@ -73,10 +73,10 @@ https://www.notion.so/My-Page-abc123def456...
 
 양쪽에서 같은 파일을 수정했을 때 해결 전략:
 
-- `"ask"` — CLI에서 매번 물어봄
-- `"local-wins"` — 항상 Obsidian 버전 유지
-- `"remote-wins"` — 항상 Notion 버전 유지
-- `"manual"` — 충돌 마커 삽입 후 수동 해결
+- `"local-first"` — 항상 Obsidian 버전 유지
+- `"remote-first"` — 항상 Notion 버전 유지
+- `"manual"` — 충돌 마커 삽입 후 수동 해결 (기본값)
+- `"duplicate"` — 양쪽 버전을 모두 보존 (`.conflict` 파일 생성)
 
 ### deleteSync
 
@@ -155,6 +155,21 @@ API 실패 시 재시도 횟수. 지수 백오프 + 랜덤 지터가 적용됩�
 ### timeoutMs
 
 단일 API 요청의 타임아웃 (밀리초). 대규모 페이지의 경우 증가가 필요할 수 있습니다.
+
+### maxFileSizeBytes
+
+Pull 시 다운로드할 파일(비디오·첨부 등)의 크기 상한. 기본 **100MB** (`104857600`).
+
+상한을 초과하는 파일은 다운로드하지 않고 **Notion 원본 링크를 노트에 유지**합니다
+(의도된 degrade — 로그에 `크기 상한 초과`로 표시). 링크는 안정 식별자 기반이라
+재 pull 에도 변하지 않으며, push 시에는 원본 블록이 그대로 보존됩니다.
+대용량 강의 영상 등까지 볼트에 내려받으려면 이 값을 늘리세요:
+
+```json
+{
+  "advanced": { "maxFileSizeBytes": 2147483648 }
+}
+```
 
 ## Database Mode / 데이터베이스 모드
 

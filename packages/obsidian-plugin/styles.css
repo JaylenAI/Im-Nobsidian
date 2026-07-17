@@ -129,6 +129,35 @@
   border-radius: 3px;
 }
 
+/* Notion Toggle/Tab Callouts
+   pull 이 Notion 토글을 `> [!toggle]-`, 탭을 `> [!tab]` 콜아웃으로 변환한다.
+   Obsidian 은 미등록 타입을 note(파란 연필)로 렌더해 노션의 담백한 토글과 이질적 —
+   배경·테두리를 없애고 접기 화살표만 남겨 노션 토글의 시각 경험에 맞춘다. */
+
+.callout[data-callout="toggle"] {
+  --callout-color: var(--color-base-70, 128, 128, 128);
+  --callout-icon: lucide-chevron-right;
+  background-color: transparent;
+  border: none;
+  padding: 0;
+}
+
+.callout[data-callout="toggle"] > .callout-title {
+  padding: 2px 0;
+  color: var(--text-normal);
+}
+
+.callout[data-callout="toggle"] > .callout-content {
+  padding-left: var(--size-4-6);
+  border-left: 1px solid var(--background-modifier-border);
+  margin-left: var(--size-4-2);
+}
+
+.callout[data-callout="tab"] {
+  --callout-color: var(--color-base-70, 128, 128, 128);
+  --callout-icon: lucide-panel-top;
+}
+
 /* Status Bar */
 
 .im-nobsidian-statusbar {

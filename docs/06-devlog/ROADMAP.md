@@ -1,15 +1,17 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-07-14
+> Last updated: 2026-07-17
 
-## Current State (v0.3.0)
+## Current State (v0.3.1 — 릴리스 대기)
 
-v0.3.0 — 왕복 충실도 일괄 봉합 + 증분 pull 누락 수정 + deps 최신화(Node 22+).
-실코퍼스 심층 감사(F14~F27) 결함 전량 봉합: 옵시디언 주석 push 차단·각주/하이라이트/표정렬
-왕복·블록 간격 복원(D1)·캡션 이미지 다운로드(F14)·증분 워터마크 갭(F20)·child DB
-재발견(F21, `pull --force`)·첨부 dedup(D6)·접근 불가 DB denylist.
-실데이터 실증: 왕복 바이트 delta-0 + 무변경 pull 869-md churn-0 + 충돌 0.
-1151 tests. 25+ block types bidirectional, 21 property read / 15 write types.
+v0.3.1 — 정상상태 churn 근절 + push 왕복 잔여 누수 봉합 (무손실 패치, 공개 API/deps 무변경).
+동명 형제 인라인 DB 폴더 충돌(22쌍 분리)·linked view 컨테이너 이중 등록(행 parent 판정)
+제거로 무변경 pull **churn-0** 달성. push 시 HTML 주석 차단(F26 확장)·page mention 신형
+`app.notion.com/p/` URL 해소(F27). clean-slate **887 파일**(258 페이지+629 DB 행) 실데이터 재구성: audit 결함 0·
+해시 불일치 0·churn-0, 재 pull "no changes", 충돌 0. **1285 tests.**
+
+직전 v0.3.0 — 왕복 충실도 일괄 봉합(주석/각주/하이라이트/표정렬/블록간격) + 증분 pull 누락
+수정 + deps 최신화(Node 22+). 25+ block types bidirectional, 21 property read / 15 write types.
 
 ---
 
@@ -45,6 +47,10 @@ v0.2.1  ─── ✅ --version 정정 + 문서 현행화 (2026-06-03)
 v0.3.0  ─── ✅ 왕복 충실도 일괄 봉합 (2026-07-14)
             주석/각주/하이라이트/표정렬/블록간격 왕복, F20/F21 증분 누락 수정,
             pull --force, 첨부 dedup, Node 22+, 1151 tests
+
+v0.3.1  ─── ⏳ 정상상태 churn 근절 (릴리스 대기)
+            동명 인라인 DB 폴더 분리·linked view 중복 제거(churn-0),
+            HTML 주석 왕복·mention URL 봉합, clean-slate 887 실데이터, 1285 tests
 
 v1.0.0  ─── 커뮤니티 등록 + 안정 릴리스 (예정)
             obsidian-releases PR, BRAT 베타, multi-workspace, 1000+ notes

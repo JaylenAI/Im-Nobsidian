@@ -38,6 +38,31 @@ describe("notionEnhancedToObsidian", () => {
     expect(result).not.toContain("<mention-page");
   });
 
+  // F27: 신형 URL 호스트/경로(`app.notion.com/p/<id>`)도 해소한다. clean-slate pull
+  // 실측 18건이 전부 이 형식이었고, `notion.so` 만 보던 정규식이 놓쳐 raw 태그가 잔존.
+  it("<mention-page url=app.notion.com/p/..> (신형 호스트) → [[notion:id]] (F27)", () => {
+    const id = "36f13b18d382806587b2e8b7ccb303bc";
+    // self-closing·라벨형 두 형태 모두 신형 호스트로
+    const selfClosing = `앞 <mention-page url="https://app.notion.com/p/${id}"/> 뒤`;
+    expect(notionEnhancedToObsidian(selfClosing)).toBe(`앞 [[notion:${id}]] 뒤`);
+
+    const labeled = `> [!note] <mention-page url="https://app.notion.com/p/${id}">AI Engineer (1)</mention-page> | [[ETC]]`;
+    const result = notionEnhancedToObsidian(labeled);
+    expect(result).toContain(`[[notion:${id}]]`);
+    expect(result).not.toContain("<mention-page");
+    expect(result).toContain("[[ETC]]");
+  });
+
+  it("신형/구형 호스트 혼재 한 줄도 모두 해소 (F27)", () => {
+    const a = "36f13b18d382806587b2e8b7ccb303bc";
+    const b = "a7713b18d38282c292ab8158f069bd7f";
+    const input = `<mention-page url="https://app.notion.com/p/${a}">A</mention-page> | <mention-page url="https://www.notion.so/${b}"/>`;
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain(`[[notion:${a}]]`);
+    expect(result).toContain(`[[notion:${b}]]`);
+    expect(result).not.toContain("<mention-page");
+  });
+
   it("<mention-user> → @name", () => {
     const input = '<mention-user id="user-1">John</mention-user>';
     expect(notionEnhancedToObsidian(input)).toBe("@John");
@@ -162,11 +187,14 @@ describe("obsidianToNotionEnhanced", () => {
     expect(result).toContain("</details>");
   });
 
-  it("> [!type] → ::: callout", () => {
+  it("> [!type] → <callout icon> 정준형 태그 (이모지는 본문이 아닌 icon 속성)", () => {
     const input = "> [!warning] Be careful";
     const result = obsidianToNotionEnhanced(input);
-    expect(result).toContain("::: callout");
-    expect(result).toContain("⚠️ Be careful");
+    expect(result).toContain('<callout icon="⚠️">');
+    expect(result).toContain("\tBe careful");
+    // 이모지가 본문 텍스트로 새면 Notion 에 리터럴로 박제된다(실측) — 금지
+    expect(result).not.toContain("⚠️ Be careful");
+    expect(result).not.toContain("::: callout");
   });
 
   // 2A: 미디어 마커 → Enhanced MD
@@ -732,5 +760,213 @@ describe("중첩 prefix/탭 누적 폭주 차단 (P2)", () => {
       if (/^[\t ]*(`{3,}|~{3,})/.test(stripped)) open = !open;
     }
     expect(open).toBe(false); // 펜스 균형
+  });
+});
+
+describe("컨테이너 태그 변형 내성 (P3 — 실측 누수 회귀가드)", () => {
+  // 실측: RAG 구축 방법 페이지 — 색상 토글은 <details color="green_bg"> 로 온다.
+  // 리터럴 <details> 만 매칭하던 정규식이 5건을 통째로 누수시켰다.
+  it("<details color=..> 속성형 토글 → [!toggle] 콜아웃 (태그 누수 0)", () => {
+    const input = [
+      '<details color="green_bg">',
+      "",
+      "<summary>지금의 chatGPT 는 똑똑해졌습니다!</summary>",
+      "",
+      "    ![[attachments/240116-RAG.png]]",
+      "",
+      "</details>",
+    ].join("\n");
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("> [!toggle]- 지금의 chatGPT 는 똑똑해졌습니다!");
+    expect(result).toContain("> ![[attachments/240116-RAG.png]]");
+    expect(result).not.toContain("<details");
+    expect(result).not.toContain("</details>");
+    expect(result).not.toContain("<summary>");
+  });
+
+  // 실측: AI Music 페이지 — 제목 없는 빈 토글은 <summary> 자체가 없다.
+  it("<summary> 없는 빈 토글 → 빈 [!toggle] 콜아웃 (태그 누수 0)", () => {
+    const input = "앞 문단\n\n<details>\n\n</details>\n\n뒤 문단";
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("> [!toggle]-");
+    expect(result).not.toContain("<details>");
+    expect(result).not.toContain("</details>");
+    expect(result).toContain("앞 문단");
+    expect(result).toContain("뒤 문단");
+  });
+
+  it("<summary> 없이 본문만 있는 토글도 본문을 보존한다", () => {
+    const input = "<details>\n\n본문 내용입니다\n\n</details>";
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("> [!toggle]-");
+    expect(result).toContain("> 본문 내용입니다");
+    expect(result).not.toContain("<details");
+  });
+
+  it("속성형 <details> 가 중첩 innermost 판정을 깨지 않는다 (mis-pair 방지)", () => {
+    const input = [
+      "<details>",
+      "<summary>바깥</summary>",
+      '\t<details color="red_bg">',
+      "\t<summary>안쪽</summary>",
+      "\t\t내용",
+      "\t</details>",
+      "</details>",
+    ].join("\n");
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("> [!toggle]- 바깥");
+    expect(result).toContain("> > [!toggle]- 안쪽");
+    expect(result).not.toContain("<details");
+  });
+
+  it("<columns count=..>/<column width_ratio=..> 속성 내성", () => {
+    const input = [
+      '<columns count="2">',
+      '<column width_ratio="0.5">',
+      "왼쪽",
+      "</column>",
+      '<column width_ratio="0.5">',
+      "오른쪽",
+      "</column>",
+      "</columns>",
+    ].join("\n");
+    const result = notionEnhancedToObsidian(input);
+    expect(result).toContain("왼쪽");
+    expect(result).toContain("오른쪽");
+    expect(result).not.toContain("<column");
+    expect(result).not.toContain("</column");
+  });
+
+  it("빈 토글 push 왕복: > [!toggle]- (제목 없음) → <details> 로 수렴", () => {
+    const pulled = "앞 문단\n\n> [!toggle]-\n\n뒤 문단";
+    const pushed = obsidianToNotionEnhanced(pulled);
+    expect(pushed).toContain("<details>");
+    expect(pushed).toContain("</details>");
+    expect(pushed).not.toContain("[!toggle]");
+  });
+});
+
+describe("미디어 플레이스홀더 캡션 왕복 (P3)", () => {
+  it("[🎬 video](url) 플레이스홀더는 빈 캡션으로 복원 (Notion drift 방지)", () => {
+    const pushed = obsidianToNotionEnhanced("[🎬 video](https://youtu.be/abc)");
+    expect(pushed).toBe('<video src="https://youtu.be/abc"></video>');
+  });
+
+  it("[🎬 실제 캡션](url) 은 캡션을 보존한다", () => {
+    const pushed = obsidianToNotionEnhanced("[🎬 발표 영상](https://youtu.be/abc)");
+    expect(pushed).toBe('<video src="https://youtu.be/abc">발표 영상</video>');
+  });
+
+  it("audio/pdf/file 플레이스홀더도 동일 (왕복 fixpoint)", () => {
+    const src = "https://example.com/x";
+    expect(obsidianToNotionEnhanced(`[🔊 audio](${src})`)).toBe(`<audio src="${src}"></audio>`);
+    expect(obsidianToNotionEnhanced(`[📄 pdf](${src})`)).toBe(`<pdf src="${src}"></pdf>`);
+    expect(obsidianToNotionEnhanced(`[📎 file](${src})`)).toBe(`<file src="${src}"></file>`);
+  });
+
+  it("pull→push→pull 수렴: 캡션 없는 video", () => {
+    const notion = '<video src="https://youtu.be/abc"></video>';
+    const pulled = notionEnhancedToObsidian(notion);
+    expect(pulled).toBe("[🎬 video](https://youtu.be/abc)");
+    const repushed = obsidianToNotionEnhanced(pulled);
+    expect(repushed).toBe(notion);
+  });
+});
+
+// 실 push 왕복 프로브(프로브 폴더의 "P2-push-왕복-검증" 페이지)에서 실측된 3중 결함:
+// ① Notion markdown 은 블록을 빈 줄 없이 연속 출력 → 인접 토글 2개가 하나의
+//    blockquote 로 융합 → 재push 시 두 번째 토글이 첫 토글의 리터럴 본문으로 오염.
+// ② summary 없는 토글에서 `\s*` 가 첫 본문 줄의 구조적 탭을 삼켜 dedent 무력화
+//    (`> \t본문` 탭 누수).
+// ③ push 토글 치환이 소비한 개행을 복원하지 않아 `</details>[🎬 video](url)` 줄 융합
+//    → Notion 이 video 블록 폐기.
+describe("인접 블록 융합 방지 (P2 — 실 push 왕복 실측 회귀가드)", () => {
+  it("① 인접 토글 2개는 빈 줄로 분리된다 (블록 경계 보존)", () => {
+    const raw = [
+      "<details>",
+      "</details>",
+      "<details>",
+      "<summary>제목 있는 토글</summary>",
+      "\t본문 첫 줄",
+      "\t본문 둘째 줄",
+      "</details>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).toContain("> [!toggle]-\n\n> [!toggle]- 제목 있는 토글");
+    expect(pulled).toContain("> 본문 첫 줄");
+    expect(pulled).not.toContain("\t");
+  });
+
+  it("① 콜아웃 뒤 인접 토글도 분리된다", () => {
+    const raw = ["<callout>", "💡 팁 내용", "</callout>", "<details>", "</details>"].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).toContain("> [!tip] 팁 내용\n\n> [!toggle]-");
+  });
+
+  it("① 중첩 레벨의 인접 토글은 `>` 구분줄로 분리된다 (바깥 유지·안쪽만 종료)", () => {
+    const raw = [
+      "<details>",
+      "<summary>부모</summary>",
+      "\t<details>",
+      "\t<summary>자식A</summary>",
+      "\t</details>",
+      "\t<details>",
+      "\t<summary>자식B</summary>",
+      "\t</details>",
+      "</details>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).toContain("> > [!toggle]- 자식A\n>\n> > [!toggle]- 자식B");
+  });
+
+  it("① 부모 헤드 직후의 첫 중첩 헤드에는 구분줄을 넣지 않는다", () => {
+    const raw = [
+      "<details>",
+      "<summary>부모</summary>",
+      "\t<details>",
+      "\t<summary>자식</summary>",
+      "\t</details>",
+      "</details>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).toContain("> [!toggle]- 부모\n> > [!toggle]- 자식");
+  });
+
+  it("② summary 없는 토글의 탭 본문이 dedent 된다", () => {
+    const raw = "<details>\n\t본문 첫 줄\n\t본문 둘째 줄\n</details>";
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).toBe("> [!toggle]-\n> 본문 첫 줄\n> 본문 둘째 줄");
+  });
+
+  it("③ 토글 직후 비-quote 줄이 붙어도 </details> 뒤 개행이 복원된다", () => {
+    const obsidian = "> [!toggle]- 제목\n> 본문\n[🎬 video](https://youtu.be/abc)";
+    const pushed = obsidianToNotionEnhanced(obsidian);
+    expect(pushed).toContain("</details>\n");
+    expect(pushed).not.toMatch(/<\/details><video/);
+    expect(pushed).toContain('<video src="https://youtu.be/abc"></video>');
+  });
+
+  it("빈 토글+제목 토글+미디어 pull→push→pull 완전 수렴 (프로브 시나리오)", () => {
+    const raw = [
+      "<details>",
+      "</details>",
+      "<details>",
+      "<summary>제목 있는 토글</summary>",
+      "\t본문 첫 줄",
+      "\t본문 둘째 줄",
+      "</details>",
+      '<video src="https://example.com/a.mp4"></video>',
+      '<pdf src="https://example.com/b.pdf"></pdf>',
+    ].join("\n");
+    const back1 = notionEnhancedToObsidian(raw);
+    const enhanced2 = obsidianToNotionEnhanced(back1);
+    // 토글 2개가 별개의 <details> 로 복원되고 미디어가 제 줄을 지킨다
+    expect(enhanced2.match(/<details>/g)).toHaveLength(2);
+    expect(enhanced2).toContain("<summary>제목 있는 토글</summary>");
+    expect(enhanced2).not.toContain("[!toggle]");
+    expect(enhanced2).toMatch(/^<video src="https:\/\/example\.com\/a\.mp4"><\/video>$/m);
+    // 같은 볼트 파일로 재수렴
+    const back2 = notionEnhancedToObsidian(enhanced2);
+    expect(back2).toBe(back1);
   });
 });

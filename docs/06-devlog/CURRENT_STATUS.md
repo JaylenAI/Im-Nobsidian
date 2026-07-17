@@ -1,7 +1,33 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-07-14
-> 버전: v0.3.0 (왕복 충실도 일괄 봉합, 태그 대기) · 마지막 정식 릴리스 v0.2.1
+> 마지막 업데이트: 2026-07-17
+> 버전: v0.3.0 릴리스 완료 (2026-07-14 태그·npm 배포) · v0.3.1 개발 완료(릴리스 대기)
+
+## v0.3.1 — 실데이터 충실도 마감 5-Phase (개발 완료)
+
+실 워크스페이스 감사 잔여 결함을 Phase 별 실 Notion API 라이브 검증으로 마감.
+
+| Phase | 범위                                                               | 상태            |
+| ----- | ------------------------------------------------------------------ | --------------- |
+| 1     | DB 완전 가시화 — linked view 원본 해소·.base 임베드 SSOT           | ✅ dev 머지     |
+| 2     | 변환 견고화 — 토글×코드펜스·중첩 콜아웃·인접 블록 융합             | ✅ dev 머지     |
+| 3     | 미디어 마감 — files 속성·synced 마커·20MB+ 멀티파트                | ✅ dev 머지     |
+| 4     | NFM 디자인 충실도 — 컬럼·콜아웃 아이콘/색·블록 색 (ADR-008)        | ✅ 라이브 검증  |
+| 5     | clean-slate 실데이터 E2E — steady churn 근절 + 주석·멘션 왕복 봉합 | ✅ churn-0 확정 |
+
+Phase 5 핵심: **v0.3.0 부터 지속되던 steady churn(매 pull 66 updated) 근절** —
+동명 형제 인라인 DB 폴더 충돌(22쌍 분리)과 linked view 컨테이너 이중 등록(진범: 신 API 가
+컨테이너에도 data_sources 를 채워 와 원본과 구분 불가 → 행 parent 로 판정) 수정.
+push E2E 에서 HTML 주석 유출 실측 → CommentStripper 확장(F26), page mention 신형 URL
+(`app.notion.com/p/`) 미해소 수정(F27). **clean-slate fresh pull 887 파일(258 페이지 + 629 DB 행) / 0 실패 →
+audit-vault 결함 0 · 해시 불일치 0 · churn-0 PASS** + 재 pull "no changes"(byte-identical) 로 멱등 재확정.
+디스커버리 폴백(search) 무손실 규명(linked view 컨테이너 70개를 원본 DB로 해소 → 중복 행 파일 제거).
+
+> 결함 라벨 주의: DB 폴더·linked view 결함은 v0.3.0 감사의 F24(하이라이트)·F25(각주)와
+> 번호가 충돌해 이름 기준으로 표기(재번호 검토 대상). HTML 주석 F26 은 comment-stripper
+> 확장, mention F27 은 신규라 충돌 없음.
+
+상세: `journal/2026-07-16.md`, `journal/2026-07-17.md`, `adr/008-nfm-design-fidelity.md`
 
 ## v0.3.0 — 왕복 충실도 일괄 봉합 + deps 최신화 (`fix/deps-latest-202607`)
 
@@ -67,14 +93,14 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 전체 상태 (릴리스 이력)
 
-**v0.2.1 릴리스 완료 + v0.3.0(왕복 충실도 일괄 봉합) 태그 대기.** 실코퍼스 감사 결함 전량 봉합, 실데이터 delta-0/churn-0 실증, Node 22 상향. 1151 테스트.
+**v0.3.0 릴리스 완료(2026-07-14), v0.3.1 개발 완료 — 사용자 검수 대기.** 1285 테스트.
 
-| 항목                     | 상태                                          |
-| ------------------------ | --------------------------------------------- |
-| npm `@im-nobsidian/core` | v0.2.1 배포 완료 (→ v0.3.0 태그 시 갱신)      |
-| npm `im-nobsidian` (CLI) | v0.2.1 배포 완료 (→ v0.3.0 태그 시 갱신)      |
-| GitHub Release           | v0.2.1 tagged + EN/KR 노트 등록 (v0.3.0 대기) |
-| Obsidian Plugin          | v0.3.0 (BRAT 설치 가능, 커뮤니티 제출 예정)   |
+| 항목                     | 상태                                        |
+| ------------------------ | ------------------------------------------- |
+| npm `@im-nobsidian/core` | v0.3.0 배포 완료                            |
+| npm `im-nobsidian` (CLI) | v0.3.0 배포 완료                            |
+| GitHub Release           | v0.3.0 tagged + 노트 등록                   |
+| Obsidian Plugin          | v0.3.0 (BRAT 설치 가능, 커뮤니티 제출 예정) |
 
 ## Phase 진행률
 
@@ -143,10 +169,11 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 테스트 현황
 
-- **전체**: 1151개 통과 (11 skip, 0 실패) — 89 테스트 파일 (3 skip)
+- **전체**: 1285개 통과 (11 skip, 0 실패) — 100 테스트 파일 (3 skip)
 - **TypeScript 타입 체크**: 클린 (에러 0)
-- **플러그인 빌드**: 620KB (better-sqlite3 제거), sql-wasm.wasm 644KB 별도
-- **실데이터 E2E**: 875페이지 볼트 — 왕복 delta-0, 무변경 pull churn-0, 충돌 0
+- **플러그인 빌드**: 675KB, sql-wasm.wasm 644KB 별도
+- **실데이터 E2E**: clean-slate 볼트 fresh full pull **887 파일(258 페이지 + 629 DB 행) / 0 실패** — audit-vault
+  결함 0·해시 불일치 0·churn-0 PASS, 재 pull "no changes"(byte-identical), 고문 노트 v5 push→pull 왕복 수렴, 충돌 0
 
 ## Obsidian 플러그인 기능
 
@@ -168,6 +195,6 @@ side-effect = 1159)임을 확정 — 버그 아님. 백업 실측: 1159 파일 /
 
 ## 다음 목표
 
-1. **v0.3.0 릴리스** — dev→main 머지 + v0.3.0 태그 (npm publish core+CLI 자동)
+1. **v0.3.1 릴리스** — Phase 5 clean-slate E2E → 사용자 검수 → dev→main 머지 + 태그
 2. **커뮤니티 플러그인 제출** — BRAT 베타 + `obsidianmd/obsidian-releases` PR
 3. **v1.0.0** — multi-workspace 지원 + 1000+ 노트 5분 이내 성능 최적화

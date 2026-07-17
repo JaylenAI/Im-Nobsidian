@@ -58,7 +58,7 @@ Error: 설정 파일 검증 실패: invalid_type, expected object...
     "frontmatterMapping": true,
     "imageDownload": "immediate",
   },
-  "advanced": { "concurrency": 3, "maxRetries": 5, "timeoutMs": 30000, "batchSize": 50 },
+  "advanced": { "concurrency": 3, "maxRetries": 5, "timeoutMs": 30000, "batchSize": 100 },
 }
 ```
 
@@ -114,6 +114,16 @@ Pull 시 Notion의 이미지는 로컬에 정상 다운로드됩니다.
 **영향**: 렌더링 결과는 동일합니다 (Obsidian에서 미리보기 시 차이 없음).
 이는 Notion 측 동작이므로 해결할 수 없습니다.
 
+### "새로 만든 페이지·DB가 pull 후에도 안 보임"
+
+**원인**: Notion search 인덱스 반영 지연으로 증분 스캔이 신규 페이지·DB를 놓칠 수 있습니다.
+
+**해결**: 증분을 우회하고 전체를 다시 스캔합니다:
+
+```bash
+nobsi pull --force
+```
+
 ### "충돌 발생"
 
 ```
@@ -127,21 +137,21 @@ Pull 시 Notion의 이미지는 로컬에 정상 다운로드됩니다.
 
 ```bash
 nobsi resolve                        # 대화형 (파일별 선택)
-nobsi resolve --strategy local-wins  # 항상 로컬 우선
-nobsi resolve --strategy remote-wins # 항상 Notion 우선
+nobsi resolve --strategy local-first  # 항상 로컬 우선
+nobsi resolve --strategy remote-first # 항상 Notion 우선
 ```
 
 또는 `config.json`에서 기본 전략을 설정합니다:
 
 ```jsonc
-{ "sync": { "conflictStrategy": "local-wins" } }
+{ "sync": { "conflictStrategy": "local-first" } }
 ```
 
 ## 데이터 안전
 
 - Im-Nobsidian은 **절대로 데이터를 자동 삭제하지 않습니다** (`deleteSync: false` 기본값)
 - 충돌 시 **양쪽 버전을 모두 보존**합니다
-- `--dry-run`으로 **항상 미리 확인**할 수 있습니다
+- `push`·`pull`·`sync` 는 `--dry-run`으로 **미리 확인**할 수 있습니다
 - 상태 DB (`.im-nobsidian/sync.db`)를 삭제하면 전체 재동기화됩니다
 
 ## 지원 및 문의
