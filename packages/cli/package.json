@@ -1,6 +1,6 @@
 {
   "name": "im-nobsidian",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "CLI tool for Obsidian ↔ Notion bidirectional sync",
   "type": "module",
   "bin": {

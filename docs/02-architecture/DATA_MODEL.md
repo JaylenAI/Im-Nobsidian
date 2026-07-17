@@ -603,7 +603,7 @@ const ConfigSchema = z.object({
     concurrency: z.number().min(1).max(10).default(3),
     maxRetries: z.number().min(0).max(10).default(5),
     timeoutMs: z.number().min(5000).max(60000).default(30000),
-    batchSize: z.number().min(1).max(100).default(50),
+    batchSize: z.number().min(1).max(100).default(100),
     snapshotMaxSize: z.number().default(1048576),
   }),
 });

@@ -151,18 +151,19 @@ nobsi watch    # 파일 변경 감시 + 자동 동기화
 
 ## CLI 명령어
 
-| 명령어              | 설명                                    |
-| ------------------- | --------------------------------------- |
-| `nobsi init`        | 대화형 설정 — Notion 토큰 + 루트 페이지 |
-| `nobsi push`        | 로컬 변경사항을 Notion에 반영           |
-| `nobsi pull`        | Notion 변경사항을 로컬에 반영           |
-| `nobsi sync`        | 양방향 동기화 (pull → push)             |
-| `nobsi status`      | 동기화 상태 + 충돌 표시                 |
-| `nobsi diff [경로]` | 로컬과 Notion 간 차이 표시              |
-| `nobsi resolve`     | 동기화 충돌 해결                        |
-| `nobsi watch`       | 파일 변경 감시 + 자동 동기화            |
+| 명령어              | 설명                                       |
+| ------------------- | ------------------------------------------ |
+| `nobsi init`        | 대화형 설정 — Notion 토큰 + 루트 페이지    |
+| `nobsi push`        | 로컬 변경사항을 Notion에 반영              |
+| `nobsi pull`        | Notion 변경사항을 로컬에 반영              |
+| `nobsi sync`        | 양방향 동기화 (pull → push)                |
+| `nobsi status`      | 동기화 상태 + 충돌 표시                    |
+| `nobsi diff [경로]` | 로컬과 Notion 간 차이 표시                 |
+| `nobsi fetch`       | 원격 변경 스캔 (신규/수정/삭제, 읽기 전용) |
+| `nobsi resolve`     | 동기화 충돌 해결                           |
+| `nobsi watch`       | 파일 변경 감시 + 자동 동기화               |
 
-모든 명령어에 `--dry-run` 옵션을 추가하면 변경 없이 미리 확인할 수 있습니다.
+`push`, `pull`, `sync`는 `--dry-run` 옵션으로 적용 없이 변경사항을 미리 볼 수 있습니다. `pull --force`는 증분 감지를 건너뛰고 전체를 다시 스캔합니다 (Notion 검색 인덱싱 지연으로 누락된 페이지 복구).
 
 ### 비대화형 모드 (CI / 스크립트)
 
@@ -203,12 +204,13 @@ Obsidian 볼트                          Notion 워크스페이스
 
 ### 충돌 해결
 
-양쪽에서 같은 파일을 수정한 경우:
+양쪽에서 같은 파일을 수정하면 `pull`/`sync`가 덮어쓰지 않고 충돌로 표시합니다. `nobsi resolve`를 실행해 파일별로 대화형으로 해결하거나 `--strategy`로 일괄 해결합니다:
 
-- `ask` — 선택 요청 (CLI 기본값)
-- `local-wins` — Obsidian 버전 유지
-- `remote-wins` — Notion 버전 유지
-- `manual` — 충돌 마커 삽입 후 수동 해결
+- `local-first` — Obsidian 버전 유지
+- `remote-first` — Notion 버전 유지
+- `duplicate` — 양쪽 모두 유지 (`.conflict` 사본 생성)
+
+대화형 모드에는 **merge** 옵션(충돌 마커를 사용한 3-way 자동 병합)이 추가됩니다. 기본 `sync.conflictStrategy`는 `manual`이며, 충돌은 표시만 되고 직접 해결하도록 남겨둡니다.
 
 ## 지원 변환 기능
 
@@ -252,7 +254,7 @@ Obsidian 볼트                          Notion 워크스페이스
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "ask" | "local-wins" | "remote-wins" | "manual"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
   },
   "paths": {
     "include": ["**/*"], // 포함할 glob 패턴
@@ -319,8 +321,11 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.3.0 ✅ 현재 — 왕복 충실도 일괄 봉합(주석/각주/하이라이트/표정렬/블록간격),
-        증분 pull 누락 수정, --force 전체 스캔, Node 22+, 1151개 테스트
+v0.3.1 🔜 다음 — steady-churn 근절(동명 인라인 DB 폴더 분리, linked view 컨테이너
+        중복 제거), 옵시디언/HTML 주석 왕복, 페이지 멘션 URL 수정,
+        clean-slate 887파일 실데이터 E2E(churn-0, 무손실), 1285개 테스트
+v0.3.0 ✅ 왕복 충실도 일괄 봉합(주석/각주/하이라이트/표정렬/블록간격),
+        증분 pull 누락 수정, --force 전체 스캔, Node 22+
 v0.2.1  --version 동적 읽기 수정, 문서 현행화, 1038개 테스트
 v0.2.0  100% 무손실·멱등·수렴, 불변식 안전망, npm 배포
 v0.1.12 Pull 충실도 + 동기화 안정성, 중첩 DB→Bases, 갤러리 커버, 777개 테스트
@@ -336,7 +341,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1151개 테스트
+pnpm test          # 1285개 테스트
 pnpm lint
 pnpm typecheck
 ```

@@ -14,7 +14,7 @@
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "ask" | "local-wins" | "remote-wins" | "manual"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "autoSync": false, // watch 모드 시 자동 동기화
     "autoSyncInterval": 300, // 자동 동기화 간격 (초)
     "deleteSync": false, // 삭제 동기화 여부
@@ -34,7 +34,7 @@
     "concurrency": 3, // 동시 API 요청 수
     "maxRetries": 5, // API 재시도 횟수
     "timeoutMs": 30000, // API 타임아웃 (ms)
-    "batchSize": 50, // 배치 처리 크기
+    "batchSize": 100, // 배치 처리 크기
   },
 }
 ```
@@ -73,10 +73,10 @@ https://www.notion.so/My-Page-abc123def456...
 
 양쪽에서 같은 파일을 수정했을 때 해결 전략:
 
-- `"ask"` — CLI에서 매번 물어봄
-- `"local-wins"` — 항상 Obsidian 버전 유지
-- `"remote-wins"` — 항상 Notion 버전 유지
-- `"manual"` — 충돌 마커 삽입 후 수동 해결
+- `"local-first"` — 항상 Obsidian 버전 유지
+- `"remote-first"` — 항상 Notion 버전 유지
+- `"manual"` — 충돌 마커 삽입 후 수동 해결 (기본값)
+- `"duplicate"` — 양쪽 버전을 모두 보존 (`.conflict` 파일 생성)
 
 ### deleteSync
 

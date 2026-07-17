@@ -161,10 +161,11 @@ That's it. Your vault and Notion workspace are now linked.
 | `nobsi sync`        | Bidirectional sync (pull → push)                              |
 | `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional) |
 | `nobsi diff [path]` | Show diff between local and Notion                            |
+| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)    |
 | `nobsi resolve`     | Resolve sync conflicts                                        |
 | `nobsi watch`       | Watch for changes + auto-sync                                 |
 
-All commands support `--dry-run` to preview changes without applying them.
+`push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` skips incremental detection for a full rescan (recovers pages missed by Notion's search indexing lag).
 
 ### Non-interactive mode (CI / scripts)
 
@@ -205,12 +206,13 @@ Obsidian Vault                        Notion Workspace
 
 ### Conflict Resolution
 
-When both sides change the same file:
+When both sides change the same file, `pull`/`sync` flags it as a conflict instead of overwriting. Run `nobsi resolve` — interactively (per file) or in bulk with `--strategy`:
 
-- `ask` — prompt to choose (CLI default)
-- `local-wins` — keep Obsidian version
-- `remote-wins` — keep Notion version
-- `manual` — insert conflict markers for manual resolution
+- `local-first` — keep the Obsidian version
+- `remote-first` — keep the Notion version
+- `duplicate` — keep both (writes a `.conflict` copy)
+
+Interactive mode adds a **merge** option (3-way auto-merge with conflict markers). The default `sync.conflictStrategy` is `manual` — conflicts are flagged and left for you to resolve.
 
 ## Supported Conversions
 
@@ -254,7 +256,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "ask" | "local-wins" | "remote-wins" | "manual"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
   },
   "paths": {
     "include": ["**/*"], // glob patterns to include
@@ -337,9 +339,11 @@ await orchestrator.sync({ dryRun: false });
 ## Roadmap
 
 ```
-v0.3.0 ✅ Current — round-trip fidelity sweep (comments/footnotes/highlights/table
-        alignment/block spacing), incremental-pull gap fixes, --force full scan,
-        Node 22+, 1151 tests
+v0.3.1 🔜 Next — steady-churn elimination (same-title inline-DB folder separation,
+        linked-view container dedup), Obsidian/HTML comment round-trip, page-mention
+        URL fix, clean-slate 887-file real-data E2E (churn-0, lossless), 1285 tests
+v0.3.0 ✅ round-trip fidelity sweep (comments/footnotes/highlights/table alignment/
+        block spacing), incremental-pull gap fixes, --force full scan, Node 22+
 v0.2.1  --version dynamic read fix, docs refresh, 1038 tests
 v0.2.0  100% lossless·idempotent·convergent, invariant safety net, npm publish
 v0.1.12 Pull fidelity + sync stability, nested DB→Bases, gallery covers, 777 tests
@@ -355,7 +359,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1151 tests
+pnpm test          # 1285 tests
 pnpm lint
 pnpm typecheck
 

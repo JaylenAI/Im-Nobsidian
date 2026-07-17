@@ -2,7 +2,7 @@
 
 ## Prerequisites / 사전 준비
 
-- **Node.js 20+** — [nodejs.org](https://nodejs.org)에서 설치
+- **Node.js 22.13+** — [nodejs.org](https://nodejs.org)에서 설치
 - **Notion 계정** — [notion.so](https://www.notion.so)에서 가입
 - **Obsidian vault** — 동기화할 Obsidian 볼트 경로
 
@@ -89,8 +89,8 @@ nobsi diff           # 로컬 ↔ Notion 차이 상세 출력
 
 ```bash
 nobsi resolve        # 대화형 충돌 해결
-nobsi resolve --strategy local-wins    # 로컬 우선
-nobsi resolve --strategy remote-wins   # Notion 우선
+nobsi resolve --strategy local-first   # 로컬 우선
+nobsi resolve --strategy remote-first  # Notion 우선
 ```
 
 ## Folder Structure / 폴더 구조
