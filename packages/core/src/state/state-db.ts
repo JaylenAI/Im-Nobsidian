@@ -54,15 +54,13 @@ export class StateDB implements IStateDB {
 
   getByPath(path: string): SyncRecord | null {
     const row = this.db.prepare("SELECT * FROM sync_state WHERE obsidian_path = ?").get(path) as
-      | RawSyncRow
-      | undefined;
+      RawSyncRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
   getByNotionId(pageId: string): SyncRecord | null {
     const row = this.db.prepare("SELECT * FROM sync_state WHERE notion_page_id = ?").get(pageId) as
-      | RawSyncRow
-      | undefined;
+      RawSyncRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
@@ -196,8 +194,7 @@ export class StateDB implements IStateDB {
 
   resolveWikilink(text: string): WikilinkEntry | null {
     const byTitle = this.db.prepare("SELECT * FROM wikilink_map WHERE title = ?").get(text) as
-      | RawWikilinkRow
-      | undefined;
+      RawWikilinkRow | undefined;
 
     if (byTitle) return this.mapWikilinkRow(byTitle);
 
@@ -238,8 +235,7 @@ export class StateDB implements IStateDB {
 
   getMeta(key: string): string | null {
     const row = this.db.prepare("SELECT value FROM sync_metadata WHERE key = ?").get(key) as
-      | { value: string }
-      | undefined;
+      { value: string } | undefined;
     return row?.value ?? null;
   }
 
