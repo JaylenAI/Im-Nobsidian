@@ -297,13 +297,20 @@ export class NotionClient {
   }
 
   /**
-   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 1회 호출로 판별한다.
+   * 발견된 DB 가 **동기화 가능한지**(접근 가능한 data source 가 있는지) 판별한다.
    * 신 모델(2025-09-03)에서 링크드 DB·미공유 데이터 소스·삭제 DB 는 `data_sources` 가
    * 비어, 행 조회(`dataSources.query`)가 404 로 실패하고 그 전에 생성된 빈 폴더/`.base` 만
    * 남긴다. 발견 단계에서 미리 걸러 **빈 폴더/.base 오염 + 매 pull 의 404 노이즈**를 차단한다.
    * 제목은 함께 반환해 호출처가 추가 조회 없이 폴더명을 잡게 한다.
+   *
+   * F25: 원본이 같은 공유 범위에 있으면 linked view 컨테이너도 `data_sources` 가 **채워져**
+   * 온다(실측 — 워크스페이스 8건). 이때 data source 의 parent database 는 원본이므로,
+   * 첫 소스의 parent 가 자신이 아니면 `linkedOriginalDbId` 로 알려 컨테이너가 원본과 같은
+   * 행 집합을 이중 pull(폴더 릴레이 재배치 churn)하는 것을 발견 단계에서 차단한다.
    */
-  async getDatabaseSyncability(databaseId: string): Promise<{ title: string; queryable: boolean }> {
+  async getDatabaseSyncability(
+    databaseId: string,
+  ): Promise<{ title: string; queryable: boolean; linkedOriginalDbId?: string }> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
@@ -311,7 +318,21 @@ export class NotionClient {
       data_sources?: Array<{ id: string }>;
     };
     const title = Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "";
-    return { title, queryable: (db.data_sources?.length ?? 0) > 0 };
+    const firstDsId = db.data_sources?.[0]?.id;
+    if (!firstDsId) return { title, queryable: false };
+
+    try {
+      const ds = (await this.withRateLimit(() =>
+        this.client.dataSources.retrieve({ data_source_id: firstDsId }),
+      )) as unknown as { parent?: { type?: string; database_id?: string } };
+      const ownerDbId = ds.parent?.database_id;
+      if (ownerDbId && normalizeNotionId(ownerDbId) !== normalizeNotionId(databaseId)) {
+        return { title, queryable: true, linkedOriginalDbId: ownerDbId };
+      }
+    } catch {
+      // 소유 판정 실패는 기존 동작(원본 취급) 유지 — 일시 오류로 컨테이너를 오강등하지 않는다.
+    }
+    return { title, queryable: true };
   }
 
   /**

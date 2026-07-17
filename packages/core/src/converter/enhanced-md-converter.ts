@@ -377,19 +377,33 @@ function convertContainers(content: string): string {
   return stripQuotedColumnMarkers(result);
 }
 
+// quote 프리픽스는 `>`+공백 1개 단위로만 소비되므로, 이중 중첩(콜아웃 안 콜아웃)에서
+// 남는 구조적 탭(`> > \t%%..%%`)까지 흡수하도록 마커 앞 여백을 별도로 허용한다(실측: 루틴).
 const QUOTED_COLUMN_EDGE_RE = new RegExp(
-  `^(?:>[ \\t]?)+%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%[ \\t]*\\n?`,
+  `^(?:>[ \\t]?)+[ \\t]*%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%[ \\t]*\\n?`,
   "gm",
 );
 const QUOTED_COLUMN_SEP_RE = new RegExp(
-  `^((?:>[ \\t]?)+)%%${MARKER_BRAND_RE}:column%%[ \\t]*$`,
+  `^((?:>[ \\t]?)+)[ \\t]*%%${MARKER_BRAND_RE}:column%%[ \\t]*$`,
   "gm",
+);
+const QUOTED_COLUMN_INLINE_RE = new RegExp(
+  `[ \\t]*%%${MARKER_BRAND_RE}:column(?:-list:(?:start|end))?%%`,
+  "g",
 );
 
 function stripQuotedColumnMarkers(content: string): string {
-  return content
-    .replace(QUOTED_COLUMN_EDGE_RE, "")
-    .replace(QUOTED_COLUMN_SEP_RE, (_m, prefix: string) => prefix.trimEnd());
+  return (
+    content
+      .replace(QUOTED_COLUMN_EDGE_RE, "")
+      .replace(QUOTED_COLUMN_SEP_RE, (_m, prefix: string) => prefix.trimEnd())
+      // 콜아웃이 컬럼을 품으면 innermost 평탄화 순서상 start 마커가 본문 첫 줄이 되어
+      // 콜아웃 제목으로 흡수된다(실측: 인사이드 아웃) — 줄 앵커 규칙을 벗어나므로
+      // quote 줄 '안'의 인라인 발생분도 걷어 동일한 평탄화 degrade 로 수렴시킨다.
+      .replace(/^(?:>[ \t]?).*%%.*$/gm, (line) =>
+        line.replace(QUOTED_COLUMN_INLINE_RE, "").trimEnd(),
+      )
+  );
 }
 
 function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
@@ -404,7 +418,10 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   // 속성 없는 레거시(<callout>\n💡 제목, ::: callout 펜스)는 첫 줄 이모지 경로를 유지한다.
   const emojiMatch =
     style?.icon || style?.color ? null : /^([\p{Emoji}️‍]+)\s*(.*)/u.exec(firstLine);
-  const icon = style?.icon ?? (emojiMatch ? emojiMatch[1]! : undefined);
+  const rawIcon = style?.icon ?? (emojiMatch ? emojiMatch[1]! : undefined);
+  // 업로드 이미지 아이콘은 만료되는 서명 URL 로만 노출된다(풀마다 서명이 바뀌어 churn,
+  // push 하면 만료 URL 오염) — URL 아이콘은 마커에 싣지 않고 색만 보존한다(degrade).
+  const icon = rawIcon !== undefined && /^https?:\/\//i.test(rawIcon) ? undefined : rawIcon;
   const type = icon ? emojiToCalloutType(icon) : "note";
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
   const rest = lines.slice(1).join("\n").trim();
@@ -445,9 +462,15 @@ function convertPageMentions(content: string): string {
   // 둘 다 page id 로 환원해 `[[notion:id]]` 로 만들고, 후처리 resolveNotionLinks 가 정식
   // 제목으로 해소한다. mention 라벨은 항상 대상 페이지의 현재 제목이므로 id 해소가 SSOT —
   // 라벨을 버려도 무손실이며, 같은 줄의 다른 위키링크와 일관된 표현이 된다.
+  //
+  // URL 호스트/경로는 워크스페이스·API 버전에 따라 여러 형태로 온다(실측 — clean-slate
+  // pull 18건이 전부 신형 `app.notion.com/p/<id>`): `www.notion.so/<id>`,
+  // `notion.so/<id>`, `app.notion.com/p/<id>`. `notion.so` 만 보던 기존 정규식은 신형을
+  // 놓쳐 콜아웃 breadcrumb 에 raw 태그가 남았다(F27). 임의 서브도메인 + `.so`/`.com` +
+  // 선택적 `/p/` 로 일반화한다. id 는 항상 32 hex 라 오탐 위험이 낮다.
   // (`[^>]*?` 는 `>` 를 넘지 않는 lazy 매치, alternation 으로 self-closing/라벨형을 한 번에 처리)
   result = result.replace(
-    /<mention-page\s+url="https?:\/\/(?:www\.)?notion\.so\/([a-f0-9]{32})"[^>]*?(?:\/>|>[\s\S]*?<\/mention-page>)/g,
+    /<mention-page\s+url="https?:\/\/(?:[a-z]+\.)?notion\.(?:so|com)\/(?:p\/)?([a-f0-9]{32})"[^>]*?(?:\/>|>[\s\S]*?<\/mention-page>)/g,
     (_match, id: string) => `[[notion:${id}]]`,
   );
   return result;

@@ -44,6 +44,7 @@ import {
 } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
+import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
@@ -791,9 +792,18 @@ export class SyncOrchestrator {
   ): Promise<DiscoveredDbOutcome> {
     let dbTitle: string;
     try {
-      // 제목 + 접근 가능한 data source 유무를 1회 호출로 확인한다. data source 가 없으면
+      // 제목 + 접근 가능한 data source 유무를 확인한다. data source 가 없으면
       // 행 조회가 404 로 실패하고 빈 폴더/.base 만 남기므로, 발견 단계에서 미리 제외한다.
       const info = await this.notionClient.getDatabaseSyncability(dbId);
+      // F25: data_sources 가 채워진 linked view 컨테이너(원본이 공유 범위에 있는 경우) —
+      // 원본으로 해소해 등록한다. 컨테이너를 원본처럼 등록하면 같은 행 집합을 이중
+      // pull 해 매 pull 폴더 릴레이 재배치(churn)가 된다.
+      if (info.linkedOriginalDbId) {
+        getLogger().info(
+          `[Im-Nobsidian] DB ${dbId}: linked view 컨테이너(원본 ${info.linkedOriginalDbId}) → 원본으로 해소(F25)`,
+        );
+        return { kind: "linked", originalDbId: info.linkedOriginalDbId };
+      }
       if (!info.queryable) {
         // linked database view 컨테이너는 data_sources 가 비지만 Views API 로 원본을
         // 알 수 있다(F22). 해소되면 접근 불가가 아니라 "원본으로 향하는 참조"로 취급한다.
@@ -909,6 +919,28 @@ export class SyncOrchestrator {
       ]);
       let changed = false;
 
+      // F24: 동명 형제 DB(같은 부모 아래 같은 제목 인라인 DB — 실측 22쌍)는 제목 기반
+      // 폴더 유도가 충돌해 .base/사이드카를 서로 덮어쓰고 행이 한 폴더에 섞인다.
+      // 폴더 점유 대장을 두고 ① 캐시의 기존 충돌을 결정적으로 수리(첫 항목이 원 폴더
+      // 유지)하고 ② 신규 등록도 같은 대장을 거치게 한다. 사용자 설정 DB 폴더는 선점.
+      const folderOwner = new Map<string, string>(
+        (this.config.notion.databases ?? []).map((d) => [d.localFolder, d.databaseId]),
+      );
+      const repairedCount = repairDbFolderCollisions(dbConfigs, folderOwner);
+      for (const c of dbConfigs) folderOwner.set(c.localFolder, c.databaseId);
+      if (repairedCount > 0) {
+        changed = true;
+        getLogger().info(`[Im-Nobsidian] 동명 DB 폴더 충돌 ${repairedCount}건 분리(F24)`);
+      }
+      const claimFolder = (config: { databaseId: string; localFolder: string }): void => {
+        config.localFolder = resolveDbFolderPath(
+          config.localFolder,
+          config.databaseId,
+          (f) => folderOwner.get(f) ?? null,
+        );
+        folderOwner.set(config.localFolder, config.databaseId);
+      };
+
       // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
       // 스택트레이스 노이즈를 차단한다. 발견 단계에서 걸러 빈 폴더/.base 오염도 막는다.
       const inaccessibleIds = this.loadInaccessibleDbIds();
@@ -953,6 +985,7 @@ export class SyncOrchestrator {
           const outcome = await this.buildDiscoveredDbConfig(origId, parentPageId);
           knownIds.add(origNohyph);
           if (outcome.kind === "ok") {
+            claimFolder(outcome.config);
             dbConfigs.push(outcome.config);
             changed = true;
           } else if (outcome.kind !== "error") {
@@ -970,6 +1003,7 @@ export class SyncOrchestrator {
         const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId);
         knownIds.add(nohyph);
         if (outcome.kind === "ok") {
+          claimFolder(outcome.config);
           dbConfigs.push(outcome.config);
           changed = true;
         } else if (outcome.kind === "linked") {
@@ -1008,12 +1042,36 @@ export class SyncOrchestrator {
       const stillSyncable: typeof dbConfigs = [];
       let queue = [...dbConfigs];
       const MAX_DISCOVERY_ROUNDS = 4;
+      // F25: linked view 컨테이너 판정 시 행 소유를 양보할 원본 폴더 탐색. 디스커버리
+      // 캐시(dbConfigs — 이번 라운드 신규 등록 포함)와 사용자 명시 설정을 함께 본다.
+      const resolveDbFolder = (dbId: string): string | null => {
+        const key = dbId.replace(/-/g, "");
+        const hit =
+          dbConfigs.find((c) => c.databaseId.replace(/-/g, "") === key) ??
+          (this.config.notion.databases ?? []).find((c) => c.databaseId.replace(/-/g, "") === key);
+        return hit?.localFolder ?? null;
+      };
       for (let round = 1; queue.length > 0; round++) {
         const roundRowPaths: string[] = [];
         for (const dbConfig of queue) {
           if (inaccessibleIds.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
           try {
-            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig);
+            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, { resolveDbFolder });
+            // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
+            // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
+            // 다음 pull 부터 이중 방문 자체를 없앤다. .base 재지향은 pullDatabase 가 마쳤다.
+            if (dbResult.linkedOriginalDbId) {
+              linkedMap.set(
+                dbConfig.databaseId.replace(/-/g, ""),
+                dbResult.linkedOriginalDbId.replace(/-/g, ""),
+              );
+              linkedChanged = true;
+              changed = true;
+              getLogger().info(
+                `[Im-Nobsidian] DB ${dbConfig.databaseId}: linked view 컨테이너 감지 → 행은 원본 ${dbResult.linkedOriginalDbId} 폴더가 단일 소유(F25)`,
+              );
+              continue;
+            }
             created += dbResult.created;
             updated += dbResult.updated;
             conflicts.push(...dbResult.conflicts);

@@ -74,7 +74,9 @@ export class PreserveMarkerInjector implements Processor {
     const params = marker.params ?? {};
 
     if (marker.type === "comment") {
-      return params.text ? `%%${params.text}%%` : null;
+      if (!params.text) return null;
+      // style=html 은 HTML 주석 원문(F26 확장) — Obsidian 주석 문법으로 바꾸면 오염.
+      return params.style === "html" ? `<!--${params.text}-->` : `%%${params.text}%%`;
     }
 
     if (params.__raw !== undefined) {
