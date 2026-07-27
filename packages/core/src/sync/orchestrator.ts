@@ -14,6 +14,7 @@ import type {
   FailedOperation,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
+import type { ConversionResult } from "../types/convert.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { isNotionObjectNotFound, DiscoveryTooLargeError } from "../notion/client.js";
@@ -1414,7 +1415,7 @@ export class SyncOrchestrator {
       localFileSize: null,
     });
 
-    await this.imageHandler.uploadAndAppendImages(page.id, conversionResult.images, path);
+    await this.syncEmbeddedMedia(page.id, conversionResult, path);
 
     const hash = computeHash(content);
     const fileStat = await this.vaultFs.getFileStat(path);
@@ -1450,6 +1451,32 @@ export class SyncOrchestrator {
     this.stateDb.markPendingCompleted(walOpId);
   }
 
+  /**
+   * 노트에 박힌 로컬 미디어를 Notion 에 올린다(R1).
+   *
+   * 먼저 본문 자리표시자를 실제 image/file 블록으로 **제자리** 교체한다. 그러고도 남은
+   * 이미지만 페이지 끝에 덧붙이는 예전 경로로 흘린다 — 자리표시자가 없는 경우는 본문
+   * push 가 통째로 스킵됐을 때(pageHasLiveChildren) 정도이고, 그때도 이미지 자체는
+   * 올라가야 하므로 폴백을 남긴다.
+   */
+  private async syncEmbeddedMedia(
+    pageId: string,
+    conversionResult: ConversionResult,
+    path: string,
+  ): Promise<void> {
+    const { handledTargets } = await this.imageHandler.materializeLocalMedia(
+      pageId,
+      conversionResult.content,
+      path,
+    );
+    const leftovers = conversionResult.images.filter(
+      (img) => !img.localPath || !handledTargets.has(img.localPath),
+    );
+    if (leftovers.length > 0) {
+      await this.imageHandler.uploadAndAppendImages(pageId, leftovers, path);
+    }
+  }
+
   private async pushUpdate(path: string): Promise<void> {
     const content = await this.vaultFs.readFile(path);
     const record = this.stateDb.getByPath(path);
@@ -1471,11 +1498,7 @@ export class SyncOrchestrator {
 
     await this.pushUpdatePage(record.notionPageId, conversionResult.content, record.baseSnapshot);
 
-    await this.imageHandler.uploadAndAppendImages(
-      record.notionPageId,
-      conversionResult.images,
-      path,
-    );
+    await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path);
 
     let propsToUpdate: Record<string, unknown> | undefined;
     if (
@@ -1955,12 +1978,17 @@ export class SyncOrchestrator {
 
     let processedMarkdown = markdown;
     if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
+      const imageResult = await this.imageHandler.downloadAllImages(
+        markdown,
+        title,
+        pageId,
+        filePath,
+      );
       processedMarkdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
 
-    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
+    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title, filePath);
     processedMarkdown = fileResult.content;
     this._pullFileCount += fileResult.downloads.length;
 
@@ -2074,12 +2102,21 @@ export class SyncOrchestrator {
     }
 
     if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, change.pageId);
+      const imageResult = await this.imageHandler.downloadAllImages(
+        markdown,
+        title,
+        change.pageId,
+        record.obsidianPath,
+      );
       markdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
 
-    const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+    const fileResult = await this.imageHandler.downloadAllFiles(
+      markdown,
+      title,
+      record.obsidianPath,
+    );
     markdown = fileResult.content;
     this._pullFileCount += fileResult.downloads.length;
 

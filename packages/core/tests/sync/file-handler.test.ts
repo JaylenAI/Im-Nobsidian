@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
-import { FileHandler, getBlockType, getMimeType } from "../../src/sync/file-handler.js";
+import { FileHandler } from "../../src/sync/file-handler.js";
+import { getBlockType, getMimeType } from "../../src/utils/mime.js";
 import type { NotionClient } from "../../src/notion/client.js";
 import type { IStateDB } from "../../src/state/state-db-interface.js";
 import {

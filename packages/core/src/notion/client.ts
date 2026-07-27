@@ -638,17 +638,36 @@ export class NotionClient {
     return allBlocks;
   }
 
-  async appendChildren(blockId: string, children: unknown[]): Promise<void> {
+  /**
+   * 자식 블록을 덧붙인다. `options.after` 를 주면 그 블록 **바로 뒤**에 삽입한다
+   * (기본은 맨 끝). 자리표시자를 실제 미디어 블록으로 제자리 교체할 때 필요하다.
+   *
+   * 실측(2025-09-03): position 삽입 응답의 `results` 는 방금 넣은 블록뿐 아니라
+   * 삽입 지점 이후의 형제까지 함께 돌려준다. 앞에서부터 batch 길이만큼이 새 블록이므로
+   * 배치를 이어 붙일 때는 그 마지막 id 를 다음 기준점으로 삼는다.
+   */
+  async appendChildren(
+    blockId: string,
+    children: unknown[],
+    options?: { readonly after?: string },
+  ): Promise<string[]> {
     const batchSize = this.batchSize;
+    const created: string[] = [];
+    let after = options?.after;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
-      await this.withRateLimit(() =>
+      const response = await this.withRateLimit(() =>
         this.client.blocks.children.append({
           block_id: blockId,
           children: batch as never,
+          ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
         }),
       );
+      const ids = response.results.slice(0, batch.length).map((b) => b.id);
+      created.push(...ids);
+      if (after && ids.length > 0) after = ids[ids.length - 1];
     }
+    return created;
   }
 
   async deleteBlock(blockId: string): Promise<void> {
