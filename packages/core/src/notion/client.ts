@@ -1140,8 +1140,11 @@ export class NotionClient {
               Math.pow(this.retryBackoffFactor, attempt) *
               (0.5 + Math.random() * 0.5);
 
-        // 서버가 대기시간을 명시했다는 건 rate limit 이라는 뜻 — 전원 대기로 승격한다.
-        if (retryAfterMs !== null) {
+        // 429 는 요청 하나가 아니라 워크스페이스 전체에 걸린 신호다 — 전원 대기로 승격한다.
+        // 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다. 헤더는 게이트웨이가
+        // 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이 통째로 사라지면
+        // 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+        if (isRateLimited(error)) {
           this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + backoffMs);
         }
 
@@ -1201,6 +1204,13 @@ function extractPropertyChoices(prop: Record<string, unknown>): {
   return result;
 }
 
+/** rate limit(429) 인가 — 이 요청만이 아니라 클라이언트 전체가 쉬어야 하는 신호. */
+function isRateLimited(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { status?: unknown }).status === 429
+  );
+}
+
 function isRetryable(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const code = (error as { code?: string }).code;
@@ -1236,6 +1246,37 @@ export function describeRetryCause(error: unknown): string {
 const MAX_RETRY_AFTER_MS = 60_000;
 
 /**
+ * 응답 헤더 컨테이너에서 헤더 하나를 꺼낸다 — **모양을 가정하지 않는다.**
+ *
+ * `@notionhq/client` 의 `APIResponseError.headers` 는 타입이 `unknown` 이고(fetch-types.d.ts
+ * `SupportedResponse`), 실제로는 fetch 응답의 `Headers` 인스턴스가 그대로 실려 온다.
+ * `Headers` 는 인덱스 접근(`h["retry-after"]`)에 **항상 undefined** 를 준다 — 값은
+ * `.get()` 으로만 나온다. 그래서 인덱스로만 읽던 예전 코드는 `Retry-After` 를 단 한 번도
+ * 못 봤고, 429 를 맞아도 서버가 지정한 대기 대신 지수 백오프로만 물러났다(라이브 429
+ * 폭풍에서 기록된 대기값이 전부 `base·2^n` 패턴이었던 게 그 증거다).
+ *
+ * 커스텀 `fetch` 를 주입하면 평범한 객체나 `Map` 이 올 수도 있으므로 세 모양을 모두 받는다.
+ * 평범한 객체는 대소문자를 가리지 않는다 — HTTP 헤더 이름은 원래 대소문자 구분이 없고,
+ * `Headers`/`Map` 과 달리 객체는 서버가 보낸 표기를 그대로 유지하기 때문이다.
+ */
+function readHeader(headers: unknown, name: string): string | null {
+  if (typeof headers !== "object" || headers === null) return null;
+
+  const get = (headers as { get?: unknown }).get;
+  if (typeof get === "function") {
+    // Headers · Map 둘 다 get(name) 계약을 만족한다.
+    const value: unknown = (get as (key: string) => unknown).call(headers, name);
+    return typeof value === "string" && value ? value : null;
+  }
+
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (key.toLowerCase() !== name) continue;
+    return typeof value === "string" && value ? value : null;
+  }
+  return null;
+}
+
+/**
  * `Retry-After` 헤더를 밀리초로 읽는다. 없거나 해석할 수 없으면 null(지수 백오프로 넘김).
  *
  * 숫자만 오리라 가정하면 안 된다 — RFC 9110 은 HTTP-date 형식도 허용한다
@@ -1249,8 +1290,7 @@ const MAX_RETRY_AFTER_MS = 60_000;
  */
 export function extractRetryAfter(error: unknown): number | null {
   if (typeof error !== "object" || error === null || !("headers" in error)) return null;
-  const headers = (error as { headers?: Record<string, string> }).headers;
-  const raw = headers?.["retry-after"];
+  const raw = readHeader((error as { headers?: unknown }).headers, "retry-after");
   if (!raw) return null;
 
   const seconds = Number(raw);

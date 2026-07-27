@@ -62,3 +62,45 @@ describe("extractRetryAfter", () => {
     expect(extractRetryAfter(new Error("boom"))).toBeNull();
   });
 });
+
+/**
+ * R9d D-RETRYAFTER-HEADERS 회귀 잠금.
+ *
+ * 위 테스트들이 전부 통과하는데도 **프로덕션에서는 `Retry-After` 가 한 번도 반영되지
+ * 않았다.** 테스트가 평범한 객체(`{ "retry-after": "3" }`)를 넘긴 반면, 실제
+ * `@notionhq/client` 는 fetch 응답의 `Headers` 인스턴스를 그대로 실어 오기 때문이다
+ * (`errors.js` → `headers: response.headers`, 타입은 `unknown`). `Headers` 는 인덱스
+ * 접근에 항상 undefined 를 주므로 예전 구현은 조용히 null 로 떨어졌고, 429 폭풍에서
+ * 서버가 지정한 대기 대신 지수 백오프로만 물러났다.
+ *
+ * 그래서 **실제 `Headers` 객체**로 잠근다 — 목이 아니라 런타임이 주는 그 타입으로.
+ */
+describe("extractRetryAfter — SDK 가 주는 헤더 모양", () => {
+  it("fetch Headers 인스턴스에서 읽는다 (인덱스 접근 불가 타입)", () => {
+    const headers = new Headers({ "Retry-After": "3" });
+    // 이 단언이 이 테스트의 존재 이유다 — 인덱스로는 값이 안 나온다.
+    expect((headers as unknown as Record<string, string>)["retry-after"]).toBeUndefined();
+    expect(extractRetryAfter({ headers })).toBe(3000);
+  });
+
+  it("Headers 에 Retry-After 가 없으면 null", () => {
+    expect(
+      extractRetryAfter({ headers: new Headers({ "content-type": "application/json" }) }),
+    ).toBeNull();
+  });
+
+  it("Map 형태 헤더도 읽는다 (커스텀 fetch 주입 대비)", () => {
+    expect(extractRetryAfter({ headers: new Map([["retry-after", "2"]]) })).toBe(2000);
+  });
+
+  it("평범한 객체는 대소문자를 가리지 않는다", () => {
+    expect(extractRetryAfter({ headers: { "Retry-After": "4" } })).toBe(4000);
+    expect(extractRetryAfter({ headers: { "RETRY-AFTER": "5" } })).toBe(5000);
+  });
+
+  it("문자열이 아닌 헤더 값은 null — 숫자 강제변환 금지", () => {
+    expect(extractRetryAfter({ headers: { "retry-after": 3 } })).toBeNull();
+    expect(extractRetryAfter({ headers: null })).toBeNull();
+    expect(extractRetryAfter({ headers: "retry-after: 3" })).toBeNull();
+  });
+});
