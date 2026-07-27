@@ -70,6 +70,10 @@ export const pullCommand = new Command("pull")
       console.log(
         `  ${summary(result.created, result.updated, result.deleted)}  ${dimText(`${result.failed.length} failed`)}`,
       );
+      // 복원은 별도 줄로 알린다 — 볼트에서 파일이 사라졌었다는 사실은 조용히 넘길 일이 아니다.
+      if (result.restored > 0) {
+        console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
+      }
       console.log(`  ${duration(result.duration)}`);
 
       if (result.conflicts.length > 0) {

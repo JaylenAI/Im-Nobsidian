@@ -158,4 +158,60 @@ describe("resolvePullConflict", () => {
     });
     expect(result.action).toBe("conflict");
   });
+
+  // --- D-DELETE-NORESTORE: 로컬 파일 삭제는 충돌이 아니라 복원 (R0) ---
+
+  it("로컬 파일이 없으면 전략과 무관하게 write (복원)", () => {
+    // 회귀 방지: localContent "" 의 해시가 record.contentHash 와 어긋나 '로컬 수정' 으로
+    // 오판되면 manual 은 conflict, local-first 는 skip 으로 빠져 삭제가 영구히 굳었다.
+    for (const strategy of ["manual", "local-first", "remote-first", "duplicate"] as const) {
+      const result = resolvePullConflict({
+        record: createRecord({ contentHash: "synced-hash" }),
+        localContent: "",
+        localExists: false,
+        remoteContent: "REMOTE",
+        remoteChange,
+        strategy,
+      });
+      expect(result.action).toBe("write");
+      expect(result.conflict).toBeUndefined();
+    }
+  });
+
+  it("로컬 파일 없음 + 리모트도 빈 내용 → 여전히 write (빈 파일이라도 되살린다)", () => {
+    // 둘 다 "" 라 내용 비교로는 구분이 안 되는 지점. localExists 가 유일한 판별자다.
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash" }),
+      localContent: "",
+      localExists: false,
+      remoteContent: "",
+      remoteChange,
+      strategy: "local-first",
+    });
+    expect(result.action).toBe("write");
+  });
+
+  it("localExists 생략 시 기존 동작 유지(하위호환) — 빈 파일은 '로컬 수정' 으로 본다", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: null }),
+      localContent: "",
+      remoteContent: "REMOTE",
+      remoteChange,
+      strategy: "manual",
+    });
+    expect(result.action).toBe("conflict");
+  });
+
+  it("localExists=true 이면 빈 파일을 복원으로 오인하지 않는다", () => {
+    // 사용자가 내용을 통째로 지워 빈 파일로 만든 것은 '편집' 이다 — local-first 는 보존해야 한다.
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash" }),
+      localContent: "",
+      localExists: true,
+      remoteContent: "REMOTE",
+      remoteChange,
+      strategy: "local-first",
+    });
+    expect(result.action).toBe("skip");
+  });
 });

@@ -369,6 +369,7 @@ export class SyncOrchestrator {
       created: 0,
       updated: 0,
       deleted: 0,
+      restored: 0,
       conflicts: [],
       writtenPaths: [],
       failed: [],
@@ -384,7 +385,7 @@ export class SyncOrchestrator {
 
     this.cleanupInterruptedSync();
 
-    const counts = { created: 0, updated: 0, deleted: 0 };
+    const counts = { created: 0, updated: 0, deleted: 0, restored: 0 };
     this._pullImageCount = 0;
     this._pullFileCount = 0;
     this._inlineDbRefs.clear();
@@ -400,6 +401,7 @@ export class SyncOrchestrator {
       created: number,
       updated: number,
       deleted: number,
+      restored = 0,
     ): Promise<PullResult> => {
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       this.stateDb.setMeta("last_pull_at", new Date().toISOString());
@@ -409,6 +411,7 @@ export class SyncOrchestrator {
         created,
         updated,
         deleted,
+        restored,
         conflicts,
         writtenPaths,
         failed,
@@ -442,7 +445,23 @@ export class SyncOrchestrator {
         })
       : remoteChanges;
 
-    if (filtered.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
+    // D-DELETE-NORESTORE: 원격 변경 감지는 "Notion 에서 바뀐 것"만 본다. 로컬에서 지워진
+    // 추적 파일은 어느 경로로도 큐에 오르지 않아, 증분이든 --force 든 되살아나지 않고
+    // 영구히 발산했다(실측 0/4). 상태 DB 와 실제 볼트의 차집합으로 직접 잡아 복원 대상으로
+    // 밀어 넣는다. 이미 원격 변경으로 큐에 오른 페이지는 중복 처리하지 않는다.
+    const queuedIds = new Set(filtered.map((c) => c.pageId));
+    const restoreChanges: RemoteChange[] = (await this.detectMissingLocalFiles(options?.paths))
+      .filter((r) => r.notionPageId !== null && !queuedIds.has(r.notionPageId))
+      .map((r) => ({
+        pageId: r.notionPageId as string,
+        type: "modified" as const,
+        lastEdited: r.notionLastEdited ?? r.updatedAt,
+        previousEdited: r.notionLastEdited,
+      }));
+    const restoreIds = new Set(restoreChanges.map((c) => c.pageId));
+    const workItems = restoreChanges.length > 0 ? [...filtered, ...restoreChanges] : filtered;
+
+    if (workItems.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
       // 본문 페이지 변경이 없어도 디스커버리된 DB 행은 새로 기록될 수 있다. 그 행들의
       // 본문 링크·frontmatter relation 을 finalize() 의 resolveNotionLinks 가 해소한다(M2).
       // (기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감 — emptyResult 와 동일)
@@ -454,7 +473,7 @@ export class SyncOrchestrator {
       );
       return finalize(dbDiscovery.created, dbDiscovery.updated, 0);
     }
-    if (filtered.length === 0) {
+    if (workItems.length === 0) {
       return emptyResult;
     }
 
@@ -463,8 +482,8 @@ export class SyncOrchestrator {
       const dryUpdated = filtered.filter((c) => c.type === "modified").length;
       const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
       let dryProgress = 0;
-      const dryTotal = filtered.length;
-      for (const change of filtered) {
+      const dryTotal = workItems.length;
+      for (const change of workItems) {
         const op =
           change.type === "created"
             ? ("create" as const)
@@ -479,6 +498,9 @@ export class SyncOrchestrator {
         created: dryCreated,
         updated: dryUpdated,
         deleted: dryDeleted,
+        // 복원은 updated 에 섞지 않는다 — dry-run 이 "수정 N건" 이라고만 말하면
+        // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
+        restored: restoreChanges.length,
         conflicts: [],
         writtenPaths: [],
         failed: [],
@@ -491,7 +513,7 @@ export class SyncOrchestrator {
 
     this.stateDb.setMeta("pull_in_progress", "true");
 
-    const pullTotal = filtered.length;
+    const pullTotal = workItems.length;
     let pullCompleted = 0;
 
     // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
@@ -522,7 +544,8 @@ export class SyncOrchestrator {
             // unchanged=true 는 content_hash 동일 no-op(가짜 수정) — 파일 재기록·churn 없음.
             // updated 카운트에 넣지 않아 보고가 정직해진다(I5).
             writtenPaths.push(result.path);
-            counts.updated++;
+            if (restoreIds.has(change.pageId)) counts.restored++;
+            else counts.updated++;
           }
           return result.path;
         }
@@ -543,7 +566,7 @@ export class SyncOrchestrator {
     // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패한 변경은 재시도 큐로 모은다.
     const retryQueue: RemoteChange[] = [];
     await runPool(
-      filtered,
+      workItems,
       async (change) => {
         if (options?.signal?.aborted) return;
         try {
@@ -619,7 +642,7 @@ export class SyncOrchestrator {
       counts.updated += dbDiscovery.updated;
     }
 
-    return finalize(counts.created, counts.updated, counts.deleted);
+    return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
   }
 
   async sync(options?: SyncOptions): Promise<SyncResult> {
@@ -1788,6 +1811,101 @@ export class SyncOrchestrator {
     return !!this.stateDb.getByNotionId(parentId);
   }
 
+  /**
+   * 추적 중(sync_state)인데 디스크에서 사라진 파일을 찾는다.
+   *
+   * 원격 변경 감지(detectRemoteChanges*)는 "Notion 에서 바뀐 것"만 본다. 로컬에서 파일이
+   * 지워진 경우는 어느 경로로도 잡히지 않아, 재pull 해도 `--force` 로도 되살아나지 않고
+   * 영구히 발산했다. push 는 deleteSync=false 면 원격을 지우지 않으므로 사용자에겐 복구
+   * 수단이 볼트 전체 초기화밖에 남지 않는다 — 이 스캔이 그 마지막 구멍을 막는다.
+   *
+   * 레코드마다 stat 을 던지면 1000건 규모에서 수 초가 든다. 볼트 워크 1회로 실재 목록을
+   * 만든 뒤 차집합을 취한다(md). md 가 아닌 추적 레코드는 수가 적어 개별 확인으로 남긴다.
+   *
+   * 로컬 이름변경·이동은 "사라짐" 과 구별해야 한다 — 되살리면 원본과 새 이름의 사본이
+   * 둘 다 남는다. push 의 detectMoves 와 같은 기준(내용 해시 일치)을 쓰되, 볼트 전체를
+   * 해시하지 않도록 크기가 같은 미추적 파일만 후보로 좁혀 확인한다.
+   */
+  private async detectMissingLocalFiles(paths?: string[]): Promise<SyncRecord[]> {
+    // deleteSync 가 켜져 있으면 로컬 삭제는 "원격에도 지우라" 는 의사 표시다. sync() 는
+    // pull 을 먼저 돌리므로 여기서 되살리면 뒤이은 push 가 지울 대상을 잃어 삭제 의도가
+    // 통째로 무효화된다. 복원은 삭제를 전파할 수단이 아예 없는 설정(deleteSync=false)
+    // 에서만 유일하게 옳은 해석이다.
+    if (this.config.sync.deleteSync) return [];
+
+    const records = this.stateDb.getAll();
+    if (records.length === 0) return [];
+
+    const scoped = records.filter(
+      (r) =>
+        // folder-only 는 실체가 폴더라 파일 부재가 정상. db-row 는 매 pull 마다
+        // database-syncer 가 전 행을 훑으며 같은 복원 판정을 이미 거치므로 여기서
+        // 중복 처리하면 행 전용 frontmatter 없이 본문만 쓰는 잘못된 경로로 샌다.
+        (r.fileType === "file" || r.fileType === "folder-note") &&
+        r.notionPageId !== null &&
+        (!paths?.length || paths.some((p) => r.obsidianPath.startsWith(p))),
+    );
+    if (scoped.length === 0) return [];
+
+    const stats = await this.vaultFs.listMarkdownFileStats();
+    const live = new Set(stats.map((f) => f.path));
+
+    const candidates: SyncRecord[] = [];
+    for (const record of scoped) {
+      if (record.obsidianPath.endsWith(".md")) {
+        if (!live.has(record.obsidianPath)) candidates.push(record);
+      } else if (!(await this.vaultFs.exists(record.obsidianPath))) {
+        candidates.push(record);
+      }
+    }
+    if (candidates.length === 0) return [];
+
+    // 이름이 바뀐 파일은 추적 경로에 없다 — 미추적 실재 파일만 크기별로 색인한다.
+    const tracked = new Set(records.map((r) => r.obsidianPath));
+    const untrackedBySize = new Map<number, string[]>();
+    for (const f of stats) {
+      if (tracked.has(f.path)) continue;
+      const bucket = untrackedBySize.get(f.size);
+      if (bucket) bucket.push(f.path);
+      else untrackedBySize.set(f.size, [f.path]);
+    }
+
+    const hashCache = new Map<string, string | null>();
+    const hashOf = async (path: string): Promise<string | null> => {
+      const cached = hashCache.get(path);
+      if (cached !== undefined) return cached;
+      let hash: string | null = null;
+      try {
+        hash = computeHash(await this.vaultFs.readFile(path));
+      } catch {
+        // 못 읽는 파일은 이름변경 판정에서 제외 — 확신 없이 복원을 취소하지 않는다.
+      }
+      hashCache.set(path, hash);
+      return hash;
+    };
+
+    const missing: SyncRecord[] = [];
+    for (const record of candidates) {
+      // localFileSize 는 크기 버킷으로 후보를 좁히는 최적화일 뿐이다. 구버전이 남긴
+      // 레코드처럼 값이 없으면 버킷을 못 고르는데, 여기서 빈 배열로 끝내면 이름변경을
+      // 놓쳐 원본 이름 사본이 되살아난다. 미추적 마크다운은 정상 볼트에서 거의 0건이라
+      // (실측: 추적 1189 / 볼트 md 1189) 전수 대조로 폴백해도 비용이 없다.
+      const sameSize =
+        record.localFileSize !== null
+          ? (untrackedBySize.get(record.localFileSize) ?? [])
+          : [...untrackedBySize.values()].flat();
+      let renamed = false;
+      for (const path of sameSize) {
+        if ((await hashOf(path)) === record.contentHash) {
+          renamed = true;
+          break;
+        }
+      }
+      if (!renamed) missing.push(record);
+    }
+    return missing;
+  }
+
   private async pullCreate(pageId: string): Promise<string> {
     const page = await this.notionClient.getPage(pageId);
     const title = this.notionClient.extractTitle(page);
@@ -1925,6 +2043,17 @@ export class SyncOrchestrator {
     if (!record) return {};
 
     const page = await this.notionClient.getPage(change.pageId);
+
+    // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
+    // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
+    // (deleteSync 가 켜져 있으면 전체 스캔이 이 페이지를 deleted 로 따로 처리한다.)
+    const remoteGone =
+      (page as { in_trash?: boolean }).in_trash === true ||
+      (page as { archived?: boolean }).archived === true;
+    if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
+      return { unchanged: true };
+    }
+
     const fetched = await this.fetchPageMarkdown(change.pageId);
     let markdown = fetched.content;
 
@@ -1971,15 +2100,21 @@ export class SyncOrchestrator {
     );
 
     let localContent: string;
+    // 읽기 실패를 곧바로 "파일 없음"으로 단정하지 않는다 — 권한 오류로 못 읽은 파일까지
+    // 복원 대상으로 삼으면 멀쩡한 로컬 편집을 덮어쓴다. 실패 경로에서만 존재 여부를
+    // 한 번 더 물어 '없음'과 '못 읽음'을 가른다.
+    let localExists = true;
     try {
       localContent = await this.vaultFs.readFile(record.obsidianPath);
     } catch {
       localContent = "";
+      localExists = await this.vaultFs.exists(record.obsidianPath);
     }
 
     const resolution = resolvePullConflict({
       record,
       localContent,
+      localExists,
       remoteContent,
       remoteChange: change,
       strategy: this.config.sync.conflictStrategy,
@@ -1999,7 +2134,9 @@ export class SyncOrchestrator {
     // 로컬 수정으로 오인 → push↔pull 무한 churn. 파일은 건드리지 않고 추적 메타
     // (notionLastEdited)만 현재 원격값으로 정렬해 재감지를 멈춘다. content_hash 비교로
     // 진짜 변경과 가짜 변경을 구분하는 핵심 멱등 지점이다.
-    if (remoteContent === localContent) {
+    // localExists 를 반드시 함께 본다: 파일이 사라졌고 원격도 빈 페이지면 둘 다 "" 라
+    // 동일 판정이 나면서 파일을 되쓰지 않고 synced 로 마감돼 삭제가 굳는다.
+    if (localExists && remoteContent === localContent) {
       const stat = await this.vaultFs.getFileStat(record.obsidianPath);
       this.stateDb.upsert({
         obsidianPath: record.obsidianPath,
