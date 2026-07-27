@@ -131,9 +131,20 @@ export function diffSnapshots(
   return { added: added.sort(), removed: removed.sort(), changed: changed.sort() };
 }
 
-/** 생성한 페이지들을 archive (정리). 실패는 무시. */
+/**
+ * 생성한 페이지들을 archive (정리). 실패는 무시.
+ *
+ * **역순(LIFO)으로 돈다.** 테스트는 격리 루트를 먼저 만들고 그 아래에 자식을 쌓으므로
+ * 목록은 부모가 앞이다. 앞에서부터 지우면 루트가 먼저 archive 되고, 그 뒤의 자식은
+ * 전부 `archived ancestor` 로 실패한다 — catch 가 삼키니 테스트는 통과하지만 SDK 가
+ * 요청마다 warn 을 찍어 라이브 로그가 **기대된 경고로 뒤덮인다**. 기대된 경고가 상시로
+ * 깔리면 진짜 경고를 못 알아본다. 자식부터 지워 원인을 없앤다(증상 억제가 아니라).
+ *
+ * 중복 id 도 접는다 — 같은 페이지를 루트로도, 레코드 순회로도 담는 테스트가 있어
+ * 두 번째 호출이 `Can't edit block that is archived` 를 낸다.
+ */
 export async function archivePages(raw: Client, ids: readonly string[]): Promise<void> {
-  for (const id of ids) {
+  for (const id of [...new Set(ids)].reverse()) {
     try {
       await raw.pages.update({ page_id: id, archived: true });
     } catch {
