@@ -386,6 +386,11 @@ function toggleToCallout(title: string, rawBody: string, color?: string): string
 // <columns>/<column> → 평탄화하되 경계를 컬럼 마커로 남긴다(ADR-008). 마커 어휘는
 // legacy block 경로(block-converter)와 동일 — push 가 <columns> 정준형으로 재조립한다.
 // 각 칼럼 본문은 dedent 로 구조적 탭까지 벗긴다(결함②: 탭 하나만 벗기던 기존 동작 교체).
+//
+// **빈 칼럼도 자리를 지킨다**(D-EMPTY-COLUMN). Notion 레이아웃에서 빈 칼럼은 여백을 주는
+// 실제 구성요소인데, 예전엔 내용이 없다는 이유로 걷어내 3열이 2열로 접혔다. 그 상태로
+// push 하면 사용자의 **Notion 레이아웃 자체가 파괴**된다(오프라인 실측: 3열 → pull 2열
+// → push `<column>` 2개). 마커만 남기고 본문을 비워 두면 칼럼 수가 보존된다.
 function flattenColumns(body: string): string {
   const cols: string[] = [];
   const re = new RegExp(COLUMN_WRAP_RE.source, COLUMN_WRAP_RE.flags);
@@ -393,13 +398,13 @@ function flattenColumns(body: string): string {
   let matched = false;
   while ((m = re.exec(body)) !== null) {
     matched = true;
-    const col = dedentContainerBody(m[1]!);
-    if (col.trim() !== "") cols.push(col);
+    cols.push(dedentContainerBody(m[1]!));
   }
-  // <column> 래퍼가 전혀 없을 때만 폴백 dedent. 래퍼가 있으나 모두 빈 칼럼이면 cols=[] →
-  // "" 반환(태그 제거됨). 폴백을 cols.length===0 으로 걸면 빈 칼럼의 <column> 태그가 샌다.
+  // <column> 래퍼가 전혀 없을 때만 폴백 dedent. 래퍼가 있으나 **전부** 빈 칼럼이면
+  // 레이아웃이 아무것도 담지 않은 것이므로 "" 반환(태그 제거됨). 폴백을 여기서 걸면
+  // 빈 칼럼의 <column> 태그가 샌다.
   if (!matched) return dedentContainerBody(body);
-  if (cols.length === 0) return "";
+  if (cols.every((c) => c.trim() === "")) return "";
   return [COLUMN_LIST_START, ...cols.map((c) => `${COLUMN_SEP}\n${c}`), COLUMN_LIST_END].join("\n");
 }
 
@@ -1165,11 +1170,17 @@ function reassembleColumns(content: string): string {
   while (result.includes(COLUMN_LIST_START) && safety++ < 100) {
     const before = result;
     result = result.replace(INNERMOST_COLUMN_REGION_RE, (_m, indent: string, inner: string) => {
-      const cols = (indent ? dedentContainerBody(inner) : inner)
+      const segments = (indent ? dedentContainerBody(inner) : inner)
         .split(sepRe)
-        .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""))
-        .filter((c) => c.trim() !== "");
-      if (cols.length === 0) return "";
+        .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""));
+      // split 의 첫 조각은 **첫 마커 앞** 구간이다. pull 이 내보내는 정준형에선 칼럼마다
+      // 마커가 하나씩 붙으므로 이 조각이 비어 있고, 칼럼이 아니라 구조적 잔여물이다.
+      // 반대로 마커를 칼럼 **사이 구분자**로 쓴 레거시 문서에선 첫 조각이 진짜 첫 칼럼이다.
+      // 그래서 "비어 있을 때만" 떨군다 — 무조건 slice(1) 하면 레거시 첫 칼럼이 사라진다.
+      const cols = segments[0]?.trim() === "" ? segments.slice(1) : segments;
+      // 나머지 빈 조각은 **버리지 않는다**(D-EMPTY-COLUMN). 빈 칼럼은 Notion 레이아웃의
+      // 실제 여백 칸이라, 걷어내면 push 가 사용자의 열 구성을 좁혀 버린다.
+      if (cols.every((c) => c.trim() === "")) return "";
       const parts = cols.map((c) => `<column>\n${indentContainerBody(c)}\n</column>`).join("\n");
       const block = `<columns>\n${indentContainerBody(parts)}\n</columns>`;
       return `${indent ? indentContainerBody(block, indent) : block}\n`;
