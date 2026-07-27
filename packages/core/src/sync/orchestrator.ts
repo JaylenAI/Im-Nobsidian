@@ -136,6 +136,7 @@ export class SyncOrchestrator {
         maxRetries: config.advanced.mediaMaxRetries,
         retryBaseMs: config.advanced.mediaRetryBaseMs,
         maxFileSizeBytes: config.advanced.maxFileSizeBytes,
+        downloadTimeoutMs: config.advanced.mediaDownloadTimeoutMs,
       },
       stateDb,
     );
@@ -144,6 +145,7 @@ export class SyncOrchestrator {
       notionClient,
       stateDb,
       config.advanced.fileConcurrency,
+      { fetch: customFetch, downloadTimeoutMs: config.advanced.mediaDownloadTimeoutMs },
     );
     this.propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(

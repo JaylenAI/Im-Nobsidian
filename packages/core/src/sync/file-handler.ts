@@ -7,6 +7,15 @@ import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
 import { getBlockType, getMimeType } from "../utils/mime.js";
 import type { NotionBlockType } from "../utils/mime.js";
+import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
+
+/** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
+export interface FileHandlerOptions {
+  /** 다운로드에 쓸 fetch 구현(테스트 주입용). 기본 전역 fetch. */
+  readonly fetch?: typeof globalThis.fetch;
+  /** 다운로드 1회 시도의 시간 상한(ms). 기본 300초. 0 이하면 상한 없음(권장하지 않음). */
+  readonly downloadTimeoutMs?: number;
+}
 
 export interface FileUploadResult {
   readonly localPath: string;
@@ -28,14 +37,23 @@ function getFolderPath(filePath: string): string {
 
 export class FileHandler {
   private readonly sema: Sema;
+  private readonly customFetch?: typeof globalThis.fetch;
+  private readonly downloadTimeoutMs: number;
 
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
     private readonly stateDb: IStateDB,
     concurrency: number = 2,
+    options?: FileHandlerOptions,
   ) {
     this.sema = new Sema(concurrency);
+    this.customFetch = options?.fetch;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+  }
+
+  private get fetchFn(): typeof globalThis.fetch {
+    return this.customFetch ?? globalThis.fetch;
   }
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
@@ -138,7 +156,8 @@ export class FileHandler {
     filename: string,
     targetFolder: string,
   ): Promise<FileDownloadResult> {
-    const response = await fetch(url);
+    // 상한 없는 fetch 는 세마포어를 쥔 채 영원히 매달릴 수 있다(utils/download-fetch 주석 참조).
+    const response = await fetchForDownload(this.fetchFn, url, this.downloadTimeoutMs);
     if (!response.ok) {
       throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
     }
