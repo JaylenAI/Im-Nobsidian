@@ -37,6 +37,7 @@ import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual, normalizeNotionId } from "../utils/id.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool } from "../utils/pool.js";
+import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
 import type { VaultFS } from "./vault-fs.js";
@@ -293,7 +294,11 @@ export class SyncOrchestrator {
         if (options?.signal?.aborted) return;
         options?.onProgress?.(++completed, total, { path: change.path, operation: opOf(change) });
         try {
-          await applyPushChange(change);
+          await withDeadline(
+            () => applyPushChange(change),
+            this.config.advanced.itemTimeoutMs,
+            `push ${change.path}`,
+          );
         } catch {
           retryQueue.push(change);
         }
@@ -314,7 +319,11 @@ export class SyncOrchestrator {
         retryQueue,
         async (change) => {
           try {
-            await applyPushChange(change);
+            await withDeadline(
+              () => applyPushChange(change),
+              this.config.advanced.itemTimeoutMs,
+              `push ${change.path}`,
+            );
             getLogger().info(`[Im-Nobsidian] 재시도 성공: ${change.path}`);
           } catch (error) {
             failed.push({
@@ -573,7 +582,11 @@ export class SyncOrchestrator {
       async (change) => {
         if (options?.signal?.aborted) return;
         try {
-          const resultPath = await applyChange(change);
+          const resultPath = await withDeadline(
+            () => applyChange(change),
+            this.config.advanced.itemTimeoutMs,
+            `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
+          );
           const record = this.stateDb.getByNotionId(change.pageId);
           const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
           const op =
@@ -603,7 +616,11 @@ export class SyncOrchestrator {
         retryQueue,
         async (change) => {
           try {
-            await applyChange(change);
+            await withDeadline(
+              () => applyChange(change),
+              this.config.advanced.itemTimeoutMs,
+              `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
+            );
             const record = this.stateDb.getByNotionId(change.pageId);
             getLogger().info(
               `[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`,
