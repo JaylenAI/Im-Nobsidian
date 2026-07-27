@@ -1096,41 +1096,73 @@ export class NotionClient {
 
   private lastRequestTime = 0;
 
-  private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
-    await this.sema.acquire();
-    try {
-      const now = Date.now();
-      const elapsed = now - this.lastRequestTime;
-      if (elapsed < this.minRequestInterval) {
-        await sleep(this.minRequestInterval - elapsed);
-      }
-      this.lastRequestTime = Date.now();
-      return await this.executeWithRetry(fn);
-    } finally {
-      this.sema.release();
-    }
-  }
+  /**
+   * 429 이후 **클라이언트 전체**가 쉬어야 하는 시각(epoch ms).
+   *
+   * rate limit 은 요청 하나의 문제가 아니라 워크스페이스 전체에 걸린 신호다. 그러니
+   * 429 를 맞은 요청만 기다리게 두면 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+   * 슬롯을 붙잡아 남을 막는 대신, 다 같이 보는 이 게이트로 쉬게 한다.
+   */
+  private cooldownUntil = 0;
 
-  private async executeWithRetry<T>(fn: () => Promise<T>, attempt: number = 0): Promise<T> {
-    try {
-      return await fn();
-    } catch (error: unknown) {
-      if (isRetryable(error) && attempt < this.maxRetries) {
+  /**
+   * 요청 1건을 rate limit 슬롯 안에서 실행하고, 재시도 가능한 실패는 백오프 후 다시 시도한다.
+   *
+   * 백오프 대기는 **슬롯을 놓은 뒤** 한다. 예전 구현은 `sema.acquire()` 안에서 재시도
+   * 전체(최대 60초 x 5회)를 돌려, 불운한 요청 하나가 동시성 한 칸을 최대 5분 점유했다.
+   * 동시성 기본값이 3이므로 그런 요청 3건이면 클라이언트 전체가 멈춘다. 게다가 재시도는
+   * 로그를 한 줄도 남기지 않아, 겉보기에는 죽은 프로세스와 구분되지 않았다 — 실제로
+   * 268페이지 pull 이 진행 로그가 멈춘 채 수 분씩 정지하는 것으로 나타났다(R9).
+   * 그래서 (1) 대기 중에는 슬롯을 반납하고, (2) 429 는 {@link cooldownUntil} 전역
+   * 게이트로 함께 쉬고, (3) 모든 재시도를 경고로 남긴다.
+   */
+  private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
+    // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
+    let backoffMs = 0;
+
+    for (let attempt = 0; ; attempt++) {
+      await this.sema.acquire();
+      try {
+        await this.waitForTurn();
+        this.lastRequestTime = Date.now();
+        return await fn();
+      } catch (error: unknown) {
+        if (!isRetryable(error) || attempt >= this.maxRetries) throw error;
+
         // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
         // 절반은 서버가 말한 시각보다 일찍 두드려 429 를 다시 부른다. 서버 지정값은
         // 위로만 흔들고(1.0~1.25배), 지수 백오프에만 기존 지터를 유지한다.
         const retryAfterMs = extractRetryAfter(error);
-        const delay =
+        backoffMs =
           retryAfterMs !== null
             ? retryAfterMs * (1 + Math.random() * 0.25)
             : this.retryBaseDelayMs *
               Math.pow(this.retryBackoffFactor, attempt) *
               (0.5 + Math.random() * 0.5);
-        await sleep(delay);
-        return this.executeWithRetry(fn, attempt + 1);
+
+        // 서버가 대기시간을 명시했다는 건 rate limit 이라는 뜻 — 전원 대기로 승격한다.
+        if (retryAfterMs !== null) {
+          this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + backoffMs);
+        }
+
+        getLogger().warn(
+          `Notion API 재시도 ${attempt + 1}/${this.maxRetries} — ${Math.round(backoffMs)}ms 대기 (${describeRetryCause(error)})`,
+        );
+      } finally {
+        this.sema.release();
       }
-      throw error;
+
+      await sleep(backoffMs);
     }
+  }
+
+  /** 슬롯을 쥔 뒤의 발사 대기 — 전역 쿨다운(429)과 최소 요청 간격을 함께 지킨다. */
+  private async waitForTurn(): Promise<void> {
+    const cooldownMs = this.cooldownUntil - Date.now();
+    if (cooldownMs > 0) await sleep(cooldownMs);
+
+    const elapsed = Date.now() - this.lastRequestTime;
+    if (elapsed < this.minRequestInterval) await sleep(this.minRequestInterval - elapsed);
   }
 }
 
@@ -1178,6 +1210,23 @@ function isRetryable(error: unknown): boolean {
   if (!("status" in error)) return false;
   const status = (error as { status: number }).status;
   return status === 429 || status === 502 || status === 503 || status === 504;
+}
+
+/**
+ * 재시도 사유를 로그 한 줄로 요약한다.
+ *
+ * 재시도 로그의 목적은 "왜 멈춘 것처럼 보였는가"에 답하는 것이다 — 429(rate limit)인지,
+ * 5xx(노션 장애)인지, 소켓 끊김인지에 따라 운영자가 할 일이 전혀 다르므로 status·code 를
+ * 모두 싣는다. 메시지는 토큰 같은 비밀을 담지 않는 SDK 요약문이라 그대로 붙여도 안전하다.
+ */
+export function describeRetryCause(error: unknown): string {
+  if (typeof error !== "object" || error === null) return String(error);
+  const e = error as { status?: unknown; code?: unknown; message?: unknown };
+  const parts: string[] = [];
+  if (typeof e.status === "number") parts.push(`status ${e.status}`);
+  if (typeof e.code === "string") parts.push(e.code);
+  if (typeof e.message === "string" && e.message) parts.push(e.message.slice(0, 120));
+  return parts.length > 0 ? parts.join(" · ") : "알 수 없는 오류";
 }
 
 /**
