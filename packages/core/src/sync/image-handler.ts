@@ -6,6 +6,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE } from "../constants/markers.js";
 import { getLogger } from "../utils/logger.js";
+import { getMimeType } from "../utils/mime.js";
 import { isNotionHostedFileUrl, isNotionAttachmentUri } from "../utils/notion-file-url.js";
 
 /** 미디어(이미지/파일) 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
@@ -49,18 +50,6 @@ const IMAGE_EXTENSIONS: Record<string, string> = {
   "image/svg+xml": ".svg",
   "image/bmp": ".bmp",
   "image/tiff": ".tiff",
-};
-
-const EXTENSION_TO_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".ico": "image/x-icon",
-  ".tiff": "image/tiff",
 };
 
 /** 괄호 균형 스캔으로 찾은 마크다운 링크/임베드 한 건. */
@@ -156,7 +145,52 @@ export function toWikilinkAlias(label: string): string {
 const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;
 const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊)\s*/u;
 
-const LOCAL_MARKER_RE = new RegExp(`${MARKER_BRAND_RE}:local-(?:image|file):([^\\s%]+)`, "g");
+// 경로에 공백이 있을 수 있어(`![[내 사진.png]]`) 닫는 `%%` 까지 비탐욕으로 받는다.
+const LOCAL_MARKER_RE = new RegExp(
+  `${MARKER_BRAND_RE}:local-(?:image|file):([^%\\n]+?)\\s*%%`,
+  "g",
+);
+
+/** 자리표시자 블록 안의 마커 — 종류(image/file)와 원본 임베드 대상을 함께 뽑는다(R1). */
+const PLACEHOLDER_MARKER_RE = new RegExp(
+  `${MARKER_BRAND_RE}:local-(image|file):([^%\\n]+?)\\s*%%`,
+  "u",
+);
+
+/** 미디어 자리표시자를 실제 블록으로 바꾸기 위해 찾아 둔 위치 한 건. */
+interface PlaceholderHit {
+  /** 자리표시자가 들어 있는 부모 블록(페이지 또는 콜아웃/토글 등 컨테이너). */
+  readonly parentId: string;
+  /** 자리표시자 블록 자신 — 실제 블록을 그 뒤에 넣고 지운다. */
+  readonly blockId: string;
+  readonly kind: "image" | "file";
+  /** `![[...]]` 안에 있던 원본 대상 문자열. `경로|별칭` 형태일 수 있다. */
+  readonly target: string;
+}
+
+/** 제자리 교체 결과 — 어떤 임베드 대상이 처리됐는지 호출자가 알아야 중복 업로드를 막는다. */
+export interface MaterializeResult {
+  readonly uploaded: ImageUploadResult[];
+  /** 실제 블록으로 바뀐 임베드 대상(원본 문자열 + 별칭 제거형 둘 다 담는다). */
+  readonly handledTargets: Set<string>;
+}
+
+/** 별칭(`경로|300`)을 떼고 실제 볼트 경로만 남긴다. */
+function stripAlias(target: string): string {
+  return target.split("|")[0]!;
+}
+
+/** 서명 URL 경로 끝의 업로드 파일명. 캡션이 우리가 적은 것인지 대조하는 데 쓴다. */
+function uploadedFileNameFromUrl(url: string): string {
+  try {
+    return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** 하위 탐색에서 제외할 블록 — 별도 페이지이거나 자식이 다른 곳에 사는 것들. */
+const NON_DESCENDABLE_TYPES = new Set(["child_page", "child_database", "synced_block", "table"]);
 
 /** pull 원문(이스케이프 포함 가능)에서 제자리 보존 마커의 대상 파일명 집합을 뽑는다(D6). */
 function collectLocalMarkerBasenames(markdown: string): Set<string> {
@@ -170,6 +204,18 @@ function collectLocalMarkerBasenames(markdown: string): Set<string> {
 
 function baseName(path: string): string {
   return path.split("/").pop() ?? path;
+}
+
+/** 노트 경로에서 그 노트가 사는 폴더만 뽑는다(루트 노트면 undefined). */
+function folderOf(notePath?: string): string | undefined {
+  return notePath?.includes("/") ? notePath.slice(0, notePath.lastIndexOf("/")) : undefined;
+}
+
+/** 블록의 rich_text 를 평문으로 이어 붙인다. 자리표시자 탐지에만 쓰므로 타입별 분기 없이 훑는다. */
+function plainTextOf(block: { readonly type: string } & Record<string, unknown>): string {
+  const body = block[block.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+  if (!body?.rich_text) return "";
+  return body.rich_text.map((r) => r.plain_text ?? "").join("");
 }
 
 export class ImageHandler {
@@ -241,6 +287,38 @@ export class ImageHandler {
     throw lastError!;
   }
 
+  /**
+   * 캡션이 push 가 적어 둔 원본 임베드 대상인지 판정한다(R1). 맞으면 그 문자열을
+   * 그대로 돌려주고, 호출자는 사본을 내려받는 대신 `![[원본]]` 으로 되살린다.
+   *
+   * 사용자가 Notion 에서 손으로 쓴 캡션을 경로로 오인하면 깨진 위키링크가 되므로,
+   * ① 파일명이 실제 업로드된 파일명과 같고 ② 볼트에 그 파일이 실재할 때만 인정한다.
+   * 둘 중 하나라도 어긋나면 null 을 돌려 기존 다운로드 경로로 떨어진다.
+   *
+   * ②의 실재 확인은 push 와 **같은 후보 사다리**(노트 폴더 → 루트 → attachments/)를
+   * 쓴다 — 위키링크는 파일명만 적는 게 관례라 볼트 루트만 보면 노트 옆 파일을 놓친다.
+   */
+  private async resolveOriginalTarget(
+    label: string,
+    uploadedName: string,
+    noteFolder?: string,
+  ): Promise<string | null> {
+    if (!label || !uploadedName) return null;
+    // NFM 은 캡션의 `|` 를 `\|` 로 이스케이프해서 돌려준다.
+    const target = label.replace(FILE_LABEL_PREFIX_RE, "").replace(/\\(.)/g, "$1").trim();
+    if (!target || /^https?:\/\//.test(target) || target.includes("\n")) return null;
+    const vaultPath = stripAlias(target);
+    if (baseName(vaultPath) !== uploadedName) return null;
+    for (const candidate of this.vaultCandidates(vaultPath, noteFolder)) {
+      try {
+        if (await this.vaultFs.exists(candidate)) return target;
+      } catch {
+        // 후보 하나가 터져도 나머지는 계속 본다.
+      }
+    }
+    return null;
+  }
+
   private async persistImage(fetched: FetchedImage): Promise<ImageDownloadResult> {
     await this.vaultFs.ensureFolder(this.attachmentFolder);
     await this.vaultFs.writeBinary(fetched.localPath, fetched.buffer);
@@ -256,7 +334,9 @@ export class ImageHandler {
     markdown: string,
     pageTitle: string,
     pageId?: string,
+    notePath?: string,
   ): Promise<{ content: string; downloads: ImageDownloadResult[] }> {
+    const noteFolder = folderOf(notePath);
     // F14: 캡션에 중첩 링크가 있으면 정규식이 URL 을 오인하므로 괄호 균형 스캔을 쓴다.
     const embeds = scanMarkdownLinks(markdown).filter((s) => s.isEmbed);
     const notionMatches = embeds.filter(
@@ -323,6 +403,16 @@ export class ImageHandler {
         result = result.replace(span.full, "");
         continue;
       }
+      // 제자리 블록(R1)은 캡션에 원본 경로를 달고 온다 — 사본을 만들지 않고 원본을 가리킨다.
+      const original = await this.resolveOriginalTarget(
+        span.label,
+        uploadedFileNameFromUrl(span.url),
+        noteFolder,
+      );
+      if (original) {
+        result = result.replace(span.full, `![[${original}]]`);
+        continue;
+      }
       const download = await this.persistImage(fetched);
       downloads.push(download);
       const alias = toWikilinkAlias(span.label);
@@ -347,6 +437,15 @@ export class ImageHandler {
           result = result.replace(span.full, "");
           continue;
         }
+        const original = await this.resolveOriginalTarget(
+          span.label,
+          parsed.fileName || uploadedFileNameFromUrl(realUrl),
+          noteFolder,
+        );
+        if (original) {
+          result = result.replace(span.full, `![[${original}]]`);
+          continue;
+        }
         const download = await this.persistImage(fetched);
         downloads.push(download);
         const alias = toWikilinkAlias(span.label);
@@ -369,7 +468,7 @@ export class ImageHandler {
 
     const { buffer, resolvedPath } = await this.readImageFromVault(localPath, noteFolder);
     const filename = localPath.split("/").pop() ?? "image.png";
-    const contentType = this.getContentTypeFromPath(filename);
+    const contentType = getMimeType(filename);
     const blob = new Blob([buffer], { type: contentType });
     const fileUploadId = await this.notionClient.uploadFile(blob, filename, contentType);
     // FileHandler.pushAllFiles 의 dedup 비교(전체 sha256)와 동일 산식으로 계산해 두 경로가
@@ -390,9 +489,7 @@ export class ImageHandler {
     const localImages = images.filter((img) => !img.isExternal && img.localPath);
     if (localImages.length === 0) return [];
 
-    const noteFolder = notePath?.includes("/")
-      ? notePath.slice(0, notePath.lastIndexOf("/"))
-      : undefined;
+    const noteFolder = folderOf(notePath);
     const results: ImageUploadResult[] = [];
     const imageBlocks: unknown[] = [];
 
@@ -419,49 +516,181 @@ export class ImageHandler {
     }
 
     if (imageBlocks.length > 0) {
-      await this.notionClient.appendChildren(pageId, imageBlocks);
-      // 업로드 성공분을 file_registry 에 등록한다. 노트 임베드 이미지는 여기서(노트 페이지에)
-      // 처리되므로, 이후 FileHandler.pushAllFiles 가 같은 첨부를 폴더 페이지에 standalone
-      // 으로 재업로드하는 중복(I6 "중복 업로드 0" 위반)을 공유 레지스트리로 차단한다.
-      // 단, replace_content(기본 push)는 노트 블록을 매번 wipe 하므로 임베드 이미지 블록은
-      // 노트 본문이 바뀔 때마다 재업로드+재append 가 불가피하다(file_upload 1회용 + atomic
-      // replace). 이는 블록 더블링/데이터 손실이 아니며, 무변경 재sync 는 변경감지가 스킵해
+      // 자리표시자가 없어 제자리 교체가 불가능한 잔여분만 여기로 온다(R1 이후). 페이지 끝에
+      // 붙이는 폴백이며, 정상 경로는 materializeLocalMedia 가 본문 자리에서 처리한다.
+      // replace_content(기본 push)는 노트 블록을 매번 wipe 하므로 임베드 이미지 블록은
+      // 노트 본문이 바뀔 때마다 재업로드가 불가피하다(file_upload 1회용 + atomic replace).
+      // 이는 블록 더블링/데이터 손실이 아니며, 무변경 재sync 는 변경감지가 스킵해
       // 재업로드 0 을 보장한다.
-      if (this.stateDb) {
-        for (const r of results) {
-          try {
-            this.stateDb.registerFile({
-              localPath: r.localPath,
-              notionPageId: pageId,
-              fileUploadId: r.fileUploadId,
-              fileType: "image",
-              fileHash: r.fileHash,
-              fileSize: r.fileSize,
-            });
-          } catch (error) {
-            getLogger().warn(`이미지 레지스트리 등록 실패 (${r.localPath}):`, error);
-          }
-        }
-      }
+      await this.notionClient.appendChildren(pageId, imageBlocks);
+      this.registerUploads(pageId, results);
     }
 
     return results;
   }
 
   /**
-   * 임베드 경로를 볼트 실제 파일로 해석한다(F23). Obsidian 위키링크 임베드는 노트 옆
-   * 파일을 파일명만으로 참조하는 게 관례라, 노트 폴더 → 볼트 루트 → attachments/ 순으로
-   * 시도한다. 폴백은 조용히 진행하고, 전부 실패했을 때만 마지막 오류를 던진다.
+   * push 가 심어 둔 자리표시자 quote 를 **제자리에서** 실제 image/file 블록으로 바꾼다(R1).
+   *
+   * 그 전에는 임베드 하나가 Notion 에서 두 조각으로 갈라졌다 — 본문 자리에는
+   * `> 📎 foo.png` + `%% im-nobsidian:local-image:… %%` 리터럴 마커가, 실제 이미지는
+   * 페이지 맨 끝에 따로. 실측: 볼트 175개 파일에서 마커 978건이 Notion 에 그대로
+   * 텍스트로 새고 있었고 그중 964건(98.6%)이 이 미디어 쌍이었다. 사용자가 Notion 에서
+   * 보는 화면이 깨질 뿐 아니라 이미지가 본문 흐름에서 이탈한다.
+   *
+   * 캡션에는 원본 임베드 대상을 그대로 적는다. pull 이 경로(와 `|별칭`)를 되찾는
+   * 진실원이 되고, 사용자에게도 출처가 보인다.
+   *
+   * 볼트에서 파일을 못 찾으면 자리표시자를 그대로 둔다 — 마커가 남아야 pull 이
+   * 임베드를 복원할 수 있으므로, 반쯤 지우는 것보다 안전하다.
    */
-  private async readImageFromVault(
-    localPath: string,
-    noteFolder?: string,
-  ): Promise<{ buffer: Buffer; resolvedPath: string }> {
+  async materializeLocalMedia(
+    pageId: string,
+    pushedMarkdown: string,
+    notePath?: string,
+  ): Promise<MaterializeResult> {
+    const empty: MaterializeResult = { uploaded: [], handledTargets: new Set() };
+    if (!this.notionClient) return empty;
+    // 마커가 없는 페이지에서는 블록 조회조차 하지 않는다 — 대부분의 페이지가 여기서 끝난다.
+    LOCAL_MARKER_RE.lastIndex = 0;
+    if (!LOCAL_MARKER_RE.test(pushedMarkdown)) return empty;
+
+    let hits: PlaceholderHit[];
+    try {
+      hits = await this.collectPlaceholders(pageId);
+    } catch (error) {
+      getLogger().warn(`미디어 자리표시자 조회 실패 (${pageId}):`, error);
+      return empty;
+    }
+    if (hits.length === 0) return empty;
+
+    const noteFolder = folderOf(notePath);
+    const uploaded: ImageUploadResult[] = [];
+    const handledTargets = new Set<string>();
+
+    for (const hit of hits) {
+      const vaultTarget = stripAlias(hit.target);
+      try {
+        const result = await this.uploadLocalImage(vaultTarget, noteFolder);
+        const fileName = baseName(vaultTarget);
+        const caption = [{ type: "text", text: { content: hit.target } }];
+        const block =
+          hit.kind === "image"
+            ? {
+                type: "image",
+                image: { type: "file_upload", file_upload: { id: result.fileUploadId }, caption },
+              }
+            : {
+                type: "file",
+                file: {
+                  type: "file_upload",
+                  file_upload: { id: result.fileUploadId },
+                  name: fileName,
+                  caption,
+                },
+              };
+
+        await this.notionClient.appendChildren(hit.parentId, [block], { after: hit.blockId });
+        await this.notionClient.deleteBlock(hit.blockId);
+
+        uploaded.push(result);
+        handledTargets.add(hit.target);
+        handledTargets.add(vaultTarget);
+        handledTargets.add(result.localPath);
+      } catch (error) {
+        // 자리표시자는 손대지 않고 남긴다 — 마커가 살아 있어야 pull 이 임베드를 되살린다.
+        if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
+          getLogger().warn(`미디어 제자리 삽입 건너뜀 — 볼트에서 파일을 찾지 못함: ${vaultTarget}`);
+        } else {
+          getLogger().warn(`미디어 제자리 삽입 실패 (${vaultTarget}):`, error);
+        }
+      }
+    }
+
+    this.registerUploads(pageId, uploaded);
+    return { uploaded, handledTargets };
+  }
+
+  /**
+   * 페이지 블록 트리를 훑어 자리표시자를 부모와 함께 모은다. 콜아웃·토글·목록 안에
+   * 들어간 임베드도 제자리 교체하려면 부모 id 가 필요하다(append 의 after_block 은
+   * 같은 부모의 자식만 기준으로 삼는다).
+   */
+  private async collectPlaceholders(rootId: string, depth = 0): Promise<PlaceholderHit[]> {
+    if (depth > 4) return [];
+    const client = this.notionClient!;
+    const children = await client.fetchAllChildren(rootId);
+    const hits: PlaceholderHit[] = [];
+
+    for (const block of children) {
+      const marker = PLACEHOLDER_MARKER_RE.exec(plainTextOf(block));
+      if (marker) {
+        hits.push({
+          parentId: rootId,
+          blockId: block.id,
+          kind: marker[1] === "image" ? "image" : "file",
+          target: marker[2]!,
+        });
+        continue;
+      }
+      if (block.has_children && !NON_DESCENDABLE_TYPES.has(block.type)) {
+        hits.push(...(await this.collectPlaceholders(block.id, depth + 1)));
+      }
+    }
+    return hits;
+  }
+
+  /**
+   * 업로드분을 file_registry 에 남긴다. 노트 임베드는 여기서 페이지에 붙으므로,
+   * 이후 FileHandler.pushAllFiles 가 같은 첨부를 폴더 페이지에 standalone 으로
+   * 재업로드하는 중복을 공유 레지스트리로 차단한다.
+   */
+  private registerUploads(pageId: string, results: ImageUploadResult[]): void {
+    if (!this.stateDb || results.length === 0) return;
+    for (const r of results) {
+      try {
+        this.stateDb.registerFile({
+          localPath: r.localPath,
+          notionPageId: pageId,
+          fileUploadId: r.fileUploadId,
+          fileType: "image",
+          fileHash: r.fileHash,
+          fileSize: r.fileSize,
+        });
+      } catch (error) {
+        getLogger().warn(`미디어 레지스트리 등록 실패 (${r.localPath}):`, error);
+      }
+    }
+  }
+
+  /**
+   * 임베드 경로가 가리킬 수 있는 볼트 실제 파일 후보를 우선순위대로 만든다(F23).
+   * Obsidian 위키링크 임베드는 노트 옆 파일을 파일명만으로 참조하는 게 관례라
+   * 노트 폴더 → 볼트 루트 → attachments/ 순.
+   *
+   * push(업로드)와 pull(원본 복원)이 **같은 사다리**를 봐야 왕복이 닫힌다. 예전에는
+   * pull 쪽이 볼트 루트만 확인해서, `__e2e_probe__/노트.md` 안의 `![[t-img.png]]` 는
+   * 올라갈 때는 노트 폴더에서 잘 찾아 올리고도 내려올 때는 원본을 못 찾아 사본을
+   * 새로 받았다(실측) — 왕복할 때마다 첨부가 한 벌씩 늘어난다.
+   */
+  private vaultCandidates(localPath: string, noteFolder?: string): string[] {
     const candidates: string[] = [];
     if (noteFolder && !localPath.includes("/")) {
       candidates.push(`${noteFolder}/${localPath}`);
     }
     candidates.push(localPath, `${this.attachmentFolder}/${localPath}`);
+    return candidates;
+  }
+
+  /**
+   * 임베드 경로를 볼트 실제 파일로 해석해 읽는다(F23).
+   * 폴백은 조용히 진행하고, 전부 실패했을 때만 마지막 오류를 던진다.
+   */
+  private async readImageFromVault(
+    localPath: string,
+    noteFolder?: string,
+  ): Promise<{ buffer: Buffer; resolvedPath: string }> {
+    const candidates = this.vaultCandidates(localPath, noteFolder);
 
     let lastError: unknown;
     for (const candidate of candidates) {
@@ -474,15 +703,12 @@ export class ImageHandler {
     throw lastError;
   }
 
-  private getContentTypeFromPath(filename: string): string {
-    const ext = filename.match(/\.[^.]+$/)?.[0]?.toLowerCase();
-    return (ext && EXTENSION_TO_MIME[ext]) ?? "application/octet-stream";
-  }
-
   async downloadAllFiles(
     markdown: string,
     pageTitle: string,
+    notePath?: string,
   ): Promise<{ content: string; downloads: ImageDownloadResult[] }> {
+    const noteFolder = folderOf(notePath);
     // F14: 캡션 중첩 링크 대응 — 괄호 균형 스캔 후 파일 라벨(이모지 프리픽스)만 취한다.
     const fileLinks = scanMarkdownLinks(markdown).filter(
       (s) => !s.isEmbed && FILE_LABEL_PREFIX_RE.test(s.label),
@@ -518,6 +744,15 @@ export class ImageHandler {
     for (const span of notionHttpMatches) {
       await sema.acquire();
       try {
+        const original = await this.resolveOriginalTarget(
+          span.label,
+          uploadedFileNameFromUrl(span.url),
+          noteFolder,
+        );
+        if (original) {
+          result = result.replace(span.full, `![[${original}]]`);
+          continue;
+        }
         const caption = toWikilinkAlias(span.label.replace(FILE_LABEL_PREFIX_RE, "")) || "file";
         const download = await this.downloadFile(span.url, pageTitle, caption);
         if (!download.localPath) continue;
@@ -540,6 +775,11 @@ export class ImageHandler {
 
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
+        const original = await this.resolveOriginalTarget(span.label, fileName, noteFolder);
+        if (original) {
+          result = result.replace(span.full, `![[${original}]]`);
+          continue;
+        }
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
         if (!realUrl) continue;
 
@@ -561,6 +801,15 @@ export class ImageHandler {
       await sema.acquire();
       try {
         const url = match[1]!;
+        const original = await this.resolveOriginalTarget(
+          match[2] ?? "",
+          uploadedFileNameFromUrl(url),
+          noteFolder,
+        );
+        if (original) {
+          result = result.replace(match[0]!, `![[${original}]]`);
+          continue;
+        }
         const caption = toWikilinkAlias(match[2] ?? "") || "file";
         const download = await this.downloadFile(url, pageTitle, caption);
         if (!download.localPath) continue;
@@ -583,6 +832,11 @@ export class ImageHandler {
 
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
+        const original = await this.resolveOriginalTarget(match[2] ?? "", fileName, noteFolder);
+        if (original) {
+          result = result.replace(match[0]!, `![[${original}]]`);
+          continue;
+        }
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
         if (!realUrl) continue;
 
