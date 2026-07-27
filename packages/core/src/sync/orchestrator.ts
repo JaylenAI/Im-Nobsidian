@@ -46,7 +46,12 @@ import {
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
-import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
+import {
+  resolveNotionIdWikilinks,
+  degradeUnresolvedNotionIdWikilinks,
+  resolveNotionRelativePageLinks,
+  degradeUnresolvedNotionRelativePageLinks,
+} from "../converter/notion-id-links.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
 import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
@@ -1269,6 +1274,7 @@ export class SyncOrchestrator {
 
   private async resolveNotionLinks(paths: string[]): Promise<number> {
     let totalResolved = 0;
+    let totalDegraded = 0;
     const allRecords = this.stateDb.getAll();
     const idToTitle = new Map<string, string>();
     const idToPath = new Map<string, string>();
@@ -1284,6 +1290,11 @@ export class SyncOrchestrator {
     }
     if (idToTitle.size === 0) return 0;
 
+    // 두 표기(위키링크형·상대 url 형)가 **같은 역조회**를 봐야 한 표기만 해소되는 일이
+    // 없다. 압축형/하이픈형 어느 쪽으로 들어와도 압축형 키로 맞춘다.
+    const notionIdToPath = (id: string): string | null =>
+      idToPath.get(id.replace(/-/g, "")) ?? null;
+
     for (const filePath of paths) {
       if (!filePath.endsWith(".md")) continue;
       try {
@@ -1294,31 +1305,23 @@ export class SyncOrchestrator {
         // 두던 시절엔 별칭 달린 `[[notion:<id>|별칭]]` 을 아예 매치하지 못해, 같은 pull
         // 안에서 나중에 만들어진 대상을 가리키는 링크가 대상이 볼트에 실재하는데도
         // 끊긴 채 남았다(실볼트 2건).
-        const idPass = resolveNotionIdWikilinks(
-          content,
-          (id) => idToPath.get(id.replace(/-/g, "")) ?? null,
-        );
+        const idPass = resolveNotionIdWikilinks(content, notionIdToPath);
         content = idPass.markdown;
         if (idPass.resolved > 0) {
           totalResolved += idPass.resolved;
           changed = true;
         }
 
-        // Notion 내부 페이지 링크는 `/<id>?pvs=N` 또는 `/p/<id>?...`(신형) 형태로 온다.
-        // 선택적 `p/` 접두사와 임의 쿼리스트링(또는 쿼리 없음)을 모두 허용한다.
-        const resolved2 = content.replace(
-          /\[([^\]]+)\]\(\/(?:p\/)?([a-f0-9]{32})(?:\?[^)]*)?\)/g,
-          (_match, text: string, id: string) => {
-            const title = idToTitle.get(id);
-            if (title) {
-              totalResolved++;
-              changed = true;
-              return `[[${title}|${text}]]`;
-            }
-            return _match;
-          },
-        );
-        content = resolved2;
+        // 상대 url 표기(`[라벨](/p/<id>?…)`)도 **같은 모듈의 짝 함수**로 해소한다.
+        // 여기 인라인 정규식으로 두던 시절엔 같은 규칙을 두 번 적는 대가를 치렀다 —
+        // 자기별칭 접기를 빠뜨려 `[[X|X]]` 45건이 굳었고(R10-C), 격하도 빠뜨려 볼트
+        // 밖 페이지를 가리키는 상대링크 89건이 끊긴 채 남았다(R10-D).
+        const urlPass = resolveNotionRelativePageLinks(content, notionIdToPath);
+        content = urlPass.markdown;
+        if (urlPass.resolved > 0) {
+          totalResolved += urlPass.resolved;
+          changed = true;
+        }
 
         // frontmatter 의 relation/people 원시 UUID → `[[제목]]`. 변환 시점에는 대상
         // 페이지가 미등록이라 UUID 로 남지만, 이 post-pass 시점엔 맵이 완성돼 해소된다.
@@ -1327,6 +1330,23 @@ export class SyncOrchestrator {
           content = fm.content;
           totalResolved += fm.count;
           changed = true;
+        }
+
+        // 해소를 전부 시도한 **뒤** 남은 것 = 볼트 밖 페이지다. 끊긴 링크로 두지 않고
+        // 동작하는 Notion URL 링크로 격하한다(순서가 뒤집히면 볼트에 실재하는 대상까지
+        // 외부 링크로 굳는다). **두 표기 모두** 격하한다 — 한쪽만 하면 다른 쪽 표기로
+        // 들어온 볼트 밖 링크가 끊긴 채 남는다(R10-B 는 위키링크형만 고쳐 상대 url 형
+        // 89건이 남았다 → R10-D).
+        for (const degrade of [
+          degradeUnresolvedNotionIdWikilinks,
+          degradeUnresolvedNotionRelativePageLinks,
+        ]) {
+          const degradation = degrade(content);
+          if (degradation.degraded > 0) {
+            content = degradation.markdown;
+            totalDegraded += degradation.degraded;
+            changed = true;
+          }
         }
 
         if (changed) {
@@ -1352,6 +1372,11 @@ export class SyncOrchestrator {
       } catch {
         // 파일 읽기/쓰기 실패 무시
       }
+    }
+    if (totalDegraded > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 볼트 밖 Notion 페이지 링크 ${totalDegraded}건을 URL 링크로 유지`,
+      );
     }
     return totalResolved;
   }

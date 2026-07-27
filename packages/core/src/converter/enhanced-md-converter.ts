@@ -16,6 +16,7 @@ import {
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
+import { formatWikilink } from "../utils/wikilink-title.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -139,8 +140,7 @@ function convertMentionPageIdToUrl(content: string): string {
 // unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
 function restoreWikilinkPreserveLinks(content: string): string {
   return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
-    const target = decodeMarkerTarget(enc);
-    return target === label ? `[[${target}]]` : `[[${target}|${label}]]`;
+    return formatWikilink(decodeMarkerTarget(enc), label);
   });
 }
 
