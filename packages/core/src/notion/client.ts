@@ -11,7 +11,15 @@ import type {
   ListDatabaseViewsResponse,
 } from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper, type WikilinkResolver } from "./property-mapper.js";
-import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
+import type {
+  ViewConfig,
+  DatabaseViewsConfig,
+  PageCover,
+  PageIcon,
+  BasePropertySchema,
+  BasePropertyOption,
+  BaseStatusGroup,
+} from "../types/view.js";
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId } from "../utils/id.js";
@@ -377,75 +385,27 @@ export class NotionClient {
     return schema;
   }
 
-  async getDatabaseSchemaFull(databaseId: string): Promise<
-    Record<
-      string,
-      {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      }
-    >
-  > {
+  /**
+   * DB 속성 스키마 전체(선택지·status 그룹 포함).
+   *
+   * 옵션 `id` 까지 그대로 실어 보낸다 — 산출물에는 안 나가지만, status 뷰 필터가
+   * 옵션명이 아니라 **그룹명**(`To-do` 등)으로 오기 때문에 `groups[].optionIds` 를
+   * 옵션명으로 되돌리려면 이 id 가 있어야 한다. 예전엔 여기서 id 를 떨궈,
+   * 그룹으로 필터링된 뷰를 Bases 로 옮길 방법이 아예 없었다.
+   */
+  async getDatabaseSchemaFull(databaseId: string): Promise<Record<string, BasePropertySchema>> {
     const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
     if (!properties) return {};
 
-    const schema: Record<
-      string,
-      {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      }
-    > = {};
-
+    const schema: Record<string, BasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
-      const entry: {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      } = {
+      schema[name] = {
         id: prop.id as string,
         type: prop.type as string,
+        ...extractPropertyChoices(prop),
       };
-
-      if (prop.type === "select" || prop.type === "multi_select") {
-        const typeData = prop[prop.type as string] as
-          | {
-              options?: Array<{ name: string; color?: string }>;
-            }
-          | undefined;
-        if (typeData?.options) {
-          entry.options = typeData.options.map((o) => ({ name: o.name, color: o.color }));
-        }
-      }
-
-      if (prop.type === "status") {
-        const statusData = prop.status as
-          | {
-              options?: Array<{ name: string; color?: string }>;
-              groups?: Array<{ name: string; color?: string; option_ids?: string[] }>;
-            }
-          | undefined;
-        if (statusData?.options) {
-          entry.options = statusData.options.map((o) => ({ name: o.name, color: o.color }));
-        }
-        if (statusData?.groups) {
-          entry.groups = statusData.groups.map((g) => ({
-            name: g.name,
-            color: g.color,
-            optionIds: g.option_ids,
-          }));
-        }
-      }
-
-      schema[name] = entry;
     }
-
     return schema;
   }
 
@@ -1172,6 +1132,41 @@ export class NotionClient {
       throw error;
     }
   }
+}
+
+/**
+ * select/multi_select/status 속성에서 선택지·그룹을 뽑아낸다.
+ *
+ * status 만 `groups` 를 가지며, 그룹은 소속 옵션을 `option_ids` 로 가리킨다 —
+ * 그래서 옵션의 `id` 도 함께 실어야 그룹을 이름으로 되돌릴 수 있다.
+ */
+function extractPropertyChoices(prop: Record<string, unknown>): {
+  options?: BasePropertyOption[];
+  groups?: BaseStatusGroup[];
+} {
+  const type = prop.type as string;
+  if (type !== "select" && type !== "multi_select" && type !== "status") return {};
+
+  const typeData = prop[type] as
+    | {
+        options?: Array<{ id?: string; name: string; color?: string }>;
+        groups?: Array<{ name: string; color?: string; option_ids?: string[] }>;
+      }
+    | undefined;
+  if (!typeData) return {};
+
+  const result: { options?: BasePropertyOption[]; groups?: BaseStatusGroup[] } = {};
+  if (typeData.options) {
+    result.options = typeData.options.map((o) => ({ id: o.id, name: o.name, color: o.color }));
+  }
+  if (typeData.groups) {
+    result.groups = typeData.groups.map((g) => ({
+      name: g.name,
+      color: g.color,
+      optionIds: g.option_ids,
+    }));
+  }
+  return result;
 }
 
 function isRetryable(error: unknown): boolean {

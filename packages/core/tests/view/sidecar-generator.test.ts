@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { SidecarGenerator, type NotionSidecar } from "../../src/view/sidecar-generator.js";
-import type { BasePropertySchema } from "../../src/view/base-file-generator.js";
-import type { DatabaseViewsConfig } from "../../src/types/view.js";
+import type { BasePropertySchema, DatabaseViewsConfig } from "../../src/types/view.js";
 
 const gen = new SidecarGenerator();
 
@@ -25,31 +24,76 @@ function build(views: DatabaseViewsConfig["views"]): NotionSidecar {
 }
 
 describe("SidecarGenerator", () => {
-  it("미지원 뷰(calendar)는 basesType=null + view-unrepresentable degrade + config 무손실", () => {
+  it("미지원 뷰(form)는 basesType=null + view-unrepresentable degrade + config 무손실", () => {
+    const s = build([{ id: "v1", name: "폼", type: "form", filter: { 알수없는: 1 } }]);
+
+    const view = s.views[0]!;
+    expect(view.basesType).toBeNull();
+    expect(view.config["filter"]).toEqual({ 알수없는: 1 });
+
+    const unrep = s.degraded.filter((d) => d.kind === "view-unrepresentable");
+    expect(unrep).toHaveLength(1);
+    expect(unrep[0]!.view).toBe("폼");
+    // 이미 뷰 전체가 누락됐다고 보고했으니 설정 하나하나를 또 세지 않는다.
+    expect(s.degraded.filter((d) => d.kind === "setting-dropped")).toHaveLength(0);
+  });
+
+  it("달력은 버리지 않고 표로 격하 + view-degraded 리포트 (R5 D-VIEWDROP)", () => {
     const s = build([
       { id: "v1", name: "달력", type: "calendar", datePropertyId: "abcd", viewRange: "month" },
     ]);
 
     const view = s.views[0]!;
-    expect(view.basesType).toBeNull();
+    // 예전엔 null 이라 .base 에서 통째로 사라졌다 — 이제 표로 살아남는다.
+    expect(view.basesType).toBe("table");
     expect(view.config["datePropertyId"]).toBe("abcd");
     expect(view.config["viewRange"]).toBe("month");
 
-    const unrep = s.degraded.filter((d) => d.kind === "view-unrepresentable");
-    expect(unrep).toHaveLength(1);
-    expect(unrep[0]!.view).toBe("달력");
+    expect(s.degraded.filter((d) => d.kind === "view-unrepresentable")).toHaveLength(0);
+    const deg = s.degraded.filter((d) => d.kind === "view-degraded");
+    expect(deg).toHaveLength(1);
+    expect(deg[0]!.view).toBe("달력");
+    expect(deg[0]!.detail).toContain("달력 격자");
   });
 
-  it("표현 뷰(table)의 Notion 필터는 config 보존 + setting-dropped 리포트", () => {
+  it("옮길 수 있는 필터는 degrade 로 보고하지 않는다 (거짓 경고 금지 · R5 D-VIEWFILTER)", () => {
     const filter = { property: "상태", status: { equals: "완료" } };
     const s = build([{ id: "v1", name: "표", type: "table", filter }]);
 
     const view = s.views[0]!;
     expect(view.basesType).toBe("table");
+    // 사이드카는 여전히 원본을 무손실 보존한다(번역은 손실 압축이므로).
     expect(view.config["filter"]).toEqual(filter);
+    // 다만 .base 가 실제로 옮겼으므로 "표현되지 않음" 은 거짓이다.
+    expect(s.degraded).toHaveLength(0);
+  });
+
+  it("못 옮긴 필터 조건만 골라 setting-dropped 로 보고한다", () => {
+    const s = build([
+      {
+        id: "v1",
+        name: "표",
+        type: "table",
+        filter: {
+          and: [
+            { property: "상태", status: { equals: "완료" } },
+            { property: "마감", date: { past_week: {} } },
+          ],
+        },
+      },
+    ]);
 
     const dropped = s.degraded.filter((d) => d.kind === "setting-dropped");
-    expect(dropped.some((d) => d.detail.includes("필터"))).toBe(true);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.detail).toContain("past_week");
+  });
+
+  it("해석 자체가 안 되는 필터는 통째로 누락됐다고 보고한다", () => {
+    const s = build([{ id: "v1", name: "표", type: "table", filter: { 이상한: "모양" } }]);
+
+    const dropped = s.degraded.filter((d) => d.kind === "setting-dropped");
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]!.detail).toContain("해석하지 못해");
   });
 
   it("갤러리 커버 크기/비율·컬럼 width/wrap 도 보존 + 각각 degrade 리포트", () => {
@@ -112,7 +156,7 @@ describe("SidecarGenerator", () => {
   it("배열 순서(뷰)는 보존 — Notion 뷰 순서가 의미를 가짐", () => {
     const s = build([
       { id: "v1", name: "B", type: "table" },
-      { id: "v2", name: "A", type: "calendar" },
+      { id: "v2", name: "A", type: "chart" },
     ]);
     expect(s.views.map((v) => v.name)).toEqual(["B", "A"]);
   });
