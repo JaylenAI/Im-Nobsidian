@@ -71,7 +71,9 @@ export const syncCommand = new Command("sync")
       const totalDuration = pullResult.duration + pushResult.duration;
       console.log(`\n  ${header(chalk.green("Sync complete"))}`);
       console.log(
-        `  ${chalk.blue("Pull:")} ${summary(pullResult.created, pullResult.updated, pullResult.deleted)}`,
+        `  ${chalk.blue("Pull:")} ${summary(pullResult.created, pullResult.updated, pullResult.deleted)}` +
+          // 사라졌던 파일이 되살아난 경우에만 덧붙인다 — 평상시 요약을 어지럽히지 않는다.
+          (pullResult.restored > 0 ? `  ${chalk.yellow(`${pullResult.restored} restored`)}` : ""),
       );
       console.log(
         `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted)}`,

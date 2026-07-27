@@ -539,17 +539,23 @@ export class DatabaseSyncer {
     // (신규 페이지는 existingRecord 가 없으므로 충돌 검사 없이 바로 기록 — 로컬 파일 미존재)
     if (existingRecord) {
       let localContent = "";
+      // 읽기 실패를 곧바로 "파일 없음"으로 단정하지 않는다(권한 오류 구분). 실패 경로에서만
+      // 존재 여부를 다시 물어, 사라진 행은 복원하고 못 읽은 행은 종전대로 보수 처리한다.
+      let localExists = true;
+      const readPath = recordPath ?? filePath;
       try {
         // 재배치 대상이면 로컬 내용은 아직 옛 경로에 있다 — 실제 위치에서 읽어야
         // local-first/충돌 판정이 빈 파일로 오판되지 않는다.
-        localContent = await this.vaultFs.readFile(recordPath ?? filePath);
+        localContent = await this.vaultFs.readFile(readPath);
       } catch {
         localContent = "";
+        localExists = await this.vaultFs.exists(readPath);
       }
 
       const resolution = resolvePullConflict({
         record: existingRecord,
         localContent,
+        localExists,
         remoteContent: finalContent,
         remoteChange: {
           pageId: page.id,

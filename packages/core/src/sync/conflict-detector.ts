@@ -14,6 +14,12 @@ export interface PullConflictInput {
   readonly record: SyncRecord;
   /** 디스크의 현재 로컬 내용 (파일 없으면 ""). */
   readonly localContent: string;
+  /**
+   * 디스크에 파일이 실제로 존재하는지. 생략하면 존재하는 것으로 본다(하위호환).
+   * `false` 는 "빈 파일"이 아니라 "파일 없음"을 뜻한다 — 둘을 구분해야 복원과
+   * 내용 비교를 섞지 않는다.
+   */
+  readonly localExists?: boolean;
   /** Notion에서 가져와 변환한 리모트 내용. */
   readonly remoteContent: string;
   /** 충돌 객체 구성용 리모트 변경 메타. */
@@ -42,6 +48,16 @@ export function resolvePullConflict(input: PullConflictInput): PullConflictResul
   const { record, localContent, remoteContent, remoteChange, strategy } = input;
 
   const localHash = computeHash(localContent);
+
+  // 로컬 파일이 사라진 경우는 충돌이 아니라 '복원'이다. localContent 가 "" 라 해시가
+  // 어긋나 '로컬 수정'으로 오판되고, manual 은 충돌·local-first 는 skip 으로 빠져 삭제가
+  // 영구히 굳었다. 없어진 파일에는 지켜야 할 로컬 편집이 존재할 수 없으므로 리모트가
+  // 유일한 생존본 — 무조건 덮어쓴다. 의도적 삭제를 원격에 전파하려면 deleteSync 가
+  // 지정된 경로다. (일반 페이지·db-row 양쪽이 이 함수를 공유하므로 한 곳에서 마감된다.)
+  if (input.localExists === false) {
+    return { action: "write", localHash };
+  }
+
   const localModified = localHash !== record.contentHash;
 
   // 로컬이 마지막 동기화 이후 변경되지 않았다면 충돌 없이 덮어쓰기 안전.
