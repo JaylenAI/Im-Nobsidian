@@ -1,15 +1,19 @@
 ---
 type: report
-title: "불변식 I1~I12 커버리지 매트릭스 (이원 도달성)"
+title: "불변식 I1~I14 커버리지 매트릭스 (이원 도달성)"
 created: 2026-05-30
-updated: 2026-05-30
+updated: 2026-07-27
 status: active
 tags: ["project/im-nobsidian", "type/coverage", "sync/fidelity"]
 related: ["[[SYNC_FIDELITY_GOAL]]"]
-summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(오프라인 결정론 / 라이브 Notion) 매핑과 완료조건 체크리스트. /goal 종료 전 사용자 승인용 SSOT."
+summary: "I1~I14 + 드리프트 불변식의 자동테스트·이원 도달성(오프라인 결정론 / 라이브 Notion) 매핑과 완료조건 체크리스트. /goal 종료 전 사용자 승인용 SSOT."
 ---
 
 # 불변식 커버리지 매트릭스 — 이원 도달성
+
+> **2026-07-27 갱신:** R6 에서 **I13**(마커·링크 구조 라운드트립), R8 에서 **I14**(빈 칼럼
+> 보존)이 추가되어 라이브 불변식은 **10 파일 / 15 케이스**가 되었다. 둘 다 오프라인
+> 테스트가 문자열 왕복만 보던 사각지대를 실 Notion 블록 트리 수준으로 덮는다.
 
 > [[SYNC_FIDELITY_GOAL]] 의 **완료 조건 #4(커버리지 이원화)** 와 진척 보고 형식 #4(불변식
 > 커버리지표)를 충족하기 위한 단일 표. **라이브 수치 셀은 머지 후 전체 스위트·불변식 스위트
@@ -29,26 +33,33 @@ summary: "I1~I12 + 드리프트 불변식의 자동테스트·이원 도달성(�
 > **오프라인** = 토큰 불필요 결정론 테스트(픽스처 기반, CI 상시).
 > **라이브** = `skipIf(SKIP)` 게이트, 실 Notion(TOKEN+ROOT_PAGE_ID) 필요. 격리 페이지 생성·archive.
 
-| 불변식                               | 오프라인 결정론 테스트                                                                                                                                                                                                                            | 라이브 Notion 테스트                                                                 | 비고                              |
-| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | --------------------------------- |
-| **I1** MD 라운드트립 deep-equal      | `converter/roundtrip-fidelity.test.ts`(파이프라인 무손실), `converter/block-taxonomy-coverage.test.ts`(블록 택소노미 완전성), `converter/roundtrip.test.ts`                                                                                       | `invariants/block-roundtrip.invariant.test.ts`, `invariants/drift.invariant.test.ts` | 부분문자열 금지·전체 deep-equal   |
-| **I2** Notion 라운드트립             | `converter/block-converter.test.ts`, `converter/block-taxonomy-coverage.test.ts`, `converter/roundtrip.test.ts`                                                                                                                                   | `invariants/block-roundtrip.invariant.test.ts`                                       | 속성/블록/순서/span 보존          |
-| **I3** 무손실(블록·속성·인라인 span) | `converter/rich-text-converter.test.ts`, `converter/processors.test.ts`, `converter/preserve-marker-injector.test.ts`, `converter/callout-restorer.test.ts`                                                                                       | `invariants/block-roundtrip.invariant.test.ts`                                       | 개수 delta=0, 인라인 매트릭스     |
-| **I4** DB 충실도·스키마 진화         | `view/sidecar-generator.test.ts`†, `view/base-file-generator.test.ts`(결정론·dedupe 유일성, rank18), `view/filter-engine.test.ts`, `view/view-data-provider.test.ts`, `utils/db-row-path.test.ts`(직속 행만·중첩 DB 오포함 차단, rank21)          | E2E `analyze`/`repull`(DB 폴더 드리프트 0)                                           | 미표현 뷰 = 사이드카+degrade 로그 |
-| **I5** 멱등성 non-trivial fixpoint   | `sync/push-idempotency.test.ts`(실 StateDB·push-twice no-op·mtime fixpoint, rank11), `sync/incremental-deletion-churn.test.ts`(pull #1 updated=1 → 동일콘텐츠 pull #2 updated=0·재기록0), 보조 `sync/compute-patches.test.ts`(동일해시 push 스킵) | `invariants/idempotency.invariant.test.ts` (3)                                       | 1회차 N>0 단언 → 2회차 0          |
-| **I6** 첨부 content_hash·중복0       | `sync/image-handler.test.ts`                                                                                                                                                                                                                      | `invariants/attachment.invariant.test.ts`                                            | signed URL 변동 무시              |
-| **I7** Bases 렌더·degrade 보존       | `view/sidecar-generator.test.ts`†, `view/base-file-generator.test.ts`, `view/color-map.test.ts`                                                                                                                                                   | E2E pull 산출 `.base`/`.notion.json` 검증                                            | 잃는 뷰설정 frontmatter 보존      |
-| **I8** 충돌 3-way·false-conflict 0   | `conflict/merger.test.ts`, `conflict/resolver.test.ts`, `sync/conflict-detector.test.ts`, `sync/conflict-integration.test.ts`‡                                                                                                                    | — (3-way는 결정론, 라이브 불필요)                                                    | base 스냅샷 비-null 왕복·루프 0   |
-| **I9** UIUX 뷰 충실 렌더             | `obsidian-plugin/tests/views/*.test.ts`‡ (table/gallery/list/dashboard), `view/view-data-provider.test.ts`(중첩 DB 행 오포함 차단 rank21·커버 multivalue→첫URL degrade rank22·title/icon 숫자·배열→스칼라 강제 rank22b)                           | — (happy-dom 마운트, 결정론)                                                         | 진행률/에러/충돌 일관 표시        |
-| **I10** 삭제 전파·resurrection 0     | `sync/incremental-deletion-churn.test.ts`(deleteSync ON → 증분우회·전체스캔·deleted=1·deleteFile; OFF → 증분 fast-path), 보조 `sync/change-detector.test.ts`(로컬 삭제 감지)                                                                      | `invariants/deletion.invariant.test.ts` (2)                                          | in_trash 부활 차단                |
-| **I11** 구조 제약 무손실 push        | `converter/structural-constraints.test.ts`(150행 테이블→헤더반복 ≤100행 청킹·행손실0 / 5단계 중첩→3단계 평탄화·항목손실0)                                                                                                                         | `invariants/deep-nesting.invariant.test.ts`                                          | 100블록·3단계 한계 우회           |
-| **I12** 크래시 복구·중복 append 0    | `state/`·`sync/orchestrator.test.ts`(pending_operations), `sync/block-update-idempotency.test.ts`(block-API 폴백 append-then-delete 수렴, rank9), `sync/delete-idempotency.test.ts`(삭제 멱등·graceful 아카이브, rank19)                          | `invariants/crash-resume.invariant.test.ts` (2)                                      | 429 재시도 멱등 사전조회          |
-| **드리프트** fixpoint 비트동일       | —                                                                                                                                                                                                                                                 | `invariants/drift.invariant.test.ts`                                                 | pull→push→pull diff empty         |
+| 불변식                               | 오프라인 결정론 테스트                                                                                                                                                                                                                            | 라이브 Notion 테스트                                                                 | 비고                                |
+| ------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------ | ----------------------------------- |
+| **I1** MD 라운드트립 deep-equal      | `converter/roundtrip-fidelity.test.ts`(파이프라인 무손실), `converter/block-taxonomy-coverage.test.ts`(블록 택소노미 완전성), `converter/roundtrip.test.ts`                                                                                       | `invariants/block-roundtrip.invariant.test.ts`, `invariants/drift.invariant.test.ts` | 부분문자열 금지·전체 deep-equal     |
+| **I2** Notion 라운드트립             | `converter/block-converter.test.ts`, `converter/block-taxonomy-coverage.test.ts`, `converter/roundtrip.test.ts`                                                                                                                                   | `invariants/block-roundtrip.invariant.test.ts`                                       | 속성/블록/순서/span 보존            |
+| **I3** 무손실(블록·속성·인라인 span) | `converter/rich-text-converter.test.ts`, `converter/processors.test.ts`, `converter/preserve-marker-injector.test.ts`, `converter/callout-restorer.test.ts`                                                                                       | `invariants/block-roundtrip.invariant.test.ts`                                       | 개수 delta=0, 인라인 매트릭스       |
+| **I4** DB 충실도·스키마 진화         | `view/sidecar-generator.test.ts`†, `view/base-file-generator.test.ts`(결정론·dedupe 유일성, rank18), `view/filter-engine.test.ts`, `view/view-data-provider.test.ts`, `utils/db-row-path.test.ts`(직속 행만·중첩 DB 오포함 차단, rank21)          | E2E `analyze`/`repull`(DB 폴더 드리프트 0)                                           | 미표현 뷰 = 사이드카+degrade 로그   |
+| **I5** 멱등성 non-trivial fixpoint   | `sync/push-idempotency.test.ts`(실 StateDB·push-twice no-op·mtime fixpoint, rank11), `sync/incremental-deletion-churn.test.ts`(pull #1 updated=1 → 동일콘텐츠 pull #2 updated=0·재기록0), 보조 `sync/compute-patches.test.ts`(동일해시 push 스킵) | `invariants/idempotency.invariant.test.ts` (3)                                       | 1회차 N>0 단언 → 2회차 0            |
+| **I6** 첨부 content_hash·중복0       | `sync/image-handler.test.ts`                                                                                                                                                                                                                      | `invariants/attachment.invariant.test.ts`                                            | signed URL 변동 무시                |
+| **I7** Bases 렌더·degrade 보존       | `view/sidecar-generator.test.ts`†, `view/base-file-generator.test.ts`, `view/color-map.test.ts`                                                                                                                                                   | E2E pull 산출 `.base`/`.notion.json` 검증                                            | 잃는 뷰설정 frontmatter 보존        |
+| **I8** 충돌 3-way·false-conflict 0   | `conflict/merger.test.ts`, `conflict/resolver.test.ts`, `sync/conflict-detector.test.ts`, `sync/conflict-integration.test.ts`‡                                                                                                                    | — (3-way는 결정론, 라이브 불필요)                                                    | base 스냅샷 비-null 왕복·루프 0     |
+| **I9** UIUX 뷰 충실 렌더             | `obsidian-plugin/tests/views/*.test.ts`‡ (table/gallery/list/dashboard), `view/view-data-provider.test.ts`(중첩 DB 행 오포함 차단 rank21·커버 multivalue→첫URL degrade rank22·title/icon 숫자·배열→스칼라 강제 rank22b)                           | — (happy-dom 마운트, 결정론)                                                         | 진행률/에러/충돌 일관 표시          |
+| **I10** 삭제 전파·resurrection 0     | `sync/incremental-deletion-churn.test.ts`(deleteSync ON → 증분우회·전체스캔·deleted=1·deleteFile; OFF → 증분 fast-path), 보조 `sync/change-detector.test.ts`(로컬 삭제 감지)                                                                      | `invariants/deletion.invariant.test.ts` (2)                                          | in_trash 부활 차단                  |
+| **I11** 구조 제약 무손실 push        | `converter/structural-constraints.test.ts`(150행 테이블→헤더반복 ≤100행 청킹·행손실0 / 5단계 중첩→3단계 평탄화·항목손실0)                                                                                                                         | `invariants/deep-nesting.invariant.test.ts`                                          | 100블록·3단계 한계 우회             |
+| **I12** 크래시 복구·중복 append 0    | `state/`·`sync/orchestrator.test.ts`(pending_operations), `sync/block-update-idempotency.test.ts`(block-API 폴백 append-then-delete 수렴, rank9), `sync/delete-idempotency.test.ts`(삭제 멱등·graceful 아카이브, rank19)                          | `invariants/crash-resume.invariant.test.ts` (2)                                      | 429 재시도 멱등 사전조회            |
+| **I13** 마커·링크 구조 라운드트립    | `converter/roundtrip-fidelity.test.ts`, `converter/wikilink-*.test.ts`, `converter/preserve-marker-injector.test.ts` (R1~R3·R6 오프라인 회귀)                                                                                                     | `invariants/marker-roundtrip.invariant.test.ts`                                      | 별칭·괄호·임베드·`%`·컬럼 중첩 생존 |
+| **I14** 빈 칼럼 보존                 | `converter/design-fidelity-roundtrip.test.ts`(문자열 왕복)                                                                                                                                                                                        | `invariants/empty-column.invariant.test.ts`                                          | 3열(가운데 빔) → 왕복 후에도 3열    |
+| **드리프트** fixpoint 비트동일       | —                                                                                                                                                                                                                                                 | `invariants/drift.invariant.test.ts`                                                 | pull→push→pull diff empty           |
 
 † I4/I7 사이드카 테스트는 `feature/i4-i7-view-fidelity` (7c9afcf·56fe9c2) — **dev 머지 완료**(2026-05-30, --no-ff). db-fidelity 라이브 불변식 동반.
 ‡ I8/I9 통합·UIUX 테스트는 `feature/i8-i9-integration-tests` (412f4a5·8ec37ce) — **dev 머지 완료**(2026-05-30, --no-ff).
 
-**라이브 불변식 스위트 합계:** 8 파일 / **13 케이스**(attachment 1·block-roundtrip 1·crash-resume 2·db-fidelity 2·deep-nesting 1·deletion 2·drift 1·idempotency 3), 전부 `skipIf(SKIP)`. **재실행 결과 13/13 GREEN, 99.14s**(실 Notion, 2026-05-30).
+**라이브 불변식 스위트 합계:** **10 파일 / 15 케이스**(attachment 1·block-roundtrip 1·crash-resume 2·db-fidelity 2·deep-nesting 1·deletion 2·drift 1·idempotency 3·**marker-roundtrip 1(I13)**·**empty-column 1(I14)**), 전부 `skipIf(SKIP)`.
+직전 8 파일 13 케이스 기준 **13/13 GREEN, 99.14s**(실 Notion, 2026-05-30). I13·I14 는 각각 R6·R8 브랜치에서 라이브 GREEN 확인 후 dev 머지.
+
+> **실행법:** 오프라인 스위트(`packages/core/vitest.config.ts`)는 `tests/invariants/**` 를
+> **제외**한다. 라이브는 전용 설정으로 돌린다 —
+> `npx vitest run --config packages/core/vitest.invariant.config.ts [파일]`.
 
 > **수정 이력(결함12, #63~#65 · 커밋 d757f5f):** 직전 재실행에서 **I10 `deleteSync=true` 가
 > 180s 타임아웃으로 hang** → 그 시점 라이브는 사실상 **12/13**. 근본 원인은 페이지 모드 pull

@@ -3,6 +3,30 @@
 All notable changes to this project will be documented in this file.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+> R0~R9 — 지정 볼트 실데이터 E2E 를 매번 clean-slate 로 돌리며 발견한 충실도·견고성
+> 결함 트랙. 아직 태그하지 않았다(dev 머지 완료).
+
+### Fixed
+
+- **재시도 백오프가 rate limit 슬롯을 점유하던 문제 (R9c — "pull 이 멈춘다"의 근본 원인)** — `withRateLimit` 이 `sema` 를 쥔 채 재시도 전체(최대 60초 × 5회)를 돌려, 불운한 요청 하나가 동시성 한 칸을 최대 5분 점유했다. 기본 동시성이 3이라 그런 요청 3건이면 클라이언트 전체가 멈춘다. 백오프 대기를 **슬롯 반납 뒤로** 옮기고, 429 는 `cooldownUntil` 전역 게이트로 함께 쉬게 해 재시도 폭풍을 막는다
+- **재시도가 로그를 남기지 않아 정지와 구분되지 않던 문제 (R9c)** — 시도 횟수·대기시간·사유(status·code)를 경고로 남긴다. `Notion API 재시도 1/5 — 3750ms 대기 (status 429 · rate_limited · ...)`
+- **첨부 다운로드에 시간 상한이 없던 문제 (R9a)** — `image-handler` 에는 있던 가드가 `file-handler` 에는 없어, 상한 없는 `fetch` 가 세마포어를 쥔 채 영원히 매달릴 수 있었다. 공용 `utils/download-fetch.ts` 로 통합해 양쪽이 위임
+- **빈 칼럼 소실 (R8, D-EMPTY-COLUMN)** — Notion 다단 레이아웃의 내용 없는 칼럼이 pull·push 양쪽에서 제거돼 3열이 왕복 한 번에 2열로 좁혀지던 레이아웃 파괴 봉합
+- R0~R7 — 삭제 파일 복원 스캔·임베드 미디어 제자리 교체·링크 왕복 손실 7종·왕복 수렴 회귀·블록 구조(`%` 마커 오인·컬럼 중첩)·CLI 배선 결함 11종·뷰 필터 번역
+
+### Added
+
+- **`advanced.mediaDownloadTimeoutMs`** (기본 300초) — 미디어·첨부 다운로드 1회 시도의 시간 상한
+- **`advanced.itemTimeoutMs`** (기본 30분) — 페이지 1건 처리의 시간 상한. 한 건이 동기화 전체를 멈춰 세우지 못하게 하고, 상한 초과 시 `시간 상한 초과(...초): pull <경로>` 로 **어느 페이지에서 멎었는지 보고**한다 (R9b)
+- **라이브 불변식 I13**(마커·링크 구조 라운드트립)·**I14**(빈 칼럼 보존) — 라이브 불변식 스위트가 8 파일 13 케이스 → **10 파일 15 케이스**
+
+### Quality
+
+- 신규 회귀 테스트 25건 (download-timeout 9 · deadline 7 · retry-observability 9)
+- 세 겹 시간 상한(API 30초 / 다운로드 300초 / 페이지 30분)을 `TROUBLESHOOTING.md` 에 표로 공시
+
 ## [0.3.1] - 2026-07-17
 
 > steady churn 근절 + 왕복 충실도 마감 릴리스.
