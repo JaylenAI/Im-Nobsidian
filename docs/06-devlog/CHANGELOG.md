@@ -5,10 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-> R0~R10 — 지정 볼트 실데이터 E2E 를 매번 clean-slate 로 돌리며 발견한 충실도·견고성
+> R0~R11 — 지정 볼트 실데이터 E2E 를 매번 clean-slate 로 돌리며 발견한 충실도·견고성
 > 결함 트랙. 아직 태그하지 않았다(dev 머지 완료).
 
 ### Fixed
+
+- **CLI 가 모든 실패를 종료코드 0 으로 삼키던 문제 (R11-C)** — `index.ts` 가 parseAsync 후 `setTimeout(() => process.exit(0), 100)` 으로 강제 종료했다. better-sqlite3 핸들과 rate limiter 타이머가 이벤트 루프를 붙잡아 강제 종료 자체는 필요하지만, 인자를 0 으로 못박아 각 명령이 실패마다 세워 둔 `process.exitCode = 1`(init·pull·push·sync·resolve)을 **전부 덮어썼다** — 즉 **모든 CLI 실패가 성공으로 나갔다**. 셸도 CI 도 실패를 감지할 수 없었고, node 프로브 두 개로 실측 확인했다(하드코딩 0 → exit 0 / `process.exitCode ?? 0` → exit 1). 종료 코드 결정을 `utils/exit.ts` 의 `resolveExitCode`/`scheduleForcedExit` 로 꺼내 "강제 종료한다"와 "성공으로 종료한다"가 다시 한 줄에 섞이지 않게 했다. R11-B 의 완결성 게이트는 이 봉합 없이는 **작동하지 않는다** — `nobsi verify` 가 실패해도 0 으로 끝나 하니스가 통과로 읽기 때문
+- **DB 모드 원격 변경 감지가 1차 data source 만 훑던 문제 (R11-A)** — Notion `2025-09-03` 부터 database 는 `data_sources[]` 를 소유하고 행은 소스별로 조회하는데, `detectRemoteChanges()` 의 DB 갈래만 `queryDatabase()` 인라인 페이지네이션(=1차 소스)으로 열거했다. 같은 계약을 `pullDatabase` 는 `queryAllDatabasePages()`(전 소스)로 지키고 있어, 한 경로만 계약을 어긴 **비대칭**이다(R9a·R9e·R9f·R10-A·R10-C·R10-D 와 같은 결함류). 결과는 미발견에 그치지 않는다 — `deleteSync: true` 면 2번째+ 소스의 행이 "원격에 없다"고 판정돼 **로컬 파일이 고아로 삭제**되고, 다음 pull 이 다시 만들어 **생성↔삭제 진동**이 된다(한 경로가 만든 걸 다른 경로가 지운다). 인라인 사본을 지우고 SSOT 하나만 부르게 봉합
 
 - **볼트 밖 `/p/<id>` 상대 페이지 링크가 끊긴 채 남던 문제 (R10-D)** — R10-B 가 `[[notion:<id>]]` 표기에만 격하를 넣어, 같은 상황의 상대 url 표기(`[¹](/p/<id>?pvs=25#<blockId>)`)는 그대로 남았다(지정 볼트 89건/10파일 — 대상 11개가 상태 DB 대조상 전부 볼트 밖, 코드펜스 안 0건). `/p/<id>` 는 Notion 앱 안에서만 뜻이 있어 옵시디언은 볼트 루트 기준으로 읽고 `p/<id>` 라는 없는 파일을 가리키는 **끊긴 링크**로 그린다 — R10-B 가 없앤 것과 똑같은 증상이고, 없앤 건 비대칭의 **절반**이었다. 사례 대신 모듈 경계를 고쳐 `converter/notion-id-links.ts` 가 표기별 해소·격하를 **한 쌍씩** 갖게 하고(`resolveNotionRelativePageLinks`/`degradeUnresolvedNotionRelativePageLinks`), 오케스트레이터에는 링크 규칙을 한 줄도 남기지 않았다. `#<blockId>` 앵커는 살린다 — 89건 중 80건이 각주라 버리면 각주 80개가 전부 페이지 최상단으로 떨어진다. 반대로 **해소** 쪽은 앵커를 버린다(Notion 블록 id 는 옵시디언 `[[노트#제목]]` 의 앵커가 아니라 옮겨 붙이면 없는 제목을 가리킨다)
 - **url 형 페이지 링크가 `[[X\|X]]` 자기별칭을 만들던 문제 (R10-C)** — Notion 이 내려주는 라벨 달린 상대 링크(`[ETC](/p/<id>)`)를 해소하는 갈래가 "라벨이 대상 제목과 같으면 접는다"는 규칙을 빠뜨려, breadcrumb 처럼 라벨이 곧 제목인 링크가 `[[ETC|ETC]]` 로 굳었다(지정 볼트 45건/12파일 — R10-A 를 넣고 다시 pull 해도 한 건도 줄지 않아 드러났다). `[[X|X]]` 는 `[[X]]` 와 뜻이 같지만 push 의 분기(별칭 유무로 mention/URL 링크를 가른다)를 헛돌게 해 mention 이어야 할 링크를 평범한 URL 링크로 내보낸다. 세어 보니 이 접기 규칙은 **네 곳에 복제**돼 있었고 그중 한 곳만 빠져 있었다 — 사례 대신 구조를 고쳐, 위키링크를 뱉는 출구를 `utils/wikilink-title.ts` 의 `formatWikilink(target, label?)` **하나로** 합치고 네 곳이 전부 이를 부르게 했다
@@ -24,12 +27,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`nobsi verify [--json]` — DB 완결성 게이트 (R11-B)** — database 별로 **원격 행 id 집합**과 **볼트가 추적 중인 db-row id 집합**을 직접 대조하고, 미발견·잔재·조회 실패가 하나라도 있으면 종료 코드 1 로 끝난다. 기존 게이트(`analyze` 무결성 · `repull` churn 0 · `pushdry` churn 0 · 재-pull 바이트 동일 · 해시 일치)는 전부 **멱등성**이거나 **볼트 내부 성질**이라 체계적 미발견을 구조적으로 못 잡는다 — 디스커버리가 매번 **같은 행을 똑같이** 놓치면 재실행 결과가 첫 실행과 같아 churn 은 0 이고 해시도 전부 일치한다. 실제로 2026-07-17 pull 은 DB 행 **296개**를 침묵 유실한 채 그 전부를 통과했다. 설계 결정 셋: ① **카운트가 아니라 집합**을 비교한다(원격 925·볼트 925 라도 "미발견 1 + 잔재 1" 이면 수만 맞다 — 상쇄되는 게이트는 게이트가 아니다) ② 대조 대상은 볼트가 아니라 오케스트레이터가 조립한다(설정 `notion.databases[]` + 디스커버리 캐시 `discovered_dbs` + DB 모드 루트 DB — "볼트가 추적 중인 DB"만 보면 **통째로 미발견된 DB** 는 볼트에 흔적이 없어 영영 대상에도 못 오른다) ③ 조회 실패를 통과로 접지 않는다(`failures` 로 올리고 `complete = false`, 그 DB 만 총계에서 빼고 나머지는 계속 대조). 코어 API `orchestrator.verifyCompleteness()` · CLI `nobsi verify` · E2E 기본 베이스라인 `verify` 단계 세 표면으로 노출
 - **`advanced.mediaDownloadTimeoutMs`** (기본 300초) — 미디어·첨부 다운로드 1회 시도의 시간 상한
 - **`advanced.itemTimeoutMs`** (기본 30분) — 페이지 1건 처리의 시간 상한. 한 건이 동기화 전체를 멈춰 세우지 못하게 하고, 상한 초과 시 `시간 상한 초과(...초): pull <경로>` 로 **어느 페이지에서 멎었는지 보고**한다 (R9b)
 - **라이브 불변식 I13**(마커·링크 구조 라운드트립)·**I14**(빈 칼럼 보존) — 라이브 불변식 스위트가 8 파일 13 케이스 → **10 파일 15 케이스**
 
 ### Quality
 
+- R11 회귀 25건 — DB 모드 다중 data source 3(`tests/sync/db-mode-multi-datasource.test.ts`) · 완결성 단위 11(`tests/audit/completeness.test.ts`) · 배선 4(`tests/sync/completeness-wiring.test.ts`) · CLI verify 4 · 종료 코드 7(`packages/cli/tests/utils/exit.test.ts`). 변이 검증: R11-A 옛 인라인 페이지네이션 복원 → 3건 실패(2번째 소스 행의 **생성**과 `deleteSync: true` 에서의 **미삭제**를 각각 잠근다) · R11-C `proc.exit(0)` 복원 → 2건 실패. 완결성 쪽은 "수는 맞고 내용은 틀린" 상황(`remoteTotal === localTotal` 인데 `complete === false`)과 캐시 JSON 파손이 통과로 둔갑하지 않는지를 전용 케이스로 잠갔다
+- E2E 하니스에 `verify` 단계를 **기본 베이스라인**에 추가(읽기 전용). `scripts/e2e/README.md` 에 "멱등성과 완결성은 다른 성질이다" 절로 두 게이트의 관할을 공시
 - 신규 회귀 테스트 41건 (download-timeout 9 · deadline 7 · retry-observability 11 · retry-after 헤더 모양 5 · db-row 항목 상한 6 · 첨부 항목 상한 3). R9d 테스트는 **목이 아니라 실제 `Headers` 객체**로 잠갔다 — 평범한 객체로 흉내 내면 옛 버그가 그대로 통과하기 때문이며, 뮤테이션(옛 구현 복원)으로 6건 실패를 확인했다
 - 상한 테스트는 전부 **끝나지 않는 프로미스**로 설계해 가드를 지우면 실패가 아니라 hang 으로 드러나게 했다. 변이 검증: R9e 4건 → vitest 타임아웃(20.0초), R9f 3건 → 테스트 타임아웃(15.0초). 통과 자체가 아니라 "제거하면 무너지는가"로 잠금을 증명한다
 - 세 겹 시간 상한(API 30초 / 다운로드 300초 / 페이지 30분)을 `TROUBLESHOOTING.md` 에 표로 공시

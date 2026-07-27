@@ -182,14 +182,24 @@ export type {
   DegradeNote,
 } from "./view/index.js";
 
-// Audit — 충실도 측정 인프라(회귀 상시 잠금)
-export { classifyBodyFidelity, summarizeFidelity } from "./audit/index.js";
+// Audit — 충실도 측정 인프라(회귀 상시 잠금) + DB 완결성 게이트
+export {
+  classifyBodyFidelity,
+  summarizeFidelity,
+  verifyDatabaseCompleteness,
+} from "./audit/index.js";
 export type {
   FidelityDefect,
   FidelityDefectForm,
   FidelityClassification,
   FidelityContext,
   FidelitySummary,
+  CompletenessRemoteSource,
+  CompletenessLocalSource,
+  CompletenessOptions,
+  CompletenessFailure,
+  CompletenessReport,
+  DatabaseCompleteness,
 } from "./audit/index.js";
 
 // Utils

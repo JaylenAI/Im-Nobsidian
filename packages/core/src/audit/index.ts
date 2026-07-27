@@ -6,3 +6,13 @@ export type {
   FidelityContext,
   FidelitySummary,
 } from "./fidelity.js";
+
+export { verifyDatabaseCompleteness } from "./completeness.js";
+export type {
+  CompletenessRemoteSource,
+  CompletenessLocalSource,
+  CompletenessOptions,
+  CompletenessFailure,
+  CompletenessReport,
+  DatabaseCompleteness,
+} from "./completeness.js";
