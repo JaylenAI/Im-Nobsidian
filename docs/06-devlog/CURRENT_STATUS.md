@@ -27,9 +27,9 @@
 | **R9e**   | `feature/db-row-item-timeout` | DB 행 pull·push 에 항목 시간 상한 적용 (629/887 파일이 무방비였음)                                                 | `8144c11` |
 | **R9f**   | `fix/attachment-item-timeout` | 첨부 업로드 상한 + 중복된 두 업로드 루프를 하나로 통합                                                             | `541eafd` |
 | **R10-A** | `fix/notion-id-link-alias`    | pull 마감 후처리가 별칭 달린 `[[notion:<id>\|별칭]]` 을 못 봐 대상이 볼트에 있어도 미해소                          | `2a784dd` |
-| **R10-B** | `fix/notion-id-link-fallback` | 볼트 밖 페이지 링크를 죽은 위키링크 대신 동작하는 Notion URL 로 격하                                               | (진행 중) |
-| **R10-C** | `fix/notion-id-link-fallback` | url 형 페이지 링크 해소가 자기별칭을 안 접어 `[[X\|X]]` 45건/12파일 — 위키링크 출구를 `formatWikilink` 하나로 통합 | (진행 중) |
-| **R10-D** | `fix/notion-id-link-fallback` | 볼트 밖 `/p/<id>` 상대링크 89건/10파일이 격하 없이 남아 끊긴 링크 — 표기별 해소·격하 짝을 모듈로 통합              | (진행 중) |
+| **R10-B** | `fix/notion-id-link-fallback` | 볼트 밖 페이지 링크를 죽은 위키링크 대신 동작하는 Notion URL 로 격하                                               | `0dfdcb5` |
+| **R10-C** | `fix/notion-id-link-fallback` | url 형 페이지 링크 해소가 자기별칭을 안 접어 `[[X\|X]]` 45건/12파일 — 위키링크 출구를 `formatWikilink` 하나로 통합 | `0dfdcb5` |
+| **R10-D** | `fix/notion-id-link-fallback` | 볼트 밖 `/p/<id>` 상대링크 89건/10파일이 격하 없이 남아 끊긴 링크 — 표기별 해소·격하 짝을 모듈로 통합              | `0dfdcb5` |
 
 ### R9 — "268페이지 pull 이 멈춘다"의 근본 원인
 
