@@ -9,6 +9,7 @@ import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
 import { getMimeType } from "../utils/mime.js";
 import { isNotionHostedFileUrl, isNotionAttachmentUri } from "../utils/notion-file-url.js";
+import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 
 /** 미디어(이미지/파일) 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface MediaOptions {
@@ -244,27 +245,16 @@ export class ImageHandler {
     this.maxRetries = options?.maxRetries ?? 3;
     this.retryBaseMs = options?.retryBaseMs ?? 1000;
     this.maxFileSizeBytes = options?.maxFileSizeBytes ?? 100 * 1024 * 1024;
-    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? 300_000;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
   }
 
   private get fetchFn(): typeof globalThis.fetch {
     return this.customFetch ?? globalThis.fetch;
   }
 
-  /**
-   * 다운로드용 fetch — **반드시 시간 상한을 건다**.
-   *
-   * 상한이 없으면 응답이 오다 멈춘 연결(만료된 S3 프리사인 URL·중간 프록시 끊김)에서
-   * `fetch` 가 영원히 매달려 pull 이 그 자리에 멎는다. 재시도 루프도 예외가 나야 도는
-   * 것이라 함께 멈춘다 — 사용자에겐 "pull 이 그냥 안 끝난다"로만 보인다.
-   * 신호는 헤더뿐 아니라 본문 스트림까지 덮으므로 `arrayBuffer()` 중 정지도 함께 끊긴다.
-   * `AbortSignal` 은 재사용할 수 없어 시도마다 새로 만든다.
-   *
-   * 기본 300초는 상한 파일 크기(기본 100MB)를 초당 340KB 로도 받아낼 수 있는 여유값이다.
-   */
+  /** 상한 로직은 첨부 경로와 공유한다 — 한쪽만 빠뜨리지 않도록(utils/download-fetch). */
   private fetchForDownload(url: string): ReturnType<typeof globalThis.fetch> {
-    if (this.downloadTimeoutMs <= 0) return this.fetchFn(url);
-    return this.fetchFn(url, { signal: AbortSignal.timeout(this.downloadTimeoutMs) });
+    return fetchForDownload(this.fetchFn, url, this.downloadTimeoutMs);
   }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {

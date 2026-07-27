@@ -67,6 +67,8 @@ export const ConfigSchema = z.object({
       .number()
       .min(1024)
       .default(100 * 1024 * 1024),
+    // 미디어·첨부 다운로드 1회 시도의 시간 상한 (ms, 기본 300초). 0 = 상한 없음(권장하지 않음)
+    mediaDownloadTimeoutMs: z.number().min(0).max(1_800_000).default(300_000),
   }),
 });
 
@@ -114,5 +116,6 @@ export const DEFAULT_CONFIG: Config = {
     mediaRetryBaseMs: 1000,
     fileConcurrency: 2,
     maxFileSizeBytes: 100 * 1024 * 1024,
+    mediaDownloadTimeoutMs: 300_000,
   },
 };
