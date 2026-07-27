@@ -44,6 +44,7 @@ import {
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
+import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
 import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
@@ -2526,13 +2527,10 @@ export class SyncOrchestrator {
   // 이를 state DB 역조회로 원래 `[[제목]]` 위키링크로 복원해 push↔pull 라운드트립을 수렴시킨다.
   // 볼트 밖/미추적 페이지면 `[[notion:<id>]]` 를 그대로 두어 정보 손실을 막는다.
   private resolveNotionIdWikilinks(markdown: string): string {
-    return markdown.replace(/\[\[notion:([a-f0-9]{32})\]\]/g, (match, id: string) => {
-      const record = this.stateDb.getByNotionId(normalizeNotionId(id));
-      if (!record?.obsidianPath) return match;
-      const base = record.obsidianPath.split("/").pop() ?? record.obsidianPath;
-      const title = base.replace(/\.md$/, "");
-      return `[[${title}]]`;
-    });
+    return resolveNotionIdWikilinks(
+      markdown,
+      (id) => this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null,
+    );
   }
 
   private async extractParentId(page: PageObjectResponse): Promise<string | null> {

@@ -13,6 +13,8 @@ import {
   toggleColorMarker,
   blockColorMarker,
 } from "../constants/markers.js";
+import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
+import { mapOutsideCodeFences } from "../utils/md-regions.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -26,6 +28,11 @@ const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
 const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
 const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
+/** 라벨 달린 Notion 페이지 링크. id 는 하이픈 유무 양쪽으로 온다(실측). */
+const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
+  `\\[${MARKER_LABEL_CAPTURE}\\]\\(https?:\\/\\/(?:[a-z]+\\.)?notion\\.(?:so|com)\\/(?:p\\/)?([a-f0-9]{32}|[a-f0-9-]{36})\\)`,
+  "g",
+);
 
 export function notionEnhancedToObsidian(enhanced: string): string {
   let result = enhanced;
@@ -49,18 +56,34 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = removeEmptyBlocks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
-  result = unescapeWikilinkBrackets(result);
+  result = unescapeBrackets(result);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
 
   return result;
 }
 
-// Notion markdown API 는 평문 위키링크 `[[..]]` 를 `\[\[..\]\]` 로 escape 저장한다.
-// (resolved 위키링크는 mention 이 되어 이 경로를 타지 않고, unresolved 만 평문으로 보존됨)
-// pull 시 escape 를 해제해 Obsidian 위키링크 기능과 push↔pull 수렴을 보장한다.
-function unescapeWikilinkBrackets(content: string): string {
-  return content.replace(/\\\[\\\[([\s\S]*?)\\\]\\\]/g, "[[$1]]");
+/**
+ * Notion Markdown API 는 링크로 재해석될 소지가 있는 대괄호를 **전부** escape 해서
+ * 돌려준다 — 평문 위키링크 `\[\[..\]\]` 뿐 아니라 그냥 대괄호로 감싼 글자
+ * `\[대괄호\]`, 각주 `\[^1\]` 도 마찬가지다(실 Notion 실측).
+ * (resolved 위키링크는 mention 이 되어 이 경로를 타지 않고, unresolved 만 평문으로 남는다)
+ * 그대로 두면 볼트에 백슬래시가 눌러앉고 위키링크 기능도 죽으므로 pull 시 되돌린다.
+ *
+ * 위키링크 패턴(`\[\[..\]\]`)으로만 풀면 중첩을 못 이긴다 — `\[\[\[happy\]\]\]` 는
+ * 안쪽 한 쌍만 잡혀 `\[[[happy]]\]` 라는 반쯤 풀린 문자열이 남는다(실측). 짝을 맞추는
+ * 대신 escape 자체를 걷어내야 중첩 깊이와 무관하게 옳다.
+ *
+ * 두 가지만 건드리지 않는다:
+ *  - `\[..\](..)` — 사용자가 "링크로 보이지 말라"고 escape 한 것이다. 풀면 없던 링크가 생긴다.
+ *  - 펜스 코드블록 안 — 코드 리터럴은 원문 그대로여야 한다.
+ */
+function unescapeBrackets(content: string): string {
+  return mapOutsideCodeFences(content, (segment) =>
+    segment.replace(/\\\[[^\n[\]]*\\\]\(|\\([[\]])/g, (match, bracket: string | undefined) =>
+      bracket === undefined ? match : bracket,
+    ),
+  );
 }
 
 export function obsidianToNotionEnhanced(obsidian: string): string {
@@ -95,7 +118,7 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
 
 const MENTION_PAGE_ID_RE = /<mention-page id="([^"]+)">[\s\S]*?<\/mention-page>/g;
 const WIKILINK_PRESERVE_LINK_RE = new RegExp(
-  `\\[([^\\]]+)\\]\\(${WIKILINK_PROTOCOL}([^)]+)\\)`,
+  `\\[${MARKER_LABEL_CAPTURE}\\]\\(${WIKILINK_PROTOCOL}${MARKER_URL_CAPTURE}\\)`,
   "g",
 );
 
@@ -110,12 +133,7 @@ function convertMentionPageIdToUrl(content: string): string {
 // unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
 function restoreWikilinkPreserveLinks(content: string): string {
   return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
-    let target = enc;
-    try {
-      target = decodeURIComponent(enc);
-    } catch {
-      // 잘못 인코딩된 경우 원문 유지
-    }
+    const target = decodeMarkerTarget(enc);
     return target === label ? `[[${target}]]` : `[[${target}|${label}]]`;
   });
 }
@@ -473,6 +491,13 @@ function convertPageMentions(content: string): string {
     /<mention-page\s+url="https?:\/\/(?:[a-z]+\.)?notion\.(?:so|com)\/(?:p\/)?([a-f0-9]{32})"[^>]*?(?:\/>|>[\s\S]*?<\/mention-page>)/g,
     (_match, id: string) => `[[notion:${id}]]`,
   );
+  // 라벨을 가진 페이지 링크(`[별칭](https://www.notion.so/<id>)`)는 mention 이 아니다 —
+  // 별칭이 붙은 위키링크를 push 가 이 형태로 내보낸다(mention 은 라벨을 못 가지므로).
+  // 라벨을 살린 채 id 로 환원해, 후처리 역조회가 `[[대상|별칭]]` 까지 복원하게 한다.
+  result = result.replace(NOTION_LABELED_PAGE_LINK_RE, (_match, label: string, id: string) => {
+    const normalized = id.replace(/-/g, "");
+    return `[[notion:${normalized}|${label}]]`;
+  });
   return result;
 }
 
