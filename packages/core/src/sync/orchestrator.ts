@@ -146,7 +146,11 @@ export class SyncOrchestrator {
       notionClient,
       stateDb,
       config.advanced.fileConcurrency,
-      { fetch: customFetch, downloadTimeoutMs: config.advanced.mediaDownloadTimeoutMs },
+      {
+        fetch: customFetch,
+        downloadTimeoutMs: config.advanced.mediaDownloadTimeoutMs,
+        itemTimeoutMs: config.advanced.itemTimeoutMs,
+      },
     );
     this.propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(

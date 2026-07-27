@@ -16,6 +16,13 @@
  * 않을 만큼 넉넉해야 한다(정상 페이지는 초 단위, 기본 상한은 분 단위).
  */
 
+/**
+ * 항목 1건 처리의 기본 상한(30분). 설정(`advanced.itemTimeoutMs`)이 전달되지 않는 경로의
+ * 폴백이며, 정상 항목이 절대 닿지 않을 만큼 넉넉하게 잡는다 — 상한은 무한 정지를 끊는
+ * 안전망이지 성능 SLA 가 아니다.
+ */
+export const DEFAULT_ITEM_TIMEOUT_MS = 1_800_000;
+
 export class DeadlineExceededError extends Error {
   constructor(
     readonly label: string,
