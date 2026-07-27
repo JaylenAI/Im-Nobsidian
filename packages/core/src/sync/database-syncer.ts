@@ -16,6 +16,7 @@ import { isDirectDbRowPath } from "../utils/db-folder-path.js";
 import { notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
+import { withDeadline } from "../utils/deadline.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
@@ -53,6 +54,17 @@ type PullPageOutcome =
   | { action: "written"; path: string }
   | { action: "skipped"; path: string }
   | { action: "conflict"; path: string; conflict: Conflict };
+
+/**
+ * {@link DatabaseSyncer.pushDatabaseRow} 의 처리 결과.
+ * 카운터 증가·실패 기록은 전부 호출부가 하도록 결과만 돌려준다 — 상한(R9e)에 걸려 중간에
+ * 끊긴 행이 집계를 반쯤 오염시키는 경로를 없애기 위해서다.
+ */
+type PushRowOutcome =
+  | { action: "created" }
+  | { action: "updated" }
+  | { action: "skipped" }
+  | { action: "failed"; failure: FailedOperation };
 
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
@@ -215,21 +227,29 @@ export class DatabaseSyncer {
           // 이어도 재처리해 현 폴더로 재배치한다.
           const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
           if (page.last_edited_time === record.notionLastEdited && !misplaced) continue;
-          const outcome = await this.pullDatabasePage(page, dbConfig);
-          if (outcome.action === "written") {
-            updated++;
-            writtenPaths.push(outcome.path);
-          } else if (outcome.action === "conflict") {
-            conflicts.push(outcome.conflict);
-          }
-          // skipped(local-first): 카운트하지 않음
-        } else {
-          const outcome = await this.pullDatabasePage(page, dbConfig);
-          created++;
-          if (outcome.action === "written") {
-            writtenPaths.push(outcome.path);
-          }
         }
+
+        // R9e: 행 1건 처리도 합성 경로다 — 블록 조회·첨부 다운로드·변환·파일 IO 가 얽혀
+        // 있어 호출 단위 상한만으로는 덮이지 않는다. R9b 가 오케스트레이터의 페이지 루프
+        // 4곳에만 상한을 걸어 DB 행은 그대로 무방비였다(R9a 의 image/file 핸들러 비대칭과
+        // 같은 결함군 — 같은 계약이 두 경로에 있으면 한쪽만 빠진다). 볼트의 887개 파일 중
+        // 629개가 DB 행이므로 보호 공백이 오히려 다수였다.
+        const outcome = await withDeadline(
+          () => this.pullDatabasePage(page, dbConfig),
+          this.config.advanced.itemTimeoutMs,
+          `pull ${dbConfig.localFolder}/${page.id}`,
+        );
+
+        if (!record) {
+          created++;
+          if (outcome.action === "written") writtenPaths.push(outcome.path);
+        } else if (outcome.action === "written") {
+          updated++;
+          writtenPaths.push(outcome.path);
+        } else if (outcome.action === "conflict") {
+          conflicts.push(outcome.conflict);
+        }
+        // skipped(local-first): 카운트하지 않음
       } catch (error) {
         failed.push({
           path: `${dbConfig.localFolder}/${page.id}`,
@@ -645,109 +665,18 @@ export class DatabaseSyncer {
 
     for (const file of dbFiles) {
       try {
-        const content = await this.vaultFs.readFile(file.path);
-        const hash = computeHash(content);
-
-        const record = this.stateDb.getByPath(file.path);
-        if (record?.contentHash === hash) continue;
-
-        const parsed = matter(content);
-        const frontmatter = parsed.data as Record<string, unknown>;
-        const body = parsed.content;
-
-        const title = (frontmatter.title as string) ?? extractTitleFromPath(file.path);
-        delete frontmatter.title;
-
-        const notionProps = this.propertyMapper.toNotionProperties(frontmatter, title);
-        const enhanced = obsidianToNotionEnhanced(body.trim());
-
-        if (record?.notionPageId) {
-          try {
-            await this.notionClient.updatePageProperties(record.notionPageId, notionProps);
-            await this.notionClient.replacePageMarkdown(record.notionPageId, enhanced);
-          } catch (error) {
-            // push 실패: 본문/속성이 Notion 에 반영되지 않았으므로 해시를 전진시키거나
-            // synced 로 표시하지 않는다. (과거: 본문 실패를 삼키고 synced 처리 → 거짓 동기화·
-            // 본문 영구 유실. 해시 전진 탓에 다음 push 에서 스킵되어 변경이 영원히 전달 안 됨)
-            this.stateDb.updateStatus(record.id, "error");
-            failed.push({
-              path: file.path,
-              operation: "update",
-              error: error instanceof Error ? error.message : String(error),
-            });
-            continue;
-          }
-
-          const updatedPage = await this.notionClient.getPage(record.notionPageId);
-          this.stateDb.transaction(() => {
-            this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
-            this.stateDb.updateStatus(record.id, "synced");
-            this.stateDb.setNotionLastEdited(record.id, updatedPage.last_edited_time);
-            // 제목/별칭이 바뀌었을 수 있으므로 wikilink 도 함께 갱신해 최신성을 보장한다.
-            this.stateDb.upsertWikilink({
-              obsidianPath: file.path,
-              notionPageId: record.notionPageId!,
-              title,
-              aliases: extractAliases(frontmatter),
-            });
-          });
-          updated++;
-        } else {
-          // rename 감지: 내용이 동일한 고아 레코드가 있으면 신규 페이지 생성 대신 경로만 재매핑.
-          // (과거: getByPath(newPath)=null → 무조건 신규 생성 → Notion 중복 페이지 + 고아 레코드.
-          //  db-row 프론트매터엔 Notion page id 가 없어 내용 해시로 동일 행을 식별한다.)
-          const renamed = orphanByHash.get(hash);
-          if (renamed?.notionPageId) {
-            const movedPageId = renamed.notionPageId;
-            orphanByHash.delete(hash); // 같은 고아를 두 번 매칭하지 않도록 제거
-            this.stateDb.transaction(() => {
-              this.stateDb.updatePath(renamed.id, file.path);
-              this.stateDb.updateHash(renamed.id, hash, Buffer.from(content, "utf-8"));
-              this.stateDb.updateStatus(renamed.id, "synced");
-              // 새 경로로 wikilink 갱신 — INSERT OR REPLACE 가 notion_page_id UNIQUE 충돌로
-              // 이전 경로의 wikilink 행을 자동 정리한다.
-              this.stateDb.upsertWikilink({
-                obsidianPath: file.path,
-                notionPageId: movedPageId,
-                title,
-                aliases: extractAliases(frontmatter),
-              });
-            });
-            updated++;
-            continue;
-          }
-
-          const page = await this.notionClient.createPageWithMarkdown({
-            parentId: dbConfig.databaseId,
-            parentType: "database",
-            title,
-            markdown: enhanced,
-            properties: notionProps,
-          });
-
-          this.stateDb.transaction(() => {
-            this.stateDb.upsert({
-              obsidianPath: file.path,
-              notionPageId: page.id,
-              notionParentId: dbConfig.databaseId,
-              contentHash: hash,
-              notionLastEdited: page.last_edited_time,
-              localLastModified: new Date().toISOString(),
-              syncDirection: "both",
-              fileType: "db-row",
-              status: "synced",
-              baseSnapshot: Buffer.from(content, "utf-8"),
-            });
-
-            this.stateDb.upsertWikilink({
-              obsidianPath: file.path,
-              notionPageId: page.id,
-              title,
-              aliases: extractAliases(frontmatter),
-            });
-          });
-          created++;
-        }
+        // R9e: pull 행과 같은 이유로 push 행에도 상한을 건다. 본문 교체(replacePageMarkdown)는
+        // 블록 100개 단위로 쪼개져 호출 수가 노트 길이에 비례하므로, 호출 1건 상한(30초)이
+        // 모두 지켜져도 합성 경로 전체는 여전히 무한대다.
+        const outcome = await withDeadline(
+          () => this.pushDatabaseRow(file.path, dbConfig, orphanByHash),
+          this.config.advanced.itemTimeoutMs,
+          `push ${file.path}`,
+        );
+        if (outcome.action === "created") created++;
+        else if (outcome.action === "updated") updated++;
+        else if (outcome.action === "failed") failed.push(outcome.failure);
+        // skipped(해시 동일): 카운트하지 않음
       } catch (error) {
         failed.push({
           path: file.path,
@@ -759,6 +688,128 @@ export class DatabaseSyncer {
 
     getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
     return { created, updated, conflicts: [], failed, writtenPaths: [] };
+  }
+
+  /**
+   * db-row 파일 1건을 Notion 으로 밀어 올린다 — 생성·갱신·rename 재매핑·스킵을 모두 담당.
+   *
+   * 호출부의 루프에서 떼어낸 이유는 상한(`withDeadline`)을 걸 단위가 필요해서다(R9e).
+   * 그래서 결과는 카운터를 직접 건드리지 않고 {@link PushRowOutcome} 으로 돌려준다 —
+   * 상한에 걸린 행이 카운터를 절반만 올린 채 끊기는 일이 구조적으로 불가능해진다.
+   *
+   * 본문 push 실패만 `failed` 를 **반환**하고 나머지 예외는 그대로 던진다. 둘의 차이는
+   * 상태 처리에 있다: 전자는 레코드를 `error` 로 내려 해시 전진을 막아야 하므로 여기서
+   * 처리하고, 후자는 호출부의 catch 가 일괄 기록한다(기존 동작 그대로).
+   */
+  private async pushDatabaseRow(
+    filePath: string,
+    dbConfig: DatabaseSyncConfig,
+    orphanByHash: Map<string, SyncRecord>,
+  ): Promise<PushRowOutcome> {
+    const content = await this.vaultFs.readFile(filePath);
+    const hash = computeHash(content);
+
+    const record = this.stateDb.getByPath(filePath);
+    if (record?.contentHash === hash) return { action: "skipped" };
+
+    const parsed = matter(content);
+    const frontmatter = parsed.data as Record<string, unknown>;
+    const body = parsed.content;
+
+    const title = (frontmatter.title as string) ?? extractTitleFromPath(filePath);
+    delete frontmatter.title;
+
+    const notionProps = this.propertyMapper.toNotionProperties(frontmatter, title);
+    const enhanced = obsidianToNotionEnhanced(body.trim());
+
+    if (record?.notionPageId) {
+      try {
+        await this.notionClient.updatePageProperties(record.notionPageId, notionProps);
+        await this.notionClient.replacePageMarkdown(record.notionPageId, enhanced);
+      } catch (error) {
+        // push 실패: 본문/속성이 Notion 에 반영되지 않았으므로 해시를 전진시키거나
+        // synced 로 표시하지 않는다. (과거: 본문 실패를 삼키고 synced 처리 → 거짓 동기화·
+        // 본문 영구 유실. 해시 전진 탓에 다음 push 에서 스킵되어 변경이 영원히 전달 안 됨)
+        this.stateDb.updateStatus(record.id, "error");
+        return {
+          action: "failed",
+          failure: {
+            path: filePath,
+            operation: "update",
+            error: error instanceof Error ? error.message : String(error),
+          },
+        };
+      }
+
+      const updatedPage = await this.notionClient.getPage(record.notionPageId);
+      this.stateDb.transaction(() => {
+        this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
+        this.stateDb.updateStatus(record.id, "synced");
+        this.stateDb.setNotionLastEdited(record.id, updatedPage.last_edited_time);
+        // 제목/별칭이 바뀌었을 수 있으므로 wikilink 도 함께 갱신해 최신성을 보장한다.
+        this.stateDb.upsertWikilink({
+          obsidianPath: filePath,
+          notionPageId: record.notionPageId!,
+          title,
+          aliases: extractAliases(frontmatter),
+        });
+      });
+      return { action: "updated" };
+    }
+
+    // rename 감지: 내용이 동일한 고아 레코드가 있으면 신규 페이지 생성 대신 경로만 재매핑.
+    // (과거: getByPath(newPath)=null → 무조건 신규 생성 → Notion 중복 페이지 + 고아 레코드.
+    //  db-row 프론트매터엔 Notion page id 가 없어 내용 해시로 동일 행을 식별한다.)
+    const renamed = orphanByHash.get(hash);
+    if (renamed?.notionPageId) {
+      const movedPageId = renamed.notionPageId;
+      orphanByHash.delete(hash); // 같은 고아를 두 번 매칭하지 않도록 제거
+      this.stateDb.transaction(() => {
+        this.stateDb.updatePath(renamed.id, filePath);
+        this.stateDb.updateHash(renamed.id, hash, Buffer.from(content, "utf-8"));
+        this.stateDb.updateStatus(renamed.id, "synced");
+        // 새 경로로 wikilink 갱신 — INSERT OR REPLACE 가 notion_page_id UNIQUE 충돌로
+        // 이전 경로의 wikilink 행을 자동 정리한다.
+        this.stateDb.upsertWikilink({
+          obsidianPath: filePath,
+          notionPageId: movedPageId,
+          title,
+          aliases: extractAliases(frontmatter),
+        });
+      });
+      return { action: "updated" };
+    }
+
+    const page = await this.notionClient.createPageWithMarkdown({
+      parentId: dbConfig.databaseId,
+      parentType: "database",
+      title,
+      markdown: enhanced,
+      properties: notionProps,
+    });
+
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        notionParentId: dbConfig.databaseId,
+        contentHash: hash,
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: "db-row",
+        status: "synced",
+        baseSnapshot: Buffer.from(content, "utf-8"),
+      });
+
+      this.stateDb.upsertWikilink({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        title,
+        aliases: extractAliases(frontmatter),
+      });
+    });
+    return { action: "created" };
   }
 
   /**

@@ -8,6 +8,7 @@ import { getLogger } from "../utils/logger.js";
 import { getBlockType, getMimeType } from "../utils/mime.js";
 import type { NotionBlockType } from "../utils/mime.js";
 import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
+import { withDeadline, DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
 
 /** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface FileHandlerOptions {
@@ -15,6 +16,8 @@ export interface FileHandlerOptions {
   readonly fetch?: typeof globalThis.fetch;
   /** 다운로드 1회 시도의 시간 상한(ms). 기본 300초. 0 이하면 상한 없음(권장하지 않음). */
   readonly downloadTimeoutMs?: number;
+  /** 첨부 1건 업로드 전체의 시간 상한(ms). 기본 30분. 0 이하면 상한 없음. */
+  readonly itemTimeoutMs?: number;
 }
 
 export interface FileUploadResult {
@@ -39,6 +42,7 @@ export class FileHandler {
   private readonly sema: Sema;
   private readonly customFetch?: typeof globalThis.fetch;
   private readonly downloadTimeoutMs: number;
+  private readonly itemTimeoutMs: number;
 
   constructor(
     private readonly vaultFs: VaultFS,
@@ -50,6 +54,7 @@ export class FileHandler {
     this.sema = new Sema(concurrency);
     this.customFetch = options?.fetch;
     this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_ITEM_TIMEOUT_MS;
   }
 
   private get fetchFn(): typeof globalThis.fetch {
@@ -65,26 +70,53 @@ export class FileHandler {
     const results: FileUploadResult[] = [];
 
     for (const file of folderFiles) {
-      const existing = this.stateDb.getFileRegistry(file.path);
-      if (existing) {
-        if (existing.fileSize === file.size) continue;
-        const buffer = await this.vaultFs.readBinary(file.path);
-        const currentHash = createHash("sha256").update(buffer).digest("hex");
-        if (existing.fileHash === currentHash) continue;
-      }
-
-      await this.sema.acquire();
-      try {
-        const result = await this.uploadFile(file, folderPageId);
-        if (result) results.push(result);
-      } catch (error) {
-        getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
-      } finally {
-        this.sema.release();
-      }
+      const result = await this.pushSingleFile(file, folderPageId);
+      if (result) results.push(result);
     }
 
     return results;
+  }
+
+  /**
+   * 첨부 1건을 폴더 페이지에 올린다 — 두 push 경로(`pushFilesForFolder` · `pushAllFiles`)의
+   * 공통 단위. 변경 없음 판정·동시성 슬롯·시간 상한·실패 격리를 모두 여기 한 곳에 둔다.
+   *
+   * 한 곳에 모은 이유는 R9a 에서 실제로 데인 적이 있어서다. 같은 다운로드 로직이
+   * image/file 핸들러에 두 벌 존재한 탓에 한쪽에만 상한이 걸린 채로 남았고, 상한 없는
+   * 쪽이 세마포어를 쥔 채 영원히 매달렸다. 여기도 같은 코드가 두 루프에 나뉘어 있었다.
+   *
+   * 상한(R9f): 업로드는 호출 1건마다 상한이 있어도(SDK 30초) 멀티파트는 파트 수만큼
+   * 호출이 늘어나는 **합성 경로**라 전체로는 여전히 무한대다. 상한을 넘긴 첨부는 경고만
+   * 남기고 나머지 첨부는 계속 올린다 — 첨부 하나가 push 전체를 멎게 하지 않는다.
+   *
+   * @returns 업로드 결과. 변경 없음(스킵)이거나 실패했으면 null.
+   */
+  private async pushSingleFile(
+    file: NonMdFileInfo,
+    folderPageId: string,
+  ): Promise<FileUploadResult | null> {
+    const existing = this.stateDb.getFileRegistry(file.path);
+    if (existing) {
+      if (existing.fileSize === file.size) return null;
+      const buffer = await this.vaultFs.readBinary(file.path);
+      const currentHash = createHash("sha256").update(buffer).digest("hex");
+      if (existing.fileHash === currentHash) return null;
+    }
+
+    // 슬롯 대기는 상한 밖이다 — 줄 서서 기다리는 것은 정지가 아니라 정상 동작이다.
+    await this.sema.acquire();
+    try {
+      return await withDeadline(
+        () => this.uploadFile(file, folderPageId),
+        this.itemTimeoutMs,
+        `첨부 업로드 ${file.path}`,
+      );
+    } catch (error) {
+      getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
+      return null;
+    } finally {
+      this.sema.release();
+    }
   }
 
   /**
@@ -128,23 +160,8 @@ export class FileHandler {
       }
 
       for (const file of files) {
-        const existing = this.stateDb.getFileRegistry(file.path);
-        if (existing) {
-          if (existing.fileSize === file.size) continue;
-          const buffer = await this.vaultFs.readBinary(file.path);
-          const currentHash = createHash("sha256").update(buffer).digest("hex");
-          if (existing.fileHash === currentHash) continue;
-        }
-
-        await this.sema.acquire();
-        try {
-          const result = await this.uploadFile(file, folderPageId);
-          if (result) results.push(result);
-        } catch (error) {
-          getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
-        } finally {
-          this.sema.release();
-        }
+        const result = await this.pushSingleFile(file, folderPageId);
+        if (result) results.push(result);
       }
     }
 
