@@ -42,10 +42,19 @@ describe("비이미지 로컬 임베드 push (D5)", () => {
     expect(push("![[img.png]]")).toBe("> 📎 img.png %% im-nobsidian:local-image:img.png %%");
   });
 
-  it("노트 임베드(확장자 없음/.md)는 기존 보존 링크 경로를 유지한다", () => {
-    expect(push("![[다른노트]]")).toContain("im-nobsidian://embed/");
-    expect(push("![[other.md]]")).toContain("im-nobsidian://embed/other.md");
-    expect(push("![[board.canvas]]")).toContain("im-nobsidian://embed/board.canvas");
+  /*
+   * 노트 임베드는 **아무 변환도 하지 않는다**. 의사 프로토콜 링크로 바꿔 올리면 Notion 이
+   * 미지원 스킴을 버리고 라벨만 남겨 `![[대상]]` 이 평문으로 영구 붕괴한다(라이브 실측, I13).
+   * 원문 그대로 올리면 Notion 이 일반 텍스트로 보존하고 pull 이 글자 그대로 되돌린다.
+   */
+  it("노트 임베드(확장자 없음/.md/.canvas)는 원문 그대로 올라간다", () => {
+    expect(push("![[다른노트]]")).toBe("![[다른노트]]");
+    expect(push("![[other.md]]")).toBe("![[other.md]]");
+    expect(push("![[board.canvas]]")).toBe("![[board.canvas]]");
+  });
+
+  it("노트 임베드 별칭도 원문 보존 (D-EMBEDALIAS)", () => {
+    expect(push("![[다른노트|별칭]]")).toBe("![[다른노트|별칭]]");
   });
 });
 
