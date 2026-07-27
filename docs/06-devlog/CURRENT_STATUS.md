@@ -23,6 +23,7 @@
 | **R9a** | `fix/download-timeout-guard` | 첨부 다운로드 시간 상한 봉합 + 이미지/첨부 가드 공용화           | `3fc152e` |
 | **R9b** | `feature/pool-item-timeout`  | 페이지 1건 시간 상한(`itemTimeoutMs`)으로 무한 정지 차단         | `e4b8b33` |
 | **R9c** | `fix/retry-observability`    | 재시도 백오프의 슬롯 점유·무로그 정지 해소 (**R9 근본 원인**)    | `ea0dd3c` |
+| **R9d** | `fix/retry-after-headers`    | SDK 의 `Headers` 를 못 읽어 `Retry-After` 가 죽어 있던 문제 봉합 | `50b44f7` |
 
 ### R9 — "268페이지 pull 이 멈춘다"의 근본 원인
 
@@ -47,6 +48,11 @@
 R9a·R9b 는 같은 증상의 **다른 경로**를 함께 막는다 — 상한 없는 첨부 다운로드(무한 대기)와
 합성 경로 전체(페이지 1건 처리)의 시간 상한. 세 상한의 관계는
 `docs/05-guides/TROUBLESHOOTING.md` 에 표로 공시했다.
+
+R9d 는 R9c 가 켜 준 로그 덕분에 드러났다. 라이브 429 폭풍에서 기록된 대기값 11개가 전부
+지수 백오프 격자 위에 떨어져 있었고 — 즉 `Retry-After` 경로를 한 번도 타지 않았다 —
+추적해 보니 SDK 가 주는 `Headers` 인스턴스를 인덱스로 읽고 있어 `extractRetryAfter` 가
+통째로 죽은 코드였다. 자세한 경위는 `journal/2026-07-27.md §R9d`.
 
 ## v0.3.1 — 실데이터 충실도 마감 5-Phase (개발 완료)
 
