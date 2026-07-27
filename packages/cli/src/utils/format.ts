@@ -45,6 +45,24 @@ export function summary(created: number, updated: number, deleted: number): stri
   return parts.join("  ");
 }
 
+/**
+ * 완료 헤더 — 실패가 하나라도 있으면 초록 "complete" 로 끝내지 않는다.
+ *
+ * pull/push/sync 가 모두 결과와 무관하게 초록 `... complete` 를 찍었다. 수십 건이 실패해도
+ * 화면 맨 아래는 성공으로 읽혀, 사람은 물론 로그를 훑는 스크립트까지 넘어갔다.
+ * 헤더 문구·색을 결과에서 파생시켜 세 명령이 같은 판정을 공유한다.
+ */
+export function completionHeader(label: string, failedCount: number): string {
+  return failedCount > 0
+    ? header(chalk.yellow(`${label} finished with errors`))
+    : header(chalk.green(`${label} complete`));
+}
+
+/** 실패 건수 표기. dim 은 "없는 셈" 으로 읽히므로 0 이 아닐 때만 dim 을 벗는다. */
+export function failedCountText(count: number): string {
+  return count > 0 ? chalk.red(`${count} failed`) : chalk.dim("0 failed");
+}
+
 export function duration(ms: number): string {
   return chalk.dim(`Done in ${(ms / 1000).toFixed(1)}s`);
 }

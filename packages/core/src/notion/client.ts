@@ -1156,11 +1156,17 @@ export class NotionClient {
       return await fn();
     } catch (error: unknown) {
       if (isRetryable(error) && attempt < this.maxRetries) {
-        const baseDelay =
-          extractRetryAfter(error) ??
-          this.retryBaseDelayMs * Math.pow(this.retryBackoffFactor, attempt);
-        const jitter = baseDelay * (0.5 + Math.random() * 0.5);
-        await sleep(jitter);
+        // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
+        // 절반은 서버가 말한 시각보다 일찍 두드려 429 를 다시 부른다. 서버 지정값은
+        // 위로만 흔들고(1.0~1.25배), 지수 백오프에만 기존 지터를 유지한다.
+        const retryAfterMs = extractRetryAfter(error);
+        const delay =
+          retryAfterMs !== null
+            ? retryAfterMs * (1 + Math.random() * 0.25)
+            : this.retryBaseDelayMs *
+              Math.pow(this.retryBackoffFactor, attempt) *
+              (0.5 + Math.random() * 0.5);
+        await sleep(delay);
         return this.executeWithRetry(fn, attempt + 1);
       }
       throw error;
@@ -1179,13 +1185,41 @@ function isRetryable(error: unknown): boolean {
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
-function extractRetryAfter(error: unknown): number | null {
-  if (typeof error === "object" && error !== null && "headers" in error) {
-    const headers = (error as { headers: Record<string, string> }).headers;
-    const retryAfter = headers?.["retry-after"];
-    if (retryAfter) return Number(retryAfter) * 1000;
+/**
+ * `Retry-After` 를 존중하되 대기 상한을 둔다. 서버가 3600(=1시간)을 주면 프로세스가
+ * 아무 말 없이 한 시간 멈춘다 — 그 위는 지수 백오프에 맡기고 재시도는 계속 이어간다.
+ */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * `Retry-After` 헤더를 밀리초로 읽는다. 없거나 해석할 수 없으면 null(지수 백오프로 넘김).
+ *
+ * 숫자만 오리라 가정하면 안 된다 — RFC 9110 은 HTTP-date 형식도 허용한다
+ * (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). 예전 코드의 `Number(raw) * 1000` 은
+ * 이때 NaN 을 내고, `setTimeout(_, NaN)` 은 **즉시** 깨어난다 — 429 를 맞은 직후
+ * 대기 없이 곧장 재시도하는, 가장 하면 안 되는 동작이 된다. 날짜형은 초로 환산하고,
+ * 그마저 해석 불가면 null 로 떨궈 기본 백오프에 맡긴다.
+ *
+ * 재시도 대기는 실패해도 로그에 아무 흔적이 남지 않으므로(그저 빨리/오래 기다릴 뿐이다)
+ * 순수 함수로 떼어 직접 잠근다 — {@link isNotionObjectNotFound} 와 같은 이유의 export.
+ */
+export function extractRetryAfter(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("headers" in error)) return null;
+  const headers = (error as { headers?: Record<string, string> }).headers;
+  const raw = headers?.["retry-after"];
+  if (!raw) return null;
+
+  const seconds = Number(raw);
+  let ms: number;
+  if (Number.isFinite(seconds)) {
+    ms = seconds * 1000;
+  } else {
+    const at = Date.parse(raw);
+    ms = Number.isNaN(at) ? Number.NaN : at - Date.now();
   }
-  return null;
+
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
 }
 
 function sleep(ms: number): Promise<void> {

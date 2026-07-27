@@ -35,6 +35,7 @@ import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { notionIdsEqual, normalizeNotionId } from "../utils/id.js";
+import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool } from "../utils/pool.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
@@ -199,9 +200,7 @@ export class SyncOrchestrator {
 
     const excludeSet = options?.excludePaths ? new Set(options.excludePaths) : null;
     const filtered = (
-      options?.paths
-        ? eligible.filter((c) => options.paths!.some((p) => c.path.startsWith(p)))
-        : eligible
+      options?.paths ? eligible.filter((c) => inAnyPathScope(c.path, options.paths)) : eligible
     ).filter((c) => !isDbPath(c.path) && (!excludeSet || !excludeSet.has(c.path)));
 
     const hasDbConfigs = (this.config.notion.databases?.length ?? 0) > 0;
@@ -443,7 +442,7 @@ export class SyncOrchestrator {
     const filtered = options?.paths
       ? remoteChanges.filter((c) => {
           const record = this.stateDb.getByNotionId(c.pageId);
-          return record && options.paths!.some((p) => record.obsidianPath.startsWith(p));
+          return !!record && inAnyPathScope(record.obsidianPath, options.paths);
         })
       : remoteChanges;
 
@@ -727,10 +726,16 @@ export class SyncOrchestrator {
     };
   }
 
+  /**
+   * @param options.fullRender 원격 본문을 pull 과 동일한 파이프라인으로 렌더할지.
+   *   기본(false)은 화면 미리보기용 경량 렌더 — 첨부를 내려받지 않으므로 `status` 처럼
+   *   읽기만 하는 경로가 쓴다. 볼트에 덮어쓸 본문이 필요한 해소 경로는 반드시 켠다.
+   */
   private async buildConflictsFromRecords(
     records: SyncRecord[],
     localChanges: LocalChange[],
     remoteChanges: RemoteChange[],
+    options?: { fullRender?: boolean },
   ): Promise<Conflict[]> {
     const conflicts: Conflict[] = [];
 
@@ -742,13 +747,6 @@ export class SyncOrchestrator {
         previousHash: record.contentHash,
       };
 
-      const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
-        pageId: record.notionPageId ?? "",
-        type: "modified" as const,
-        lastEdited: record.notionLastEdited ?? "",
-        previousEdited: null,
-      };
-
       let localContent = "";
       try {
         localContent = await this.vaultFs.readFile(record.obsidianPath);
@@ -757,13 +755,31 @@ export class SyncOrchestrator {
       }
 
       let remoteContent = "";
+      let remoteLastEdited: string | null = null;
       if (record.notionPageId) {
         try {
-          remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
+          if (options?.fullRender) {
+            const page = await this.notionClient.getPage(record.notionPageId);
+            remoteLastEdited = (page as { last_edited_time?: string }).last_edited_time ?? null;
+            remoteContent = (await this.renderRemotePage(record, record.notionPageId, page))
+              .content;
+          } else {
+            remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
+          }
         } catch {
           // 페이지가 삭제된 경우
         }
       }
+
+      const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
+        pageId: record.notionPageId ?? "",
+        type: "modified" as const,
+        // 현재 원격 시각을 실제로 읽어왔다면 그 값을 쓴다. 해소 후 재조정(propagateResolution)
+        // 이 이 값을 그대로 기준점으로 삼는데, 낡은 저장값을 실으면 다음 pull 이 같은 변경을
+        // 다시 충돌로 보고 무한 재충돌한다.
+        lastEdited: remoteLastEdited ?? record.notionLastEdited ?? "",
+        previousEdited: null,
+      };
 
       conflicts.push({
         syncRecord: record,
@@ -1563,6 +1579,72 @@ export class SyncOrchestrator {
   // 보장. 변환 파이프라인이 필요한 push 는 기존 엔터프라이즈 경로(pushUpdate)를 재사용한다.
   // ──────────────────────────────────────────────────────────────────────────
 
+  /**
+   * 해소 대상 충돌 목록 — 원격 본문을 pull 과 **같은 파이프라인**으로 렌더해 담는다.
+   *
+   * 해소는 실제로 볼트 파일을 덮어쓰므로 `status()` 의 경량 미리보기 렌더를 쓰면 안 된다
+   * (프론트매터·첨부가 빠진 반쪽 본문이 덮인다). 반대로 전체 pull 을 먼저 돌려 목록을
+   * 얻는 것도 안 된다 — 해소하겠다고 볼트를 먼저 원격으로 덮어쓰는 셈이라 순서가 거꾸로다.
+   * 그래서 충돌 레코드만 좁혀 그 페이지들만 읽어 온다.
+   */
+  async listConflicts(): Promise<Conflict[]> {
+    const records = this.stateDb.getByStatus("conflict");
+    if (records.length === 0) return [];
+    const files = await this.vaultFs.listMarkdownFiles();
+    const localChanges = this.changeDetector.detectLocalChanges(files);
+    return this.buildConflictsFromRecords(records, localChanges, [], { fullRender: true });
+  }
+
+  /**
+   * 추적 파일의 **현재 원격 본문**을 pull 과 같은 변환으로 렌더한다 — 표시 전용.
+   *
+   * 첨부는 내려받지 않는다: 비교를 보려다 볼트에 파일이 생기면 안 된다. 그 대가로 아직
+   * 내려받지 않은 미디어는 원격 URL 로 남아 비교 화면에만 차이로 보인다.
+   *
+   * @returns 추적되지 않았거나 원격 페이지가 없으면 null.
+   */
+  async renderRemoteSnapshot(path: string): Promise<string | null> {
+    const record = this.stateDb.getByPath(path);
+    if (!record?.notionPageId) return null;
+    const page = await this.notionClient.getPage(record.notionPageId);
+    const rendered = await this.renderRemotePage(record, record.notionPageId, page, {
+      downloadMedia: false,
+    });
+    return rendered.content;
+  }
+
+  /**
+   * 해소할 게 남지 않은 충돌 레코드를 `synced` 로 되돌리고, 되돌린 경로를 반환한다.
+   *
+   * 충돌로 표시된 파일은 push 대상에서 통째로 빠진다(양쪽 덮어쓰기 방지). 그래서 사용자가
+   * 손으로 양쪽을 맞춰 둬 이미 같은 내용이 됐는데도 레코드만 남으면, 그 파일의 이후 편집이
+   * **영원히 Notion 에 올라가지 않는다** — 아무 경고 없이 정체된다. 내용이 이미 동일한
+   * 건만 골라 상태를 되돌린다(진짜 충돌은 손대지 않는다).
+   */
+  clearStaleConflicts(conflicts: readonly Conflict[]): string[] {
+    const cleared: string[] = [];
+    for (const conflict of conflicts) {
+      // 양쪽 다 비었으면 "같다"가 아니라 양쪽 다 사라진 것이다 — 삭제 전파의 몫으로 남긴다.
+      if (conflict.localContent === "" && conflict.remoteContent === "") continue;
+      if (conflict.localContent !== conflict.remoteContent) continue;
+
+      const record = conflict.syncRecord;
+      this.stateDb.transaction(() => {
+        this.stateDb.updateHash(
+          record.id,
+          computeHash(conflict.localContent),
+          Buffer.from(conflict.localContent, "utf-8"),
+        );
+        this.stateDb.updateStatus(record.id, "synced");
+        if (conflict.remoteChange.lastEdited) {
+          this.stateDb.setNotionLastEdited(record.id, conflict.remoteChange.lastEdited);
+        }
+      });
+      cleared.push(record.obsidianPath);
+    }
+    return cleared;
+  }
+
   /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
   async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
     const result = await this.conflictResolver.resolve(conflict, choice);
@@ -1867,7 +1949,7 @@ export class SyncOrchestrator {
         // 중복 처리하면 행 전용 frontmatter 없이 본문만 쓰는 잘못된 경로로 샌다.
         (r.fileType === "file" || r.fileType === "folder-note") &&
         r.notionPageId !== null &&
-        (!paths?.length || paths.some((p) => r.obsidianPath.startsWith(p))),
+        inAnyPathScope(r.obsidianPath, paths),
     );
     if (scoped.length === 0) return [];
 
@@ -2065,25 +2147,27 @@ export class SyncOrchestrator {
     }
   }
 
-  private async pullUpdate(
-    change: RemoteChange,
-  ): Promise<{ path?: string; conflict?: Conflict; unchanged?: boolean }> {
-    const record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) return {};
-
-    const page = await this.notionClient.getPage(change.pageId);
-
-    // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
-    // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
-    // (deleteSync 가 켜져 있으면 전체 스캔이 이 페이지를 deleted 로 따로 처리한다.)
-    const remoteGone =
-      (page as { in_trash?: boolean }).in_trash === true ||
-      (page as { archived?: boolean }).archived === true;
-    if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
-      return { unchanged: true };
-    }
-
-    const fetched = await this.fetchPageMarkdown(change.pageId);
+  /**
+   * 원격 페이지를 **pull 과 동일한 파이프라인**으로 볼트에 쓸 수 있는 본문까지 렌더한다.
+   * (본문 변환 → 이미지/첨부 내려받기 → 속성 주입 → preserve marker → 압축형 간격 판정)
+   *
+   * pull 경로와 충돌 해소 경로가 이 한 곳을 공유해야 한다. 예전엔 충돌 목록만
+   * {@link fetchPageMarkdown} 원문을 그대로 담아, `nobsi resolve` 에서 "원격 유지"를 고르면
+   * 프론트매터도 첨부도 없는 반쪽 본문이 볼트에 덮여 썼다 — 해소가 곧 손실이었다.
+   *
+   * @returns 렌더된 본문과 함께, 호출자가 위키링크 레지스트리 등에 쓰는 제목·속성.
+   *          여기서 이미 읽은 값을 되돌려 줘야 호출자가 같은 페이지를 다시 파싱하지 않는다.
+   */
+  private async renderRemotePage(
+    record: SyncRecord,
+    pageId: string,
+    page: Awaited<ReturnType<NotionClient["getPage"]>>,
+    options?: { downloadMedia?: boolean },
+  ): Promise<{ content: string; title: string; properties: Record<string, unknown> }> {
+    // 표시 전용 호출(diff)은 첨부를 내려받지 않는다 — 비교를 보려다 볼트에 파일이 생기면
+    // 안 된다. 이때 새 미디어는 원격 URL 그대로 남지만, 비교 화면에서만 보이는 차이다.
+    const downloadMedia = options?.downloadMedia !== false;
+    const fetched = await this.fetchPageMarkdown(pageId);
     let markdown = fetched.content;
 
     const title = this.notionClient.extractTitle(page);
@@ -2102,27 +2186,29 @@ export class SyncOrchestrator {
       properties.title = title;
     }
 
-    if (this.config.conversion.imageDownload === "immediate") {
+    if (downloadMedia && this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(
         markdown,
         title,
-        change.pageId,
+        pageId,
         record.obsidianPath,
       );
       markdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
 
-    const fileResult = await this.imageHandler.downloadAllFiles(
-      markdown,
-      title,
-      record.obsidianPath,
-    );
-    markdown = fileResult.content;
-    this._pullFileCount += fileResult.downloads.length;
+    if (downloadMedia) {
+      const fileResult = await this.imageHandler.downloadAllFiles(
+        markdown,
+        title,
+        record.obsidianPath,
+      );
+      markdown = fileResult.content;
+      this._pullFileCount += fileResult.downloads.length;
+    }
 
     const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
-    const remoteContent = this.pipeline.convertToMarkdown(
+    const content = this.pipeline.convertToMarkdown(
       markdown,
       {
         direction: "pull",
@@ -2136,6 +2222,29 @@ export class SyncOrchestrator {
         notionExportCompact: fetched.compact,
       },
     );
+    return { content, title, properties };
+  }
+
+  private async pullUpdate(
+    change: RemoteChange,
+  ): Promise<{ path?: string; conflict?: Conflict; unchanged?: boolean }> {
+    const record = this.stateDb.getByNotionId(change.pageId);
+    if (!record) return {};
+
+    const page = await this.notionClient.getPage(change.pageId);
+
+    // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
+    // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
+    // (deleteSync 가 켜져 있으면 전체 스캔이 이 페이지를 deleted 로 따로 처리한다.)
+    const remoteGone =
+      (page as { in_trash?: boolean }).in_trash === true ||
+      (page as { archived?: boolean }).archived === true;
+    if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
+      return { unchanged: true };
+    }
+
+    const rendered = await this.renderRemotePage(record, change.pageId, page);
+    const remoteContent = rendered.content;
 
     let localContent: string;
     // 읽기 실패를 곧바로 "파일 없음"으로 단정하지 않는다 — 권한 오류로 못 읽은 파일까지
@@ -2213,11 +2322,11 @@ export class SyncOrchestrator {
         localFileSize: updateStat?.size ?? null,
       });
 
-      const aliases = extractAliases(properties);
+      const aliases = extractAliases(rendered.properties);
       this.stateDb.upsertWikilink({
         obsidianPath: record.obsidianPath,
         notionPageId: change.pageId,
-        title,
+        title: rendered.title,
         aliases,
       });
     });

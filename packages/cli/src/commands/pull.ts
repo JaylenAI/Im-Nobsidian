@@ -17,6 +17,8 @@ import {
   icons,
   failedItem,
   dimText,
+  completionHeader,
+  failedCountText,
 } from "../utils/format.js";
 
 export const pullCommand = new Command("pull")
@@ -66,9 +68,10 @@ export const pullCommand = new Command("pull")
         console.log(`  ${icons.success} ${result.linkCount} links resolved`);
       }
 
-      console.log(`\n  ${header(chalk.green("Pull complete"))}`);
+      const failedCount = result.failed.length;
+      console.log(`\n  ${completionHeader("Pull", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted)}  ${dimText(`${result.failed.length} failed`)}`,
+        `  ${summary(result.created, result.updated, result.deleted)}  ${failedCountText(failedCount)}`,
       );
       // 복원은 별도 줄로 알린다 — 볼트에서 파일이 사라졌었다는 사실은 조용히 넘길 일이 아니다.
       if (result.restored > 0) {
@@ -82,11 +85,13 @@ export const pullCommand = new Command("pull")
         );
       }
 
-      if (result.failed.length > 0) {
+      if (failedCount > 0) {
         console.log("");
         for (const f of result.failed) {
           failedItem(f.path, f.error);
         }
+        // 종료 코드까지 실패로 남긴다 — 자동화가 pull 실패를 성공으로 집계하면 안 된다.
+        process.exitCode = 1;
       }
     } finally {
       stateDb.close();
