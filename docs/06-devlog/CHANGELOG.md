@@ -10,6 +10,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **DB 행·첨부에 항목 시간 상한이 빠져 있던 문제 (R9e·R9f)** — R9b 가 도입한 `itemTimeoutMs` 는 오케스트레이터의 페이지 루프 4곳에만 걸려 있었다. 지정 볼트 887개 파일 중 629개가 DB 행이라 **보호받지 못하는 쪽이 다수**였고, 첨부 업로드 루프도 마찬가지였다. `DatabaseSyncer` 의 pull·push 행 루프와 `FileHandler` 의 업로드에 같은 상한을 적용. 아울러 `FileHandler` 의 업로드 루프가 `pushFilesForFolder`·`pushAllFiles` 두 곳에 중복돼 있던 것을 `pushSingleFile` 하나로 합쳤다 — R9a 에서 같은 구조(image/file 핸들러 중복) 때문에 한쪽만 상한이 빠졌던 사고의 재발 방지
+- **`Retry-After` 를 한 번도 반영하지 못하던 헤더 접근 (R9d)** — `@notionhq/client` 는 `APIResponseError.headers` 에 fetch 응답의 `Headers` **인스턴스**를 그대로 싣는데(타입은 `unknown`) 인덱스(`headers["retry-after"]`)로 읽어 항상 `undefined` 였다. 429 를 맞아도 서버가 지정한 대기를 무시하고 지수 백오프로만 물러났고, R9c 의 전역 쿨다운은 실제로 한 번도 걸리지 않았다. `Headers`·`Map`·평범한 객체(대소문자 무관) 세 모양을 모두 읽도록 봉합. 아울러 쿨다운 발동 조건을 **`Retry-After` 유무 → status 429** 로 교정했다 — 게이트웨이가 헤더를 떼어먹으면 쿨다운이 통째로 사라지기 때문
 - **재시도 백오프가 rate limit 슬롯을 점유하던 문제 (R9c — "pull 이 멈춘다"의 근본 원인)** — `withRateLimit` 이 `sema` 를 쥔 채 재시도 전체(최대 60초 × 5회)를 돌려, 불운한 요청 하나가 동시성 한 칸을 최대 5분 점유했다. 기본 동시성이 3이라 그런 요청 3건이면 클라이언트 전체가 멈춘다. 백오프 대기를 **슬롯 반납 뒤로** 옮기고, 429 는 `cooldownUntil` 전역 게이트로 함께 쉬게 해 재시도 폭풍을 막는다
 - **재시도가 로그를 남기지 않아 정지와 구분되지 않던 문제 (R9c)** — 시도 횟수·대기시간·사유(status·code)를 경고로 남긴다. `Notion API 재시도 1/5 — 3750ms 대기 (status 429 · rate_limited · ...)`
 - **첨부 다운로드에 시간 상한이 없던 문제 (R9a)** — `image-handler` 에는 있던 가드가 `file-handler` 에는 없어, 상한 없는 `fetch` 가 세마포어를 쥔 채 영원히 매달릴 수 있었다. 공용 `utils/download-fetch.ts` 로 통합해 양쪽이 위임
@@ -24,7 +26,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Quality
 
-- 신규 회귀 테스트 25건 (download-timeout 9 · deadline 7 · retry-observability 9)
+- 신규 회귀 테스트 41건 (download-timeout 9 · deadline 7 · retry-observability 11 · retry-after 헤더 모양 5 · db-row 항목 상한 6 · 첨부 항목 상한 3). R9d 테스트는 **목이 아니라 실제 `Headers` 객체**로 잠갔다 — 평범한 객체로 흉내 내면 옛 버그가 그대로 통과하기 때문이며, 뮤테이션(옛 구현 복원)으로 6건 실패를 확인했다
+- 상한 테스트는 전부 **끝나지 않는 프로미스**로 설계해 가드를 지우면 실패가 아니라 hang 으로 드러나게 했다. 변이 검증: R9e 4건 → vitest 타임아웃(20.0초), R9f 3건 → 테스트 타임아웃(15.0초). 통과 자체가 아니라 "제거하면 무너지는가"로 잠금을 증명한다
 - 세 겹 시간 상한(API 30초 / 다운로드 300초 / 페이지 30분)을 `TROUBLESHOOTING.md` 에 표로 공시
 
 ## [0.3.1] - 2026-07-17
