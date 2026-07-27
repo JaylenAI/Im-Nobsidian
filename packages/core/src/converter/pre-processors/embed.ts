@@ -1,6 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import type { ImageReference } from "../../types/convert.js";
-import { EMBED_PROTOCOL, spacedMarker } from "../../constants/markers.js";
+import { spacedMarker } from "../../constants/markers.js";
 import { encodeMarkerTarget } from "../marker-url.js";
 
 /**
@@ -46,11 +46,24 @@ export class EmbedResolver implements Processor {
         }
         // 비이미지 로컬 첨부 파일(pdf/mov 등): EMBED_PROTOCOL href 는 Notion 이 스킴을
         // 버려 평문으로 강등된다 — 이미지와 동일한 quote+마커 쌍으로 왕복을 보존한다(D5).
-        // 노트 임베드(확장자 없음·.md·.canvas)는 위키링크/멘션 계열이므로 기존 경로 유지.
         if (isPush && !isExternalUrl(target) && isAttachmentFile(target)) {
           return isolate(placeholder("local-file", target), span);
         }
-        return `${lead}[${target}](${EMBED_PROTOCOL}${encodeMarkerTarget(target)})${trail}`;
+        /*
+         * 노트 임베드(확장자 없음·.md·.canvas)와 외부 URL 임베드는 **원문 그대로** 올린다.
+         *
+         * 예전엔 여기서도 `[대상](im-nobsidian://embed/…)` 로 바꿔 올렸다. 그런데 Notion 은
+         * 미지원 스킴을 링크째 버리고 **라벨 텍스트만** 남긴다 — 첨부 파일에 대해 위(D5)에서
+         * 이미 실측한 그 현상이 노트 임베드에도 똑같이 일어난다. `![[대상|별칭]]` 이 평문
+         * `대상|별칭` 으로 영구 붕괴하고, pull 의 복원기는 되살릴 href 자체를 못 본다.
+         * (실볼트에는 `…했어요![[neutral]]` 처럼 느낌표 뒤 위키링크가 526곳 있어 편집 후
+         *  push 하면 그만큼 대괄호가 통째로 날아갔다.)
+         *
+         * 반면 `![[대상]]` 을 손대지 않고 그대로 올리면 Notion 은 일반 텍스트로 저장하고
+         * pull 이 글자 그대로 되돌린다 — 별칭 포함 무손실 왕복(실측). Notion 에는 전치
+         * (transclusion) 개념이 없으므로 Obsidian 문법을 원문 보존하는 편이 정직하고 안전하다.
+         */
+        return match;
       },
     );
 

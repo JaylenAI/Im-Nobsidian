@@ -20,7 +20,12 @@ const WIKILINK_PRESERVE_REGEX = new RegExp(
   "g",
 );
 
-/** 임베드 보존 마커 → `![[target]]`. */
+/**
+ * 임베드 보존 마커 → `![[target]]`. **해독 전용 레거시 경로** — 지금은 아무도 이 형태를
+ * 만들지 않는다. Notion 이 미지원 스킴을 버려 `![[대상]]` 이 평문으로 붕괴했기 때문에
+ * 노트 임베드는 원문 그대로 올리도록 바뀌었다(`pre-processors/embed.ts` 참조).
+ * 구버전이 남긴 본문을 만나도 되살릴 수 있도록 해독만 유지한다.
+ */
 const EMBED_PRESERVE_REGEX = new RegExp(
   `\\[${MARKER_LABEL_CAPTURE}\\]\\(${EMBED_PROTOCOL}${MARKER_URL_CAPTURE}\\)`,
   "g",

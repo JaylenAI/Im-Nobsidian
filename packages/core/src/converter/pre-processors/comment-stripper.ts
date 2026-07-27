@@ -5,7 +5,7 @@ import type {
   PreserveMarker,
 } from "../../types/convert.js";
 import { MARKER_BRAND } from "../../constants/markers.js";
-import { mapOutsideCodeFences, computeAnchor } from "../../utils/md-regions.js";
+import { mapOutsideCodeFences, mapOutsideMarkers, computeAnchor } from "../../utils/md-regions.js";
 
 const COMMENT_REGEX = /%%([\s\S]*?)%%/g;
 const HTML_COMMENT_REGEX = /<!--([\s\S]*?)-->/g;
@@ -19,6 +19,11 @@ const HTML_COMMENT_REGEX = /<!--([\s\S]*?)-->/g;
  * im-nobsidian 브랜드 마커(`%%im-nobsidian:...%%`·`%% im-nobsidian:... %%`)와
  * 닫는 토큰(`%%/color%%` 류)은 동기화 자체의 운반체이므로 건드리지 않는다.
  * HTML 주석 문법은 브랜드 마커가 쓰지 않으므로 무조건 제거한다.
+ *
+ * 마커 회피는 **본문에서 마커 토큰을 먼저 떼어 낸 뒤**(`mapOutsideMarkers`) 남은 평문에만
+ * 주석 정규식을 돌리는 방식이다. 예전처럼 매치 본문의 접두만 보고 되돌리면, 구분자 짝짓기
+ * 자체는 이미 마커의 `%%` 를 소비한 뒤라 늦다 — 본문 한가운데의 홑 `%%`(예: `압축률 100%%`)가
+ * 마커 여는 `%%` 와 짝지어져 그 사이 문장과 마커 내용이 통째로 삭제됐다(실측 D-COMMENT-PAIR).
  */
 export class CommentStripper implements Processor {
   readonly name = "CommentStripper";
@@ -35,20 +40,20 @@ export class CommentStripper implements Processor {
       : [];
 
     const content = mapOutsideCodeFences(input.content, (segment) => {
-      const afterObsidian = segment.replace(
-        COMMENT_REGEX,
-        (match, body: string, offset: number) => {
+      const afterObsidian = mapOutsideMarkers(segment, (plain, base) =>
+        plain.replace(COMMENT_REGEX, (match, body: string, offset: number) => {
+          // 개행이 섞여 MARKER_TOKEN_RE 에 안 걸린 깨진 마커까지 삼키지 않도록 남겨 둔 방어선.
           const trimmed = body.trimStart();
           if (trimmed.startsWith(`${MARKER_BRAND}:`) || trimmed.startsWith("/")) {
             return match;
           }
           markers.push({
             type: "comment",
-            params: { text: body, __anchor: computeAnchor(segment, offset) },
-            startIndex: offset,
+            params: { text: body, __anchor: computeAnchor(segment, base + offset) },
+            startIndex: base + offset,
           });
           return "";
-        },
+        }),
       );
       return afterObsidian.replace(HTML_COMMENT_REGEX, (_match, body: string, offset: number) => {
         markers.push({
