@@ -46,7 +46,7 @@ function toNotion(input: string, pipeline = plain): string {
 function backToObsidian(notion: string, pipeline = plain, markers?: PreserveMarker[]): string {
   const restored = resolveNotionIdWikilinks(notionEnhancedToObsidian(notion), (id) =>
     id === TARGET_ID_NOHYPH ? VAULT["T2-target"]! : null,
-  );
+  ).markdown;
   return pipeline
     .convertToMarkdown(
       restored,
