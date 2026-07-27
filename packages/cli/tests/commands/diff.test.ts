@@ -10,7 +10,14 @@ const mockStatus = vi.fn().mockResolvedValue({
   lastSyncAt: null,
 });
 
-vi.mock("@im-nobsidian/core", () => ({
+/*
+ * 무거운 것(설정 로드·DB·Notion 클라이언트·오케스트레이터)만 갈아 끼우고 **나머지는 원본을
+ * 그대로 편다**. 예전엔 팩토리에 필요한 심볼을 손으로 나열했는데, 명령이 core 에서 순수
+ * 유틸을 하나 더 가져오는 순간(`matchesPathScope`) 목에 없다는 이유로 테스트가 죽었다 —
+ * 프로덕션 코드는 멀쩡한데 목 명세만 낡아서 나는 거짓 실패다.
+ */
+vi.mock("@im-nobsidian/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@im-nobsidian/core")>()),
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
