@@ -76,7 +76,7 @@ describe("R11-B — verifyCompleteness 대조 대상 조립", () => {
     }).verifyCompleteness();
 
     expect(queriedDbIds()).toEqual([CONFIGURED_DB]);
-    expect(report.databases).toHaveLength(1);
+    expect(report.databases.databases).toHaveLength(1);
   });
 
   it("디스커버리 캐시가 깨져 있어도 나머지로 검증을 계속한다", async () => {
@@ -101,5 +101,70 @@ describe("R11-B — verifyCompleteness 대조 대상 조립", () => {
 
     expect(notion.queryAllDatabasePages).not.toHaveBeenCalled();
     expect(report.complete).toBe(true);
+  });
+});
+
+/**
+ * R12-C 배선 잠금 — 페이지 대조가 실제로 `verify` 판정에 들어가는가.
+ *
+ * 게이트를 만들어 두고 배선을 빠뜨리면 리포트에는 숫자가 찍히는데 종료 코드는 0 이 나가는,
+ * 가장 나쁜 형태의 통과가 된다(R11-C 와 같은 함정). 그래서 "페이지만 깨졌을 때 전체
+ * 판정이 false 인가"를 여기서 못 박는다.
+ */
+describe("R12-C — verifyCompleteness 페이지 대조 배선", () => {
+  let vaultFs: ReturnType<typeof createMockVaultFs>;
+  let stateDb: ReturnType<typeof createMockStateDb>;
+  let notion: ReturnType<typeof createMockNotionClient>;
+
+  beforeEach(() => {
+    vaultFs = createMockVaultFs();
+    stateDb = createMockStateDb();
+    notion = createMockNotionClient();
+  });
+
+  function makeOrchestrator(config: Config): SyncOrchestrator {
+    return new SyncOrchestrator(config, stateDb as never, notion as never, vaultFs as never);
+  }
+
+  it("원격에만 있는 페이지가 있으면 DB 가 완결이어도 전체 판정이 실패다", async () => {
+    notion.getPagesUnderRootViaSearch.mockResolvedValue([{ id: "pageone" }, { id: "pagetwo" }]);
+    stateDb.getAll.mockReturnValue([
+      { notionPageId: "pageone", notionParentId: null, fileType: "file" },
+    ]);
+
+    const report = await makeOrchestrator(createConfig()).verifyCompleteness();
+
+    expect(report.databases.complete).toBe(true);
+    expect(report.pages?.missingIds).toEqual(["pagetwo"]);
+    expect(report.complete).toBe(false);
+  });
+
+  it("페이지 대조는 설정된 root 를 대상으로 돈다", async () => {
+    const base = createConfig();
+    await makeOrchestrator(base).verifyCompleteness();
+
+    expect(notion.getPagesUnderRootViaSearch).toHaveBeenCalledWith(base.notion.rootPageId);
+  });
+
+  it("DB 모드에서는 페이지 대조를 아예 하지 않는다 (root 서브트리가 없다)", async () => {
+    const base = createConfig();
+    const report = await makeOrchestrator({
+      ...base,
+      notion: { ...base.notion, parentMode: "database", databaseId: CONFIGURED_DB },
+    }).verifyCompleteness();
+
+    expect(notion.getPagesUnderRootViaSearch).not.toHaveBeenCalled();
+    expect(report.pages).toBeNull();
+    // 없는 대조가 전체 판정을 끌어내리면 DB 모드는 영원히 실패한다.
+    expect(report.complete).toBe(true);
+  });
+
+  it("페이지 열거가 실패하면 통과로 접지 않는다", async () => {
+    notion.getPagesUnderRootViaSearch.mockRejectedValue(new Error("search unavailable"));
+
+    const report = await makeOrchestrator(createConfig()).verifyCompleteness();
+
+    expect(report.pages?.error).toBe("search unavailable");
+    expect(report.complete).toBe(false);
   });
 });

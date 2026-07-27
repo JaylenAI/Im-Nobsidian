@@ -6,7 +6,11 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
 } from "@im-nobsidian/core";
-import type { CompletenessReport } from "@im-nobsidian/core";
+import type {
+  CompletenessReport,
+  PageCompletenessReport,
+  VaultCompletenessReport,
+} from "@im-nobsidian/core";
 import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
 
@@ -23,7 +27,7 @@ function printIdSample(label: string, ids: readonly string[], color: (s: string)
   }
 }
 
-function printReport(report: CompletenessReport): void {
+function printDatabaseSection(report: CompletenessReport): void {
   console.log(`\n${header("  DB Completeness")}`);
   console.log(`  ${separator(50)}`);
   console.log(`  ${dimText("Databases:")}  ${report.databases.length}`);
@@ -52,15 +56,66 @@ function printReport(report: CompletenessReport): void {
 
   if (report.complete) {
     console.log(`\n  ${chalk.green("All database rows present in vault")} ${icons.success}`);
-  } else {
+  }
+}
+
+/**
+ * 페이지 대조 출력 (R12-C).
+ *
+ * `local-only` 는 실패가 아니라 정보다 — 아직 push 하지 않은 로컬 노트·root 페이지 자신·
+ * search 색인 지연이 전부 여기에 정상적으로 들어온다. 색을 달리 줘서 "고쳐야 할 것"과
+ * "그냥 알아 둘 것"이 화면에서 섞이지 않게 한다.
+ */
+function printPageSection(report: PageCompletenessReport): void {
+  console.log(`\n${header("  Page Completeness")}`);
+  console.log(`  ${separator(50)}`);
+  console.log(`  ${dimText("Remote pages:")} ${report.remotePages}`);
+  console.log(`  ${dimText("Vault pages:")}  ${report.vaultPages}`);
+
+  if (report.error) {
+    console.log(`\n  ${icons.fail} ${chalk.yellow("Page enumeration failed")}`);
+    console.log(`    ${dimText(report.error)}`);
+    return;
+  }
+
+  if (report.missingIds.length > 0) {
     console.log(
-      `\n  ${dimText("Run")} ${chalk.cyan("nobsi pull")} ${dimText("to fetch the missing rows")}`,
+      `\n  ${header(chalk.red(`Pages missing from vault: ${report.missingIds.length}`))}`,
+    );
+    printIdSample("missing", report.missingIds, chalk.red);
+  }
+
+  if (report.localOnlyIds.length > 0) {
+    console.log(
+      `\n  ${dimText(`local-only pages: ${report.localOnlyIds.length} (informational)`)}`,
+    );
+    printIdSample("local-only", report.localOnlyIds, dimText);
+  }
+
+  if (report.complete) {
+    console.log(`\n  ${chalk.green("All remote pages present in vault")} ${icons.success}`);
+  }
+}
+
+function printReport(report: VaultCompletenessReport): void {
+  printDatabaseSection(report.databases);
+
+  if (report.pages) {
+    printPageSection(report.pages);
+  } else {
+    // DB 모드에는 root 서브트리가 없어 대조할 페이지 자체가 없다 — 생략을 명시한다.
+    console.log(`\n  ${dimText("Page completeness: skipped (database mode)")}`);
+  }
+
+  if (!report.complete) {
+    console.log(
+      `\n  ${dimText("Run")} ${chalk.cyan("nobsi pull")} ${dimText("to fetch what is missing")}`,
     );
   }
 }
 
 export const verifyCommand = new Command("verify")
-  .description("DB 완결성 검증 — 원격 행이 볼트에 빠짐없이 있는지 대조 (API 호출)")
+  .description("완결성 검증 — 원격 DB 행·페이지가 볼트에 빠짐없이 있는지 대조 (API 호출)")
   .option("--json", "결과를 JSON 으로 출력")
   .action(async (opts: { json?: boolean }) => {
     const cwd = process.cwd();

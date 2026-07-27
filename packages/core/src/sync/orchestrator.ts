@@ -28,8 +28,8 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict } from "./conflict-detector.js";
-import { verifyDatabaseCompleteness } from "../audit/completeness.js";
-import type { CompletenessReport } from "../audit/completeness.js";
+import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
+import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
@@ -740,17 +740,21 @@ export class SyncOrchestrator {
   }
 
   /**
-   * DB 완결성 검증 — 원격 행이 볼트에 빠짐없이 있는지 대조한다(R11-B).
+   * 볼트 완결성 검증 — 원격에 있는 것이 볼트에 빠짐없이 있는지 대조한다(R11-B · R12-C).
    *
    * 기존 게이트(해시 일치·repull 바이트 동일·churn 0)는 전부 **멱등성**을 본다. 매번
-   * 같은 행을 놓치는 체계적 미발견은 그 게이트를 전부 통과한다 — 실제로 296개 DB 행이
+   * 같은 것을 놓치는 체계적 미발견은 그 게이트를 전부 통과한다 — 실제로 296개 DB 행이
    * 그렇게 침묵 유실됐다. 여기서만 "빠짐없다"를 본다.
    *
    * 대조 대상 database id 는 이 클래스가 조립한다: 설정에 적힌 것 + 디스커버리 캐시가
    * 아는 것 + DB 모드의 루트 DB. `discovered_dbs` 메타 키를 아는 곳을 이 파일 하나로
    * 유지해, 호출부(CLI·E2E)가 캐시 표현을 각자 다시 해석하지 않게 한다.
+   *
+   * 페이지(R12-C)는 pull 이 쓴 경로가 아니라 **search 열거**로 대조한다. 페이지는 열거
+   * 경로가 둘이고 둘이 같은 집합을 내지 않는 게 애초의 결함이므로(R12-A), 독립된 두 번째
+   * 열거와 맞대 봐야 의미가 있다.
    */
-  async verifyCompleteness(): Promise<CompletenessReport> {
+  async verifyCompleteness(): Promise<VaultCompletenessReport> {
     const ids: string[] = [];
     if (this.isDatabaseMode) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);
@@ -767,7 +771,20 @@ export class SyncOrchestrator {
       }
     }
 
-    return verifyDatabaseCompleteness(this.notionClient, this.stateDb, { databaseIds: ids });
+    const databases = await verifyDatabaseCompleteness(this.notionClient, this.stateDb, {
+      databaseIds: ids,
+    });
+
+    // 페이지 대조는 페이지 모드에서만 의미가 있다 — DB 모드에는 root 서브트리가 없다.
+    const pages = this.isDatabaseMode
+      ? null
+      : await verifyPageCompleteness(
+          this.notionClient,
+          this.stateDb,
+          this.config.notion.rootPageId,
+        );
+
+    return { databases, pages, complete: databases.complete && (pages?.complete ?? true) };
   }
 
   async fetch(): Promise<{
@@ -1868,10 +1885,17 @@ export class SyncOrchestrator {
       //     대상(서브트리)에 비례해, 작은 볼트가 수천 페이지 워크스페이스에 있어도 빠르다
       //     (I10: 2-파일 볼트 pull ~12s). 단 비용은 서브트리 **전체 블록 수**에 비례하므로,
       //  2) 콘텐츠가 많은 대규모 서브트리에서는 시간 예산(DISCOVERY_RECURSIVE_BUDGET_MS)을
-      //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리로 폴백한다(비용이
-      //     워크스페이스 페이지 수에 비례·예측가능·유한). 두 경로 모두 중첩 깊이와 무관하게
-      //     모든 하위 페이지를 찾으므로 **무손실**이며, DB 행·archive/in_trash 를 동일하게
-      //     제외해 orphan(삭제) 판정도 일관된다.
+      //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리를 **덧붙인다**(비용이
+      //     워크스페이스 페이지 수에 비례·예측가능·유한).
+      //
+      // 두 경로를 경합시키지 않고 **합집합**을 쓰는 이유(R12-A): 둘은 같은 집합을 낸다고
+      // 가정할 수 없다. search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수 있고,
+      // 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 그런데 어느 쪽이 도는지를 90초
+      // 벽시계가 정한다 — 실제로 같은 볼트에서 첫 pull 은 폴백(search), 재 pull 은 순회로
+      // 돌았고 페이지 수가 회차마다 흔들렸다. 더 나쁜 건 이걸 멱등성 게이트가 못 본다는
+      // 점이다: 두 번째 실행이 더 **적게** 찾아도 created/updated 는 0 이라 churn 0 이다.
+      // 그리고 deleteSync 가 켜져 있으면 아래 orphan 판정이 그 차집합을 **삭제**한다.
+      // 합집합은 이 경합을 없앤다. 순회 부분 결과는 이미 치른 비용이라 추가 요청도 없다.
       let underRoot: PageObjectResponse[];
       try {
         underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
@@ -1880,10 +1904,22 @@ export class SyncOrchestrator {
       } catch (error) {
         if (!(error instanceof DiscoveryTooLargeError)) throw error;
         getLogger().info(
-          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 워크스페이스 search 기반 디스커버리로 전환`,
+          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 순회 부분 결과 ${error.partial.length}건에 ` +
+            `워크스페이스 search 기반 디스커버리를 합칩니다`,
         );
-        underRoot = await this.notionClient.getPagesUnderRootViaSearch(
+        const viaSearch = await this.notionClient.getPagesUnderRootViaSearch(
           this.config.notion.rootPageId,
+        );
+        // id 로 디듀프한다 — 아래 remotePages 차단점도 디듀프하지만, 그 전에 도는
+        // _childParentIds 루프의 extractParentId 가 block 부모마다 API 를 부를 수 있어
+        // 중복을 여기서 먼저 없애야 요청이 두 배로 새지 않는다.
+        const byId = new Map<string, PageObjectResponse>();
+        for (const page of [...error.partial, ...viaSearch]) {
+          byId.set(normalizeNotionId(page.id), page);
+        }
+        underRoot = [...byId.values()];
+        getLogger().info(
+          `[Im-Nobsidian] 디스커버리 합집합: 순회 ${error.partial.length} ∪ search ${viaSearch.length} → ${underRoot.length}건`,
         );
       }
       // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
