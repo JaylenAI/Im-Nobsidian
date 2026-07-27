@@ -156,7 +156,7 @@ describe("BaseFileGenerator", () => {
     expect(result).toContain("direction: ASC");
   });
 
-  it("calendar/timeline 등 미지원 뷰는 건너뛰고 기본 table로 대체한다", () => {
+  it("calendar/timeline 은 버리지 않고 날짜순 표로 격하한다 (R5 D-VIEWDROP)", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -165,15 +165,41 @@ describe("BaseFileGenerator", () => {
           lastSynced: "2026-01-01T00:00:00.000Z",
           views: [
             { id: "v4", name: "Calendar", type: "calendar", datePropertyName: "Due" },
-            { id: "v5", name: "Timeline", type: "timeline" },
+            { id: "v5", name: "Timeline", type: "timeline", datePropertyId: "d1" },
           ],
         },
       }),
     );
 
+    // Bases 에 달력/타임라인 타입은 없다 — 그렇다고 뷰를 통째로 없애면 사용자는
+    // Obsidian 에서 그 뷰의 존재조차 알 수 없다. 표로 살리되 날짜순을 유지한다.
     expect(result).not.toContain("type: calendar");
     expect(result).not.toContain("type: timeline");
+    expect(result).toContain("name: Calendar");
+    expect(result).toContain("name: Timeline");
+    // 두 뷰 모두 날짜 속성 오름차순으로 정렬된다(datePropertyName / id 양쪽 경로).
+    expect(result.match(/property: Due\n {8}direction: ASC/g)).toHaveLength(2);
+  });
+
+  it("미지원 뷰(form/chart)만 누락되고, 남는 뷰가 없으면 기본 table 로 대체한다", () => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            { id: "v6", name: "Form", type: "form" },
+            { id: "v7", name: "Chart", type: "chart" },
+          ],
+        },
+      }),
+    );
+
+    expect(result).not.toContain("name: Form");
+    expect(result).not.toContain("name: Chart");
     expect(result).toContain("- type: table");
+    expect(result).toContain("name: Table");
   });
 
   it("뷰가 하나도 없으면 기본 table 뷰를 생성한다", () => {
@@ -868,6 +894,108 @@ describe("BaseFileGenerator — 결정론·dedupe 유일성 (rank18)", () => {
     const result = generator.generate(makeCollidingOptions(["table", "gallery", "list"]));
     // 출력 순서를 그대로 따른다: 첫 뷰는 기본명 유지, 이후 위치순 접미.
     expect(viewNames(result)).toEqual(["Untitled", "Untitled 2", "Untitled 3"]);
+  });
+
+  /**
+   * R5 D-VIEWFILTER — 뷰별 `filters:` 는 전역 폴더 필터와 AND 로 결합된다.
+   *
+   * 예전엔 폴더 필터만 나가서, '완료 안 된 것' 이라는 이름의 뷰가 Obsidian 에서는
+   * 완료 행까지 전부 보여 줬다. 이름과 내용이 어긋나는데 오류는 안 난다.
+   */
+  describe("뷰별 필터 (R5 D-VIEWFILTER)", () => {
+    function withFilter(filter: unknown): string {
+      return generator.generate(
+        makeOptions({
+          viewsConfig: {
+            databaseId: "db-123",
+            databaseName: "Tasks",
+            lastSynced: "2026-01-01T00:00:00.000Z",
+            views: [{ id: "v1", name: "Active", type: "table", filter }],
+          },
+        }),
+      );
+    }
+
+    it("단일 조건은 한 줄로 나간다", () => {
+      const result = withFilter({ property: "c1", checkbox: { equals: false } });
+      expect(result).toContain('    filters: note["Done"] == false');
+    });
+
+    it("and/or 중첩은 블록으로 나간다", () => {
+      const result = withFilter({
+        and: [
+          { property: "c1", checkbox: { equals: false } },
+          {
+            or: [
+              { property: "s1", select: { equals: "To Do" } },
+              { property: "s1", select: { equals: "In Progress" } },
+            ],
+          },
+        ],
+      });
+
+      expect(result).toContain(
+        [
+          "    filters:",
+          "      and:",
+          '        - note["Done"] == false',
+          "        - or:",
+          '            - note["Status"] == "To Do"',
+          '            - note["Status"] == "In Progress"',
+        ].join("\n"),
+      );
+    });
+
+    it("전역 폴더/확장자 필터는 그대로 남는다 — 뷰 필터가 이를 대체하지 않는다", () => {
+      const result = withFilter({ property: "c1", checkbox: { equals: true } });
+      expect(result).toContain('    - file.inFolder("databases/Tasks")');
+      expect(result).toContain('    - file.ext == "md"');
+    });
+
+    it("필터가 없거나 전부 못 옮기면 filters 키 자체를 쓰지 않는다", () => {
+      expect(withFilter(undefined)).not.toContain("    filters:");
+      // rollup 은 프론트매터에 없는 계산값이라 옮기지 않는다.
+      expect(
+        withFilter({ property: "n1", rollup: { any: { number: { equals: 1 } } } }),
+      ).not.toContain("    filters:");
+    });
+
+    it("YAML 메타문자가 든 속성명은 인용해 스칼라를 깨뜨리지 않는다", () => {
+      const result = generator.generate(
+        makeOptions({
+          schema: {
+            Name: { id: "title", type: "title" },
+            "메모: 비고": { id: "x1", type: "rich_text" },
+          },
+          viewsConfig: {
+            databaseId: "db-123",
+            databaseName: "Tasks",
+            lastSynced: "2026-01-01T00:00:00.000Z",
+            views: [
+              {
+                id: "v1",
+                name: "Q",
+                type: "table",
+                filter: { property: "x1", rich_text: { equals: "가" } },
+              },
+            ],
+          },
+        }),
+      );
+
+      // `: ` 가 평문 스칼라에 들어가면 YAML 이 매핑으로 오해한다 — 작은따옴표로 감싼다.
+      expect(result).toContain(`    filters: 'note["메모: 비고"] == "가"'`);
+    });
+
+    it("멱등 — 같은 입력은 바이트 동일", () => {
+      const filter = {
+        and: [
+          { property: "c1", checkbox: { equals: false } },
+          { property: "s1", select: { equals: ["To Do", "In Progress"] } },
+        ],
+      };
+      expect(withFilter(filter)).toBe(withFilter(filter));
+    });
   });
 
   it("dedupe 유일성 불변식 — 입력 순열이 바뀌어도 항상 3개 distinct 한 동일 집합", () => {

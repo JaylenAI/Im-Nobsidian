@@ -1,9 +1,7 @@
-import type { DatabaseViewsConfig, ViewConfig } from "../types/view.js";
-import {
-  basesViewTypeOf,
-  type BasePropertySchema,
-  type BasesViewType,
-} from "./base-file-generator.js";
+import type { BasePropertySchema, DatabaseViewsConfig, ViewConfig } from "../types/view.js";
+import { basesViewMappingOf, type BasesViewType } from "./base-file-generator.js";
+import { translateNotionFilter } from "./notion-filter-translator.js";
+import { resolvePropertyName } from "./property-resolver.js";
 
 /**
  * DB 사이드카(`<db>.notion.json`) — `.base` 로 표현할 수 없는 Notion DB 메타데이터를
@@ -59,13 +57,17 @@ export interface SidecarView {
 
 export interface DegradeNote {
   readonly view: string;
-  readonly kind: "view-unrepresentable" | "setting-dropped";
+  /**
+   * `view-unrepresentable` = 뷰가 `.base` 에서 통째로 누락.
+   * `view-degraded` = 뷰는 남지만 다른 타입으로 격하(달력→표 등).
+   * `setting-dropped` = 뷰는 그대로지만 설정 하나가 빠짐.
+   */
+  readonly kind: "view-unrepresentable" | "view-degraded" | "setting-dropped";
   readonly detail: string;
 }
 
 /** `.base` 가 표현하지 못해 사이드카로만 보존되는 뷰 설정 키 → 사람용 사유. */
 const DROPPED_SETTING_REASONS: Record<string, string> = {
-  filter: "Notion 필터식은 .base 로 표현되지 않음(폴더 필터만 적용)",
   coverSize: "갤러리 커버 크기는 Bases 미지원",
   coverAspect: "갤러리 커버 비율은 Bases 미지원",
   viewRange: "캘린더 표시 범위(week/month)는 Bases 미지원",
@@ -87,7 +89,7 @@ export class SidecarGenerator {
     const degraded: DegradeNote[] = [];
 
     const properties = this.buildProperties(options.schema);
-    const views = options.viewsConfig.views.map((v) => this.buildView(v, degraded));
+    const views = options.viewsConfig.views.map((v) => this.buildView(v, options.schema, degraded));
 
     // 정직성·안정성: 리포트를 (뷰명, kind, detail) 로 정렬해 결정적 순서 보장.
     degraded.sort(
@@ -130,8 +132,13 @@ export class SidecarGenerator {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
-  private buildView(view: ViewConfig, degraded: DegradeNote[]): SidecarView {
-    const basesType = basesViewTypeOf(view.type);
+  private buildView(
+    view: ViewConfig,
+    schema: Record<string, BasePropertySchema>,
+    degraded: DegradeNote[],
+  ): SidecarView {
+    const mapping = basesViewMappingOf(view.type);
+    const basesType = mapping.type;
     const viewName = view.name || view.type;
 
     if (basesType === null) {
@@ -140,9 +147,15 @@ export class SidecarGenerator {
         kind: "view-unrepresentable",
         detail: `'${view.type}' 뷰는 Obsidian Bases 대응이 없어 .base 에서 누락 — 사이드카로만 보존`,
       });
+    } else if (mapping.degradeReason) {
+      degraded.push({
+        view: viewName,
+        kind: "view-degraded",
+        detail: `'${view.type}' 뷰: ${mapping.degradeReason}`,
+      });
     }
 
-    const config = this.extractConfig(view, basesType, viewName, degraded);
+    const config = this.extractConfig(view, schema, basesType, viewName, degraded);
 
     return {
       id: view.id,
@@ -160,6 +173,7 @@ export class SidecarGenerator {
    */
   private extractConfig(
     view: ViewConfig,
+    schema: Record<string, BasePropertySchema>,
     basesType: BasesViewType | null,
     viewName: string,
     degraded: DegradeNote[],
@@ -177,7 +191,7 @@ export class SidecarGenerator {
 
     if (view.filter !== undefined && view.filter !== null) {
       config["filter"] = view.filter;
-      noteDrop("filter");
+      this.noteFilterDegrade(view.filter, schema, basesType, viewName, degraded);
     }
     if (view.sorts && view.sorts.length > 0) config["sorts"] = view.sorts;
     if (view.groupBy) {
@@ -207,6 +221,45 @@ export class SidecarGenerator {
     }
 
     return config;
+  }
+
+  /**
+   * 필터 손실을 **실제로 못 옮긴 것만** 보고한다.
+   *
+   * 예전엔 필터가 있기만 하면 "Notion 필터식은 .base 로 표현되지 않음"을 무조건 찍었다.
+   * 이제 `.base` 가 뷰별 `filters:` 를 내보내므로 그 문구는 대부분의 경우 거짓이다.
+   * 거짓 degrade 는 진짜 degrade 를 묻어 버리므로, `.base` 와 **같은 번역기**를 돌려
+   * 남은 것만 적는다(두 산출물이 어긋날 여지를 없앤다).
+   */
+  private noteFilterDegrade(
+    filter: unknown,
+    schema: Record<string, BasePropertySchema>,
+    basesType: BasesViewType | null,
+    viewName: string,
+    degraded: DegradeNote[],
+  ): void {
+    if (basesType === null) return;
+
+    const { node, untranslated } = translateNotionFilter(filter, schema, (id) =>
+      resolvePropertyName(id, schema),
+    );
+
+    for (const reason of untranslated) {
+      degraded.push({
+        view: viewName,
+        kind: "setting-dropped",
+        detail: `필터 일부 누락 — ${reason}`,
+      });
+    }
+
+    // 사유조차 못 남긴 채 통째로 실패한 경우(문법 자체를 못 알아본 필터).
+    if (node === null && untranslated.length === 0) {
+      degraded.push({
+        view: viewName,
+        kind: "setting-dropped",
+        detail: "필터 누락 — Notion 필터식을 해석하지 못해 .base 에 옮기지 못함",
+      });
+    }
   }
 }
 

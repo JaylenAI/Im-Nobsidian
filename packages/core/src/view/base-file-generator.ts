@@ -1,11 +1,6 @@
-import type { DatabaseViewsConfig, ViewConfig } from "../types/view.js";
-
-export interface BasePropertySchema {
-  readonly id: string;
-  readonly type: string;
-  readonly options?: Array<{ name: string; color?: string }>;
-  readonly groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-}
+import type { BasePropertySchema, DatabaseViewsConfig, ViewConfig } from "../types/view.js";
+import { translateNotionFilter, type BasesFilterNode } from "./notion-filter-translator.js";
+import { resolvePropertyName } from "./property-resolver.js";
 
 export interface BaseFileOptions {
   readonly databaseId: string;
@@ -17,31 +12,76 @@ export interface BaseFileOptions {
 
 export type BasesViewType = "table" | "cards" | "list";
 
+/** Notion 뷰 하나를 Bases 로 옮길 때의 판정. */
+export interface BasesViewMapping {
+  /** Bases 뷰 타입. `null` = 대응이 없어 `.base` 에 실을 수 없음. */
+  readonly type: BasesViewType | null;
+  /**
+   * 값이 있으면 **정확한 대응이 아니라 격하**라는 뜻(사람용 사유).
+   * 뷰 자체는 살아남지만 원래 뷰의 표현 일부(달력 격자·타임라인 축)는 재현되지 않는다.
+   */
+  readonly degradeReason?: string;
+}
+
 /**
- * Notion 뷰 타입 → Obsidian Bases 뷰 타입 매핑(SSOT).
+ * Notion 뷰 타입 → Obsidian Bases 뷰 매핑(SSOT).
  *
- * `null` = Bases 에 대응 뷰가 없어 `.base` 로 표현 불가. 이 경우 해당 뷰는 `.base` 에서
- * 누락되므로, 사이드카(`<db>.notion.json`)가 원본 뷰 설정을 무손실 보존한다.
  * 뷰는 현재 pull-authoritative — Notion API 가 2026-03-19 뷰 생성/수정/삭제를 열었지만
  * 본 프로젝트는 아직 뷰 write-back 을 구현하지 않았다(로드맵 항목). push 로 되돌릴 수
  * 없는 동안 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다.
+ *
+ * 달력·타임라인은 예전에 `null` 이었다 — 즉 `.base` 에서 **통째로 사라졌다**. 사이드카에는
+ * 남지만 Obsidian 을 여는 사람 눈에는 그 뷰가 애초에 없었던 것처럼 보인다. 격자·축은
+ * 못 살려도 "날짜 순으로 늘어놓은 목록"이라는 본래 의도는 표로 남길 수 있으므로,
+ * 버리는 대신 격하해 살리고 사유를 사이드카에 적는다.
  */
-export const NOTION_TO_BASES_VIEW: Record<string, BasesViewType | null> = {
-  table: "table",
-  gallery: "cards",
-  list: "list",
-  board: "cards",
-  calendar: null,
-  timeline: null,
-  form: null,
-  chart: null,
-  map: null,
-  dashboard: null,
+export const NOTION_TO_BASES_VIEW: Record<string, BasesViewMapping> = {
+  table: { type: "table" },
+  gallery: { type: "cards" },
+  list: { type: "list" },
+  board: { type: "cards" },
+  calendar: {
+    type: "table",
+    degradeReason: "달력 격자는 Bases 미지원 — 날짜 오름차순 표로 격하",
+  },
+  timeline: {
+    type: "table",
+    degradeReason: "타임라인 축은 Bases 미지원 — 날짜 오름차순 표로 격하",
+  },
+  form: { type: null },
+  chart: { type: null },
+  map: { type: null },
+  dashboard: { type: null },
 };
+
+/** Notion 뷰 타입의 Bases 매핑. 미상 타입은 표현 불가로 본다. */
+export function basesViewMappingOf(notionType: string): BasesViewMapping {
+  return NOTION_TO_BASES_VIEW[notionType] ?? { type: null };
+}
 
 /** Notion 뷰 타입의 Bases 대응 타입을 돌려준다. 미지원/미상 타입은 `null`. */
 export function basesViewTypeOf(notionType: string): BasesViewType | null {
-  return NOTION_TO_BASES_VIEW[notionType] ?? null;
+  return basesViewMappingOf(notionType).type;
+}
+
+/** `.base` 의 `views[]` 한 항목. 이름은 dedupe 로 바뀔 수 있어 가변으로 둔다. */
+interface BasesView {
+  type: BasesViewType;
+  name: string;
+  order?: string[];
+  sort?: Array<{ property: string; direction: string }>;
+  groupBy?: { property: string; direction?: string };
+  image?: string;
+  filters?: BasesFilterNode;
+}
+
+/** 필터 그룹 노드에서 `[연산자, 자식들]` 을 꺼낸다. */
+function filterGroup(
+  node: Exclude<BasesFilterNode, string>,
+): ["and" | "or" | "not", BasesFilterNode[]] {
+  if ("and" in node) return ["and", node.and];
+  if ("or" in node) return ["or", node.or];
+  return ["not", node.not];
 }
 
 export class BaseFileGenerator {
@@ -155,7 +195,58 @@ export class BaseFileGenerator {
       if (view.image) {
         lines.push(`    image: ${this.propRef(view.image)}`);
       }
+
+      // 뷰별 필터는 전역 `filters:` 와 AND 로 결합된다(폴더/확장자 제한은 그대로 유지).
+      if (view.filters) {
+        this.writeFilterValue(lines, view.filters, "    ");
+      }
     }
+  }
+
+  /** `filters:` 키와 그 값을 쓴다. 단일 식이면 한 줄, 그룹이면 블록. */
+  private writeFilterValue(lines: string[], node: BasesFilterNode, indent: string): void {
+    if (typeof node === "string") {
+      lines.push(`${indent}filters: ${this.yamlExpr(node)}`);
+      return;
+    }
+    lines.push(`${indent}filters:`);
+    const [op, children] = filterGroup(node);
+    lines.push(`${indent}  ${op}:`);
+    for (const child of children) {
+      this.writeFilterItem(lines, child, `${indent}    `);
+    }
+  }
+
+  /** 필터 노드를 시퀀스 항목(`- …`)으로 쓴다. 그룹이면 재귀적으로 중첩한다. */
+  private writeFilterItem(lines: string[], node: BasesFilterNode, indent: string): void {
+    if (typeof node === "string") {
+      lines.push(`${indent}- ${this.yamlExpr(node)}`);
+      return;
+    }
+    const [op, children] = filterGroup(node);
+    lines.push(`${indent}- ${op}:`);
+    for (const child of children) {
+      this.writeFilterItem(lines, child, `${indent}    `);
+    }
+  }
+
+  /**
+   * 필터 식을 YAML 스칼라로 쓴다.
+   *
+   * 식은 대개 `note["상태"] == "진행 중"` 처럼 큰따옴표를 품는다. 평문 스칼라는 큰따옴표를
+   * 안에 담을 수 있으므로(선두만 아니면 된다) 기본은 평문으로 두어 기존 `file.ext == "md"`
+   * 라인과 모양을 맞춘다. 다만 `: `·` #`·선두 지시문자는 평문에서 의미가 달라지므로
+   * 그때만 작은따옴표로 감싼다(속성명에 콜론이나 해시가 들어갈 수 있다).
+   */
+  private yamlExpr(expr: string): string {
+    const unsafe =
+      expr !== expr.trim() ||
+      expr.includes(": ") ||
+      expr.includes(" #") ||
+      expr.endsWith(":") ||
+      /^[-?:,[\]{}#&*!|>'"%@`]/.test(expr);
+    if (!unsafe) return expr;
+    return `'${expr.replace(/'/g, "''")}'`;
   }
 
   /**
@@ -179,25 +270,11 @@ export class BaseFileGenerator {
   private convertView(
     view: ViewConfig,
     schema: Record<string, BasePropertySchema>,
-  ): {
-    type: BasesViewType;
-    name: string;
-    order?: string[];
-    sort?: Array<{ property: string; direction: string }>;
-    groupBy?: { property: string; direction?: string };
-    image?: string;
-  } | null {
-    const basesType = NOTION_TO_BASES_VIEW[view.type];
+  ): BasesView | null {
+    const basesType = basesViewMappingOf(view.type).type;
     if (!basesType) return null;
 
-    const result: {
-      type: BasesViewType;
-      name: string;
-      order?: string[];
-      sort?: Array<{ property: string; direction: string }>;
-      groupBy?: { property: string; direction?: string };
-      image?: string;
-    } = {
+    const result: BasesView = {
       type: basesType,
       name: view.name || view.type,
     };
@@ -256,6 +333,17 @@ export class BaseFileGenerator {
       }
     }
 
+    // 달력/타임라인은 격자·축을 못 살린다. 그래도 "시간 순서"라는 본래 의도는 남길 수
+    // 있으므로, 명시 정렬이 없으면 날짜 속성 오름차순을 넣어 표로 격하한다.
+    if ((view.type === "calendar" || view.type === "timeline") && !result.sort?.length) {
+      const dateName =
+        view.datePropertyName ??
+        (view.datePropertyId ? this.resolvePropertyName(view.datePropertyId, schema) : undefined);
+      if (dateName) {
+        result.sort = [{ property: this.toNoteRef(dateName), direction: "ASC" }];
+      }
+    }
+
     if (view.type === "gallery" && view.cover) {
       if (view.cover.type === "property" && view.cover.propertyId) {
         const propName = this.resolvePropertyName(view.cover.propertyId, schema);
@@ -265,6 +353,15 @@ export class BaseFileGenerator {
       } else if (view.cover.type === "page_content" || view.cover.type === "page_content_first") {
         result.image = "formula.coverImage";
       }
+    }
+
+    // Notion 뷰 필터를 Bases 식으로 옮긴다. 옮기지 못한 조건은 여기서 조용히 빠지지만,
+    // 사이드카가 같은 번역기를 돌려 무엇이 빠졌는지 degrade 리포트에 남긴다.
+    if (view.filter !== undefined && view.filter !== null) {
+      const { node } = translateNotionFilter(view.filter, schema, (id) =>
+        this.resolvePropertyName(id, schema),
+      );
+      if (node) result.filters = node;
     }
 
     return result;
@@ -288,23 +385,7 @@ export class BaseFileGenerator {
     propertyId: string,
     schema: Record<string, BasePropertySchema>,
   ): string | undefined {
-    // Notion `views.retrieve` 는 RAW 속성 id(예: `[jiM`)를 주지만
-    // `databases.retrieve` 스키마는 URL-인코딩된 id(예: `%5BjiM`)를 준다.
-    // 디코드 후 비교하지 않으면 "title" 외 모든 속성(cover/order/sort/groupBy)이
-    // 매칭에 실패해 갤러리 커버·표시 컬럼이 통째로 사라진다.
-    const target = this.decodeId(propertyId);
-    for (const [name, prop] of Object.entries(schema)) {
-      if (this.decodeId(prop.id) === target) return name;
-    }
-    return undefined;
-  }
-
-  private decodeId(id: string): string {
-    try {
-      return decodeURIComponent(id);
-    } catch {
-      return id;
-    }
+    return resolvePropertyName(propertyId, schema);
   }
 
   private yamlKey(key: string): string {

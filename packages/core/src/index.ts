@@ -44,6 +44,9 @@ export type {
   DatabaseViewsConfig,
   PageCover,
   PageIcon,
+  BasePropertySchema,
+  BasePropertyOption,
+  BaseStatusGroup,
 } from "./types/view.js";
 
 // Config
@@ -143,7 +146,10 @@ export {
   EntryEditor,
   BaseFileGenerator,
   basesViewTypeOf,
+  basesViewMappingOf,
   NOTION_TO_BASES_VIEW,
+  translateNotionFilter,
+  resolvePropertyName,
   SidecarGenerator,
   sortEntries,
   groupEntries,
@@ -165,9 +171,11 @@ export type {
   PropertySchema,
   PropertyOption,
   FilterCondition,
-  BasePropertySchema,
   BaseFileOptions,
   BasesViewType,
+  BasesViewMapping,
+  BasesFilterNode,
+  TranslationResult,
   NotionSidecar,
   SidecarProperty,
   SidecarView,
