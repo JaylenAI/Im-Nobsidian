@@ -153,19 +153,26 @@ That's it. Your vault and Notion workspace are now linked.
 
 ## CLI Reference
 
-| Command             | Description                                                   |
-| ------------------- | ------------------------------------------------------------- |
-| `nobsi init`        | Interactive setup — Notion token + root page                  |
-| `nobsi push`        | Push local changes to Notion                                  |
-| `nobsi pull`        | Pull Notion changes to local                                  |
-| `nobsi sync`        | Bidirectional sync (pull → push)                              |
-| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional) |
-| `nobsi diff [path]` | Show diff between local and Notion                            |
-| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)    |
-| `nobsi resolve`     | Resolve sync conflicts                                        |
-| `nobsi watch`       | Watch for changes + auto-sync                                 |
+| Command             | Description                                                                 |
+| ------------------- | --------------------------------------------------------------------------- |
+| `nobsi init`        | Interactive setup — Notion token + root page                                |
+| `nobsi push`        | Push local changes to Notion                                                |
+| `nobsi pull`        | Pull Notion changes to local                                                |
+| `nobsi sync`        | Bidirectional sync (pull → push)                                            |
+| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional)               |
+| `nobsi diff [path]` | Show diff between local and Notion                                          |
+| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)                  |
+| `nobsi verify`      | Verify database completeness — every remote row is in the vault (read-only) |
+| `nobsi resolve`     | Resolve sync conflicts                                                      |
+| `nobsi watch`       | Watch for changes + auto-sync                                               |
 
 `push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` skips incremental detection for a full rescan (recovers pages missed by Notion's search indexing lag).
+
+`verify` answers a different question from `status`: not "is anything out of date?" but **"is anything
+missing?"**. It compares the _set_ of remote row ids against the _set_ of database rows tracked in the
+vault, per database, and exits non-zero when a row exists in Notion but not locally. Idempotency checks
+(re-running `pull` and seeing no churn) cannot detect this — a discovery pass that misses the same rows
+every time produces identical results on every run. Add `--json` for machine-readable output in CI.
 
 ### Non-interactive mode (CI / scripts)
 

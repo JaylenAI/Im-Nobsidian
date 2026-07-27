@@ -28,6 +28,8 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict } from "./conflict-detector.js";
+import { verifyDatabaseCompleteness } from "../audit/completeness.js";
+import type { CompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
@@ -735,6 +737,37 @@ export class SyncOrchestrator {
       pendingOperations: conflictRecords.length,
       lastSyncAt,
     };
+  }
+
+  /**
+   * DB 완결성 검증 — 원격 행이 볼트에 빠짐없이 있는지 대조한다(R11-B).
+   *
+   * 기존 게이트(해시 일치·repull 바이트 동일·churn 0)는 전부 **멱등성**을 본다. 매번
+   * 같은 행을 놓치는 체계적 미발견은 그 게이트를 전부 통과한다 — 실제로 296개 DB 행이
+   * 그렇게 침묵 유실됐다. 여기서만 "빠짐없다"를 본다.
+   *
+   * 대조 대상 database id 는 이 클래스가 조립한다: 설정에 적힌 것 + 디스커버리 캐시가
+   * 아는 것 + DB 모드의 루트 DB. `discovered_dbs` 메타 키를 아는 곳을 이 파일 하나로
+   * 유지해, 호출부(CLI·E2E)가 캐시 표현을 각자 다시 해석하지 않게 한다.
+   */
+  async verifyCompleteness(): Promise<CompletenessReport> {
+    const ids: string[] = [];
+    if (this.isDatabaseMode) ids.push(this.config.notion.databaseId!);
+    for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);
+
+    const cachedRaw = this.stateDb.getMeta("discovered_dbs");
+    if (cachedRaw) {
+      try {
+        const cached = JSON.parse(cachedRaw) as Array<{ databaseId?: string }>;
+        for (const entry of cached) {
+          if (entry.databaseId) ids.push(entry.databaseId);
+        }
+      } catch {
+        // 캐시가 깨졌으면 설정·볼트 추적분만으로 대조한다(검증 자체는 계속).
+      }
+    }
+
+    return verifyDatabaseCompleteness(this.notionClient, this.stateDb, { databaseIds: ids });
   }
 
   async fetch(): Promise<{
@@ -1820,18 +1853,15 @@ export class SyncOrchestrator {
 
     let remotePages: Array<{ id: string; last_edited_time: string }>;
     if (this.isDatabaseMode) {
-      const allPages: Array<{ id: string; last_edited_time: string }> = [];
-      let cursor: string | undefined;
-      do {
-        const result = await this.notionClient.queryDatabase(this.config.notion.databaseId!, {
-          startCursor: cursor,
-        });
-        allPages.push(
-          ...result.results.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time })),
-        );
-        cursor = result.nextCursor ?? undefined;
-      } while (cursor);
-      remotePages = allPages;
+      // R11-A: 전 data source 를 순회하는 SSOT(queryAllDatabasePages)로 열거한다. 1차 data
+      // source 만 페이지네이션하면 2번째+ 소스의 행이 **원격에 없는 것으로 보여**, 미발견에
+      // 그치지 않고 deleteSync 시 로컬 파일이 고아로 판정돼 지워진다(pullDatabase 는 이미
+      // 전 소스를 훑어 그 행들을 정상 기록하므로, 같은 행을 한 경로는 만들고 다른 경로는
+      // 지우는 진동이 된다). 열거 계약을 한 메서드로 모아 경로 간 비대칭을 없앤다.
+      const allPages = await this.notionClient.queryAllDatabasePages(
+        this.config.notion.databaseId!,
+      );
+      remotePages = allPages.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     } else {
       // 디스커버리 이중 전략(비용 상한 하이브리드):
       //  1) 기본 — root 서브트리 직접 BFS 순회(getChildPagesRecursive). 비용이 실제 동기화
@@ -1866,8 +1896,8 @@ export class SyncOrchestrator {
       remotePages = underRoot.map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
     }
 
-    // 원격 페이지 목록을 page_id 로 디듀프한다. search API(페이지 모드)·queryDatabase(DB 모드)
-    // 모두 페이지네이션 사이 재정렬로 같은 페이지를 중복 반환할 수 있고, 중복이 changes 로
+    // 원격 페이지 목록을 page_id 로 디듀프한다. search API(페이지 모드)·data source 쿼리
+    // (DB 모드) 모두 페이지네이션 사이 재정렬로 같은 페이지를 중복 반환할 수 있고, 중복이 changes 로
     // 새면 같은 page_id 가 두 번 create 되어 동일 콘텐츠가 클린·`(1)` 두 경로에 기록(첫 파일
     // 고아화)된다. 여기가 페이지·DB 양 모드를 함께 막는 단일 차단점이다.
     const seenRemoteIds = new Set<string>();
