@@ -97,6 +97,75 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
   });
 });
 
+// R3 D-COLUMN-NEST: push 재조립이 비탐욕 한 방이라 바깥 START 가 안쪽 END 에서 닫혀
+// 중첩 한 겹이 통째로 평탄화됐다(실볼트 `올인원 가계부 _Lite_` 마커 24→22 · `영화` 49→42).
+// pull 쪽 INNERMOST_COLUMNS_RE 와 같은 "최내곽부터 반복" 관용으로 봉합한다.
+describe("칼럼 중첩·들여쓰기 재조립 (R3)", () => {
+  const NESTED = [
+    "<columns>",
+    "\t<column>",
+    "\t\tA",
+    "\t</column>",
+    "\t<column>",
+    "\t\t<columns>",
+    "\t\t\t<column>",
+    "\t\t\t\tB",
+    "\t\t\t</column>",
+    "\t\t\t<column>",
+    "\t\t\t\tC",
+    "\t\t\t</column>",
+    "\t\t</columns>",
+    "\t</column>",
+    "</columns>",
+  ].join("\n");
+
+  it("칼럼 안 칼럼이 왕복해도 평탄화되지 않는다", () => {
+    const { pulled, pushed } = roundtrip(NESTED);
+
+    // pull: 안쪽·바깥쪽 모두 마커 쌍이 남는다
+    expect(pulled.match(new RegExp(escape(COLUMN_LIST_START), "g"))).toHaveLength(2);
+    expect(pulled.match(new RegExp(escape(COLUMN_LIST_END), "g"))).toHaveLength(2);
+    expect(pulled.match(new RegExp(escape(COLUMN_SEP), "g"))).toHaveLength(4);
+    // push: 정준형 계층이 그대로 복원된다
+    expect(pushed.trim()).toBe(NESTED);
+  });
+
+  it("두 겹 왕복해도 고정점이다", () => {
+    const once = roundtrip(NESTED).pushed;
+    expect(roundtrip(once.trim()).pushed.trim()).toBe(NESTED);
+  });
+
+  // 실볼트 `영화.md`: 토글 헤딩(`### … {toggle="true"}`)의 자식 칼럼을 pull 이 4칸
+  // 들여쓴 채 내보낸다. 열 0 만 매칭하던 시절엔 그 영역이 통째로 청소에 걷혀 위젯
+  // 6개가 사라졌다 — 들여쓰기를 캡처해 재조립 결과에 다시 입힌다.
+  it("들여쓴 칼럼 마커도 재조립되고 들여쓰기가 보존된다", () => {
+    const indented = [
+      "머리말",
+      `    ${COLUMN_LIST_START}`,
+      `    ${COLUMN_SEP}`,
+      "    왼쪽",
+      `    ${COLUMN_SEP}`,
+      "    오른쪽",
+      `    ${COLUMN_LIST_END}`,
+    ].join("\n");
+
+    const pushed = obsidianToNotionEnhanced(indented);
+
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("    <columns>");
+    expect(pushed).toContain("    \t<column>");
+    expect(pushed).toContain("왼쪽");
+    expect(pushed).toContain("오른쪽");
+    // 들여쓰기째 왕복해도 마커 쌍이 살아 돌아온다
+    expect(notionEnhancedToObsidian(pushed)).toContain(COLUMN_LIST_START);
+  });
+});
+
+/** 정규식 리터럴로 쓰기 위한 마커 이스케이프(마커에는 `%` 만 특수문자가 아님). */
+function escape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 describe("콜아웃 아이콘/색 (ADR-008)", () => {
   it("icon+color 왕복: 스타일 마커로 실어 정준형 속성으로 재조립", () => {
     const canonical = ['<callout icon="🔥" color="yellow_bg">', "\t불꽃 본문", "</callout>"].join(

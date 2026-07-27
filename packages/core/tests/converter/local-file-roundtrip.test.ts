@@ -32,8 +32,9 @@ describe("비이미지 로컬 임베드 push (D5)", () => {
   });
 
   it("폴더 경로 임베드는 파일명만 표시하고 마커에 전체 경로를 보존한다", () => {
+    // 경로는 위키링크 마커와 같이 퍼센트 인코딩해 싣는다(R3 D-PCT-MARKER).
     expect(push("![[docs/spec.pdf]]")).toBe(
-      "> 📎 spec.pdf %% im-nobsidian:local-file:docs/spec.pdf %%",
+      "> 📎 spec.pdf %% im-nobsidian:local-file:docs%2Fspec.pdf %%",
     );
   });
 
@@ -74,6 +75,39 @@ describe("비이미지 로컬 임베드 pull 복원 (D5)", () => {
   it("왕복: ![[x.pdf]] → 마커 쌍 → ![[x.pdf]]", () => {
     const original = "앞 문단\n\n![[archive/백서.pdf]]\n\n뒤 문단";
     expect(pull(push(original))).toBe(original);
+  });
+});
+
+// R3 D-PCT-MARKER: `%` 한 글자가 마커를 통째로 무효화해 임베드가 **사라지고** 마커
+// 원문이 본문에 노출됐다(실볼트 `LLM Inference` 한 파일에서 임베드 13개 중 3개 소실).
+// push 는 인코딩으로, pull 은 넓힌 캡처+복호로 — 이미 올라간 구버전 마커도 살린다.
+describe("미디어 자리표시자 — 퍼센트 기호 (D-PCT-MARKER)", () => {
+  it("캡션 별칭에 `%` 가 있어도 왕복한다", () => {
+    const original = "![[attachments/a.png|모델의 50% 압축]]";
+    expect(pull(push(original))).toBe(original);
+  });
+
+  it("괄호까지 섞인 백분율 별칭도 왕복한다", () => {
+    const original = "![[attachments/a.png|50% 압축(정적의 20%)]]";
+    expect(pull(push(original))).toBe(original);
+  });
+
+  it("파일명 자체에 `%` 가 있어도 왕복한다", () => {
+    const original = "![[attachments/50%.png]]";
+    expect(pull(push(original))).toBe(original);
+  });
+
+  it("자리표시자에 마커 원문이 남지 않는다", () => {
+    expect(pull(push("![[a.png|50% 압축]]"))).not.toContain("im-nobsidian:local-image");
+  });
+
+  it("인코딩 이전 구버전 마커(원문 `%`)도 그대로 복원한다(하위호환)", () => {
+    expect(pull("> 📎 50%.png %% im-nobsidian:local-image:attachments/50%.png %%")).toBe(
+      "![[attachments/50%.png]]",
+    );
+    expect(pull("> 📎 a.png %% im-nobsidian:local-image:attachments/a.png|50% 압축 %%")).toBe(
+      "![[attachments/a.png|50% 압축]]",
+    );
   });
 });
 

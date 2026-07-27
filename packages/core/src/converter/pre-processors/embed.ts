@@ -82,10 +82,15 @@ function stripAlias(target: string): string {
  * Notion Markdown API 가 quote 를 두 블록으로 쪼개, 마커 줄만 지워지고 `📎 파일명` 줄이
  * 미디어 옆에 유령처럼 남는다(실측). 업로드가 실패했을 때 사용자가 무엇이 빠졌는지
  * 알아볼 수 있도록 파일명은 남겨 둔다.
+ *
+ * 경로는 위키링크 마커(53행)와 같이 퍼센트 인코딩해 싣는다. 원문 그대로 실으면
+ * 캡션의 `50%` 같은 홑 `%` 가 마커 종결자 탐색을 깨뜨려 복원기가 자리표시자를
+ * 통째로 못 알아보고, pull 결과에 임베드 대신 마커 원문이 노출됐다
+ * (실볼트 `LLM Inference` 한 파일에서만 임베드 13개 중 3개 소실).
  */
 function placeholder(kind: "local-image" | "local-file", target: string): string {
   const fileName = stripAlias(target).split("/").pop() ?? target;
-  return `> 📎 ${fileName} ${spacedMarker(`${kind}:${target}`)}`;
+  return `> 📎 ${fileName} ${spacedMarker(`${kind}:${encodeMarkerTarget(target)}`)}`;
 }
 
 /** 임베드가 원문에서 차지한 자리 — 앞뒤 가로 공백까지 포함한다. */

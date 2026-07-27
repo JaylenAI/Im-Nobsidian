@@ -4,7 +4,8 @@ import type { VaultFS } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { ImageReference } from "../types/convert.js";
-import { MARKER_BRAND_RE } from "../constants/markers.js";
+import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
+import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
 import { getMimeType } from "../utils/mime.js";
 import { isNotionHostedFileUrl, isNotionAttachmentUri } from "../utils/notion-file-url.js";
@@ -146,14 +147,16 @@ const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;
 const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊)\s*/u;
 
 // 경로에 공백이 있을 수 있어(`![[내 사진.png]]`) 닫는 `%%` 까지 비탐욕으로 받는다.
+// 경로는 push 가 퍼센트 인코딩해 실으므로 읽는 쪽은 반드시 `decodeMarkerTarget` 을 거친다.
+// 인코딩 이전에 올라간 구버전 마커는 원문 `%` 를 품고 있어 payload 를 넓게 받는다.
 const LOCAL_MARKER_RE = new RegExp(
-  `${MARKER_BRAND_RE}:local-(?:image|file):([^%\\n]+?)\\s*%%`,
+  `${MARKER_BRAND_RE}:local-(?:image|file):(${MARKER_PAYLOAD_CHAR}+?)\\s*%%`,
   "g",
 );
 
 /** 자리표시자 블록 안의 마커 — 종류(image/file)와 원본 임베드 대상을 함께 뽑는다(R1). */
 const PLACEHOLDER_MARKER_RE = new RegExp(
-  `${MARKER_BRAND_RE}:local-(image|file):([^%\\n]+?)\\s*%%`,
+  `${MARKER_BRAND_RE}:local-(image|file):(${MARKER_PAYLOAD_CHAR}+?)\\s*%%`,
   "u",
 );
 
@@ -197,7 +200,7 @@ function collectLocalMarkerBasenames(markdown: string): Set<string> {
   const names = new Set<string>();
   const unescaped = markdown.replace(/\\/g, "");
   for (const m of unescaped.matchAll(LOCAL_MARKER_RE)) {
-    names.add(baseName(m[1]!));
+    names.add(baseName(decodeMarkerTarget(m[1]!)));
   }
   return names;
 }
@@ -629,7 +632,8 @@ export class ImageHandler {
           parentId: rootId,
           blockId: block.id,
           kind: marker[1] === "image" ? "image" : "file",
-          target: marker[2]!,
+          // 마커에 실린 경로는 퍼센트 인코딩돼 있다 — 볼트 조회·캡션 모두 원문이어야 한다.
+          target: decodeMarkerTarget(marker[2]!),
         });
         continue;
       }

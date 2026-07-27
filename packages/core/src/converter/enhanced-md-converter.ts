@@ -1138,22 +1138,44 @@ function restoreBlockColorMarkers(content: string): string {
 // 컬럼 마커 영역 → <columns>/<column> 정준형 재조립. 마커 어휘는 legacy block 경로와
 // 공유(markers.ts SSOT). 영역 안 내용은 이미 모든 push 변환이 끝난 상태이므로
 // (파이프라인 마지막에 실행) 정준형대로 탭 한 단계씩 들여쓰기만 하면 된다.
-const COLUMN_REGION_RE = new RegExp(
-  `^${escapeRegex(COLUMN_LIST_START)}[ \\t]*\\n([\\s\\S]*?)\\n?^${escapeRegex(COLUMN_LIST_END)}[ \\t]*$\\n?`,
+//
+// 본문은 **시작 마커를 품지 않는 구간**으로 제한한다 — 즉 매 패스의 매치가 항상
+// 최내곽이다(pull 쪽 {@link INNERMOST_COLUMNS_RE} 와 같은 관용). 단순 비탐욕
+// `[\s\S]*?` 로 받으면 바깥 START 가 **안쪽 END** 에서 닫혀, 짝을 잃은 안쪽 START 와
+// 바깥 END 가 아래 "잔여 마커 제거" 청소에 걷혀 중첩 한 겹이 통째로 평탄화됐다
+// (실볼트 `올인원 가계부 _Lite_`: 마커 24→22 · column-list 4→2, `영화`: 49→42 실측).
+//
+// 마커 줄의 선행 들여쓰기도 받는다. pull 은 토글 헤딩의 자식 칼럼을 들여쓴 채 내보내는데
+// (실볼트 `영화.md`: `### … {toggle="true"}` 밑 4칸), 열 0 만 매칭하면 그 영역이 통째로
+// 아래 청소에 걷혀 위젯 6개가 사라졌다(마커 49→42 실측). 캡처한 들여쓰기는 재조립 결과에
+// 다시 입혀 형제 줄과 같은 깊이에 머물게 한다(pull 쪽 `reindentLines` 와 같은 관용).
+const INNERMOST_COLUMN_REGION_RE = new RegExp(
+  `^([ \\t]*)${escapeRegex(COLUMN_LIST_START)}[ \\t]*\\n` +
+    `((?:(?!^[ \\t]*${escapeRegex(COLUMN_LIST_START)})[\\s\\S])*?)` +
+    `\\n?^[ \\t]*${escapeRegex(COLUMN_LIST_END)}[ \\t]*$\\n?`,
   "gm",
 );
 
 function reassembleColumns(content: string): string {
-  const sepRe = new RegExp(`^${escapeRegex(COLUMN_SEP)}[ \\t]*$`, "m");
-  let result = content.replace(COLUMN_REGION_RE, (_m, inner: string) => {
-    const cols = inner
-      .split(new RegExp(sepRe.source, "gm"))
-      .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""))
-      .filter((c) => c.trim() !== "");
-    if (cols.length === 0) return "";
-    const parts = cols.map((c) => `<column>\n${indentContainerBody(c)}\n</column>`).join("\n");
-    return `<columns>\n${indentContainerBody(parts)}\n</columns>\n`;
-  });
+  const sepRe = new RegExp(`^[ \\t]*${escapeRegex(COLUMN_SEP)}[ \\t]*$`, "gm");
+  let result = content;
+  // 최내곽부터 한 겹씩 — 재조립 결과엔 마커가 남지 않으므로 다음 패스에서 부모가
+  // 새 최내곽이 된다. 더 이상 바뀌지 않으면 멈춘다(중첩 깊이만큼만 돈다).
+  let safety = 0;
+  while (result.includes(COLUMN_LIST_START) && safety++ < 100) {
+    const before = result;
+    result = result.replace(INNERMOST_COLUMN_REGION_RE, (_m, indent: string, inner: string) => {
+      const cols = (indent ? dedentContainerBody(inner) : inner)
+        .split(sepRe)
+        .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""))
+        .filter((c) => c.trim() !== "");
+      if (cols.length === 0) return "";
+      const parts = cols.map((c) => `<column>\n${indentContainerBody(c)}\n</column>`).join("\n");
+      const block = `<columns>\n${indentContainerBody(parts)}\n</columns>`;
+      return `${indent ? indentContainerBody(block, indent) : block}\n`;
+    });
+    if (result === before) break;
+  }
   // 소비되지 않은 잔여 컬럼 마커(quote 중첩 등 재조립 불가 위치)는 줄째 걷어낸다 —
   // Notion 으로 마커 리터럴이 새는 것보다 평탄화 degrade 가 낫다.
   result = result.replace(
