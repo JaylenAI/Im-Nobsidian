@@ -327,14 +327,37 @@ await orchestrator.sync({ dryRun: false });
 
 ## Known Limitations
 
-| Limitation                | Reason                                                           | Workaround                                                      |
-| ------------------------- | ---------------------------------------------------------------- | --------------------------------------------------------------- |
-| Notion-only blocks        | API returns `unsupported` for buttons, forms, synced blocks      | Preserved as callout placeholders                               |
-| Rate limit                | Notion enforces 3 requests/second                                | Built-in rate limiter with exponential backoff                  |
-| Soft breaks split blocks  | A single newline becomes a separate paragraph block in Notion    | Use hard paragraph breaks (blank line) for intended splits      |
-| Consecutive blank lines   | Notion has no "N empty paragraphs" concept — collapses to one    | No semantic difference — spacing is restored on pull            |
-| Note embeds (`![[note]]`) | Notion has no note-transclusion concept                          | Represented as a page link in Notion; restored as embed on pull |
-| First-push wikilinks      | Cross-references between new pages may not resolve on first sync | Resolved automatically on subsequent syncs                      |
+Sync is **lossless, idempotent and convergent**: no content is dropped, re-syncing an unchanged
+vault produces zero churn, and where a rendition has to change it settles on the **first**
+round-trip and never moves again. The tables below list every place where Notion's storage model
+constrains the _rendition_ — grouped by whether the constraint is permanent or a one-time
+normalization.
+
+### Permanent limitations
+
+| Limitation                | Reason                                                                 | Workaround                                                                     |
+| ------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------------------------ |
+| Notion-only blocks        | API returns `unsupported` for buttons, forms, synced blocks            | Preserved as callout placeholders                                              |
+| Rate limit                | Notion enforces 3 requests/second                                      | Built-in rate limiter with exponential backoff                                 |
+| Soft breaks split blocks  | A single newline becomes a separate paragraph block in Notion          | Use hard paragraph breaks (blank line) for intended splits                     |
+| Consecutive blank lines   | Notion has no "N empty paragraphs" concept — collapses to one          | No semantic difference — spacing is restored on pull                           |
+| Note embeds (`![[note]]`) | Notion has no note-transclusion concept, and drops custom-scheme links | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync |
+| First-push wikilinks      | Cross-references between new pages may not resolve on first sync       | Resolved automatically on subsequent syncs                                     |
+
+### One-time normalizations
+
+These change how something is _written_, once, on the first round-trip — and are stable from then
+on (`nobsi status` reports no churn afterwards). Nothing is lost; only the spelling settles on the
+form Notion can actually store.
+
+| You write                                | After the first round-trip                      | Why                                                                                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `\[escaped\]`                            | `[escaped]`                                     | Notion stores plain text, not markdown escapes — a backslash cannot survive a store/export cycle. Consequence: `\[\[note\]\]` becomes a real wikilink, so escaping is not a way to hide one. |
+| `%%im-nobsidian:toggle:start%%` … `:end` | `> [!toggle]- Title`                            | Notion returns toggles as `<details>`, which maps to the Obsidian callout form. The marker form is legacy input and still accepted.                                                          |
+| A column list with _N_ columns           | One `%%im-nobsidian:column%%` marker per column | The marker opens a column rather than separating two, so the first column gets one too.                                                                                                      |
+
+Escapes inside fenced or inline code are untouched, and `\\[` (an escaped backslash) is left alone
+— only a genuine `\[` normalizes.
 
 ## Roadmap
 
