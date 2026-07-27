@@ -15,12 +15,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { NotionClient, describeRetryCause } from "../../src/notion/client.js";
 import { setLogger, type Logger } from "../../src/utils/logger.js";
 
-/** SDK 오류 흉내 — isRetryable 은 status/code 만 본다. */
+/**
+ * SDK 오류 흉내 — isRetryable 은 status/code 만 본다.
+ *
+ * 헤더는 반드시 **`Headers` 인스턴스**로 싣는다. `@notionhq/client` 가 fetch 응답의
+ * 헤더를 그대로 넘기기 때문이며(R9d), 평범한 객체로 흉내 내면 인덱스 접근으로만 읽던
+ * 옛 버그가 테스트를 통과해 버린다.
+ */
 function apiError(status: number, extra?: { retryAfter?: string; code?: string }): Error {
   const error = new Error(`HTTP ${status}`) as Error & Record<string, unknown>;
   error.status = status;
   if (extra?.code) error.code = extra.code;
-  if (extra?.retryAfter) error.headers = { "retry-after": extra.retryAfter };
+  if (extra?.retryAfter) error.headers = new Headers({ "Retry-After": extra.retryAfter });
   return error;
 }
 
@@ -159,6 +165,55 @@ describe("백오프 중 슬롯 점유 — 한 요청이 클라이언트 전체�
     // 429 요청이 끝난 시점 == 쿨다운 만료 시점이므로 뒤 요청은 곧바로 통과한다.
     expect(otherDoneAt - startedAt).toBeGreaterThanOrEqual(400);
     expect(warnings[0]).toContain("status 429");
+  });
+
+  it("서버가 지정한 Retry-After 를 실제로 존중한다 (지수 백오프보다 길어도)", async () => {
+    const client = new NotionClient({
+      token: "ntn_test_fake_token",
+      concurrency: 1,
+      maxRetries: 1,
+      // 지수 백오프였다면 최대 10ms — Retry-After 를 못 읽으면 이 테스트는 300ms 미만에 끝난다.
+      retryBaseDelayMs: 10,
+      rateLimitIntervalMs: 0,
+    });
+    let calls = 0;
+    stubRetrieve(client, () => {
+      calls += 1;
+      return calls === 1
+        ? Promise.reject(apiError(429, { retryAfter: "0.3" }))
+        : Promise.resolve({ id: "p1" });
+    });
+
+    const startedAt = Date.now();
+    await client.getPage("p1");
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(300);
+    expect(warnings[0]).toMatch(/3\d\dms 대기|[34]\d\dms 대기/);
+  });
+
+  it("Retry-After 가 없는 429 도 전역 쿨다운을 건다 (헤더 유무로 판단 금지)", async () => {
+    const client = new NotionClient({
+      token: "ntn_test_fake_token",
+      concurrency: 2,
+      maxRetries: 1,
+      retryBaseDelayMs: 300,
+      retryBackoffFactor: 1,
+      rateLimitIntervalMs: 0,
+    });
+    let limitedCalls = 0;
+    stubRetrieve(client, (pageId) => {
+      if (pageId !== "limited") return Promise.resolve({ id: pageId });
+      limitedCalls += 1;
+      // 게이트웨이가 Retry-After 를 떼어먹은 429.
+      return limitedCalls === 1 ? Promise.reject(apiError(429)) : Promise.resolve({ id: pageId });
+    });
+
+    const startedAt = Date.now();
+    await client.getPage("limited");
+    // 지터 하한 0.5 → 최소 150ms 쿨다운. 쿨다운이 없으면 이 요청은 즉시 끝난다.
+    await client.getPage("other");
+
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(150);
   });
 });
 
