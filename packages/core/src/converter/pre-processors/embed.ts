@@ -7,8 +7,13 @@ import { encodeMarkerTarget } from "../marker-url.js";
  * 대상에 `[` `]` 를 허용하지 않는다 — 이유는 WikilinkResolver 쪽 주석 참조.
  * 앞뒤 가로 공백까지 함께 잡는다 — 자리표시자를 줄 단독으로 떼어낼 때 이 공백이
  * 새 줄머리로 옮겨가면 안 되기 때문이다({@link isolate} 주석 참조).
+ * 임베드가 인용/콜아웃 줄을 통째로 차지하고 있으면 그 `>` 접두사까지 함께 잡는다 —
+ * 자리표시자만 떼어내고 접두사를 남기면 빈 껍데기 줄이 된다({@link isolate} 주석 참조).
  */
-const OBSIDIAN_EMBED_REGEX = /([ \t]*)!\[\[([^[\]]+)\]\]([ \t]*)/g;
+const OBSIDIAN_EMBED_REGEX = /((?:^[ \t]*(?:>[ \t]*)+)?[ \t]*)!\[\[([^[\]]+)\]\]([ \t]*)/gm;
+
+/** {@link OBSIDIAN_EMBED_REGEX} 의 lead 가 인용 접두사를 삼켰는지 — 즉 줄머리인지. */
+const QUOTE_LEAD = /^[ \t]*>/;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 const VIDEO_HOSTS = ["youtube.com", "youtu.be", "vimeo.com"];
@@ -113,6 +118,13 @@ interface EmbedSpan {
  *     이미 갈린 마당에 줄머리 공백은 의미가 없다.
  *
  * 줄 전체가 공백뿐이면(목록 안 들여쓰기 등) 원래 들여쓰기를 그대로 돌려준다.
+ *
+ * 인용/콜아웃 줄을 임베드가 통째로 차지한 경우(`> ![[x.base]]`)에는 `>` 접두사를
+ * **되돌려 쓰지 않는다**. 자리표시자는 어차피 자기 블록으로 떨어져 나가야 하므로
+ * 접두사를 남기면 `>` 하나뿐인 껍데기 줄이 콜아웃 안에 눌러앉는다. 그 껍데기는
+ * 왕복 1회차엔 남고 2회차엔 사라져 파일이 영영 수렴하지 않았다(실볼트 34파일 실측).
+ * Notion 콜아웃 안에 첨부 블록을 넣을 수단이 없어 임베드가 콜아웃 밖으로 나가는 것은
+ * 데이터 모델상 불가피하다 — 대신 흔적을 남기지 않고 깨끗하게 내보낸다.
  */
 function isolate(text: string, span: EmbedSpan): string {
   const { offset, length, whole } = span;
@@ -121,8 +133,11 @@ function isolate(text: string, span: EmbedSpan): string {
   const nl = whole.indexOf("\n", afterIdx);
   const afterOnLine = whole.slice(afterIdx, nl === -1 ? whole.length : nl);
 
-  const head = beforeOnLine.trim() === "" ? span.lead : "\n\n";
   const tail = afterOnLine.trim() === "" ? "" : "\n\n";
+  // 인용 접두사를 삼킨 경우 lead 는 줄머리에서 시작하므로 앞에 빈 줄 하나면 충분하다.
+  if (QUOTE_LEAD.test(span.lead)) return `${offset === 0 ? "" : "\n"}${text}${tail}`;
+
+  const head = beforeOnLine.trim() === "" ? span.lead : "\n\n";
   return `${head}${text}${tail}`;
 }
 

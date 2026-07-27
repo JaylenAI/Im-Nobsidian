@@ -143,6 +143,21 @@ describe("D-ESCBRACKET — Notion 이 붙여 보내는 대괄호 escape 를 되�
     expect(backToObsidian("본문\\[^1\\]")).toBe("본문[^1]");
   });
 
+  it("escape 된 백슬래시 뒤 대괄호는 escape 가 아니다", () => {
+    // `\\[` 는 "리터럴 백슬래시 + 여는 대괄호" 다 — `[` 는 escape 된 적이 없다.
+    // 구분하지 못하면 왕복마다 백슬래시를 한 겹씩 갉아먹어 파일이 영영 수렴하지 않는다
+    // (정규식 패턴을 본문에 적어 둔 노트에서 발산 실측).
+    const notion = "패턴 ((.\\*?)\\\\[\\\\s\\*\\\\](.\\*))";
+
+    expect(backToObsidian(notion)).toBe(notion);
+  });
+
+  it("한 번 푼 결과를 다시 넣어도 더 줄지 않는다(멱등)", () => {
+    const once = backToObsidian("본문 \\[대괄호\\] 와 \\\\[리터럴\\\\]");
+
+    expect(backToObsidian(once)).toBe(once);
+  });
+
   it("escape 된 링크 문법은 되살리지 않는다", () => {
     // 사용자가 "링크로 보이지 말라"고 escape 한 것이다 — 풀면 없던 링크가 생긴다.
     const notion = "\\[링크 아님\\](https://example.com)";
