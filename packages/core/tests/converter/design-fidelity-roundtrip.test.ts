@@ -97,6 +97,73 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
   });
 });
 
+// R8 D-EMPTY-COLUMN: 빈 칼럼을 "내용이 없다"는 이유로 걷어내던 탓에 3열 레이아웃이
+// pull 에서 2열로 접히고, 그 상태로 push 하면 **사용자의 Notion 열 구성 자체가 좁아졌다**.
+// 빈 칼럼은 여백을 담당하는 실제 구성요소이므로 자리를 지켜야 한다.
+describe("빈 칼럼 보존 (R8)", () => {
+  const THREE_WITH_HOLE = [
+    "<columns>",
+    "\t<column>",
+    "\t\t왼쪽",
+    "\t</column>",
+    "\t<column>",
+    "\t</column>",
+    "\t<column>",
+    "\t\t오른쪽",
+    "\t</column>",
+    "</columns>",
+  ].join("\n");
+
+  it("가운데가 빈 3열은 pull 에서 마커 3개로 남는다", () => {
+    const pulled = notionEnhancedToObsidian(THREE_WITH_HOLE);
+
+    expect((pulled.match(new RegExp(COLUMN_SEP, "g")) ?? []).length).toBe(3);
+    expect(pulled).toContain("왼쪽");
+    expect(pulled).toContain("오른쪽");
+  });
+
+  it("push 재조립도 3열을 유지한다 (레이아웃 붕괴 금지)", () => {
+    const { pushed } = roundtrip(THREE_WITH_HOLE);
+
+    expect((pushed.match(/<column(?!s)/g) ?? []).length).toBe(3);
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+  });
+
+  it("두 번째 왕복에서도 열 개수가 그대로다 (수렴)", () => {
+    const once = roundtrip(THREE_WITH_HOLE).pushed;
+    const twice = roundtrip(once).pushed;
+
+    expect(twice.trimEnd()).toBe(once.trimEnd());
+    expect((twice.match(/<column(?!s)/g) ?? []).length).toBe(3);
+  });
+
+  it("칼럼이 전부 비면 레이아웃째 사라진다 (담은 내용이 없음)", () => {
+    const allEmpty = [
+      "<columns>",
+      "\t<column>",
+      "\t</column>",
+      "\t<column>",
+      "\t</column>",
+      "</columns>",
+    ].join("\n");
+    const { pulled, pushed } = roundtrip(allEmpty);
+
+    expect(pulled.trim()).toBe("");
+    expect(pushed).not.toContain("<column");
+  });
+
+  it("마커를 칼럼 **사이 구분자**로 쓴 레거시 문서도 첫 칼럼을 잃지 않는다", () => {
+    // 정준형(칼럼마다 마커 1개)에서는 split 의 첫 조각이 빈 잔여물이지만, 레거시
+    // 구분자 표기에서는 그 조각이 진짜 첫 칼럼이다. 무조건 떨구면 "왼쪽"이 사라진다.
+    const legacy = [COLUMN_LIST_START, "왼쪽", COLUMN_SEP, "오른쪽", COLUMN_LIST_END].join("\n");
+    const pushed = obsidianToNotionEnhanced(legacy);
+
+    expect((pushed.match(/<column(?!s)/g) ?? []).length).toBe(2);
+    expect(pushed).toContain("왼쪽");
+    expect(pushed).toContain("오른쪽");
+  });
+});
+
 // R3 D-COLUMN-NEST: push 재조립이 비탐욕 한 방이라 바깥 START 가 안쪽 END 에서 닫혀
 // 중첩 한 겹이 통째로 평탄화됐다(실볼트 `올인원 가계부 _Lite_` 마커 24→22 · `영화` 49→42).
 // pull 쪽 INNERMOST_COLUMNS_RE 와 같은 "최내곽부터 반복" 관용으로 봉합한다.
