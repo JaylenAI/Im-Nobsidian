@@ -95,6 +95,18 @@ export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 // ─── 정규식 헬퍼 ───
 
 /**
+ * push 가 심는 미디어 자리표시자 quote 의 **머리 부분** 패턴 원문.
+ * `> 📎 파일명 %% im-nobsidian:local-image|local-file:경로 %%` 한 줄이 통째로 하나의
+ * 블록이어야 업로드 성공 뒤 image/file 블록으로 제자리 교체된다
+ * (`converter/pre-processors/embed.ts` 의 `placeholder` 주석 참조).
+ *
+ * 예전 두 줄 형태로 이미 Notion 에 올라가 있는 문서가 남아 있어 개행은 선택적으로 받는다.
+ * 뒤에 경로 캡처를 붙여 복원용으로 쓰거나(`local-image-restorer`), 앞에 `^` 를 붙여
+ * "이 줄이 자리표시자인가" 판정에 쓴다(`enhanced-md-converter`).
+ */
+export const MEDIA_PLACEHOLDER_HEAD = `>\\s*📎\\s*[^\\n%]*(?:\\n>)?\\s*%%\\s*${MARKER_BRAND}:local-(?:image|file):`;
+
+/**
  * 정규식 패턴에 직접 삽입할 수 있는 브랜드 토큰.
  * 브랜드에 정규식 특수문자가 없어(하이픈은 문자클래스 밖에서 리터럴) 이스케이프 없이 사용 가능.
  * 사용 예: `new RegExp(`%% ${MARKER_BRAND_RE}:end %%`, "g")`
