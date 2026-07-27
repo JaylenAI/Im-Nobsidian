@@ -1271,6 +1271,7 @@ export class SyncOrchestrator {
     let totalResolved = 0;
     const allRecords = this.stateDb.getAll();
     const idToTitle = new Map<string, string>();
+    const idToPath = new Map<string, string>();
     for (const r of allRecords) {
       if (r.notionPageId && r.obsidianPath) {
         // M4: 단일 변환 패스(resolvePageId)와 동일한 규칙으로 위키링크 텍스트를 만든다.
@@ -1278,6 +1279,7 @@ export class SyncOrchestrator {
         const cleanId = r.notionPageId.replace(/-/g, "");
         idToTitle.set(cleanId, title);
         idToTitle.set(r.notionPageId, title);
+        idToPath.set(cleanId, r.obsidianPath);
       }
     }
     if (idToTitle.size === 0) return 0;
@@ -1288,16 +1290,19 @@ export class SyncOrchestrator {
         let content = await this.vaultFs.readFile(filePath);
         let changed = false;
 
-        const resolved = content.replace(/\[\[notion:([a-f0-9-]+)\]\]/g, (_match, id: string) => {
-          const title = idToTitle.get(id.replace(/-/g, ""));
-          if (title) {
-            totalResolved++;
-            changed = true;
-            return `[[${title}]]`;
-          }
-          return _match;
-        });
-        content = resolved;
+        // 변환 시점 패스(resolveNotionIdWikilinks)와 **같은 함수**를 쓴다. 자체 정규식을
+        // 두던 시절엔 별칭 달린 `[[notion:<id>|별칭]]` 을 아예 매치하지 못해, 같은 pull
+        // 안에서 나중에 만들어진 대상을 가리키는 링크가 대상이 볼트에 실재하는데도
+        // 끊긴 채 남았다(실볼트 2건).
+        const idPass = resolveNotionIdWikilinks(
+          content,
+          (id) => idToPath.get(id.replace(/-/g, "")) ?? null,
+        );
+        content = idPass.markdown;
+        if (idPass.resolved > 0) {
+          totalResolved += idPass.resolved;
+          changed = true;
+        }
 
         // Notion 내부 페이지 링크는 `/<id>?pvs=N` 또는 `/p/<id>?...`(신형) 형태로 온다.
         // 선택적 `p/` 접두사와 임의 쿼리스트링(또는 쿼리 없음)을 모두 허용한다.
@@ -2662,7 +2667,7 @@ export class SyncOrchestrator {
     return resolveNotionIdWikilinks(
       markdown,
       (id) => this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null,
-    );
+    ).markdown;
   }
 
   private async extractParentId(page: PageObjectResponse): Promise<string | null> {
