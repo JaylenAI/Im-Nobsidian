@@ -1,4 +1,5 @@
 import { WIKILINK_PROTOCOL, EMBED_PROTOCOL } from "../constants/markers.js";
+import { formatWikilink } from "../utils/wikilink-title.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 
 /**
@@ -36,8 +37,7 @@ export function restoreLinkMarkers(text: string): string {
   let out = text.replace(NOTION_LINK_REGEX, (_match, display: string) => `[[${display}]]`);
 
   out = out.replace(WIKILINK_PRESERVE_REGEX, (_match, display: string, encodedTarget: string) => {
-    const target = decodeMarkerTarget(encodedTarget);
-    return target === display ? `[[${target}]]` : `[[${target}|${display}]]`;
+    return formatWikilink(decodeMarkerTarget(encodedTarget), display);
   });
 
   out = out.replace(EMBED_PRESERVE_REGEX, (_match, _display: string, encodedTarget: string) => {
