@@ -54,10 +54,23 @@ export const statusCommand = new Command("status")
       // Tracked files summary
       const allRecords = stateDb.getAll();
       const total = allRecords.length;
-      const synced = allRecords.filter((r) => r.status === "synced").length;
       const conflictCount = status.conflictRecords.length;
       const createdChanges = status.localChanges.filter((c) => c.type === "created");
       const modifiedChanges = status.localChanges.filter((c) => c.type === "modified");
+      const deletedChanges = status.localChanges.filter((c) => c.type === "deleted");
+
+      // 추적 파일 내역은 서로 겹치지 않아야 한다. DB 의 status 는 push/pull 시점에만 갱신되므로
+      // 방금 고친 파일도 레코드상으론 여전히 'synced' 다 — 그대로 세면 같은 파일이 synced 와
+      // modified 양쪽에 잡혀 내역 합이 총계를 넘는 표가 나온다(무엇이 밀렸는지 못 읽는다).
+      // 실제 변경이 걸린 경로를 먼저 덜어 내고 남은 것만 synced 로 센다.
+      const dirtyPaths = new Set([
+        ...modifiedChanges.map((c) => c.path),
+        ...deletedChanges.map((c) => c.path),
+        ...status.conflictRecords.map((r) => r.obsidianPath),
+      ]);
+      const synced = allRecords.filter(
+        (r) => r.status === "synced" && !dirtyPaths.has(r.obsidianPath),
+      ).length;
       const remoteCreated = status.remoteChanges.filter((c) => c.type === "created");
       const remoteModified = status.remoteChanges.filter((c) => c.type === "modified");
       const remoteDeleted = status.remoteChanges.filter((c) => c.type === "deleted");
@@ -67,11 +80,18 @@ export const statusCommand = new Command("status")
       if (modifiedChanges.length > 0) {
         console.log(`  ${icons.modified} ${chalk.yellow("modified")}   ${modifiedChanges.length}`);
       }
-      if (createdChanges.length > 0) {
-        console.log(`  ${icons.newFile} ${chalk.cyan("new")}        ${createdChanges.length}`);
+      if (deletedChanges.length > 0) {
+        console.log(`  ${chalk.red("-")} ${chalk.red("deleted")}    ${deletedChanges.length}`);
       }
       if (conflictCount > 0) {
         console.log(`  ${icons.conflictDot} ${chalk.magenta("conflict")}   ${conflictCount}`);
+      }
+      // new 는 아직 추적 레코드가 없는 파일이라 위 총계(Tracked files)에 들어가지 않는다.
+      // 같은 블록에 숫자만 늘어놓으면 합이 안 맞아 보이므로 그 사실을 함께 적는다.
+      if (createdChanges.length > 0) {
+        console.log(
+          `  ${icons.newFile} ${chalk.cyan("new")}        ${createdChanges.length} ${dimText("(untracked)")}`,
+        );
       }
 
       // Modified files

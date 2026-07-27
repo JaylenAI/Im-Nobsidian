@@ -188,6 +188,7 @@ export type {
 export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
+export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 

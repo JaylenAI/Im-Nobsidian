@@ -6,7 +6,6 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
 } from "@im-nobsidian/core";
-import chalk from "chalk";
 import {
   header,
   operationIcon,
@@ -16,6 +15,8 @@ import {
   duration,
   failedItem,
   dimText,
+  completionHeader,
+  failedCountText,
 } from "../utils/format.js";
 
 export const pushCommand = new Command("push")
@@ -48,17 +49,20 @@ export const pushCommand = new Command("push")
         },
       });
 
-      console.log(`\n  ${header(chalk.green("Push complete"))}`);
+      const failedCount = result.failed.length;
+      console.log(`\n  ${completionHeader("Push", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted)}  ${dimText(`${result.failed.length} failed`)}`,
+        `  ${summary(result.created, result.updated, result.deleted)}  ${failedCountText(failedCount)}`,
       );
       console.log(`  ${duration(result.duration)}`);
 
-      if (result.failed.length > 0) {
+      if (failedCount > 0) {
         console.log("");
         for (const f of result.failed) {
           failedItem(f.path, f.error);
         }
+        // 종료 코드까지 실패로 남긴다 — push 가 반쯤 실패한 걸 자동화가 성공으로 보면 안 된다.
+        process.exitCode = 1;
       }
     } finally {
       stateDb.close();

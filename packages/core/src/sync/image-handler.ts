@@ -16,6 +16,8 @@ export interface MediaOptions {
   readonly maxRetries?: number;
   readonly retryBaseMs?: number;
   readonly maxFileSizeBytes?: number;
+  /** 다운로드 1회 시도의 시간 상한(ms). 기본 300초. 0 이하면 상한 없음(권장하지 않음). */
+  readonly downloadTimeoutMs?: number;
 }
 
 export interface ImageDownloadResult {
@@ -227,6 +229,7 @@ export class ImageHandler {
   private readonly maxRetries: number;
   private readonly retryBaseMs: number;
   private readonly maxFileSizeBytes: number;
+  private readonly downloadTimeoutMs: number;
 
   constructor(
     private readonly vaultFs: VaultFS,
@@ -241,10 +244,27 @@ export class ImageHandler {
     this.maxRetries = options?.maxRetries ?? 3;
     this.retryBaseMs = options?.retryBaseMs ?? 1000;
     this.maxFileSizeBytes = options?.maxFileSizeBytes ?? 100 * 1024 * 1024;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? 300_000;
   }
 
   private get fetchFn(): typeof globalThis.fetch {
     return this.customFetch ?? globalThis.fetch;
+  }
+
+  /**
+   * 다운로드용 fetch — **반드시 시간 상한을 건다**.
+   *
+   * 상한이 없으면 응답이 오다 멈춘 연결(만료된 S3 프리사인 URL·중간 프록시 끊김)에서
+   * `fetch` 가 영원히 매달려 pull 이 그 자리에 멎는다. 재시도 루프도 예외가 나야 도는
+   * 것이라 함께 멈춘다 — 사용자에겐 "pull 이 그냥 안 끝난다"로만 보인다.
+   * 신호는 헤더뿐 아니라 본문 스트림까지 덮으므로 `arrayBuffer()` 중 정지도 함께 끊긴다.
+   * `AbortSignal` 은 재사용할 수 없어 시도마다 새로 만든다.
+   *
+   * 기본 300초는 상한 파일 크기(기본 100MB)를 초당 340KB 로도 받아낼 수 있는 여유값이다.
+   */
+  private fetchForDownload(url: string): ReturnType<typeof globalThis.fetch> {
+    if (this.downloadTimeoutMs <= 0) return this.fetchFn(url);
+    return this.fetchFn(url, { signal: AbortSignal.timeout(this.downloadTimeoutMs) });
   }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
@@ -263,7 +283,7 @@ export class ImageHandler {
             `[Im-Nobsidian] 이미지 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${pageTitle}`,
           );
         }
-        const response = await this.fetchFn(url);
+        const response = await this.fetchForDownload(url);
         if (!response.ok) {
           throw new Error(`이미지 다운로드 실패: ${response.status} ${response.statusText}`);
         }
@@ -893,7 +913,7 @@ export class ImageHandler {
             `[Im-Nobsidian] 파일 다운로드 재시도 (${attempt + 1}/${maxRetries}): ${caption}`,
           );
         }
-        const response = await this.fetchFn(url);
+        const response = await this.fetchForDownload(url);
         if (!response.ok) {
           throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
         }
