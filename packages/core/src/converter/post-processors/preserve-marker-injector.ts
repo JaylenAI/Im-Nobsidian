@@ -5,6 +5,7 @@ import type {
   PreserveMarker,
 } from "../../types/convert.js";
 import { spacedMarker } from "../../constants/markers.js";
+import { decodeMarkerTarget } from "../marker-url.js";
 
 /**
  * 다른 복원기가 소비하지 못하고 실제로 유실된 보존 마커를 재삽입하는 최후 보루.
@@ -100,7 +101,10 @@ export class PreserveMarkerInjector implements Processor {
       }
       case "local-image":
       case "local-file": {
-        const target = params.__raw ?? params.path;
+        // `__raw` 는 마커에 실린 그대로(퍼센트 인코딩된) 경로다 — 재삽입 때 원문을
+        // 되돌려 써야 해서 인코딩을 벗기지 않고 보관한다. 본문과 대조할 때만 푼다.
+        const raw = params.__raw ?? params.path;
+        const target = raw !== undefined ? decodeMarkerTarget(raw) : undefined;
         return target ? content.includes(`![[${target}]]`) : false;
       }
       case "table-align":

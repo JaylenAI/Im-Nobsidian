@@ -95,6 +95,16 @@ export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 // ─── 정규식 헬퍼 ───
 
 /**
+ * 마커 페이로드 한 글자 — 줄바꿈이 아니고, 종결자 `%%` 를 열지 않는 문자.
+ *
+ * 페이로드를 `[^%]` 로 끊으면 `50% 압축` 같은 **홑 `%`** 에서 마커 매칭이 깨진다.
+ * 새로 만드는 마커는 경로를 퍼센트 인코딩해 홑 `%` 가 남지 않지만, 이미 Notion 에
+ * 올라가 있는 구버전 마커에는 원문 `%` 가 그대로 들어 있다 — 그쪽도 살려야 하므로
+ * "`%` 는 받되 `%%` 는 받지 않는다"로 넓힌다(`marker-url.ts` 와 같은 이중 대응).
+ */
+export const MARKER_PAYLOAD_CHAR = "(?:[^\\n%]|%(?!%))";
+
+/**
  * push 가 심는 미디어 자리표시자 quote 의 **머리 부분** 패턴 원문.
  * `> 📎 파일명 %% im-nobsidian:local-image|local-file:경로 %%` 한 줄이 통째로 하나의
  * 블록이어야 업로드 성공 뒤 image/file 블록으로 제자리 교체된다
@@ -103,8 +113,11 @@ export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
  * 예전 두 줄 형태로 이미 Notion 에 올라가 있는 문서가 남아 있어 개행은 선택적으로 받는다.
  * 뒤에 경로 캡처를 붙여 복원용으로 쓰거나(`local-image-restorer`), 앞에 `^` 를 붙여
  * "이 줄이 자리표시자인가" 판정에 쓴다(`enhanced-md-converter`).
+ *
+ * 파일명 부분은 {@link MARKER_PAYLOAD_CHAR} 로 받는다 — `50%.png` 처럼 `%` 가 든 이름을
+ * `[^\n%]*` 로 끊으면 자리표시자 전체가 복원되지 않고 마커 원문이 본문에 노출됐다(실측).
  */
-export const MEDIA_PLACEHOLDER_HEAD = `>\\s*📎\\s*[^\\n%]*(?:\\n>)?\\s*%%\\s*${MARKER_BRAND}:local-(?:image|file):`;
+export const MEDIA_PLACEHOLDER_HEAD = `>\\s*📎\\s*${MARKER_PAYLOAD_CHAR}*(?:\\n>)?\\s*%%\\s*${MARKER_BRAND}:local-(?:image|file):`;
 
 /**
  * 정규식 패턴에 직접 삽입할 수 있는 브랜드 토큰.
