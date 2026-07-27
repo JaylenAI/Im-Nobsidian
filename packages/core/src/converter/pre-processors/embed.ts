@@ -1,8 +1,14 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import type { ImageReference } from "../../types/convert.js";
 import { EMBED_PROTOCOL, spacedMarker } from "../../constants/markers.js";
+import { encodeMarkerTarget } from "../marker-url.js";
 
-const OBSIDIAN_EMBED_REGEX = /!\[\[([^\]]+)\]\]/g;
+/**
+ * 대상에 `[` `]` 를 허용하지 않는다 — 이유는 WikilinkResolver 쪽 주석 참조.
+ * 앞뒤 가로 공백까지 함께 잡는다 — 자리표시자를 줄 단독으로 떼어낼 때 이 공백이
+ * 새 줄머리로 옮겨가면 안 되기 때문이다({@link isolate} 주석 참조).
+ */
+const OBSIDIAN_EMBED_REGEX = /([ \t]*)!\[\[([^[\]]+)\]\]([ \t]*)/g;
 const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 const VIDEO_HOSTS = ["youtube.com", "youtu.be", "vimeo.com"];
@@ -15,23 +21,33 @@ export class EmbedResolver implements Processor {
     const images: ImageReference[] = input.metadata.images ? [...input.metadata.images] : [];
     const isPush = input.context.direction === "push";
 
-    let content = input.content.replace(OBSIDIAN_EMBED_REGEX, (_match, target: string) => {
-      if (isImageFile(target)) {
-        images.push({ url: target, localPath: stripAlias(target), isExternal: false });
-        if (isPush && !isExternalUrl(target)) {
-          return placeholder("local-image", target);
+    let content = input.content.replace(
+      OBSIDIAN_EMBED_REGEX,
+      (
+        match: string,
+        lead: string,
+        target: string,
+        trail: string,
+        offset: number,
+        whole: string,
+      ) => {
+        const span = { offset, length: match.length, whole, lead, trail };
+        if (isImageFile(target)) {
+          images.push({ url: target, localPath: stripAlias(target), isExternal: false });
+          if (isPush && !isExternalUrl(target)) {
+            return isolate(placeholder("local-image", target), span);
+          }
+          return `${lead}![${target}](${encodeURI(target)})${trail}`;
         }
-        return `![${target}](${encodeURI(target)})`;
-      }
-      // 비이미지 로컬 첨부 파일(pdf/mov 등): EMBED_PROTOCOL href 는 Notion 이 스킴을
-      // 버려 평문으로 강등된다 — 이미지와 동일한 quote+마커 쌍으로 왕복을 보존한다(D5).
-      // 노트 임베드(확장자 없음·.md·.canvas)는 위키링크/멘션 계열이므로 기존 경로 유지.
-      if (isPush && !isExternalUrl(target) && isAttachmentFile(target)) {
-        return placeholder("local-file", target);
-      }
-      const encoded = encodeURIComponent(target);
-      return `[${target}](${EMBED_PROTOCOL}${encoded})`;
-    });
+        // 비이미지 로컬 첨부 파일(pdf/mov 등): EMBED_PROTOCOL href 는 Notion 이 스킴을
+        // 버려 평문으로 강등된다 — 이미지와 동일한 quote+마커 쌍으로 왕복을 보존한다(D5).
+        // 노트 임베드(확장자 없음·.md·.canvas)는 위키링크/멘션 계열이므로 기존 경로 유지.
+        if (isPush && !isExternalUrl(target) && isAttachmentFile(target)) {
+          return isolate(placeholder("local-file", target), span);
+        }
+        return `${lead}[${target}](${EMBED_PROTOCOL}${encodeMarkerTarget(target)})${trail}`;
+      },
+    );
 
     content = content.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
       if (isVideoUrl(url)) {
@@ -65,6 +81,49 @@ function stripAlias(target: string): string {
 function placeholder(kind: "local-image" | "local-file", target: string): string {
   const fileName = stripAlias(target).split("/").pop() ?? target;
   return `> 📎 ${fileName} ${spacedMarker(`${kind}:${target}`)}`;
+}
+
+/** 임베드가 원문에서 차지한 자리 — 앞뒤 가로 공백까지 포함한다. */
+interface EmbedSpan {
+  offset: number;
+  length: number;
+  whole: string;
+  lead: string;
+  trail: string;
+}
+
+/**
+ * 자리표시자를 **자기 줄 단독**으로 떼어 놓는다.
+ *
+ * 자리표시자는 quote 블록이라 줄머리에 있어야만 Notion 이 블록으로 인식하고, 그래야
+ * ImageHandler 가 업로드 성공 뒤 그 블록을 image/file 블록으로 제자리 교체한다.
+ * `느낌표 뒤![[neutral.png]] 주의.` 처럼 글자 바로 뒤에 붙은 임베드(실볼트 806건/26파일)는
+ * 그대로 두면 `느낌표 뒤> 📎 …` 라는 한 문단이 되어 quote 가 아니게 되고 — 교체 대상이
+ * 사라져 이미지가 끝내 안 올라간다(실측).
+ *
+ * Notion 에는 인라인 이미지가 없으므로 문단이 갈리는 것은 데이터 모델상 불가피하다.
+ * 앞뒤 글자는 한 자도 버리지 않고, 한 번 갈린 뒤로는 모양이 고정된다(멱등).
+ *
+ * 끊는 방식이 두 가지 이유로 까다롭다(둘 다 실 Notion 실측):
+ *  1. 줄바꿈 한 개로는 모자란다 — CommonMark lazy continuation 이 뒷글자를 quote 안으로
+ *     빨아들이고, quote 를 image 로 통째 교체할 때 그 글자가 같이 지워졌다.
+ *  2. 빈 줄로 끊어도, **뒷줄이 공백으로 시작하면 Notion 파서가 그 문단을 앞 quote 의
+ *     자식으로 중첩시킨다**. `deleteBlock(quote)` 가 자식째 날려 `주의.` 가 또 사라졌다.
+ *     그래서 임베드에 붙어 있던 가로 공백은 새 줄머리로 옮기지 않고 버린다 — 문단이
+ *     이미 갈린 마당에 줄머리 공백은 의미가 없다.
+ *
+ * 줄 전체가 공백뿐이면(목록 안 들여쓰기 등) 원래 들여쓰기를 그대로 돌려준다.
+ */
+function isolate(text: string, span: EmbedSpan): string {
+  const { offset, length, whole } = span;
+  const beforeOnLine = whole.slice(whole.lastIndexOf("\n", offset - 1) + 1, offset);
+  const afterIdx = offset + length;
+  const nl = whole.indexOf("\n", afterIdx);
+  const afterOnLine = whole.slice(afterIdx, nl === -1 ? whole.length : nl);
+
+  const head = beforeOnLine.trim() === "" ? span.lead : "\n\n";
+  const tail = afterOnLine.trim() === "" ? "" : "\n\n";
+  return `${head}${text}${tail}`;
 }
 
 /** 별칭(`|300`)이 붙어도 이미지로 인식해야 image 블록으로 올라간다. */

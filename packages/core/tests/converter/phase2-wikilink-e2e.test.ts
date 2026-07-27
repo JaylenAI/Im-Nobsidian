@@ -74,9 +74,11 @@ describe("Phase 2 E2E: 위키링크 ↔ 페이지 멘션 완전 왕복", () => {
   it("[[target|display]] 별명 위키링크 왕복", () => {
     const pipeline = createPipeline();
 
-    // 등록된 페이지
+    // 등록된 페이지: mention 은 라벨을 못 가져 대상 페이지의 현재 제목만 렌더한다 —
+    // 별칭을 살리려면 라벨을 가질 수 있는 일반 페이지 링크로 나가야 한다(D-ALIAS-LOST).
     const push1 = pipeline.convertToNotion("See [[My Note|내 노트]] here.", pushCtx);
-    expect(push1.content).toContain('<mention-page id="page-aaa-111">내 노트</mention-page>');
+    expect(push1.content).toContain("[내 노트](https://www.notion.so/pageaaa111)");
+    expect(push1.content).not.toContain("<mention-page");
 
     // 미등록 페이지
     const push2 = pipeline.convertToNotion("See [[Future|미래]] here.", pushCtx);
