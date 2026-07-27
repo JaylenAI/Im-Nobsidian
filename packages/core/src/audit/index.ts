@@ -7,7 +7,7 @@ export type {
   FidelitySummary,
 } from "./fidelity.js";
 
-export { verifyDatabaseCompleteness } from "./completeness.js";
+export { verifyDatabaseCompleteness, verifyPageCompleteness } from "./completeness.js";
 export type {
   CompletenessRemoteSource,
   CompletenessLocalSource,
@@ -15,4 +15,7 @@ export type {
   CompletenessFailure,
   CompletenessReport,
   DatabaseCompleteness,
+  PageCompletenessRemoteSource,
+  PageCompletenessReport,
+  VaultCompletenessReport,
 } from "./completeness.js";

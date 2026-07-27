@@ -153,26 +153,33 @@ That's it. Your vault and Notion workspace are now linked.
 
 ## CLI Reference
 
-| Command             | Description                                                                 |
-| ------------------- | --------------------------------------------------------------------------- |
-| `nobsi init`        | Interactive setup — Notion token + root page                                |
-| `nobsi push`        | Push local changes to Notion                                                |
-| `nobsi pull`        | Pull Notion changes to local                                                |
-| `nobsi sync`        | Bidirectional sync (pull → push)                                            |
-| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional)               |
-| `nobsi diff [path]` | Show diff between local and Notion                                          |
-| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)                  |
-| `nobsi verify`      | Verify database completeness — every remote row is in the vault (read-only) |
-| `nobsi resolve`     | Resolve sync conflicts                                                      |
-| `nobsi watch`       | Watch for changes + auto-sync                                               |
+| Command             | Description                                                                     |
+| ------------------- | ------------------------------------------------------------------------------- |
+| `nobsi init`        | Interactive setup — Notion token + root page                                    |
+| `nobsi push`        | Push local changes to Notion                                                    |
+| `nobsi pull`        | Pull Notion changes to local                                                    |
+| `nobsi sync`        | Bidirectional sync (pull → push)                                                |
+| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional)                   |
+| `nobsi diff [path]` | Show diff between local and Notion                                              |
+| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)                      |
+| `nobsi verify`      | Verify completeness — every remote row **and page** is in the vault (read-only) |
+| `nobsi resolve`     | Resolve sync conflicts                                                          |
+| `nobsi watch`       | Watch for changes + auto-sync                                                   |
 
 `push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` skips incremental detection for a full rescan (recovers pages missed by Notion's search indexing lag).
 
 `verify` answers a different question from `status`: not "is anything out of date?" but **"is anything
-missing?"**. It compares the _set_ of remote row ids against the _set_ of database rows tracked in the
-vault, per database, and exits non-zero when a row exists in Notion but not locally. Idempotency checks
-(re-running `pull` and seeing no churn) cannot detect this — a discovery pass that misses the same rows
-every time produces identical results on every run. Add `--json` for machine-readable output in CI.
+missing?"**. It compares _sets_ of ids, not counts, on two axes — database rows (per database) and pages
+(under the root) — and exits non-zero when something exists in Notion but not locally. Idempotency checks
+(re-running `pull` and seeing no churn) cannot detect this — a discovery pass that misses the same items
+every time produces identical results on every run, and churn counts only what was created or updated, so
+a _smaller_ second enumeration is indistinguishable from a matching one. Add `--json` for machine-readable
+output in CI.
+
+The two axes are deliberately asymmetric. For rows, anything present locally but not remotely is stale
+residue and fails the check. For pages, local-only entries are reported but do **not** fail — an unpushed
+local note, the root page itself, and Notion's search indexing lag all land there legitimately, and a gate
+that cries wolf gets ignored. Page verification is skipped in database mode (there is no root subtree).
 
 ### Non-interactive mode (CI / scripts)
 

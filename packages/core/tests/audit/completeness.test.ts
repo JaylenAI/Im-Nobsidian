@@ -10,10 +10,14 @@
  * 1건이 동시에 있으면 카운트는 같아져 상쇄되기 때문이다.
  */
 import { describe, it, expect, vi } from "vitest";
-import { verifyDatabaseCompleteness } from "../../src/audit/completeness.js";
+import {
+  verifyDatabaseCompleteness,
+  verifyPageCompleteness,
+} from "../../src/audit/completeness.js";
 import type {
   CompletenessLocalSource,
   CompletenessRemoteSource,
+  PageCompletenessRemoteSource,
 } from "../../src/audit/completeness.js";
 
 const DB_A = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -179,5 +183,121 @@ describe("verifyDatabaseCompleteness — DB 완결성 게이트", () => {
     expect(report.failures).toEqual([]);
     expect(report.complete).toBe(true);
     expect(remote.queryAllDatabasePages).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * R12-C 회귀 잠금 — 페이지 완결성 게이트.
+ *
+ * R11-B 로 DB 행은 "빠짐없다"를 보게 됐지만 **페이지는 여전히 멱등 게이트뿐**이었다.
+ * 실제로 2026-07-28 라이브 pull 은 디스커버리 경로 경합(R12-A) 으로 페이지를 268 → 342
+ * 로 다르게 열거하고도 `repull churn 0` 을 통과했다 — churn 은 created+updated 만 세므로
+ * 두 번째 열거가 *더 작아도* 일치와 구분되지 않는다. 이 게이트만 페이지 집합을 직접 센다.
+ *
+ * DB 쪽과 달리 미발견(missing)만 실패로 본다는 비대칭이 핵심 계약이다. 볼트에만 있는
+ * 페이지는 정상 상태(미push 로컬 노트·root 자신·search 색인 지연)라서 실패로 접으면
+ * 게이트가 거짓 적색을 내고, 거짓 적색이 반복되면 게이트는 무시당해 없는 것과 같아진다.
+ */
+const ROOT = "12345678123456781234567812345678";
+
+function pageRemote(ids: string[]): PageCompletenessRemoteSource {
+  return { getPagesUnderRootViaSearch: vi.fn(async () => ids.map((id) => ({ id }))) };
+}
+
+function page(pageId: string, fileType = "file"): LocalRecord {
+  return { notionPageId: pageId, notionParentId: null, fileType };
+}
+
+describe("verifyPageCompleteness — 페이지 완결성 게이트", () => {
+  it("원격 페이지가 볼트에 전부 있으면 완결", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote(["p1", "p2"]),
+      localSource([page("p1"), page("p2", "folder-note")]),
+      ROOT,
+    );
+
+    expect(report.complete).toBe(true);
+    expect(report.remotePages).toBe(2);
+    expect(report.vaultPages).toBe(2);
+    expect(report.missingIds).toEqual([]);
+  });
+
+  it("볼트에 없는 원격 페이지를 미발견으로 집어낸다 (경로 경합 유실 차단)", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote(["p1", "p2", "p3"]),
+      localSource([page("p1")]),
+      ROOT,
+    );
+
+    expect(report.complete).toBe(false);
+    expect(report.missingIds).toEqual(["p2", "p3"]);
+  });
+
+  it("볼트에만 있는 페이지는 정보성일 뿐 실패가 아니다 (미push 로컬 노트·root 자신)", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote(["p1"]),
+      localSource([page("p1"), page("localdraft")]),
+      ROOT,
+    );
+
+    expect(report.localOnlyIds).toEqual(["localdraft"]);
+    expect(report.complete).toBe(true);
+  });
+
+  it("미발견 1건 + 로컬전용 1건이 카운트로 상쇄돼도 통과시키지 않는다 (집합 비교 계약)", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote(["p1", "p2"]),
+      localSource([page("p1"), page("localdraft")]),
+      ROOT,
+    );
+
+    // 카운트만 보면 2 = 2 라 통과한다.
+    expect(report.remotePages).toBe(report.vaultPages);
+    expect(report.complete).toBe(false);
+    expect(report.missingIds).toEqual(["p2"]);
+  });
+
+  it("db-row 는 페이지 대조에서 제외한다 (DB 게이트가 따로 본다)", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote([]),
+      localSource([row("r1", DB_A), row("r2", DB_A)]),
+      ROOT,
+    );
+
+    expect(report.vaultPages).toBe(0);
+    expect(report.localOnlyIds).toEqual([]);
+    expect(report.complete).toBe(true);
+  });
+
+  it("하이픈 표기 차이를 같은 id 로 본다", async () => {
+    const report = await verifyPageCompleteness(
+      pageRemote(["11111111-1111-1111-1111-111111111111"]),
+      localSource([page("11111111111111111111111111111111")]),
+      ROOT,
+    );
+
+    expect(report.complete).toBe(true);
+  });
+
+  it("열거 실패는 통과로 접지 않는다", async () => {
+    const remote: PageCompletenessRemoteSource = {
+      getPagesUnderRootViaSearch: vi.fn(async () => {
+        throw new Error("search unavailable");
+      }),
+    };
+
+    const report = await verifyPageCompleteness(remote, localSource([page("p1")]), ROOT);
+
+    expect(report.complete).toBe(false);
+    expect(report.error).toBe("search unavailable");
+    // 미발견 0 이라는 이유로 통과하면 안 된다 — 대조 자체가 성립하지 않았다.
+    expect(report.missingIds).toEqual([]);
+  });
+
+  it("설정된 root 를 그대로 열거에 넘긴다", async () => {
+    const remote = pageRemote([]);
+    await verifyPageCompleteness(remote, localSource([]), ROOT);
+
+    expect(remote.getPagesUnderRootViaSearch).toHaveBeenCalledWith(ROOT);
   });
 });

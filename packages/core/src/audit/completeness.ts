@@ -172,3 +172,94 @@ export async function verifyDatabaseCompleteness(
 
   return { databases, failures, remoteTotal, localTotal, complete };
 }
+
+// ─── 페이지 완결성 (R12-C) ───────────────────────────────────────────────────
+
+/**
+ * 원격 페이지 열거 — {@link NotionClient} 가 그대로 만족한다.
+ *
+ * DB 쪽과 달리 여기서는 **일부러 pull 과 다른 열거를 쓴다**. DB 행은 열거 방법이 하나뿐이라
+ * 검증기가 다른 규칙을 쓰면 게이트가 통과해도 pull 은 놓치는 상황이 생기지만, 페이지는
+ * 열거 경로가 둘(직접 순회 · search)이고 **둘이 같은 집합을 내지 않는다**는 게 애초의
+ * 결함이다(R12-A). pull 이 어느 경로로 돌았든 독립된 두 번째 열거와 대조해야 의미가 있다.
+ */
+export interface PageCompletenessRemoteSource {
+  getPagesUnderRootViaSearch(rootId: string): Promise<Array<{ id: string }>>;
+}
+
+/** {@link verifyPageCompleteness} 결과. */
+export interface PageCompletenessReport {
+  /** 원격(search 열거) root 하위 페이지 수. */
+  readonly remotePages: number;
+  /** 볼트가 추적 중인 페이지 수(db-row 제외). */
+  readonly vaultPages: number;
+  /** 원격에만 있는 페이지 id — **침묵 미발견**. 비어야 정상. */
+  readonly missingIds: readonly string[];
+  /**
+   * 볼트에만 있는 페이지 id — **정보성**(판정에 쓰지 않는다).
+   *
+   * DB 행과 달리 페이지는 볼트에만 있는 게 정상일 수 있다: 아직 push 하지 않은 로컬 노트,
+   * root 페이지 자신(search 열거는 root 를 제외한다), search 색인이 아직 못 따라온 신규
+   * 페이지. 이걸 실패로 접으면 게이트가 거짓 적색을 내며 신뢰를 잃는다.
+   */
+  readonly localOnlyIds: readonly string[];
+  /** 열거 실패 사유. 있으면 `complete` 는 false(실패를 통과로 접지 않는다). */
+  readonly error?: string;
+  /** 미발견 0 이고 열거도 성공. */
+  readonly complete: boolean;
+}
+
+/** {@link SyncOrchestrator.verifyCompleteness} 결과 — DB 와 페이지 대조를 한 판정으로 묶는다. */
+export interface VaultCompletenessReport {
+  readonly databases: CompletenessReport;
+  /** 페이지 모드에서만 채워진다. DB 모드에는 root 서브트리가 없어 `null`. */
+  readonly pages: PageCompletenessReport | null;
+  /** 두 대조가 모두 통과. */
+  readonly complete: boolean;
+}
+
+/**
+ * 원격 root 하위 페이지 집합과 볼트가 추적 중인 페이지 집합을 대조한다.
+ *
+ * 볼트 쪽은 `fileType !== "db-row"` 로 고른다 — 페이지형 타입을 열거하면
+ * (`file`·`folder-note`·`folder-only`) 새 타입이 생겼을 때 한쪽만 낡아 조용히 게이트를
+ * 빠져나간다. "행이 아닌 것은 전부 페이지"가 이 대조가 실제로 뜻하는 바다.
+ */
+export async function verifyPageCompleteness(
+  remote: PageCompletenessRemoteSource,
+  local: CompletenessLocalSource,
+  rootPageId: string,
+): Promise<PageCompletenessReport> {
+  const localIds = new Set<string>();
+  for (const record of local.getAll()) {
+    if (record.fileType === "db-row") continue;
+    if (!record.notionPageId) continue;
+    localIds.add(compactNotionId(record.notionPageId));
+  }
+
+  let remoteIds: Set<string>;
+  try {
+    const pages = await remote.getPagesUnderRootViaSearch(rootPageId);
+    remoteIds = new Set(pages.map((p) => compactNotionId(p.id)));
+  } catch (error) {
+    return {
+      remotePages: 0,
+      vaultPages: localIds.size,
+      missingIds: [],
+      localOnlyIds: [],
+      error: error instanceof Error ? error.message : String(error),
+      complete: false,
+    };
+  }
+
+  const missingIds = [...remoteIds].filter((id) => !localIds.has(id));
+  const localOnlyIds = [...localIds].filter((id) => !remoteIds.has(id));
+
+  return {
+    remotePages: remoteIds.size,
+    vaultPages: localIds.size,
+    missingIds,
+    localOnlyIds,
+    complete: missingIds.length === 0,
+  };
+}

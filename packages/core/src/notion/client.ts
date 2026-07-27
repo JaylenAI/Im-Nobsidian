@@ -43,9 +43,19 @@ export function isNotionObjectNotFound(error: unknown): boolean {
  * (비용이 워크스페이스 페이지 수에 비례·예측가능)가 더 저렴하다. 이 오류를 받은 호출측은
  * search 기반 폴백(getPagesUnderRootViaSearch)으로 전환한다. 작은 볼트는 예산 안에서
  * 순회가 끝나 폴백 없이 빠르게 완료된다(이중 전략의 분기점).
+ *
+ * `partial` 은 **포기 시점까지 확정적으로 찾은 페이지**다(R12-A). 두 경로는 같은 집합을
+ * 낸다고 가정할 수 없다 — search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수
+ * 있고, 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 어느 쪽이 도는지를 벽시계가
+ * 정하므로(같은 볼트에서 첫 pull=search, 재 pull=순회), 결과를 **경합시키면** 실행마다
+ * 집합이 달라진다. 그래서 부분 결과를 버리지 않고 실어 보내 호출측이 **합집합**을 만든다.
+ * 이미 치른 순회 비용을 버리지 않는 것이라 추가 요청도 없다.
  */
 export class DiscoveryTooLargeError extends Error {
-  constructor(elapsedMs: number) {
+  constructor(
+    elapsedMs: number,
+    readonly partial: readonly PageObjectResponse[] = [],
+  ) {
     super(`subtree discovery exceeded time budget (${elapsedMs}ms)`);
     this.name = "DiscoveryTooLargeError";
   }
@@ -795,6 +805,8 @@ export class NotionClient {
    *
    * @param opts.deadlineMs `Date.now()` 기준 마감 시각. 각 페이지 처리 전 초과를 검사해
    *   초과 시 {@link DiscoveryTooLargeError}를 던진다(대규모 서브트리 → search 폴백 유도).
+   *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
+   *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
    *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
    */
   async getChildPagesRecursive(
@@ -810,7 +822,7 @@ export class NotionClient {
 
       for (const id of currentLevel) {
         if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
-          throw new DiscoveryTooLargeError(Date.now() - start);
+          throw new DiscoveryTooLargeError(Date.now() - start, all);
         }
         let children: PageObjectResponse[];
         try {
@@ -892,7 +904,16 @@ export class NotionClient {
         let bp: Parent;
         try {
           bp = ((await this.getBlock(bid)) as unknown as { parent: Parent }).parent;
-        } catch {
+        } catch (error) {
+          // 부모 해소 실패 = 이 블록에 중첩된 페이지가 결과에서 조용히 빠진다는 뜻이다.
+          // 같은 파일의 직접 순회(getChildPagesRecursive)는 스킵할 때 warn 을 남기는데
+          // 이 경로만 침묵했다 — 유실을 관측 가능하게 맞춘다(R12-B).
+          getLogger().warn(
+            `[Im-Nobsidian] 부모 블록 해소 실패 (${bid}) — 이 블록에 중첩된 페이지는 ` +
+              `search 디스커버리에서 제외됨: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+          );
           blockOwner.set(bid, null);
           return null;
         }
