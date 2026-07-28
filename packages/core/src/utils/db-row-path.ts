@@ -42,6 +42,27 @@ export function selectDbRowFiles<T extends VaultPathRef>(
 }
 
 /**
+ * 동명 충돌을 풀 때 시도할 경로 후보를 **결정적 순서**로 만든다.
+ *
+ * 자연 이름 → 페이지 ID 조각 8 → 16 → 32 글자 순. 순번(`(1)`, `(2)` …)이 아니라 ID 를
+ * 쓰는 이유는 **안정성**이다. 순번은 그때그때 볼트에 무엇이 있느냐로 결정되므로 두 페이지가
+ * 실행마다 접미사를 맞바꿀 수 있고, 그러면 pull 마다 파일이 뒤바뀌어 churn 이 끝나지 않는다.
+ * 페이지 ID 는 불변이라 어떤 순서로 처리되든 같은 페이지가 항상 같은 경로로 수렴한다.
+ *
+ * 마지막 후보(전체 32 글자)는 전역 유일하므로 후보가 고갈되는 일은 없다 — 호출부는
+ * "고갈 시 원본 덮어쓰기" 같은 폴백을 두지 않아도 된다.
+ *
+ * @param dir      상위 폴더 경로(빈 문자열이면 볼트 루트)
+ * @param safeName sanitize 된 파일명(확장자 제외)
+ * @param pageId   대상 Notion 페이지 ID (하이픈 유무 무관)
+ */
+export function pagePathCandidates(dir: string, safeName: string, pageId: string): string[] {
+  const base = dir ? `${dir}/${safeName}` : safeName;
+  const raw = pageId.replace(/-/g, "");
+  return [`${base}.md`, ...[8, 16, 32].map((len) => `${base} (${raw.slice(0, len)}).md`)];
+}
+
+/**
  * DB 행 파일 경로를 충돌 없이 결정한다.
  *
  * 같은 DB 에 동명 페이지(예: 제목이 비어 "제목 없음" 으로 수렴하는 행들)가 여럿
@@ -76,16 +97,8 @@ export function resolveDbRowPath(
     return owner.notionPageId != null && notionIdsEqual(owner.notionPageId, pageId);
   };
 
-  const natural = `${localFolder}/${safeName}.md`;
-  if (ownedBySelf(natural)) return natural;
-
-  const raw = pageId.replace(/-/g, "");
-  for (const len of [8, 16, 32]) {
-    const candidate = `${localFolder}/${safeName} (${raw.slice(0, len)}).md`;
-    if (ownedBySelf(candidate)) return candidate;
-  }
-
-  // 전체 ID(32 글자)는 전역 유일하므로 위 루프에서 반드시 반환된다.
-  // 도달 불가 경로이나 방어적으로 전체 ID 접미사를 반환한다.
-  return `${localFolder}/${safeName} (${raw}).md`;
+  const candidates = pagePathCandidates(localFolder, safeName, pageId);
+  // 전체 ID(32 글자) 후보는 전역 유일하므로 find 는 실질적으로 항상 성공한다.
+  // 도달 불가 경로이나 방어적으로 마지막(가장 유일한) 후보를 돌려준다.
+  return candidates.find(ownedBySelf) ?? candidates[candidates.length - 1]!;
 }
