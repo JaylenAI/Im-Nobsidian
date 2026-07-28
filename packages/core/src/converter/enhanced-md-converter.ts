@@ -8,6 +8,7 @@ import {
   COLUMN_LIST_END,
   WIKILINK_PROTOCOL,
   syncedStartMarker,
+  type SyncedKind,
   SYNCED_END,
   calloutStyleMarker,
   toggleColorMarker,
@@ -19,6 +20,7 @@ import {
   CONTAINER_PREFIX_SOURCE,
   dedentContainerBody,
   indentContainerBody,
+  nfmOpenTagSource,
   splitContainerPrefix,
 } from "./container-indent.js";
 import {
@@ -207,15 +209,18 @@ const INNERMOST_DETAILS_RE = new RegExp(
   "g",
 );
 const INNERMOST_CALLOUT_RE = new RegExp(
-  `([\\t ]*)<callout([^>]*)>\\n?(${NO_CONTAINER_BODY})<\\/callout>`,
+  `([\\t ]*)${nfmOpenTagSource("callout", "capture")}\\n?(${NO_CONTAINER_BODY})<\\/callout>`,
   "g",
 );
 const INNERMOST_COLUMNS_RE = new RegExp(
-  `([\\t ]*)<columns[^>]*>\\n?(${NO_CONTAINER_BODY})<\\/columns>`,
+  `([\\t ]*)${nfmOpenTagSource("columns")}\\n?(${NO_CONTAINER_BODY})<\\/columns>`,
   "g",
 );
-// `(?!s)` — `<column` 이 `<columns` 를 삼키지 않게 구분(속성 허용은 width_ratio 대비)
-const COLUMN_WRAP_RE = /[\t ]*<column(?!s)[^>]*>\n?([\s\S]*?)[\t ]*<\/column>\n?/g;
+// 이름 경계 확인이 `<column` 과 `<columns` 를 갈라 준다 — 속성 허용은 ratio 대비
+const COLUMN_WRAP_RE = new RegExp(
+  `[\\t ]*${nfmOpenTagSource("column")}\\n?([\\s\\S]*?)[\\t ]*<\\/column>\\n?`,
+  "g",
+);
 
 // 캡처한 선행 들여쓰기를 변환 결과의 비어있지-않은 모든 줄에 다시 입힌다.
 function reindentLines(text: string, indent: string): string {
@@ -310,14 +315,30 @@ const COLUMN_MARKER_LINE_RE = new RegExp(
   `^${CONTAINER_PREFIX_SOURCE}%%${MARKER_BRAND_RE}:column(?:-list:(?:start|end))?%%[\\t ]*$`,
 );
 
+/**
+ * 이미 인용 접두를 얻은 줄 — 안쪽 변환이 먼저 끝난 **중첩 콜아웃/토글/인용**의 머리다.
+ * ({@link CONTAINER_PREFIX_SOURCE} 는 `>` 를 삼키므로 여기서는 쓸 수 없다.)
+ */
+const QUOTED_LINE_RE = /^[\t ]*>/;
+
+/**
+ * 콜아웃 제목으로 끌어올리면 안 되는 본문 첫 줄인가.
+ *
+ * 제목 자리로 올린 줄은 본문에서 빠진다. 그 줄이 내용이 아니라 **구조**면 구조가 사라진다.
+ * 컬럼 경계 마커면 열 구성이 무너지고, 중첩 컨테이너의 머리면 그 컨테이너가
+ * `> [!note] > [!toggle]- 제목` 한 줄로 뭉개져 push 가 `<details>` 를 되살리지 못한다
+ * (실측: `<details>` 5개·3노트 소실).
+ */
+function isStructuralFirstLine(line: string): boolean {
+  return COLUMN_MARKER_LINE_RE.test(line) || QUOTED_LINE_RE.test(line);
+}
+
 function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
   // 콜아웃 본문도 토글과 동일한 코드펜스 cascade 위험이 있으므로 같은 dedent 를 적용한다.
   const lines = dedentContainerBody(body)
     .split("\n")
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
-  // 본문이 컬럼 레이아웃으로 시작하면 제목으로 쓸 텍스트가 없다. 경계 마커를 제목 자리로
-  // 끌어올리면 그 줄이 본문에서 빠져 열 구성이 통째로 무너진다({@link COLUMN_MARKER_LINE_RE}).
-  const titleIndex = COLUMN_MARKER_LINE_RE.test(lines[0] ?? "") ? -1 : 0;
+  const titleIndex = isStructuralFirstLine(lines[0] ?? "") ? -1 : 0;
   const firstLine = titleIndex === 0 ? (lines[0] ?? "") : "";
 
   // NFM 정준형은 아이콘을 icon 속성으로 나른다 — 속성이 하나라도 있으면 정준형이므로
@@ -331,10 +352,14 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   const icon = rawIcon !== undefined && /^https?:\/\//i.test(rawIcon) ? undefined : rawIcon;
   const type = icon ? emojiToCalloutType(icon) : "note";
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
+  // 앞뒤 **빈 줄만** 떨군다. `trim()` 은 첫 줄의 선행 공백까지 먹어 버려, 같은 깊이의
+  // 형제 중 첫 줄만 한 단계 얕게 렌더된다(실측: 콜아웃 안 토글 헤딩 두 개가 서로 다른
+  // 깊이로 보임 — 앞의 것은 `> ###`, 뒤의 것은 `>   ###`).
   const rest = lines
     .slice(titleIndex + 1)
     .join("\n")
-    .trim();
+    .replace(/^(?:[\t ]*\n)+/, "")
+    .replace(/\n[\t ]*$/, "");
 
   // icon/color 는 마커로 제목 줄에 실어 push 가 정준형 속성으로 재조립한다(ADR-008).
   // 단, 아이콘이 type 기본 이모지와 같고 색이 없으면 push 가 type 에서 동일 아이콘을
@@ -344,7 +369,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
     Boolean(style?.color) || (icon !== undefined && calloutTypeToEmoji(type) !== icon);
   const styleTail = needsMarker ? ` ${calloutStyleMarker({ icon, color: style?.color })}` : "";
   const calloutTitle = title ? `> [!${type}] ${title}${styleTail}` : `> [!${type}]${styleTail}`;
-  const calloutBody = rest ? `\n${quoteCalloutBody(rest)}` : "";
+  const calloutBody = rest.trim() ? `\n${quoteCalloutBody(rest)}` : "";
 
   return calloutTitle + calloutBody;
 }
@@ -444,7 +469,7 @@ function convertSyncedBlockRef(content: string): string {
     match: string,
     indent: string,
     attrs: string,
-    kind: "ref" | "orig",
+    kind: SyncedKind,
     openRe: RegExp,
     closeRe: RegExp,
   ): string => {
@@ -456,23 +481,24 @@ function convertSyncedBlockRef(content: string): string {
     return reindentLines(`${syncedStartMarker(kind, url)}\n${inner}\n${SYNCED_END}`, indent);
   };
 
-  let result = content.replace(
-    /([\t ]*)<synced_block_reference([^>]*)>[\s\S]*?<\/synced_block_reference>/g,
-    (match, indent: string, attrs: string) =>
-      rebuild(
-        match,
-        indent,
-        attrs,
-        "ref",
-        /<synced_block_reference[^>]*>\n?/,
-        /<\/synced_block_reference>/,
-      ),
-  );
-  result = result.replace(
-    /([\t ]*)<synced_block([^>]*)>[\s\S]*?<\/synced_block>/g,
-    (match, indent: string, attrs: string) =>
-      rebuild(match, indent, attrs, "orig", /<synced_block[^>]*>\n?/, /<\/synced_block>/),
-  );
+  // `synced_block` 은 `synced_block_reference` 의 접두다 — 이름 경계를 확인하지 않으면
+  // 참조 블록이 원본 블록으로 잡혀 URL 종류가 뒤바뀐다({@link nfmOpenTagSource}).
+  const replaceSynced = (text: string, name: string, kind: SyncedKind): string =>
+    text.replace(
+      new RegExp(`([\\t ]*)${nfmOpenTagSource(name, "capture")}[\\s\\S]*?<\\/${name}>`, "g"),
+      (match, indent: string, attrs: string) =>
+        rebuild(
+          match,
+          indent,
+          attrs,
+          kind,
+          new RegExp(`${nfmOpenTagSource(name)}\\n?`),
+          new RegExp(`</${name}>`),
+        ),
+    );
+
+  let result = replaceSynced(content, "synced_block_reference", "ref");
+  result = replaceSynced(result, "synced_block", "orig");
   return result;
 }
 
@@ -902,9 +928,13 @@ function unescapeNotionChars(content: string): string {
  * 는 열 0 에 있다. 접두를 잡지 않고 치환하면 **첫 행만** 접두를 물려받고 나머지 행은
  * 열 0 으로 떨어진다. 그러면 (a) 콜아웃이 그 자리에서 끊기고 (b) 구분행이 표 헤더와
  * 분리돼 표가 통째로 죽는다(결함⑧⑨ — 실측 96건·15노트).
+ *
+ * 여는 태그는 {@link nfmOpenTagSource} 로 **이름 경계까지** 확인한다. 이름 뒤를 열어
+ * 두면 `<table_of_contents/>` 가 여는 표로 잡혀 거기서 첫 `</table>` 까지의 본문이
+ * 통째로 사라진다.
  */
 const NOTION_TABLE_RE = new RegExp(
-  `^(${CONTAINER_PREFIX_SOURCE})<table[^>]*>([\\s\\S]*?)</table>`,
+  `^(${CONTAINER_PREFIX_SOURCE})${nfmOpenTagSource("table")}([\\s\\S]*?)</table>`,
   "gm",
 );
 const TABLE_ROW_RE = /<tr>([\s\S]*?)<\/tr>/g;

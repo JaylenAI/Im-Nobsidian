@@ -123,3 +123,62 @@ describe("토글 헤딩 왕복", () => {
     expect(pulled).not.toMatch(/^[ \t]+```/m);
   });
 });
+
+// 실측 근거: `노시언의 30가지 노션템플릿/건강` NFM raw 92~99행.
+// Notion 은 **문단도 자식을 가질 수 있어** 토글 헤딩이 열 0 에 있지 않다:
+// `<callout>` → 문단(1탭) → 토글 헤딩(2탭) → 자식(3탭).
+const NESTED_RAW = [
+  `<callout icon="/icons/drafts_lightgray.svg">`,
+  `${T}**간헐적 단식 스케줄러**`,
+  `${T}${T}### 16 : 8 {toggle="true"}`,
+  `${T}${T}${T}16시간 단식, 8시간 식사`,
+  `${T}${T}### 23 : 1 {toggle="true"}`,
+  `${T}${T}${T}23시간 단식, 1시간 식사`,
+  `${T}<empty-block/>`,
+  `</callout>`,
+].join("\n");
+
+describe("들여쓴 토글 헤딩(문단의 자식)", () => {
+  it("열 0 이 아닌 토글 헤딩도 변환된다 — 속성 누수 0", () => {
+    const pulled = convertToggleHeadings(NESTED_RAW);
+
+    expect(pulled).not.toContain('{toggle="true"}');
+    expect(pulled).toContain(`${T}${T}### 16 : 8 ${TOGGLE_HEADING_START}`);
+    expect(pulled).toContain(`${T}${T}### 23 : 1 ${TOGGLE_HEADING_START}`);
+  });
+
+  it("자식이 제목과 같은 깊이로 올라오고 형제 경계가 유지된다", () => {
+    const lines = convertToggleHeadings(NESTED_RAW).split("\n");
+    const first = lines.indexOf(`${T}${T}### 16 : 8 ${TOGGLE_HEADING_START}`);
+
+    // 자식은 제목 깊이(2탭)로 — 한 단계만 올라온다
+    expect(lines[first + 1]).toBe(`${T}${T}16시간 단식, 8시간 식사`);
+    // 끝 마커도 제목 깊이에 놓여 다음 형제와 섞이지 않는다
+    expect(lines[first + 2]).toBe(`${T}${T}${TOGGLE_HEADING_END}`);
+    expect(lines[first + 3]).toBe(`${T}${T}### 23 : 1 ${TOGGLE_HEADING_START}`);
+    // 헤딩보다 얕은 형제(문단·empty-block)는 자식으로 빨려들지 않는다
+    expect(lines).toContain(`${T}<empty-block/>`);
+  });
+
+  it("push 가 들여쓴 토글 헤딩의 NFM 구조를 정확히 복원한다", () => {
+    expect(restoreToggleHeadings(convertToggleHeadings(NESTED_RAW))).toBe(NESTED_RAW);
+  });
+
+  it("콜아웃을 통과해도 두 형제 헤딩이 같은 깊이로 렌더된다", () => {
+    // `rest` 를 trim() 하면 첫 줄의 구조 들여쓰기까지 먹혀 앞 헤딩만 한 단계 얕아졌다.
+    const rendered = notionEnhancedToObsidian(NESTED_RAW).split("\n");
+    const a = rendered.find((l) => l.includes("### 16 : 8"))!;
+    const b = rendered.find((l) => l.includes("### 23 : 1"))!;
+
+    expect(a).toBeDefined();
+    expect(/^>[\t ]*/.exec(a)![0]).toBe(/^>[\t ]*/.exec(b)![0]);
+  });
+
+  it("콜아웃 왕복에서 토글 헤딩이 살아 돌아온다", () => {
+    const pushed = obsidianToNotionEnhanced(notionEnhancedToObsidian(NESTED_RAW));
+
+    expect(pushed).toContain('### 16 : 8 {toggle="true"}');
+    expect(pushed).toContain('### 23 : 1 {toggle="true"}');
+    expect(pushed).not.toContain(TOGGLE_HEADING_START);
+  });
+});

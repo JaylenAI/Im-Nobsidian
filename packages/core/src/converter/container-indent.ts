@@ -22,6 +22,23 @@ export const CONTAINER_PREFIX_SOURCE = "[\\t ]*(?:>[\\t ]*)*";
 
 const CONTAINER_PREFIX_RE = new RegExp(`^${CONTAINER_PREFIX_SOURCE}`);
 
+/**
+ * NFM 여는 태그의 정규식 원문 — **태그명이 정확히 끝나는 것**까지 확인한다.
+ *
+ * `<table[^>]*>` 처럼 이름 뒤를 열어 두면 `<table_of_contents color="gray"/>` 가 여는
+ * 표로 잡힌다. 그러면 매치가 목차 태그에서 시작해 저 아래 첫 `</table>` 까지 삼켜,
+ * 그 사이 본문이 통째로 표로 치환되며 사라진다(실측: 한 노트에서 128행 소실). NFM 은
+ * `table`/`table_of_contents`, `synced_block`/`synced_block_reference`,
+ * `column`/`columns` 처럼 접두가 겹치는 이름을 쓰므로 경계 확인이 선택이 아니다.
+ *
+ * @param name 정확히 일치해야 하는 태그명
+ * @param attrs `"capture"` 면 속성부를 그룹으로 남긴다 — 값은 선행 공백을 포함한
+ *   `' icon="💡"'` 또는 속성이 없을 때 `''`.
+ */
+export function nfmOpenTagSource(name: string, attrs: "capture" | "ignore" = "ignore"): string {
+  return `<${name}${attrs === "capture" ? "(\\s[^>]*|)" : "(?:\\s[^>]*)?"}>`;
+}
+
 /** 줄을 컨테이너 접두와 실제 내용으로 가른다. */
 export function splitContainerPrefix(line: string): { prefix: string; body: string } {
   const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
@@ -103,6 +120,25 @@ export function indentContainerBody(text: string, indent = "\t"): string {
 }
 
 /**
+ * **폭을 이미 아는** 접두 한 겹만 벗긴다 — {@link indentContainerBody} 의 정확한 역함수.
+ *
+ * 공통 최소값을 계산하는 {@link dedentContainerBody} 와 달리, 붙인 폭을 아는 자리에서
+ * 쓴다. 최소값 계산은 본문 전체가 한 단계 더 들여쓴 리스트일 때 **사용자가 쓴 상대
+ * 들여쓰기까지** 벗겨 버리므로, 아는 폭이 있으면 이쪽이 안전하다. 코드블록 내부처럼
+ * 애초에 접두가 붙지 않은 줄(비대칭 들여쓰기)은 그대로 둔다.
+ */
+export function stripContainerIndent(text: string, indent: string): string {
+  if (indent === "") return text;
+  return text
+    .split("\n")
+    .map((line) => (line.startsWith(indent) ? line.slice(indent.length) : line))
+    .join("\n");
+}
+
+/** 표를 여는 줄 — 이름 경계를 확인해 `<table_of_contents/>` 를 배제한다. */
+const TABLE_OPEN_LINE_RE = new RegExp(`^[\\t ]*${nfmOpenTagSource("table")}`);
+
+/**
  * 코드블록·테이블 경계를 추적해 각 줄을 분류한다 —
  * {@link dedentContainerBody}(pull)와 {@link indentContainerBody}(push)의 공통 기준.
  */
@@ -135,7 +171,7 @@ export function classifyContainerLines(lines: readonly string[]): ContainerLineK
       fenceChar = fence[1]![0]!;
       fenceLen = fence[1]!.length;
       kinds.push("fence");
-    } else if (/^[\t ]*<table[^>]*>/.test(line)) {
+    } else if (TABLE_OPEN_LINE_RE.test(line)) {
       // <table> 태그만 깊게 들여쓰고 내부 행은 열 0 인 비대칭 구조. 한 줄에서 닫히지
       // 않으면 테이블 모드로 진입해 행을 보존, 닫는 </table> 도 경계로 열 0 정렬한다.
       if (!/<\/table>/.test(line)) inTable = true;

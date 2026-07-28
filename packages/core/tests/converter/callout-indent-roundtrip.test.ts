@@ -243,3 +243,37 @@ describe("콜아웃 들여쓰기 클램프", () => {
     expect(lines[tail - 1]).toBe(">");
   });
 });
+
+describe("콜아웃 제목 자리에 구조를 올리지 않는다", () => {
+  // 제목 자리로 올린 줄은 본문에서 빠진다. 그 줄이 내용이 아니라 **구조**면 구조가
+  // 사라진다 — 중첩 토글의 머리가 제목으로 흡수되면 `> [!tip] > [!toggle]- …` 한 줄로
+  // 뭉개져 push 가 `<details>` 를 되살리지 못한다(실측: `<details>` 5개·3노트 소실).
+  const NESTED_TOGGLE = [
+    `<callout icon="💡">`,
+    `${T}<details>`,
+    `${T}<summary>중첩 토글</summary>`,
+    `${T}${T}안쪽 내용`,
+    `${T}</details>`,
+    `${T}바깥 계속`,
+    `</callout>`,
+  ].join("\n");
+
+  it("첫 자식이 중첩 컨테이너면 제목을 비워 둔다", () => {
+    const lines = notionEnhancedToObsidian(NESTED_TOGGLE).split("\n");
+
+    expect(lines[0]).toBe("> [!tip]");
+    expect(lines[1]).toBe("> > [!toggle]- 중첩 토글");
+    expect(lines[2]).toBe("> > 안쪽 내용");
+    expect(lines[3]).toBe("> 바깥 계속");
+  });
+
+  it("push 가 콜아웃과 중첩 토글을 둘 다 복원한다", () => {
+    const pushed = obsidianToNotionEnhanced(notionEnhancedToObsidian(NESTED_TOGGLE));
+
+    expect(pushed).toContain(`<callout icon="💡">`);
+    expect(pushed).toContain(`<details>`);
+    expect(pushed).toContain(`<summary>중첩 토글</summary>`);
+    expect(pushed).toContain(`안쪽 내용`);
+    expect(pushed).toContain(`바깥 계속`);
+  });
+});
