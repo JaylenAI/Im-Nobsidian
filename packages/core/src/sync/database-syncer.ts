@@ -42,6 +42,12 @@ export interface DatabaseSyncResult {
    */
   writtenPaths: string[];
   /**
+   * R13: 볼트에서 사라졌기에 되살린 행 수. `updated` 와 섞지 않는다 — 리모트는 그대로이고
+   * 바뀐 것은 로컬의 부재이므로, 합쳐 세면 dry-run 과 멱등성 게이트(churn)가 "원격이
+   * 바뀌었다"고 거짓말한다. 페이지 경로가 이미 같은 이유로 `restored` 를 분리해 보고한다.
+   */
+  restored: number;
+  /**
    * F25: 이 config 가 linked view 컨테이너로 판정된 경우 data source 원본 database id.
    * 행 처리는 원본 config 에 양보하고 건너뛰었으므로, 호출처(디스커버리 캐시)는 이 config
    * 를 제거하고 linked 매핑을 기록해야 다음 pull 부터 이중 방문 자체가 사라진다.
@@ -102,11 +108,12 @@ export class DatabaseSyncer {
   async pullAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
+      return { created: 0, updated: 0, restored: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
     let updated = 0;
+    let restored = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
     const writtenPaths: string[] = [];
@@ -116,6 +123,7 @@ export class DatabaseSyncer {
         const result = await this.pullDatabase(dbConfig);
         created += result.created;
         updated += result.updated;
+        restored += result.restored;
         conflicts.push(...result.conflicts);
         failed.push(...result.failed);
         writtenPaths.push(...result.writtenPaths);
@@ -129,13 +137,13 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts, failed, writtenPaths };
+    return { created, updated, restored, conflicts, failed, writtenPaths };
   }
 
   async pushAll(): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, conflicts: [], failed: [], writtenPaths: [] };
+      return { created: 0, updated: 0, restored: 0, conflicts: [], failed: [], writtenPaths: [] };
     }
 
     let created = 0;
@@ -158,7 +166,8 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, conflicts: [], failed, writtenPaths: [] };
+    // push 는 볼트에 쓰지 않으므로 restored 는 항상 0 이다.
+    return { created, updated, restored: 0, conflicts: [], failed, writtenPaths: [] };
   }
 
   async pullDatabase(
@@ -193,6 +202,7 @@ export class DatabaseSyncer {
         return {
           created: 0,
           updated: 0,
+          restored: 0,
           conflicts: [],
           failed: [],
           writtenPaths: [],
@@ -211,6 +221,7 @@ export class DatabaseSyncer {
 
     let created = 0;
     let updated = 0;
+    let restored = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
     // M3: 실제로 디스크에 기록된 DB 행 경로 — 후처리 링크 해소(resolveNotionLinks)가
@@ -220,13 +231,24 @@ export class DatabaseSyncer {
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
+        // 원격 무변경인데도 되살리려고 내려온 행인가 — 아래 집계에서 updated 와 가른다.
+        let restoring = false;
 
         if (record) {
-          // 리모트가 마지막 동기화 시점과 동일하면 건너뜀. 단 레코드 경로가 현재 DB
-          // 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유 폴더 잔류) 원격 무변경
-          // 이어도 재처리해 현 폴더로 재배치한다.
+          // 리모트가 마지막 동기화 시점과 동일하면 건너뜀. 단 두 가지 예외가 있다.
+          //  · 레코드 경로가 현재 DB 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유
+          //    폴더 잔류) 원격 무변경이어도 재처리해 현 폴더로 재배치한다.
+          //  · 로컬 파일이 사라졌으면 되살린다(R13). 이 확인이 없으면 pullDatabasePage
+          //    안의 복원 판정(localExists → resolvePullConflict)에 영영 도달하지 못해
+          //    지운 행이 조용히 영구 소실된다. 페이지 경로는 R0 으로 이미 마감한 계약인데
+          //    행 경로만 빠져 있었다 — 오케스트레이터의 detectMissingLocalFiles 가 "행은
+          //    여기서 이미 같은 판정을 거친다"는 (틀린) 전제로 db-row 를 제외해 두었기에
+          //    양쪽 어디에도 복원 경로가 없는 상태였다.
           const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
-          if (page.last_edited_time === record.notionLastEdited && !misplaced) continue;
+          if (page.last_edited_time === record.notionLastEdited && !misplaced) {
+            if (await this.vaultFs.exists(record.obsidianPath)) continue;
+            restoring = true;
+          }
         }
 
         // R9e: 행 1건 처리도 합성 경로다 — 블록 조회·첨부 다운로드·변환·파일 IO 가 얽혀
@@ -244,7 +266,8 @@ export class DatabaseSyncer {
           created++;
           if (outcome.action === "written") writtenPaths.push(outcome.path);
         } else if (outcome.action === "written") {
-          updated++;
+          if (restoring) restored++;
+          else updated++;
           writtenPaths.push(outcome.path);
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
@@ -260,9 +283,9 @@ export class DatabaseSyncer {
     }
 
     getLogger().debug(
-      `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${conflicts.length} 충돌`,
+      `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${restored} 복원, ${conflicts.length} 충돌`,
     );
-    return { created, updated, conflicts, failed, writtenPaths };
+    return { created, updated, restored, conflicts, failed, writtenPaths };
   }
 
   private async pullDatabaseViews(
@@ -687,7 +710,8 @@ export class DatabaseSyncer {
     }
 
     getLogger().debug(`[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트`);
-    return { created, updated, conflicts: [], failed, writtenPaths: [] };
+    // push 는 볼트에 쓰지 않으므로 restored 는 항상 0 이다.
+    return { created, updated, restored: 0, conflicts: [], failed, writtenPaths: [] };
   }
 
   /**

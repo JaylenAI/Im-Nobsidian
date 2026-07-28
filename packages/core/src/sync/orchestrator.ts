@@ -492,20 +492,43 @@ export class SyncOrchestrator {
     const restoreIds = new Set(restoreChanges.map((c) => c.pageId));
     const workItems = restoreChanges.length > 0 ? [...filtered, ...restoreChanges] : filtered;
 
-    if (workItems.length === 0 && (this.config.notion.databases?.length ?? 0) === 0) {
-      // 본문 페이지 변경이 없어도 디스커버리된 DB 행은 새로 기록될 수 있다. 그 행들의
-      // 본문 링크·frontmatter relation 을 finalize() 의 resolveNotionLinks 가 해소한다(M2).
-      // (기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감 — emptyResult 와 동일)
+    if (workItems.length === 0) {
+      // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
+      // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
+      // 디스커버리 DB 둘 다. 과거엔 설정된 DB 가 하나라도 있으면 여기서 곧장 emptyResult 로
+      // 빠져나가, 그 DB 의 원격 변경도 로컬 삭제 복원도 조용한 pull 에서는 영영 반영되지
+      // 않았다(디스커버리 DB 만 살아 있던 한쪽 누락). 아래 정상 경로는 두 DB 소스를 모두
+      // 거치므로, 이 조기 반환만 어휘가 달랐던 셈이다.
+      // 기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감된다(emptyResult 와 동일).
+      // 기록이 생겼다면 그 행들의 본문 링크·frontmatter relation 을 finalize 가 해소한다(M2).
+      let dbCreated = 0;
+      let dbUpdated = 0;
+      let dbRestored = 0;
+      if ((this.config.notion.databases?.length ?? 0) > 0) {
+        try {
+          const dbResult = await this.databaseSyncer.pullAll();
+          dbCreated += dbResult.created;
+          dbUpdated += dbResult.updated;
+          dbRestored += dbResult.restored;
+          conflicts.push(...dbResult.conflicts);
+          failed.push(...dbResult.failed);
+          writtenPaths.push(...dbResult.writtenPaths);
+        } catch (error) {
+          getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
+        }
+      }
       const dbDiscovery = await this.pullDiscoveredDatabases(
         writtenPaths,
         failed,
         conflicts,
         options?.force === true,
       );
-      return finalize(dbDiscovery.created, dbDiscovery.updated, 0);
-    }
-    if (workItems.length === 0) {
-      return emptyResult;
+      return finalize(
+        dbCreated + dbDiscovery.created,
+        dbUpdated + dbDiscovery.updated,
+        0,
+        dbRestored + dbDiscovery.restored,
+      );
     }
 
     if (options?.dryRun) {
@@ -659,6 +682,7 @@ export class SyncOrchestrator {
         const dbResult = await this.databaseSyncer.pullAll();
         counts.created += dbResult.created;
         counts.updated += dbResult.updated;
+        counts.restored += dbResult.restored;
         conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
         // M3: 후처리 대상은 실제 기록된 행 경로를 그대로 받는다. 과거엔 "synced 상태의
@@ -679,6 +703,7 @@ export class SyncOrchestrator {
       );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
+      counts.restored += dbDiscovery.restored;
     }
 
     return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
@@ -1019,11 +1044,12 @@ export class SyncOrchestrator {
     failed: FailedOperation[],
     conflicts: Conflict[],
     forceRediscovery = false,
-  ): Promise<{ created: number; updated: number }> {
-    if (this.isDatabaseMode) return { created: 0, updated: 0 };
+  ): Promise<{ created: number; updated: number; restored: number }> {
+    if (this.isDatabaseMode) return { created: 0, updated: 0, restored: 0 };
 
     let created = 0;
     let updated = 0;
+    let restored = 0;
 
     try {
       const cachedRaw = this.stateDb.getMeta("discovered_dbs");
@@ -1201,6 +1227,7 @@ export class SyncOrchestrator {
             }
             created += dbResult.created;
             updated += dbResult.updated;
+            restored += dbResult.restored;
             conflicts.push(...dbResult.conflicts);
             failed.push(...dbResult.failed);
             // M3: 슬라이스 추정 대신 실제 기록된 행 경로를 후처리 대상으로 받는다.
@@ -1257,7 +1284,7 @@ export class SyncOrchestrator {
       getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
     }
 
-    return { created, updated };
+    return { created, updated, restored };
   }
 
   /**
@@ -2071,9 +2098,12 @@ export class SyncOrchestrator {
 
     const scoped = records.filter(
       (r) =>
-        // folder-only 는 실체가 폴더라 파일 부재가 정상. db-row 는 매 pull 마다
-        // database-syncer 가 전 행을 훑으며 같은 복원 판정을 이미 거치므로 여기서
-        // 중복 처리하면 행 전용 frontmatter 없이 본문만 쓰는 잘못된 경로로 샌다.
+        // folder-only 는 실체가 폴더라 파일 부재가 정상. db-row 를 제외하는 이유는
+        // 여기서 되살리면 행 전용 frontmatter(속성 매핑) 없이 본문만 쓰는 잘못된 경로로
+        // 새기 때문이다 — 복원은 반드시 database-syncer 의 행 경로가 해야 한다.
+        // 다만 그쪽이 실제로 복원하는지는 오래 참이 아니었다: 원격 무변경이면 로컬 존재를
+        // 묻지도 않고 건너뛰어, 지운 행이 어느 경로로도 돌아오지 않았다. R13 에서 그
+        // 존재 확인을 넣어 이 제외가 비로소 근거를 갖는다(tests/sync/db-row-restore-deleted).
         (r.fileType === "file" || r.fileType === "folder-note") &&
         r.notionPageId !== null &&
         inAnyPathScope(r.obsidianPath, paths),
