@@ -296,46 +296,29 @@ function convertContainers(content: string): string {
     );
     if (result === before) break;
   }
-  // 컨테이너 안에 중첩됐던 컬럼 마커는 quote prefix 를 얻어 push 재조립이 불가능하다 —
-  // 마커 줄을 걷어내 기존 평탄화로 degrade 한다(Notion 으로 마커 리터럴 누수 방지).
-  return stripQuotedColumnMarkers(result);
+  return result;
 }
 
-// quote 프리픽스는 `>`+공백 1개 단위로만 소비되므로, 이중 중첩(콜아웃 안 콜아웃)에서
-// 남는 구조적 탭(`> > \t%%..%%`)까지 흡수하도록 마커 앞 여백을 별도로 허용한다(실측: 루틴).
-const QUOTED_COLUMN_EDGE_RE = new RegExp(
-  `^(?:>[ \\t]?)+[ \\t]*%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%[ \\t]*\\n?`,
-  "gm",
+/**
+ * 컬럼 구조 마커 **하나만** 있는 줄 — 콜아웃/토글 안에 중첩된 경우까지 잡도록 컨테이너
+ * 접두(들여쓰기 + 인용)를 허용한다.
+ *
+ * 이 줄은 내용이 아니라 **레이아웃 경계**다. 콜아웃 제목으로 흡수되면 경계가 소실되면서
+ * 사용자의 Notion 열 구성이 push 에서 평탄화된다(D-EMPTY-COLUMN 과 같은 이유).
+ */
+const COLUMN_MARKER_LINE_RE = new RegExp(
+  `^${CONTAINER_PREFIX_SOURCE}%%${MARKER_BRAND_RE}:column(?:-list:(?:start|end))?%%[\\t ]*$`,
 );
-const QUOTED_COLUMN_SEP_RE = new RegExp(
-  `^((?:>[ \\t]?)+)[ \\t]*%%${MARKER_BRAND_RE}:column%%[ \\t]*$`,
-  "gm",
-);
-const QUOTED_COLUMN_INLINE_RE = new RegExp(
-  `[ \\t]*%%${MARKER_BRAND_RE}:column(?:-list:(?:start|end))?%%`,
-  "g",
-);
-
-function stripQuotedColumnMarkers(content: string): string {
-  return (
-    content
-      .replace(QUOTED_COLUMN_EDGE_RE, "")
-      .replace(QUOTED_COLUMN_SEP_RE, (_m, prefix: string) => prefix.trimEnd())
-      // 콜아웃이 컬럼을 품으면 innermost 평탄화 순서상 start 마커가 본문 첫 줄이 되어
-      // 콜아웃 제목으로 흡수된다(실측: 인사이드 아웃) — 줄 앵커 규칙을 벗어나므로
-      // quote 줄 '안'의 인라인 발생분도 걷어 동일한 평탄화 degrade 로 수렴시킨다.
-      .replace(/^(?:>[ \t]?).*%%.*$/gm, (line) =>
-        line.replace(QUOTED_COLUMN_INLINE_RE, "").trimEnd(),
-      )
-  );
-}
 
 function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
   // 콜아웃 본문도 토글과 동일한 코드펜스 cascade 위험이 있으므로 같은 dedent 를 적용한다.
   const lines = dedentContainerBody(body)
     .split("\n")
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
-  const firstLine = lines[0] ?? "";
+  // 본문이 컬럼 레이아웃으로 시작하면 제목으로 쓸 텍스트가 없다. 경계 마커를 제목 자리로
+  // 끌어올리면 그 줄이 본문에서 빠져 열 구성이 통째로 무너진다({@link COLUMN_MARKER_LINE_RE}).
+  const titleIndex = COLUMN_MARKER_LINE_RE.test(lines[0] ?? "") ? -1 : 0;
+  const firstLine = titleIndex === 0 ? (lines[0] ?? "") : "";
 
   // NFM 정준형은 아이콘을 icon 속성으로 나른다 — 속성이 하나라도 있으면 정준형이므로
   // 첫 줄 이모지 파싱을 건너뛴다(첫 글자가 이모지인 본문을 아이콘으로 오식하면 소실).
@@ -348,7 +331,10 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   const icon = rawIcon !== undefined && /^https?:\/\//i.test(rawIcon) ? undefined : rawIcon;
   const type = icon ? emojiToCalloutType(icon) : "note";
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
-  const rest = lines.slice(1).join("\n").trim();
+  const rest = lines
+    .slice(titleIndex + 1)
+    .join("\n")
+    .trim();
 
   // icon/color 는 마커로 제목 줄에 실어 push 가 정준형 속성으로 재조립한다(ADR-008).
   // 단, 아이콘이 type 기본 이모지와 같고 색이 없으면 push 가 type 에서 동일 아이콘을
@@ -804,7 +790,7 @@ const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
  * 여백을 인용 뒤에만 두면 `\t> <empty-block/>`(리스트/칼럼 안 콜아웃의 빈 줄)이 매칭되지
  * 않아 토큰 원문이 그대로 볼트에 새어 나간다(실측: `Creai LLM.md` pull 961행).
  */
-const NOTION_EMPTY_BLOCK_RE = /^[\t ]*(?:>[\t ]*)*<empty-block\/>[\t ]*\n?/gm;
+const NOTION_EMPTY_BLOCK_RE = /^([\t ]*(?:>[\t ]*)*)<empty-block\/>[\t ]*\n?/gm;
 
 function convertPageLinks(content: string): string {
   return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
@@ -873,8 +859,21 @@ function separateAdjacentCallouts(content: string): string {
   return out.join("\n");
 }
 
+/** 인용 접두만 남은 줄인지 — `> > ` 처럼 `>` 를 하나라도 품은 여백. */
+const QUOTE_ONLY_PREFIX_RE = /^[\t ]*(?:>[\t ]*)+$/;
+
+/**
+ * 빈 문단 토큰을 실제 빈 줄로 되돌린다.
+ *
+ * 콜아웃 **안**의 토큰은 인용 접두를 남긴다. 열 0 빈 줄로 바꾸면 Obsidian 이 거기서
+ * 인용을 닫아 버려 뒤따르는 본문이 콜아웃 밖으로 떨어진다. 중첩 컬럼에서는 이 절단이
+ * 시작·끝 마커를 서로 다른 콜아웃 본문으로 갈라 놓아 push 가 레이아웃을 재조립하지
+ * 못했다(실측: `건강검진.md` 등 3노트 9개 `<columns>` 소실).
+ */
 function removeEmptyBlocks(content: string): string {
-  return content.replace(NOTION_EMPTY_BLOCK_RE, "\n");
+  return content.replace(NOTION_EMPTY_BLOCK_RE, (_match, prefix: string) =>
+    QUOTE_ONLY_PREFIX_RE.test(prefix) ? `${prefix.trimEnd()}\n` : "\n",
+  );
 }
 
 const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;

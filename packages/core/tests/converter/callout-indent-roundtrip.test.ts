@@ -192,4 +192,54 @@ describe("콜아웃 들여쓰기 클램프", () => {
     expect(twice).toBe(once);
     expect(once).toContain("print(1)");
   });
+
+  it("콜아웃 안 빈 문단이 인용 깊이를 잃지 않는다", () => {
+    // 결함: `removeEmptyBlocks` 가 `> > <empty-block/>` 를 **열 0 빈 줄**로 바꿔 인용
+    // 깊이를 통째로 버렸다. Obsidian 은 거기서 인용을 닫으므로 뒤 본문이 콜아웃 밖으로
+    // 떨어지고, 중첩 컬럼에선 시작·끝 마커가 서로 다른 본문에 갈려 레이아웃이 소실됐다.
+    const raw = [
+      `<callout icon="💡">`,
+      `${T}바깥`,
+      `${T}<callout icon="📌">`,
+      `${T}${T}첫 문단`,
+      `${T}${T}<empty-block/>`,
+      `${T}${T}끝 문단`,
+      `${T}</callout>`,
+      `</callout>`,
+    ].join("\n");
+
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled).not.toContain("empty-block");
+    // 빈 줄이 얕은 `>` 로 떨어지면 그 자리에서 안쪽 콜아웃이 두 조각 난다
+    expect(pulled.split("\n").filter((l) => l.trim() === ">")).toHaveLength(0);
+    expect(pulled).toContain("> > [!abstract] 첫 문단");
+    expect(pulled).toContain("> >\n> > 끝 문단");
+    // 끝 문단이 안쪽 콜아웃 안에 남아야 한다 — 밖으로 새면 push 가 형제로 만든다
+    expect(
+      obsidianToNotionEnhanced(pulled)
+        .split("\n")
+        .filter((l) => l.includes("<callout")),
+    ).toHaveLength(2);
+  });
+
+  it("빈 줄은 이웃 중 얕은 쪽 인용 깊이를 물려받는다", () => {
+    // 안쪽 컨테이너가 끝나는 자리의 빈 줄까지 깊은 쪽을 따라가면, 이미 닫힌 컨테이너가
+    // 되살아나 다음 블록을 빨아들인다 — 얕은 쪽이 맞다.
+    const raw = [
+      `<callout icon="💡">`,
+      `${T}바깥`,
+      `${T}<callout icon="📌">`,
+      `${T}${T}안쪽`,
+      `${T}</callout>`,
+      `${T}<empty-block/>`,
+      `${T}바깥 계속`,
+      `</callout>`,
+    ].join("\n");
+
+    const lines = notionEnhancedToObsidian(raw).split("\n");
+    const tail = lines.findIndex((l) => l.includes("바깥 계속"));
+    expect(tail).toBeGreaterThan(0);
+    expect(lines[tail]).toBe("> 바깥 계속");
+    expect(lines[tail - 1]).toBe(">");
+  });
 });

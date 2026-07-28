@@ -72,7 +72,7 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
     expect(pushed).toContain("끝 문단");
   });
 
-  it("컨테이너-중첩 컬럼은 pull 때 마커 없이 평탄화된다 (degrade)", () => {
+  it("컨테이너-중첩 컬럼도 마커로 보존되어 레이아웃째 왕복한다", () => {
     const nested = [
       '<callout icon="⚠️">',
       "\t제목줄",
@@ -88,12 +88,16 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
     ].join("\n");
     const { pulled, pushed } = roundtrip(nested);
 
-    // quote prefix 가 붙은 컬럼 마커는 재조립 불가 → 걷어내고 내용만 평탄화
-    expect(pulled).not.toContain("%%im-nobsidian:column");
+    // 예전엔 "인용 접두가 붙으면 재조립 불가"라 보고 마커를 걷어내 평탄화했다. 실제로는
+    // push 가 콜아웃을 먼저 <callout> 로 되돌린 뒤 컬럼을 재조립하므로(파이프라인 순서)
+    // 접두는 그 시점에 이미 탭이다 — degrade 는 살릴 수 있는 레이아웃을 버리고 있었다.
+    expect(pulled).toContain("> %%im-nobsidian:column-list:start%%");
     expect(pulled).toContain("중첩 칼럼A");
     expect(pulled).toContain("중첩 칼럼B");
-    // push 산출물에도 마커 리터럴이 새지 않는다
+    // 마커 리터럴이 Notion 으로 새지 않고 정준형 태그로 재조립된다
     expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("<columns>");
+    expect(pushed.split("\n").filter((l) => l.trim() === "<column>")).toHaveLength(2);
   });
 });
 
@@ -459,14 +463,17 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     "</callout>",
   ].join("\n");
 
-  it("pull: 콜아웃 제목으로 흡수된 컬럼 start 마커도 걷어낸다 (평탄화 degrade)", () => {
+  it("pull: 컬럼 경계 마커를 콜아웃 제목으로 흡수하지 않는다", () => {
     const pulled = notionEnhancedToObsidian(CALLOUT_WRAPPING_COLUMNS);
+    const head = pulled.split("\n")[0]!;
 
-    expect(pulled).not.toContain("%%im-nobsidian:column");
+    // 마커가 제목 자리로 올라가면 그 줄이 본문에서 빠져 열 구성이 통째로 무너진다
+    expect(head).not.toContain("column-list:start");
+    expect(pulled).toContain("> %%im-nobsidian:column-list:start%%");
     expect(pulled).toContain("왼쪽 내용");
     expect(pulled).toContain("오른쪽 내용");
-    // 스타일 마커는 유지된다 (아이콘·색 보존)
-    expect(pulled).toContain("callout-style");
+    // 스타일 마커는 제목 줄에 그대로 유지된다 (아이콘·색 보존)
+    expect(head).toContain("callout-style");
   });
 
   it("push: 왕복해도 컬럼 마커 리터럴이 Notion 으로 새지 않는다", () => {
@@ -489,9 +496,7 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     expect(pushed).toContain("본문 내용");
   });
 
-  it("pull: 이중 중첩(콜아웃 안 콜아웃)의 구조적 탭이 남은 컬럼 마커도 걷어낸다", () => {
-    // 실측(루틴 iOS 알림 버전): quote 프리픽스 소비는 `>`+공백 1개 단위라
-    // `> > \t%%..%%` 의 탭이 남아 줄 앵커 규칙(EDGE/SEP)을 벗어났다.
+  it("이중 중첩(콜아웃 안 콜아웃)의 컬럼도 깊이째 왕복한다", () => {
     const nested = [
       '<callout icon="💡">',
       "\t바깥 콜아웃 제목",
@@ -510,12 +515,15 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     ].join("\n");
 
     const pulled = notionEnhancedToObsidian(nested);
-    expect(pulled).not.toContain("%%im-nobsidian:column");
-    expect(pulled).toContain("왼쪽");
-    expect(pulled).toContain("오른쪽");
+    // 깊이 2 인용(`> > `) 위에서도 마커가 살아 있어야 push 가 열 구성을 되살린다
+    expect(pulled).toContain("> > %%im-nobsidian:column-list:start%%");
+    expect(pulled).toContain("> > 왼쪽");
+    expect(pulled).toContain("> > 오른쪽");
 
     const pushed = obsidianToNotionEnhanced(pulled);
     expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toMatch(/^\t\t<columns>$/m);
+    expect(pushed.split("\n").filter((l) => l.includes("<callout"))).toHaveLength(2);
   });
 
   it("pull: 업로드 이미지(서명 URL) 아이콘은 마커에 싣지 않는다 — 색만 보존", () => {
