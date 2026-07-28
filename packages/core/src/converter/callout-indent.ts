@@ -98,7 +98,53 @@ export function clampCalloutIndent(content: string): string {
   return out.join("\n");
 }
 
+/**
+ * 콜아웃 **본문** 줄의 구조 들여쓰기도 같은 임계 아래로 누른다.
+ *
+ * 머리줄만 클램프하면 본문이 남는다: Notion 은 문단의 자식 블록(이미지·설명문 등)을 탭
+ * 한 단계 더 들여쓰므로, dedent 로 공통 폭을 벗겨도 **상대 들여쓰기 탭이 그대로 살아**
+ * `> \t![](…)` 형태가 된다. 인용 안에서 탭은 4칸이라 Obsidian 이 들여쓰기 코드블록으로
+ * 파싱하고, 그 결과 이미지·본문이 콜아웃 안에서 회색 코드 상자로 죽는다(실측 15건·6노트).
+ *
+ * 리스트 줄은 **제외**한다. 리스트는 상대 들여쓰기가 곧 중첩 깊이이고, CommonMark 가
+ * 부모 항목의 content indent 기준으로 판정하므로 탭이어도 코드가 되지 않는다(실측 1,721건
+ * 전부 정상 렌더). 여기서 눌러 버리면 멀쩡한 중첩 리스트가 평평해진다.
+ */
+const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])\s)/;
+
+/** 본문 줄 하나의 선행 탭을 클램프 폭으로 누른다({@link BODY_INDENT_RE} 주석 참조). */
+export function clampBodyIndent(line: string): string {
+  return line.replace(BODY_INDENT_RE, CLAMPED_INDENT);
+}
+
+/**
+ * 컨테이너 본문을 인용(`> `)으로 감싼다 — pull 의 토글/콜아웃 공통 진입점.
+ *
+ * 펜스·코드·표 내부는 건드리지 않는다. 그쪽 들여쓰기는 {@link classifyContainerLines}
+ * 가 정의하는 NFM 비대칭 구조라 폭을 바꾸면 왕복이 깨진다.
+ */
+export function quoteCalloutBody(body: string): string {
+  const lines = body.split("\n");
+  const kinds = classifyContainerLines(lines);
+  return lines
+    .map((line, i) =>
+      line.trim() ? `> ${kinds[i] === "prose" ? clampBodyIndent(line) : line}` : ">",
+    )
+    .join("\n");
+}
+
 // ─── Push: 클램프된 폭 → 구조적 들여쓰기 ───
+
+/** 클램프 폭으로 눌러 둔 본문 들여쓰기를 탭으로 되돌린다 — {@link quoteCalloutBody} 의 역함수. */
+const RESTORE_BODY_INDENT_RE = new RegExp(`^${CLAMPED_INDENT}`);
+
+export function restoreBodyIndent(body: string): string {
+  const lines = body.split("\n");
+  const kinds = classifyContainerLines(lines);
+  return lines
+    .map((line, i) => (kinds[i] === "prose" ? line.replace(RESTORE_BODY_INDENT_RE, "\t") : line))
+    .join("\n");
+}
 
 /**
  * 콜아웃 머리줄의 들여쓰기와 제목에서 원래 깊이를 읽어 낸다.
