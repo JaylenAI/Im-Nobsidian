@@ -74,6 +74,41 @@ export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");
 export const COLUMN_SEP = compactMarker("column");
 
+/**
+ * 칼럼 구분 마커 — **너비 비율**까지 싣는다.
+ *
+ * NFM 은 칼럼을 `<column ratio="62.5">` 로 내보낸다(실코퍼스 120노트 기준 203개 중 181개가
+ * 비율을 가지며, 그중 100개가 비균등). 구분 마커에 비율을 싣지 않으면 볼트에는 칼럼 **개수**만
+ * 남아, push 가 `<column>` 으로 재조립하며 사용자가 잡아 둔 레이아웃을 균등 분할로 되돌린다
+ * — 열 구조는 살아 있는데 폭만 매번 리셋되는 형태다(D-EMPTY-COLUMN 과 같은 종류의 손실).
+ *
+ * 비율이 없으면 {@link COLUMN_SEP} 를 그대로 쓴다 — 구버전 볼트 문서·legacy 경로와 형식을
+ * 공유해 마커 노이즈를 늘리지 않는다.
+ */
+export function columnMarker(ratio?: string): string {
+  return ratio ? compactMarker(`column:ratio=${ratio}`) : COLUMN_SEP;
+}
+
+/**
+ * 칼럼 구분 마커 한 줄의 패턴 원문.
+ *
+ * 비율 유무 두 형태를 각자 매칭하는 정규식이 pull·push·legacy 세 경로에 흩어지면
+ * 한 곳만 갱신되는 순간 그 경로에서 칼럼 경계가 사라진다(경계를 놓친 split 은 여러 칼럼을
+ * 하나로 접는다). 세 경로가 이 함수 하나를 공유한다.
+ *
+ * 값은 `50`·`62.5` 같은 십진수라 홑 `%` 가 섞이지 않는다 — 퍼센트 인코딩이 필요 없다.
+ *
+ * @param ratio `"capture"` 면 비율을 그룹 하나로 남긴다(없으면 `undefined`). `String.split`
+ *   처럼 캡처가 결과 배열에 섞이면 곤란한 자리에서는 `"ignore"` 를 쓴다.
+ */
+export function columnSepSource(ratio: "capture" | "ignore" = "capture"): string {
+  const value = ratio === "capture" ? "([\\d.]+)" : "(?:[\\d.]+)";
+  return `%%${MARKER_BRAND}:column(?::ratio=${value})?%%`;
+}
+
+/** 비율을 캡처하는 칼럼 구분 마커 패턴 원문. */
+export const COLUMN_SEP_SOURCE = columnSepSource("capture");
+
 /** 목차(table of contents) 블록 보존 마커. */
 export const TOC_MARKER = compactMarker("toc");
 
