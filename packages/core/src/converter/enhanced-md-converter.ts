@@ -983,7 +983,15 @@ const NOTION_TABLE_RE = new RegExp(
   `^(${CONTAINER_PREFIX_SOURCE})${nfmOpenTagSource("table")}([\\s\\S]*?)</table>`,
   "gm",
 );
-const TABLE_ROW_RE = /<tr>([\s\S]*?)<\/tr>/g;
+/**
+ * 표 행. **속성을 허용**해야 한다 — Notion 은 배경색이 지정된 행을
+ * `<tr color="gray_bg">` 로 내보내고, 그 행은 대개 헤더 행이다.
+ *
+ * `<tr>` 만 잡으면 그 행이 통째로 조용히 사라진다. 표는 행 수만 하나 줄어든 채
+ * 멀쩡해 보이고, 다음 행이 헤더 자리로 승격돼 표의 의미가 바뀐다
+ * (실측: `5단계(22~28일)` 노트에서 `**결과**|**이유**|**해결책**` 헤더 소실).
+ */
+const TABLE_ROW_RE = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
 const TABLE_CELL_RE = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g;
 
 function isAlignmentRow(cells: string[]): boolean {

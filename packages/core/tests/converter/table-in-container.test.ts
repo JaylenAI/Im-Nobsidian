@@ -89,6 +89,35 @@ describe("컨테이너 안 표", () => {
     expect(pulled).toContain("첫 줄<br>둘째 줄");
   });
 
+  it("속성이 붙은 행(`<tr color>`)도 한 행으로 살아남는다", () => {
+    // 실측(`5단계(22~28일) …`): Notion 은 배경색을 지정한 행을 `<tr color="gray_bg">` 로
+    // 내보내고, 그 행은 대개 **헤더**다. `<tr>` 만 잡으면 헤더가 통째로 사라지고 다음
+    // 데이터 행이 헤더 자리로 승격돼 표의 의미가 바뀐다 — 그런데도 표는 멀쩡해 보인다.
+    const raw = [
+      `<table header-row="true">`,
+      `<colgroup>`,
+      `<col width="120"/>`,
+      `<col width="240"/>`,
+      `</colgroup>`,
+      `<tr color="gray_bg">`,
+      `<td>결과</td>`,
+      `<td>해결책</td>`,
+      `</tr>`,
+      `<tr>`,
+      `<td>근육 감소</td>`,
+      `<td>단백질 증량</td>`,
+      `</tr>`,
+      `</table>`,
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    const rows = pulled.split("\n").filter((l) => l.trim().startsWith("|"));
+
+    expect(rows).toHaveLength(3); // 헤더 + 구분행 + 데이터 1행
+    expect(rows[0]).toContain("결과");
+    expect(rows[0]).toContain("해결책");
+    expect(obsidianToNotionEnhanced(pulled)).toContain("결과");
+  });
+
   it("인용 안 표의 셀 이스케이프가 unescapePipes 로 풀리지 않는다", () => {
     const raw = [
       `<callout icon="💡">`,
