@@ -5,7 +5,10 @@ commit_msg=$(cat "$1")
 # 커밋 메시지 prefix 검증 (한국어 본문 허용)
 pattern="^(feat|fix|hotfix|refactor|docs|chore|test|perf|ci)(\(.+\))?: .+"
 
-if ! echo "$commit_msg" | head -1 | grep -qE "$pattern"; then
+# LC_ALL=C 필수 — 패턴은 순수 ASCII 이고 `.+` 는 "설명이 비어있지 않다"만 보면 된다.
+# UTF-8 로케일에서는 GNU grep 3.7 이 U+D000~U+D7FF 한글 음절(하·한·프·플·표·힣 …)을
+# `.` 로 매칭하지 못해, 규약에 맞는 한국어 제목을 오탐 거부한다.
+if ! echo "$commit_msg" | head -1 | LC_ALL=C grep -qE "$pattern"; then
   echo ""
   echo "ERROR: 커밋 메시지 형식이 올바르지 않습니다."
   echo ""
