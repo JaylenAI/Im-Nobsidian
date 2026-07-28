@@ -42,6 +42,21 @@ export function compactMarker(body: string): string {
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
 
+/**
+ * 토글 헤딩(`### 제목 {toggle="true"}`) 보존 마커 쌍.
+ *
+ * NFM 은 토글 헤딩을 "속성 붙은 제목 + 탭 한 단계 들여쓴 자식"으로 내보낸다. Obsidian 에
+ * 대응 문법이 없어 속성을 그대로 두면 제목 뒤에 `{toggle="true"}` 가 노출되고(실볼트 256건),
+ * 자식의 구조적 탭이 4-space 로 확장되어 콜아웃이 코드블록으로 오파싱된다(524건).
+ *
+ * 끝 마커가 필요한 이유: pull 이 자식을 열 0 으로 내리면 **자식과 후속 형제가
+ * 구분되지 않는다**. NFM 원본에서는 자식만 탭을 갖고 형제는 열 0 이라 경계가 명확한데,
+ * 그 정보를 마커로 옮겨 싣지 않으면 push 가 형제까지 토글 안으로 빨아들인다.
+ * 끝 마커가 없는 구버전 볼트 문서를 위해 push 는 "다음 동급 이상 제목까지"로 폴백한다.
+ */
+export const TOGGLE_HEADING_START = compactMarker("toggle-heading");
+export const TOGGLE_HEADING_END = compactMarker("toggle-heading:end");
+
 /** 컬럼 레이아웃 보존 마커 (block-converter). */
 export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");
