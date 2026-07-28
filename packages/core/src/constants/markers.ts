@@ -57,6 +57,18 @@ export const TOGGLE_END = compactMarker("toggle:end");
 export const TOGGLE_HEADING_START = compactMarker("toggle-heading");
 export const TOGGLE_HEADING_END = compactMarker("toggle-heading:end");
 
+/**
+ * 인용/콜아웃 들여쓰기 깊이 보존 마커.
+ *
+ * pull 은 구조적 들여쓰기를 Obsidian 이 코드블록으로 오파싱하지 않는 폭(2칸)으로
+ * 클램프한다 — "2칸 = 한 단계"가 관례이므로 깊이 1 은 마커 없이 복원된다.
+ * 두 단계 이상은 2칸으로 표현할 수 없어 이 마커가 깊이를 대신 싣는다
+ * (실볼트 콜아웃 머리줄 699개 중 깊이 ≥2 는 8개 — 마커 노이즈를 98.9% 줄이는 선택).
+ */
+export function calloutIndentMarker(depth: number): string {
+  return compactMarker(`callout-indent:${depth}`);
+}
+
 /** 컬럼 레이아웃 보존 마커 (block-converter). */
 export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");

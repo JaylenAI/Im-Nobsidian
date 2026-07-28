@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND } from "../../constants/markers.js";
+import { CLAMPED_INDENT } from "../callout-indent.js";
 
 /**
  * 블록 간격 정규화(D1) — Notion markdown export 는 블록 사이 빈 줄이 없는 압축형이라
@@ -131,9 +132,16 @@ export function respace(content: string, sourceCompact?: boolean): string {
       continue;
     }
 
-    // 리스트 들여쓰기 탭 → 4-space (펜스 밖 리스트/연속 줄만)
-    const line =
-      LIST_ITEM_RE.test(raw) || INDENTED_CONTINUATION_RE.test(raw)
+    // 리스트 들여쓰기 탭 → 4-space (펜스 밖 리스트/연속 줄만).
+    //
+    // 인용/콜아웃 줄은 **제외**한다. 여기서 탭을 4칸으로 펼치면 그 순간 Obsidian 이
+    // 들여쓰기 코드블록으로 오파싱해 콜아웃이 통째로 죽는다(결함① — `\t> [!toggle]-` 이
+    // `    > [!toggle]-` 가 되던 실제 생산 지점). 변환기(callout-indent)가 이미 안전 폭으로
+    // 클램프해 내려보내지만, 변환기를 거치지 않은 입력(플러그인 경로·기존 볼트 문서)도
+    // 여기서 같은 폭으로 눌러 준다.
+    const line = QUOTE_RE.test(raw)
+      ? raw.replace(/^\t+/, CLAMPED_INDENT)
+      : LIST_ITEM_RE.test(raw) || INDENTED_CONTINUATION_RE.test(raw)
         ? raw.replace(/^\t+/, (t) => "    ".repeat(t.length))
         : raw;
 
@@ -147,7 +155,16 @@ export function respace(content: string, sourceCompact?: boolean): string {
       continue;
     }
     if (last()?.kind === "list" && INDENTED_CONTINUATION_RE.test(line)) {
-      // 경계 무시하고 리스트에 부착 — 분리하면 4-space 들여쓴 줄이 코드 블록으로 오파싱된다
+      // 경계 무시하고 리스트에 부착 — 분리하면 4-space 들여쓴 줄이 코드 블록으로 오파싱된다.
+      //
+      // 단, 클램프된 인용(2칸, callout-indent)은 예외다. 폭이 임계 미만이라 빈 줄이
+      // 들어가도 코드블록이 되지 않는 반면, 경계를 지우면 형제 콜아웃 둘이 한 blockquote
+      // 로 융합돼 **뒤 토글의 머리줄이 앞 토글의 본문 텍스트가 된다**(실측: `Creai LLM.md`
+      // 왕복에서 `<details>` 8→7 소실). 블록에서 떼어 내지는 않고(뒤따르는 4칸 자식의
+      // 코드블록 오파싱 방지) 빈 줄만 되살려 두 경계 요구를 동시에 만족시킨다.
+      if (QUOTE_RE.test(line) && (atBoundary || CALLOUT_START_RE.test(line))) {
+        appendToLast("");
+      }
       appendToLast(line);
       continue;
     }

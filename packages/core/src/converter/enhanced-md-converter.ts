@@ -16,6 +16,11 @@ import {
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import { dedentContainerBody, indentContainerBody } from "./container-indent.js";
+import {
+  applyCalloutIndent,
+  clampCalloutIndent,
+  readCalloutIndentDepth,
+} from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
@@ -66,6 +71,9 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = unescapeBrackets(result);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
+  // 들여쓰기 클램프가 가장 마지막 — 위 변환기들은 모두 탭 기준 구조 들여쓰기를 전제로
+  // 경계를 판정한다. 먼저 누르면 그 판정이 어긋난다(callout-indent 주석 참조).
+  result = clampCalloutIndent(result);
 
   return result;
 }
@@ -621,25 +629,36 @@ function convertTogglesToHtml(content: string): string {
   // 삼키면 토글 뒤에 있던 빈 줄이 한 겹 사라져 `</details>` 와 다음 블록이 문단 구분
   // 없이 맞붙고, 그 손실이 왕복마다 하나씩 누적돼 파일이 영영 수렴하지 않는다
   // (실볼트 11파일이 왕복 1회당 1~3바이트씩 계속 잠식됨을 실측).
-  const calloutToggleRe = /^> \[!toggle\]-[ \t]*(.*)((?:\n>.*)*)/gm;
+  //
+  // 선행 들여쓰기 `([ \t]{0,3})` 를 받는 이유: pull 이 리스트/칼럼 안 토글을 코드블록
+  // 임계 아래로 클램프해 내려보내기 때문이다(callout-indent). 열 0 에만 앵커하면 그
+  // 토글들이 push 에서 **통째로 사라진다** — 실볼트 `Creai LLM.md` 왕복 실측에서
+  // `<details>` 8개가 0개가 됐다. 본문 줄은 역참조 `\1` 로 같은 들여쓰기를 요구해
+  // 이웃 블록을 삼키지 않는다.
+  const calloutToggleRe = /^([ \t]{0,3})> \[!toggle\]-[ \t]*(.*)((?:\n\1>.*)*)/gm;
 
   let result = content;
   let prev = "";
   let safety = 0;
   while (result !== prev && safety++ < 100) {
     prev = result;
-    result = result.replace(calloutToggleRe, (_match, title: string, body: string) => {
-      // 색상 토글 마커 → <details color> 속성으로 재조립(ADR-008)
-      const colorMatch = TOGGLE_COLOR_MARKER_RE.exec(title);
-      const cleanTitle = colorMatch ? title.replace(TOGGLE_COLOR_MARKER_RE, "") : title;
-      const attrs = colorMatch ? ` color="${colorMatch[1]}"` : "";
-      const bodyText = body
-        .split("\n")
-        .map((line) => line.replace(/^>\s?/, ""))
-        .join("\n")
-        .trim();
-      return `<details${attrs}>\n<summary>${cleanTitle.trim()}</summary>\n\n${bodyText}\n\n</details>`;
-    });
+    result = result.replace(
+      calloutToggleRe,
+      (_match, indent: string, rawTitle: string, body: string) => {
+        const { depth, title } = readCalloutIndentDepth(indent, rawTitle);
+        // 색상 토글 마커 → <details color> 속성으로 재조립(ADR-008)
+        const colorMatch = TOGGLE_COLOR_MARKER_RE.exec(title);
+        const cleanTitle = colorMatch ? title.replace(TOGGLE_COLOR_MARKER_RE, "") : title;
+        const attrs = colorMatch ? ` color="${colorMatch[1]}"` : "";
+        const bodyText = body
+          .split("\n")
+          .map((line) => line.replace(/^[ \t]*>\s?/, ""))
+          .join("\n")
+          .trim();
+        const html = `<details${attrs}>\n<summary>${cleanTitle.trim()}</summary>\n\n${bodyText}\n\n</details>`;
+        return applyCalloutIndent(html, depth);
+      },
+    );
   }
 
   const startRe = new RegExp(escapeRegex(TOGGLE_START), "g");
@@ -669,7 +688,7 @@ function convertTogglesToHtml(content: string): string {
   // 마커 쌍(TOGGLE_START/END) 경로는 끝 마커가 줄 안에 인라인으로 박혀 있을 수 있어
   // 닫는 태그 뒤에 다음 블록이 개행 없이 붙는다(`</details>[🎬 video](url)` — 실 push
   // 프로브에서 Notion 이 그 줄의 video 태그를 통째로 폐기함을 실측).
-  result = result.replace(/^(<\/details>)(?!\n|$)/gm, "$1\n");
+  result = result.replace(/^([\t ]*<\/details>)(?!\n|$)/gm, "$1\n");
   return result;
 }
 
@@ -727,12 +746,16 @@ function convertObsidianCallouts(content: string): string {
   let i = 0;
 
   while (i < lines.length) {
-    const headerMatch = /^> \[!(\w+)\]([-+])?[ \t]*(.*)$/.exec(lines[i]!);
-    const type = headerMatch?.[1]?.toLowerCase();
+    // 선행 들여쓰기는 pull 의 클램프(callout-indent)가 남긴 것 — 받지 않으면 리스트/칼럼
+    // 안 콜아웃이 push 에서 리터럴 `> [!x]` 텍스트로 Notion 에 박제된다.
+    const headerMatch = /^([ \t]{0,3})> \[!(\w+)\]([-+])?[ \t]*(.*)$/.exec(lines[i]!);
+    const type = headerMatch?.[2]?.toLowerCase();
     // toggle/tab 헤드는 전용 변환기(convertTogglesToHtml/restoreTabBlocks) 소관 —
     // 콜아웃으로 오변환하지 않는다.
     if (headerMatch && type !== "toggle" && type !== "tab") {
-      let title = headerMatch[3]!;
+      const indentRead = readCalloutIndentDepth(headerMatch[1]!, headerMatch[4]!);
+      const depth = indentRead.depth;
+      let title = indentRead.title;
       let style: { icon?: string; color?: string } = {};
       const styleMatch = CALLOUT_STYLE_MARKER_RE.exec(title);
       if (styleMatch) {
@@ -744,9 +767,11 @@ function convertObsidianCallouts(content: string): string {
 
       const bodyLines: string[] = [];
       i++;
+      // 본문은 머리줄과 **같은 들여쓰기**를 요구한다 — 여백이 다르면 다른 컨테이너다.
       // 빈 연속줄 `>` 도 본문의 일부다(콜아웃 내 단락 구분) — `> ` 만 받으면 끊긴다.
-      while (i < lines.length && (lines[i] === ">" || lines[i]!.startsWith("> "))) {
-        bodyLines.push(lines[i] === ">" ? "" : lines[i]!.slice(2));
+      const quote = `${headerMatch[1]!}>`;
+      while (i < lines.length && (lines[i] === quote || lines[i]!.startsWith(`${quote} `))) {
+        bodyLines.push(lines[i] === quote ? "" : lines[i]!.slice(quote.length + 1));
         i++;
       }
       // 내부에 남은 토글/콜아웃 헤드(원문 깊이 2+)는 quote 한 겹이 벗겨져 이제 깊이 1 —
@@ -754,13 +779,14 @@ function convertObsidianCallouts(content: string): string {
       const innerConverted = convertObsidianCallouts(convertTogglesToHtml(bodyLines.join("\n")));
 
       const attrs = `${style.icon ? ` icon="${style.icon}"` : ""}${style.color ? ` color="${style.color}"` : ""}`;
-      result.push(`<callout${attrs}>`);
+      const block: string[] = [`<callout${attrs}>`];
       const cleanTitle = title.trim();
-      if (cleanTitle) result.push(`\t${cleanTitle}`);
+      if (cleanTitle) block.push(`\t${cleanTitle}`);
       if (innerConverted.trim() !== "") {
-        result.push(...indentContainerBody(innerConverted).split("\n"));
+        block.push(...indentContainerBody(innerConverted).split("\n"));
       }
-      result.push("</callout>");
+      block.push("</callout>");
+      result.push(...applyCalloutIndent(block.join("\n"), depth).split("\n"));
     } else {
       result.push(lines[i]!);
       i++;
@@ -802,7 +828,12 @@ function escapeRegex(str: string): string {
 }
 
 const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
-const NOTION_EMPTY_BLOCK_RE = /^(?:>[\t ]*)*[\t ]*<empty-block\/>\n?/gm;
+/**
+ * 빈 문단 토큰(`<empty-block/>`). 선행 여백을 **인용 접두 앞**에서 받아야 한다 —
+ * 여백을 인용 뒤에만 두면 `\t> <empty-block/>`(리스트/칼럼 안 콜아웃의 빈 줄)이 매칭되지
+ * 않아 토큰 원문이 그대로 볼트에 새어 나간다(실측: `Creai LLM.md` pull 961행).
+ */
+const NOTION_EMPTY_BLOCK_RE = /^[\t ]*(?:>[\t ]*)*<empty-block\/>[\t ]*\n?/gm;
 
 function convertPageLinks(content: string): string {
   return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
@@ -846,7 +877,13 @@ function convertBlockColorAttrs(content: string): string {
 // 첫 토글 안의 리터럴 `\[!toggle\]-` 문단으로 Notion 에 실제 오염된다(실 push 왕복
 // 프로브 실측). 콜아웃 헤드 직전 줄이 같은 깊이 이상의 quote 줄이면 한 단계 얕은
 // quote 구분줄을 삽입한다 — 깊이 1 은 빈 줄, 깊이 2 는 `>` (안쪽만 닫고 바깥은 유지).
-const CALLOUT_HEAD_RE = /^((?:> )*)> \[!\w+\][-+]?/;
+//
+// 선행 들여쓰기(`^([\t ]*)`)까지 받아야 하는 이유: 리스트/칼럼 안의 형제 토글은 구조적
+// 탭을 달고 오므로 열 0 에만 앵커하면 **분리가 전혀 일어나지 않는다**. 실측(`Creai LLM.md`
+// NFM 973~975행: `\t</details>` 바로 다음 줄이 `\t<details>`) — 두 토글이 한 blockquote 로
+// 융합돼 둘째 토글의 머리줄이 첫째의 본문 텍스트가 되고, push 왕복에서 `<details>` 가
+// 8개 → 7개로 줄었다. 이 함수는 클램프 이전 단계라 탭 형태를 그대로 다뤄야 한다.
+const CALLOUT_HEAD_RE = /^([\t ]*)((?:> )*)> \[!\w+\][-+]?/;
 
 function separateAdjacentCallouts(content: string): string {
   const lines = content.split("\n");
@@ -854,7 +891,7 @@ function separateAdjacentCallouts(content: string): string {
   for (const line of lines) {
     const head = CALLOUT_HEAD_RE.exec(line);
     if (head && out.length > 0) {
-      const parentPrefix = head[1]!;
+      const parentPrefix = `${head[1]!}${head[2]!}`;
       const prev = out[out.length - 1]!;
       if (prev.startsWith(`${parentPrefix}>`)) {
         out.push(parentPrefix.trimEnd());
