@@ -1,10 +1,20 @@
 # Im-Nobsidian Roadmap
 
-> Last updated: 2026-07-17
+> Last updated: 2026-07-28
 
-## Current State (v0.3.1 — 릴리스 대기)
+## Current State (v0.3.2 — 릴리스 완료)
 
-v0.3.1 — 정상상태 churn 근절 + push 왕복 잔여 누수 봉합 (무손실 패치, 공개 API/deps 무변경).
+v0.3.2 — 볼트 렌더 충실도 + 동기화 견고성. 토글이 코드블록으로, 표가 파이프 조각으로,
+콜아웃이 적색 오류로 보이던 **렌더 결함 15종(P1–P7)** 과 본문 8,200행을 삼키던
+**코드펜스 경계 버그(P11)** 봉합. 렌더 규칙을 `@im-nobsidian/core` 로 이관해
+(`lintRenderedMarkdown`) 코퍼스 게이트와 E2E 하니스가 같은 잣대를 쓴다. 견고성 트랙
+`R0–R13` — rate limit 아래 pull 정지(R9c)·네트워크 시간상한 3종(R9a·R9e·R9f)·
+`Retry-After`(R9d)·링크 미해소 4종(R10-A–D)·CLI 종료코드(R11-C)·다중 data source
+변경감지(R11-A)·디스커버리 결정성(R12)·**삭제된 DB 행 복원(R13)**. clean-slate
+**1,268 노트**(343 페이지+925 DB 행) 실데이터 재구성: 무결성 CLEAN·verify 925=925·343=343·
+re-pull/push/sync 전부 churn-0·렌더 린트 결함 0. **1,662 tests + 라이브 불변식 15케이스.**
+
+직전 v0.3.1 — 정상상태 churn 근절 + push 왕복 잔여 누수 봉합 (무손실 패치, 공개 API/deps 무변경).
 동명 형제 인라인 DB 폴더 충돌(22쌍 분리)·linked view 컨테이너 이중 등록(행 parent 판정)
 제거로 무변경 pull **churn-0** 달성. push 시 HTML 주석 차단(F26 확장)·page mention 신형
 `app.notion.com/p/` URL 해소(F27). clean-slate **887 파일**(258 페이지+629 DB 행) 실데이터 재구성: audit 결함 0·
@@ -48,9 +58,14 @@ v0.3.0  ─── ✅ 왕복 충실도 일괄 봉합 (2026-07-14)
             주석/각주/하이라이트/표정렬/블록간격 왕복, F20/F21 증분 누락 수정,
             pull --force, 첨부 dedup, Node 22+, 1151 tests
 
-v0.3.1  ─── ⏳ 정상상태 churn 근절 (릴리스 대기)
+v0.3.1  ─── ✅ 정상상태 churn 근절 (2026-07-17)
             동명 인라인 DB 폴더 분리·linked view 중복 제거(churn-0),
             HTML 주석 왕복·mention URL 봉합, clean-slate 887 실데이터, 1285 tests
+
+v0.3.2  ─── ✅ 렌더 충실도 + 동기화 견고성 (2026-07-28)
+            렌더 결함 15종(P1–P7)·코드펜스 본문 삼킴(P11) 봉합, 렌더 게이트 코어 이관,
+            R0–R13 견고성(pull 정지·시간상한·링크 4종·종료코드·DB 행 복원),
+            clean-slate 1268 노트 실데이터(churn-0, 렌더 결함 0), 1662 tests
 
 v1.0.0  ─── 커뮤니티 등록 + 안정 릴리스 (예정)
             obsidian-releases PR, BRAT 베타, multi-workspace, 1000+ notes

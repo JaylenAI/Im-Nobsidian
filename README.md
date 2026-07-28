@@ -308,7 +308,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.3.0 (BRAT install)                                                                                       |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.3.2 (BRAT install)                                                                                       |
 
 ### Using as a Library
 
@@ -377,7 +377,12 @@ Escapes inside fenced or inline code are untouched, and `\\[` (an escaped backsl
 ## Roadmap
 
 ```
-v0.3.1 🔜 Next — steady-churn elimination (same-title inline-DB folder separation,
+v0.3.2 ✅ render fidelity (toggles/tables/callouts/code fences — 15 defect classes +
+        document-swallowing code-fence fix), sync resilience (pull stalls, network
+        deadlines, Retry-After, 4 link classes, CLI exit codes), deleted DB-row
+        restore, clean-slate 1268-note real-data E2E (churn-0, 0 render defects),
+        1662 tests
+v0.3.1 ✅ steady-churn elimination (same-title inline-DB folder separation,
         linked-view container dedup), Obsidian/HTML comment round-trip, page-mention
         URL fix, clean-slate 887-file real-data E2E (churn-0, lossless), 1285 tests
 v0.3.0 ✅ round-trip fidelity sweep (comments/footnotes/highlights/table alignment/
@@ -397,7 +402,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1285 tests
+pnpm test          # 1662 tests
 pnpm lint
 pnpm typecheck
 

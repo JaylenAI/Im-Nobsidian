@@ -298,7 +298,7 @@ due: 2026-06-30 # → Date 속성
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.3.0 (BRAT 설치 가능)                                                                                     |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.3.2 (BRAT 설치 가능)                                                                                     |
 
 ### 라이브러리로 사용하기
 
@@ -356,7 +356,11 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
-v0.3.1 🔜 다음 — steady-churn 근절(동명 인라인 DB 폴더 분리, linked view 컨테이너
+v0.3.2 ✅ 렌더 충실도(토글/표/콜아웃/코드펜스 — 결함 15종 + 본문 삼킴 코드펜스 봉합),
+        동기화 견고성(pull 정지, 네트워크 시간상한, Retry-After, 링크 4종,
+        CLI 종료코드), 삭제된 DB 행 복원,
+        clean-slate 1268노트 실데이터 E2E(churn-0, 렌더 결함 0), 1662개 테스트
+v0.3.1 ✅ steady-churn 근절(동명 인라인 DB 폴더 분리, linked view 컨테이너
         중복 제거), 옵시디언/HTML 주석 왕복, 페이지 멘션 URL 수정,
         clean-slate 887파일 실데이터 E2E(churn-0, 무손실), 1285개 테스트
 v0.3.0 ✅ 왕복 충실도 일괄 봉합(주석/각주/하이라이트/표정렬/블록간격),
@@ -376,7 +380,7 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1285개 테스트
+pnpm test          # 1662개 테스트
 pnpm lint
 pnpm typecheck
 ```
