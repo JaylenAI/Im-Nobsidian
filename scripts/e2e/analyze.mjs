@@ -79,7 +79,8 @@ const dbReport = {
   byType: {},
   duplicatePageIds: [],
   folderNoteMisplaced: [],
-  orphanFiles: [], // FS엔 있으나 DB에 없는 .md
+  orphanFiles: [], // FS엔 있으나 DB에 없는 .md (고아/누출)
+  missingFiles: [], // DB엔 있으나 FS에 없는 레코드 (조용한 소실)
 };
 
 const dbPath = join(vault, INTERNAL, "sync.db");
@@ -88,9 +89,7 @@ if (existsSync(dbPath)) {
     const Database = require("better-sqlite3");
     db = new Database(dbPath, { readonly: true });
     const rows = db
-      .prepare(
-        "SELECT obsidian_path, notion_page_id, notion_parent_id, file_type FROM sync_state",
-      )
+      .prepare("SELECT obsidian_path, notion_page_id, notion_parent_id, file_type FROM sync_state")
       .all();
     dbReport.available = true;
     dbReport.total = rows.length;
@@ -125,6 +124,17 @@ if (existsSync(dbPath)) {
     // FS에는 있으나 DB에 없는 .md (고아/누출).
     for (const p of fs.md) {
       if (!dbPaths.has(p)) dbReport.orphanFiles.push(p);
+    }
+
+    // 반대 방향 — DB엔 추적 레코드가 있는데 실물이 없는 경우. 이 축이 없던 탓에 R13
+    // (원격 무변경 db-row 의 로컬 삭제 미복원)이 모든 게이트를 통과했다: 개수 대조는
+    // FS→DB 한 방향만 봤고, verify 는 상태 DB 의 id 집합끼리 맞춰 레코드만 있으면
+    // "완결"이었으며, repull churn 은 그 행을 건너뛰니 애초에 0 이었다.
+    // folder-only 의 실체는 폴더지만 existsSync 는 폴더도 참이므로 예외가 필요 없다.
+    for (const r of rows) {
+      if (!existsSync(join(vault, r.obsidian_path))) {
+        dbReport.missingFiles.push({ path: r.obsidian_path, fileType: r.file_type });
+      }
     }
   } catch (e) {
     dbReport.error = String(e && e.message ? e.message : e);
@@ -161,12 +171,15 @@ for (const rel of fs.md) {
 
 // ─── 4) 판정 ───
 // 진짜 무결성 위반은 '같은 page_id 가 여러 파일에 매핑'(중복/부활), 'folder-note 위치오류',
-// 그리고 '본문이 깨져 보이는 노트'다. dedup 접미사는 정상 동작이므로 위반이 아니다.
+// '추적 중인데 실물이 없음'(양방향 대조), 그리고 '본문이 깨져 보이는 노트'다.
+// dedup 접미사는 정상 동작이므로 위반이 아니다.
 const violations = [];
 if (dbReport.duplicatePageIds.length)
   violations.push(`중복 page_id ${dbReport.duplicatePageIds.length}건`);
 if (dbReport.folderNoteMisplaced.length)
   violations.push(`folder-note 위치오류 ${dbReport.folderNoteMisplaced.length}건`);
+if (dbReport.missingFiles.length)
+  violations.push(`추적 중인데 실물 없음 ${dbReport.missingFiles.length}건`);
 if (renderReport.files.length)
   violations.push(`렌더 결함 ${renderReport.files.length}노트 ${renderReport.defects}건`);
 
@@ -191,7 +204,9 @@ if (jsonOnly) {
   const L = (s) => process.stderr.write(s + "\n");
   L("");
   L("  ── 동기화 충실도 분석 ──");
-  L(`  파일:  md ${report.fs.md} · .base ${report.fs.base} · 첨부 ${report.fs.attachments} · 폴더 ${report.fs.folders}`);
+  L(
+    `  파일:  md ${report.fs.md} · .base ${report.fs.base} · 첨부 ${report.fs.attachments} · 폴더 ${report.fs.folders}`,
+  );
   if (dbReport.available) {
     const types = Object.entries(dbReport.byType)
       .map(([k, v]) => `${k} ${v}`)
@@ -213,13 +228,23 @@ if (jsonOnly) {
   }
   if (renderReport.files.length > 10) L(`         … 외 ${renderReport.files.length - 10}노트`);
   if (dedupSuffixed.length)
-    L(`  · dedup 접미사(정상 disambiguation) ${dedupSuffixed.length}건: ${dedupSuffixed.slice(0, 5).join(", ")}${dedupSuffixed.length > 5 ? " …" : ""}`);
+    L(
+      `  · dedup 접미사(정상 disambiguation) ${dedupSuffixed.length}건: ${dedupSuffixed.slice(0, 5).join(", ")}${dedupSuffixed.length > 5 ? " …" : ""}`,
+    );
   if (dbReport.duplicatePageIds.length)
     L(`  ⚠ 중복 page_id: ${JSON.stringify(dbReport.duplicatePageIds.slice(0, 5))}`);
   if (dbReport.folderNoteMisplaced.length)
     L(`  ⚠ folder-note 위치오류: ${JSON.stringify(dbReport.folderNoteMisplaced.slice(0, 5))}`);
   if (dbReport.orphanFiles.length)
-    L(`  · DB 미등록 .md(고아) ${dbReport.orphanFiles.length}건: ${dbReport.orphanFiles.slice(0, 5).join(", ")}`);
+    L(
+      `  · DB 미등록 .md(고아) ${dbReport.orphanFiles.length}건: ${dbReport.orphanFiles.slice(0, 5).join(", ")}`,
+    );
+  if (dbReport.missingFiles.length) {
+    L(`  ⚠ 추적 중인데 실물 없음 ${dbReport.missingFiles.length}건:`);
+    for (const m of dbReport.missingFiles.slice(0, 10)) L(`         ✗ ${m.path} [${m.fileType}]`);
+    if (dbReport.missingFiles.length > 10)
+      L(`         … 외 ${dbReport.missingFiles.length - 10}건`);
+  }
   L(report.clean ? "  ✓ 무결성: CLEAN" : `  ✗ 무결성 위반: ${violations.join(" · ")}`);
   L("");
   // JSON 도 stdout 으로 — 호출자가 캡처 가능.
