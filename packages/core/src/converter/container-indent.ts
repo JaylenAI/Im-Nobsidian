@@ -81,7 +81,9 @@ export function dedentContainerBody(text: string): string {
   while (lines.length && lines[0]!.trim() === "") lines.shift();
   while (lines.length && lines[lines.length - 1]!.trim() === "") lines.pop();
 
-  const kinds = classifyContainerLines(lines);
+  const blocks = scanContainerBlocks(lines);
+  const kinds = kindsOf(lines, blocks);
+  const widened = widenAmbiguousFences(lines, blocks);
 
   // 2패스: 산문 줄의 공통 선행 들여쓰기 계산(상대 들여쓰기 보존 — textwrap.dedent 의미론).
   let min = Infinity;
@@ -96,7 +98,12 @@ export function dedentContainerBody(text: string): string {
     .map((l, i) => {
       if (l.trim() === "") return "";
       if (kinds[i] === "code") return l;
-      if (kinds[i] === "fence") return l.replace(/^[\t ]+/, "");
+      if (kinds[i] === "fence") {
+        // 구조 들여쓰기만 걷어내 접두(`>`)와 언어 정보는 남기고, 폭만 갈아 끼운다.
+        const flat = l.replace(/^[\t ]+/, "");
+        const bar = widened.get(i);
+        return bar === undefined ? flat : flat.replace(/`{3,}|~{3,}/, bar);
+      }
       return l.slice(min);
     })
     .join("\n");
@@ -138,47 +145,182 @@ export function stripContainerIndent(text: string, indent: string): string {
 /** 표를 여는 줄 — 이름 경계를 확인해 `<table_of_contents/>` 를 배제한다. */
 const TABLE_OPEN_LINE_RE = new RegExp(`^[\\t ]*${nfmOpenTagSource("table")}`);
 
+/** 코드펜스 한 줄의 구성요소 — 여는 펜스와 닫는 펜스를 같은 기준으로 견주기 위한 값. */
+interface FenceLine {
+  readonly indent: string;
+  readonly char: string;
+  readonly len: number;
+  readonly info: string;
+}
+
+const FENCE_LINE_RE = /^([\t ]*)(`{3,}|~{3,})(.*)$/;
+
+function matchFence(line: string): FenceLine | null {
+  const m = FENCE_LINE_RE.exec(line);
+  return m ? { indent: m[1]!, char: m[2]![0]!, len: m[2]!.length, info: m[3]! } : null;
+}
+
+/** 코드블록·표 한 덩어리의 경계. 끝까지 닫히지 않으면 `close` 가 `null`. */
+interface ContainerBlock {
+  readonly type: "code" | "table";
+  readonly open: number;
+  readonly close: number | null;
+  /** `type === "code"` 일 때 여는 펜스의 구성요소. */
+  readonly fence?: FenceLine;
+}
+
+/**
+ * 여는 펜스의 짝을 찾는다 — **들여쓰기까지 같아야** 진짜 경계다.
+ *
+ * NFM 은 경계 펜스만 탭으로 들여쓰고 내용은 열 0 에 둔다(비대칭 들여쓰기). 그래서 문자·
+ * 길이만 보고 닫으면, 코드 **내용**에 들어 있는 열 0 의 ``` 줄(프롬프트 템플릿·마크다운
+ * 튜토리얼에 흔하다)이 블록을 조기에 닫아 이후 펜스가 통째로 한 칸씩 밀린다. 들여쓰기가
+ * 어긋난 짝은 NFM 이 들여쓰기를 흘린 경우를 대비한 폴백으로만 쓴다.
+ */
+function findFenceClose(lines: readonly string[], start: number, open: FenceLine): number | null {
+  let loose: number | null = null;
+  for (let j = start + 1; j < lines.length; j++) {
+    const f = matchFence(lines[j]!);
+    if (!f || f.char !== open.char || f.len < open.len || f.info.trim() !== "") continue;
+    if (f.indent === open.indent) return j;
+    loose ??= j;
+  }
+  return loose;
+}
+
+/**
+ * 컨테이너 본문을 코드블록·표 덩어리로 훑는다 — 줄 분류와 펜스 확장의 공통 기준.
+ *
+ * <table> 태그만 깊게 들여쓰고 내부 행은 열 0 인 비대칭 구조도 같은 방식으로 다룬다.
+ */
+function scanContainerBlocks(lines: readonly string[]): ContainerBlock[] {
+  const blocks: ContainerBlock[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    const fence = matchFence(lines[i]!);
+    if (fence) {
+      const close = findFenceClose(lines, i, fence);
+      blocks.push({ type: "code", open: i, close, fence });
+      i = close ?? lines.length;
+      continue;
+    }
+    if (!TABLE_OPEN_LINE_RE.test(lines[i]!)) continue;
+    if (/<\/table>/.test(lines[i]!)) {
+      blocks.push({ type: "table", open: i, close: i });
+      continue;
+    }
+    let close: number | null = null;
+    for (let j = i + 1; j < lines.length; j++) {
+      if (!/<\/table>/.test(lines[j]!)) continue;
+      close = j;
+      break;
+    }
+    blocks.push({ type: "table", open: i, close });
+    i = close ?? lines.length;
+  }
+  return blocks;
+}
+
+function kindsOf(lines: readonly string[], blocks: readonly ContainerBlock[]): ContainerLineKind[] {
+  const kinds: ContainerLineKind[] = lines.map(() => "prose");
+  for (const b of blocks) {
+    kinds[b.open] = "fence";
+    const end = b.close ?? lines.length;
+    for (let j = b.open + 1; j < end; j++) kinds[j] = "code";
+    if (b.close !== null && b.close !== b.open) kinds[b.close] = "fence";
+  }
+  return kinds;
+}
+
+/**
+ * 경계 펜스를 **내용의 어떤 펜스보다도 긴** 펜스로 바꾼다.
+ *
+ * 경계 펜스는 열 0 으로 정렬해야 `> ` 를 붙여도 CommonMark 펜스 규칙(들여쓰기 ≤3칸)을
+ * 지킨다. 그런데 그렇게 맞추는 순간 내용 안의 열 0 ``` 줄과 들여쓰기가 같아져, 옵시디언이
+ * 경계와 내용을 가릴 근거를 잃는다. 펜스가 순서대로 짝지어지며 경계가 한 칸씩 밀리고,
+ * 뒤따르는 본문이 통째로 코드블록에 삼켜진다(실측: 한 노트에서 코드블록 5→39개,
+ * 8,200행 삼킴 — 사용자 화면에 `>` 가 날것으로 보이던 증상). CommonMark 는 **긴 펜스는
+ * 그보다 짧은 펜스로 닫히지 않는다**고 규정하므로, 내용의 최장 펜스보다 한 칸 긴 펜스를
+ * 쓰면 들여쓰기를 잃고도 경계가 복원된다.
+ */
+function widenAmbiguousFences(
+  lines: readonly string[],
+  blocks: readonly ContainerBlock[],
+): Map<number, string> {
+  const widened = new Map<number, string>();
+  for (const b of blocks) {
+    if (b.type !== "code" || !b.fence) continue;
+    const end = b.close ?? lines.length;
+    let longest = 0;
+    for (let j = b.open + 1; j < end; j++) {
+      const f = matchFence(lines[j]!);
+      if (f?.char === b.fence.char) longest = Math.max(longest, f.len);
+    }
+    if (longest < b.fence.len) continue;
+    const bar = b.fence.char.repeat(longest + 1);
+    widened.set(b.open, bar);
+    if (b.close !== null) widened.set(b.close, bar);
+  }
+  return widened;
+}
+
+/**
+ * 코드블록 **내부**의 문자 구간 — 코드에 적힌 마크업을 구조로 오인하지 않기 위한 경계.
+ *
+ * 코드블록 내용 자체가 `<table>`·`<details>` 같은 마크업인 문서가 흔하다(스킨 예제,
+ * 마크다운 튜토리얼). 전역 정규식으로 그 마크업을 변환하면 사용자가 적어 둔 예제 코드가
+ * 통째로 표로 치환돼 사라진다 — 실측: 한 노트에서 `<table` 29→4, `<tr` 158→1.
+ *
+ * 문서 전체를 받으므로 콜아웃 본문은 이미 `> ` 가 붙어 있다. **판정만** 접두를 벗긴
+ * 몸통으로 하고 구간은 원문 offset 으로 센다 — 접두를 경계의 일부로 삼으면
+ * {@link indentContainerBody} 쪽 중첩 판정까지 흔들린다.
+ */
+export function codeInteriorRanges(text: string): Array<readonly [number, number]> {
+  const lines = text.split("\n");
+  const kinds = classifyContainerLines(lines.map((l) => splitContainerPrefix(l).body));
+  const ranges: Array<readonly [number, number]> = [];
+  let offset = 0;
+  let start: number | null = null;
+  lines.forEach((line, i) => {
+    if (kinds[i] === "code" && start === null) start = offset;
+    else if (kinds[i] !== "code" && start !== null) {
+      ranges.push([start, offset] as const);
+      start = null;
+    }
+    offset += line.length + 1;
+  });
+  if (start !== null) ranges.push([start, offset] as const);
+  return ranges;
+}
+
+/** {@link codeInteriorRanges} 판정 — 전역 치환 콜백의 `offset` 을 그대로 넘긴다. */
+export function isInsideRanges(
+  ranges: readonly (readonly [number, number])[],
+  offset: number,
+): boolean {
+  return ranges.some(([start, end]) => offset >= start && offset < end);
+}
+
 /**
  * 코드블록·테이블 경계를 추적해 각 줄을 분류한다 —
  * {@link dedentContainerBody}(pull)와 {@link indentContainerBody}(push)의 공통 기준.
  */
 export function classifyContainerLines(lines: readonly string[]): ContainerLineKind[] {
-  const kinds: ContainerLineKind[] = [];
-  let inCode = false;
-  let fenceChar = "";
-  let fenceLen = 0;
-  let inTable = false;
-  for (const line of lines) {
-    const fence = /^[\t ]*(`{3,}|~{3,})(.*)$/.exec(line);
-    if (inCode) {
-      if (
-        fence &&
-        fence[1]![0] === fenceChar &&
-        fence[1]!.length >= fenceLen &&
-        fence[2]!.trim() === ""
-      ) {
-        inCode = false;
-        kinds.push("fence");
-      } else {
-        kinds.push("code");
-      }
-    } else if (inTable) {
-      const closes = /<\/table>/.test(line);
-      kinds.push(closes ? "fence" : "code");
-      if (closes) inTable = false;
-    } else if (fence) {
-      inCode = true;
-      fenceChar = fence[1]![0]!;
-      fenceLen = fence[1]!.length;
-      kinds.push("fence");
-    } else if (TABLE_OPEN_LINE_RE.test(line)) {
-      // <table> 태그만 깊게 들여쓰고 내부 행은 열 0 인 비대칭 구조. 한 줄에서 닫히지
-      // 않으면 테이블 모드로 진입해 행을 보존, 닫는 </table> 도 경계로 열 0 정렬한다.
-      if (!/<\/table>/.test(line)) inTable = true;
-      kinds.push("fence");
-    } else {
-      kinds.push("prose");
-    }
+  return kindsOf(lines, scanContainerBlocks(lines));
+}
+
+/**
+ * 각 줄이 속한 컨테이너 블록의 **마지막 줄** — 컨테이너 밖이면 자기 자신.
+ *
+ * 들여쓰기로 구간을 끊는 스캐너가 컨테이너를 **통째로** 건너뛰기 위한 값이다. NFM 은 경계
+ * 태그만 들여쓰고 내부 줄은 열 0 에 두므로(비대칭 들여쓰기), 줄 단위 들여쓰기 판정은 코드
+ * 첫 줄이나 **닫는 펜스**에서 구간을 잘못 끊는다. 닫는 줄이 구간 밖으로 밀려나면 그 자리에
+ * 뒤따라 붙는 마커·본문이 사용자의 코드 **안으로** 들어간다.
+ */
+export function containerBlockEnds(lines: readonly string[]): number[] {
+  const ends = lines.map((_, i) => i);
+  for (const b of scanContainerBlocks(lines)) {
+    const end = b.close ?? lines.length - 1;
+    for (let j = b.open; j <= end; j++) ends[j] = end;
   }
-  return kinds;
+  return ends;
 }

@@ -8,7 +8,13 @@ import {
   obsidianToNotionEnhanced,
 } from "../../src/converter/enhanced-md-converter.js";
 import { BlockSpacer, isCompactExport } from "../../src/converter/post-processors/block-spacer.js";
-import { lintRendered, structureDrift, contentLoss, roundTripDrift } from "./rules.js";
+import {
+  lintRendered,
+  structureDrift,
+  contentLoss,
+  roundTripDrift,
+  codeBoundaryDrift,
+} from "./rules.js";
 
 /**
  * 볼트 렌더 게이트 — NFM 원본 코퍼스를 **파이프라인 전체**로 pull/push 하고
@@ -107,6 +113,18 @@ describe(`볼트 렌더 게이트 (${corpus.length}노트 · ${CORPUS_DIR === FI
     expect(report, `비율 드리프트 ${report.length}노트\n${report.slice(0, 20).join("\n")}`).toEqual(
       [],
     );
+  });
+
+  // 삼켜진 본문은 **사라지지 않고** 코드블록 안에 남는다. 그래서 산문 보존율·본문 삼킴
+  // 지표는 이 파손을 통과시킨다 — 경계 자체를 따로 못박아야 한다(P11).
+  it("코드블록 경계가 어긋나지 않는다 — 개수·코드 행수가 원본과 같다", () => {
+    const report = corpus.flatMap(({ name, raw, pulled }) =>
+      codeBoundaryDrift(raw, pulled).map((d) => `${d.name} ${d.before}→${d.after} — ${name}`),
+    );
+    expect(
+      report,
+      `코드블록 드리프트 ${report.length}건\n${report.slice(0, 20).join("\n")}`,
+    ).toEqual([]);
   });
 
   it("왕복이 안정적이다 — push 했다 다시 pull 해도 내용 줄이 그대로다", () => {

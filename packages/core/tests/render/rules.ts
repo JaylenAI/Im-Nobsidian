@@ -154,6 +154,73 @@ export function structureDrift(raw: string, pushed: string): Drift[] {
   return drift;
 }
 
+const FENCE_OF = (body: string) => {
+  const m = /^([\t ]*)(`{3,}|~{3,})(.*)$/.exec(body);
+  return m ? { indent: m[1]!, char: m[2]![0]!, len: m[2]!.length, info: m[3]! } : null;
+};
+
+type Fence = NonNullable<ReturnType<typeof FENCE_OF>>;
+
+/**
+ * 여는 펜스를 닫는 줄. 문자·길이(CommonMark: 여는 펜스 이상)·빈 info 는 공통 조건이고,
+ * `strict` 면 들여쓰기가 같은 줄을 **우선** 고르되 하나도 없으면 첫 느슨한 줄로 물러난다.
+ * NFM 이 닫는 펜스의 들여쓰기를 흘리는 경우가 실제로 있어(여는 줄 `\t\t`, 닫는 줄 열 0),
+ * 물러섬이 없으면 멀쩡한 블록이 파일 끝까지 열린 것으로 잘못 잡힌다.
+ */
+function closeIndex(bodies: readonly string[], start: number, open: Fence, strict: boolean) {
+  let loose: number | null = null;
+  for (let j = start + 1; j < bodies.length; j++) {
+    const f = FENCE_OF(bodies[j]!);
+    if (!f || f.char !== open.char || f.len < open.len || f.info.trim() !== "") continue;
+    if (!strict || f.indent === open.indent) return j;
+    loose ??= j;
+  }
+  return loose;
+}
+
+/**
+ * 코드블록을 CommonMark 규칙대로 짝지어 **개수와 코드 행수**를 센다.
+ *
+ * @param strict 들여쓰기가 같은 닫는 펜스를 우선한다. NFM 원본은 경계 펜스만 탭으로
+ *   들여쓰고 내용은 열 0 에 두므로(비대칭 들여쓰기), 원본을 셀 때는 이 기준이 정답이다.
+ *   반대로 볼트 산출물은 옵시디언이 읽는 그대로 — 들여쓰기를 보지 않고 순서대로 — 세야
+ *   경계가 밀린 사실이 드러난다.
+ * @param quoted 인용 접두(`> `)를 벗기고 판정한다 — 볼트 산출물은 콜아웃 안에 있다.
+ */
+function codeBlocks(md: string, strict: boolean, quoted: boolean) {
+  const bodies = md.split("\n").map((l) => (quoted ? l.replace(/^((?:\s*>)+)\s?/, "") : l));
+  let blocks = 0;
+  let codeLines = 0;
+  for (let i = 0; i < bodies.length; i++) {
+    const open = FENCE_OF(bodies[i]!);
+    if (!open) continue;
+    blocks++;
+    const end = closeIndex(bodies, i, open, strict) ?? bodies.length;
+    codeLines += end - i - 1;
+    i = end;
+  }
+  return { blocks, codeLines };
+}
+
+/**
+ * 코드블록 경계 대조 — 원본 NFM 과 볼트 산출물의 코드블록 **개수·코드 행수**를 견준다.
+ *
+ * 산문 보존율·본문 삼킴 지표는 이 결함을 구조적으로 통과시킨다. 삼켜진 본문은 사라지지
+ * 않고 코드블록 **안에** 그대로 남아 글자 수가 맞기 때문이다. 사람 눈에는 `>` 와 백틱이
+ * 날것으로 보이는 완전한 파손인데 지표는 초록이었다 — 실측: Blog 노트에서 코드블록
+ * 5→39개, 본문 8,200행이 코드로 삼켜진 채 게이트 7/7 통과.
+ */
+export function codeBoundaryDrift(raw: string, pulled: string): Drift[] {
+  const before = codeBlocks(raw, true, false);
+  const after = codeBlocks(pulled, false, true);
+  const drift: Drift[] = [];
+  if (before.blocks !== after.blocks)
+    drift.push({ name: "코드블록수", before: before.blocks, after: after.blocks });
+  if (before.codeLines !== after.codeLines)
+    drift.push({ name: "코드행수", before: before.codeLines, after: after.codeLines });
+  return drift;
+}
+
 /**
  * 본문 보존 — 구조가 멀쩡해도 **글이 사라지면** 아무 의미가 없다.
  *
