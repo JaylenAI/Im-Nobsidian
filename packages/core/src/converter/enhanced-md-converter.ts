@@ -4,8 +4,9 @@ import {
   TOGGLE_START,
   TOGGLE_END,
   COLUMN_LIST_START,
-  COLUMN_SEP,
   COLUMN_LIST_END,
+  COLUMN_SEP_SOURCE,
+  columnMarker,
   WIKILINK_PROTOCOL,
   syncedStartMarker,
   type SyncedKind,
@@ -222,9 +223,10 @@ const INNERMOST_COLUMNS_RE = new RegExp(
   `([\\t ]*)${nfmOpenTagSource("columns")}\\n?(${NO_CONTAINER_BODY})<\\/columns>`,
   "g",
 );
-// 이름 경계 확인이 `<column` 과 `<columns` 를 갈라 준다 — 속성 허용은 ratio 대비
+// 이름 경계 확인이 `<column` 과 `<columns` 를 갈라 준다. 속성부는 캡처한다 — 너비 비율이
+// `<column ratio="62.5">` 로 실려 오므로 버리면 push 가 레이아웃을 균등 분할로 되돌린다.
 const COLUMN_WRAP_RE = new RegExp(
-  `[\\t ]*${nfmOpenTagSource("column")}\\n?([\\s\\S]*?)[\\t ]*<\\/column>\\n?`,
+  `[\\t ]*${nfmOpenTagSource("column", "capture")}\\n?([\\s\\S]*?)[\\t ]*<\\/column>\\n?`,
   "g",
 );
 
@@ -243,6 +245,17 @@ function parseDesignAttrs(attrs: string): { icon?: string; color?: string } {
   const icon = /\bicon="([^"]*)"/.exec(attrs)?.[1];
   const color = /\bcolor="([^"]*)"/.exec(attrs)?.[1];
   return { icon: icon || undefined, color: color || undefined };
+}
+
+/**
+ * `<column ratio="62.5">` 의 너비 비율 파서.
+ *
+ * **십진수만** 통과시킨다. 비율은 마커 페이로드로 실려 `%%…%%` 안에 들어가는데, 검증 없이
+ * 속성 값을 그대로 옮기면 `%%` 나 개행이 든 값 하나가 마커를 두 동강 내 그 자리의 칼럼
+ * 경계 전체를 무너뜨린다. 형식을 벗어난 값은 비율만 버리고 칼럼은 살린다.
+ */
+function parseColumnRatio(attrs: string): string | undefined {
+  return /\bratio="(\d+(?:\.\d+)?)"/.exec(attrs)?.[1];
 }
 
 // <details> → > [!toggle]- (본문은 dedent 후 `> ` prefix). dedent 가 코드펜스를 열 0 으로
@@ -268,20 +281,24 @@ function toggleToCallout(title: string, rawBody: string, color?: string): string
 // push 하면 사용자의 **Notion 레이아웃 자체가 파괴**된다(오프라인 실측: 3열 → pull 2열
 // → push `<column>` 2개). 마커만 남기고 본문을 비워 두면 칼럼 수가 보존된다.
 function flattenColumns(body: string): string {
-  const cols: string[] = [];
+  const cols: Array<{ ratio?: string; body: string }> = [];
   const re = new RegExp(COLUMN_WRAP_RE.source, COLUMN_WRAP_RE.flags);
   let m: RegExpExecArray | null;
   let matched = false;
   while ((m = re.exec(body)) !== null) {
     matched = true;
-    cols.push(dedentContainerBody(m[1]!));
+    cols.push({ ratio: parseColumnRatio(m[1] ?? ""), body: dedentContainerBody(m[2]!) });
   }
   // <column> 래퍼가 전혀 없을 때만 폴백 dedent. 래퍼가 있으나 **전부** 빈 칼럼이면
   // 레이아웃이 아무것도 담지 않은 것이므로 "" 반환(태그 제거됨). 폴백을 여기서 걸면
   // 빈 칼럼의 <column> 태그가 샌다.
   if (!matched) return dedentContainerBody(body);
-  if (cols.every((c) => c.trim() === "")) return "";
-  return [COLUMN_LIST_START, ...cols.map((c) => `${COLUMN_SEP}\n${c}`), COLUMN_LIST_END].join("\n");
+  if (cols.every((c) => c.body.trim() === "")) return "";
+  return [
+    COLUMN_LIST_START,
+    ...cols.map((c) => `${columnMarker(c.ratio)}\n${c.body}`),
+    COLUMN_LIST_END,
+  ].join("\n");
 }
 
 function convertContainers(content: string): string {
@@ -318,7 +335,7 @@ function convertContainers(content: string): string {
  * 사용자의 Notion 열 구성이 push 에서 평탄화된다(D-EMPTY-COLUMN 과 같은 이유).
  */
 const COLUMN_MARKER_LINE_RE = new RegExp(
-  `^${CONTAINER_PREFIX_SOURCE}%%${MARKER_BRAND_RE}:column(?:-list:(?:start|end))?%%[\\t ]*$`,
+  `^${CONTAINER_PREFIX_SOURCE}(?:${COLUMN_SEP_SOURCE}|%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%)[\\t ]*$`,
 );
 
 /**
@@ -1189,8 +1206,33 @@ const INNERMOST_COLUMN_REGION_RE = new RegExp(
   "gm",
 );
 
+/**
+ * 마커 영역 안을 칼럼 단위로 가른다 — 구분 마커에 실린 너비 비율을 함께 돌려준다.
+ *
+ * `String.split` 에 캡처 그룹이 있는 정규식을 주면 구분자 캡처가 결과 배열에 끼어들어
+ * "본문·비율·본문·비율…" 이 뒤섞인다. 인덱스 홀짝을 세는 대신 직접 훑어 의미가 드러나는
+ * 구조로 돌려준다.
+ */
+function splitColumnSegments(inner: string): Array<{ ratio?: string; body: string }> {
+  const sepRe = new RegExp(`^[ \\t]*${COLUMN_SEP_SOURCE}[ \\t]*$`, "gm");
+  const segments: Array<{ ratio?: string; body: string }> = [];
+  let cursor = 0;
+  // split 의 첫 조각과 같은 의미 — **첫 마커 앞** 구간. 마커를 칼럼 사이 구분자로 쓴
+  // 레거시 문서에선 이게 진짜 첫 칼럼이므로 비율 없이 먼저 담는다.
+  let pending: { ratio?: string; body: string } = { ratio: undefined, body: "" };
+  let m: RegExpExecArray | null;
+  while ((m = sepRe.exec(inner)) !== null) {
+    pending.body = inner.slice(cursor, m.index);
+    segments.push(pending);
+    pending = { ratio: m[1], body: "" };
+    cursor = m.index + m[0].length;
+  }
+  pending.body = inner.slice(cursor);
+  segments.push(pending);
+  return segments.map((s) => ({ ...s, body: s.body.replace(/^\n/, "").replace(/\n$/, "") }));
+}
+
 function reassembleColumns(content: string): string {
-  const sepRe = new RegExp(`^[ \\t]*${escapeRegex(COLUMN_SEP)}[ \\t]*$`, "gm");
   let result = content;
   // 최내곽부터 한 겹씩 — 재조립 결과엔 마커가 남지 않으므로 다음 패스에서 부모가
   // 새 최내곽이 된다. 더 이상 바뀌지 않으면 멈춘다(중첩 깊이만큼만 돈다).
@@ -1198,18 +1240,21 @@ function reassembleColumns(content: string): string {
   while (result.includes(COLUMN_LIST_START) && safety++ < 100) {
     const before = result;
     result = result.replace(INNERMOST_COLUMN_REGION_RE, (_m, indent: string, inner: string) => {
-      const segments = (indent ? dedentContainerBody(inner) : inner)
-        .split(sepRe)
-        .map((c) => c.replace(/^\n/, "").replace(/\n$/, ""));
-      // split 의 첫 조각은 **첫 마커 앞** 구간이다. pull 이 내보내는 정준형에선 칼럼마다
-      // 마커가 하나씩 붙으므로 이 조각이 비어 있고, 칼럼이 아니라 구조적 잔여물이다.
+      const segments = splitColumnSegments(indent ? dedentContainerBody(inner) : inner);
+      // 첫 조각은 **첫 마커 앞** 구간이다. pull 이 내보내는 정준형에선 칼럼마다 마커가
+      // 하나씩 붙으므로 이 조각이 비어 있고, 칼럼이 아니라 구조적 잔여물이다.
       // 반대로 마커를 칼럼 **사이 구분자**로 쓴 레거시 문서에선 첫 조각이 진짜 첫 칼럼이다.
       // 그래서 "비어 있을 때만" 떨군다 — 무조건 slice(1) 하면 레거시 첫 칼럼이 사라진다.
-      const cols = segments[0]?.trim() === "" ? segments.slice(1) : segments;
+      const cols = segments[0]?.body.trim() === "" ? segments.slice(1) : segments;
       // 나머지 빈 조각은 **버리지 않는다**(D-EMPTY-COLUMN). 빈 칼럼은 Notion 레이아웃의
       // 실제 여백 칸이라, 걷어내면 push 가 사용자의 열 구성을 좁혀 버린다.
-      if (cols.every((c) => c.trim() === "")) return "";
-      const parts = cols.map((c) => `<column>\n${indentContainerBody(c)}\n</column>`).join("\n");
+      if (cols.every((c) => c.body.trim() === "")) return "";
+      const parts = cols
+        .map(
+          (c) =>
+            `<column${c.ratio ? ` ratio="${c.ratio}"` : ""}>\n${indentContainerBody(c.body)}\n</column>`,
+        )
+        .join("\n");
       const block = `<columns>\n${indentContainerBody(parts)}\n</columns>`;
       return `${indent ? indentContainerBody(block, indent) : block}\n`;
     });
@@ -1219,7 +1264,7 @@ function reassembleColumns(content: string): string {
   // Notion 으로 마커 리터럴이 새는 것보다 평탄화 degrade 가 낫다.
   result = result.replace(
     new RegExp(
-      `^[>\\t ]*%%${MARKER_BRAND_RE}:(?:column-list:start|column-list:end|column)%%[ \\t]*\\n?`,
+      `^[>\\t ]*(?:%%${MARKER_BRAND_RE}:column-list:(?:start|end)%%|${COLUMN_SEP_SOURCE})[ \\t]*\\n?`,
       "gm",
     ),
     "",

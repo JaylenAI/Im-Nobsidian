@@ -14,6 +14,7 @@ import {
   COLUMN_LIST_START,
   COLUMN_SEP,
   COLUMN_LIST_END,
+  columnSepSource,
   TOC_MARKER,
   BREADCRUMB_MARKER,
 } from "../constants/markers.js";
@@ -529,8 +530,11 @@ export class BlockConverter {
       if (!endMatch) break;
 
       const inner = result.slice(match.index + match[0].length + 1, endMatch.index);
+      // 구분 마커는 비율을 실어 올 수 있다(`%%…:column:ratio=62.5%%`). 비율 없는 형태만
+      // 매칭하면 그 줄이 경계로 인식되지 않아 **여러 칼럼이 하나로 접힌다** — 이 경로는
+      // 비율을 재현하지 않지만(아래 참조) 경계는 반드시 인식해야 한다.
       const columns = inner
-        .split(new RegExp(`^${escapeRegex(COLUMN_SEP)}$`, "m"))
+        .split(new RegExp(`^${columnSepSource("ignore")}$`, "m"))
         .map((c) => c.trim())
         .filter(Boolean);
 
@@ -643,6 +647,11 @@ export class BlockConverter {
       return this.postProcessBlocks(blocks) as unknown as NotionBlock[];
     });
 
+    // 너비 비율은 이 경로에서 재현하지 않는다 — 마커가 싣고 온 값은 NFM 의 백분율
+    // (`ratio="62.5"`)인데 블록 API 의 `column.width_ratio` 는 단위가 다르다. 확인되지 않은
+    // 단위로 값을 밀어 넣으면 레이아웃이 잘못된 폭으로 **덮어써진다** — 비율을 그대로 두어
+    // Notion 이 기존 폭을 유지하게 하는 편이 낫다. 비율 왕복은 NFM 경로가 담당한다
+    // (`enhanced-md-converter` 의 `reassembleColumns`).
     return NotionBlockBuilder.columnList(columnBlocks);
   }
 

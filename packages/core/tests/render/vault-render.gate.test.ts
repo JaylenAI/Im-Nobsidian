@@ -95,6 +95,20 @@ describe(`볼트 렌더 게이트 (${corpus.length}노트 · ${CORPUS_DIR === FI
     expect(report, `산문 소실 ${report.length}노트\n${report.join("\n")}`).toEqual([]);
   });
 
+  // 칼럼은 **개수**가 맞아도 폭이 틀리면 사용자가 잡아 둔 레이아웃이 아니다. 구조 드리프트
+  // 지표는 태그 수만 세므로 비율 소실을 통과시킨다 — 값과 순서를 따로 못박는다(P10).
+  it("칼럼 너비 비율이 push 왕복에서 값·순서 그대로 유지된다", () => {
+    const ratios = (md: string): string[] =>
+      [...md.matchAll(/<column ratio="([^"]*)"/g)].map((m) => m[1]!);
+    const report = corpus
+      .map(({ name, raw, pushed }) => ({ name, before: ratios(raw), after: ratios(pushed) }))
+      .filter((r) => r.before.join(",") !== r.after.join(","))
+      .map((r) => `[${r.before.join(",")}] → [${r.after.join(",")}] — ${r.name}`);
+    expect(report, `비율 드리프트 ${report.length}노트\n${report.slice(0, 20).join("\n")}`).toEqual(
+      [],
+    );
+  });
+
   it("왕복이 안정적이다 — push 했다 다시 pull 해도 내용 줄이 그대로다", () => {
     const report = corpus.flatMap(({ name, pulled, pushed }) => {
       const drift = roundTripDrift(pulled, notionEnhancedToObsidian(pushed));
