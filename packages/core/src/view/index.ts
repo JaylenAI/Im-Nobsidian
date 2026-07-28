@@ -1,7 +1,15 @@
 export { ViewDataProvider } from "./view-data-provider.js";
 export { EntryEditor } from "./entry-editor.js";
-export { BaseFileGenerator, basesViewTypeOf, NOTION_TO_BASES_VIEW } from "./base-file-generator.js";
-export type { BasePropertySchema, BaseFileOptions, BasesViewType } from "./base-file-generator.js";
+export {
+  BaseFileGenerator,
+  basesViewTypeOf,
+  basesViewMappingOf,
+  NOTION_TO_BASES_VIEW,
+} from "./base-file-generator.js";
+export type { BaseFileOptions, BasesViewType, BasesViewMapping } from "./base-file-generator.js";
+export { resolvePropertyName } from "./property-resolver.js";
+export { translateNotionFilter } from "./notion-filter-translator.js";
+export type { BasesFilterNode, TranslationResult } from "./notion-filter-translator.js";
 export { SidecarGenerator } from "./sidecar-generator.js";
 export type {
   NotionSidecar,

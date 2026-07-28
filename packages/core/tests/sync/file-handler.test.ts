@@ -1,5 +1,7 @@
-import { describe, it, expect, vi } from "vitest";
-import { FileHandler, getBlockType, getMimeType } from "../../src/sync/file-handler.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { FileHandler } from "../../src/sync/file-handler.js";
+import { setLogger } from "../../src/utils/logger.js";
+import { getBlockType, getMimeType } from "../../src/utils/mime.js";
 import type { NotionClient } from "../../src/notion/client.js";
 import type { IStateDB } from "../../src/state/state-db-interface.js";
 import {
@@ -147,6 +149,119 @@ describe("FileHandler", () => {
 
       expect(results).toEqual([]);
       expect(notion.uploadFile).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * R9f — 첨부 1건 업로드의 시간 상한.
+   *
+   * 업로드는 호출 1건마다 상한이 있어도(SDK 30초) 멀티파트는 파트 수만큼 호출이 늘어나는
+   * 합성 경로다. 끝나지 않는 업로드 하나가 세마포어를 쥔 채 남으면 push 전체가 멎는다.
+   *
+   * **두 경로를 모두 잠그는 것이 이 블록의 핵심이다.** R9a 는 같은 다운로드 로직이 두 벌
+   * 존재한 탓에 한쪽만 상한이 걸린 채 남았던 사고였고, 여기도 같은 코드가 두 루프에
+   * 나뉘어 있었다. 상한을 지우면 실패가 아니라 hang 으로 드러난다.
+   */
+  describe("첨부 업로드 시간 상한 (R9f)", () => {
+    /** 절대 끝나지 않는 업로드 — 상한이 없으면 테스트가 hang 으로 드러난다. */
+    const neverUpload = () => new Promise<never>(() => {});
+    const ITEM_TIMEOUT_MS = 40;
+
+    function captureWarnings(): string[] {
+      const messages: string[] = [];
+      setLogger({
+        warn: (msg, ...rest) => messages.push([msg, ...rest.map(String)].join(" ")),
+        error: () => {},
+        info: () => {},
+        debug: () => {},
+      });
+      return messages;
+    }
+
+    afterEach(() => {
+      setLogger({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} });
+    });
+
+    it("pushAllFiles: 멈춘 첨부는 상한에서 끊기고 나머지는 계속 올라간다", async () => {
+      const warnings = captureWarnings();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/멈춘 첨부.png", size: 10, mtime: "2026-07-27T00:00:00.000Z" },
+        { path: "para/정상 첨부.png", size: 11, mtime: "2026-07-27T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      const notion = createMockNotionClient();
+      (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
+        (_buffer: Buffer, filename: string) =>
+          filename.includes("멈춘") ? neverUpload() : Promise.resolve("upload-id"),
+      );
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+        2,
+        { itemTimeoutMs: ITEM_TIMEOUT_MS },
+      );
+      const results = await handler.pushAllFiles();
+
+      expect(results.map((r) => r.localPath)).toEqual(["para/정상 첨부.png"]);
+      // 어느 첨부에서 멎었는지가 로그에 남아야 한다 — 조용히 사라지면 안 된다.
+      expect(warnings.join("\n")).toContain("para/멈춘 첨부.png");
+      expect(warnings.join("\n")).toContain("시간 상한 초과");
+    });
+
+    it("pushFilesForFolder 에도 같은 상한이 걸린다 (경로 비대칭 금지)", async () => {
+      const warnings = captureWarnings();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/멈춘 첨부.png", size: 10, mtime: "2026-07-27T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      const notion = createMockNotionClient();
+      (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(neverUpload);
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+        2,
+        { itemTimeoutMs: ITEM_TIMEOUT_MS },
+      );
+      const results = await handler.pushFilesForFolder("folder-page-id", "para");
+
+      expect(results).toEqual([]);
+      expect(warnings.join("\n")).toContain("시간 상한 초과");
+    });
+
+    it("상한에 걸려도 슬롯을 반납해 다음 첨부가 막히지 않는다", async () => {
+      captureWarnings();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/멈춘 1.png", size: 10, mtime: "2026-07-27T00:00:00.000Z" },
+        { path: "para/멈춘 2.png", size: 11, mtime: "2026-07-27T00:00:00.000Z" },
+        { path: "para/정상.png", size: 12, mtime: "2026-07-27T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      const notion = createMockNotionClient();
+      (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
+        (_buffer: Buffer, filename: string) =>
+          filename.includes("멈춘") ? neverUpload() : Promise.resolve("upload-id"),
+      );
+
+      // 동시성 1 — 상한이 슬롯을 놓지 않으면 세 번째 첨부는 영원히 차례가 오지 않는다.
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+        1,
+        { itemTimeoutMs: ITEM_TIMEOUT_MS },
+      );
+      const results = await handler.pushAllFiles();
+
+      expect(results.map((r) => r.localPath)).toEqual(["para/정상.png"]);
     });
   });
 });

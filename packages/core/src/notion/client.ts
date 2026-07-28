@@ -11,7 +11,15 @@ import type {
   ListDatabaseViewsResponse,
 } from "@notionhq/client/build/src/api-endpoints/views.js";
 import { PropertyMapper, type WikilinkResolver } from "./property-mapper.js";
-import type { ViewConfig, DatabaseViewsConfig, PageCover, PageIcon } from "../types/view.js";
+import type {
+  ViewConfig,
+  DatabaseViewsConfig,
+  PageCover,
+  PageIcon,
+  BasePropertySchema,
+  BasePropertyOption,
+  BaseStatusGroup,
+} from "../types/view.js";
 import type { Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId } from "../utils/id.js";
@@ -35,9 +43,19 @@ export function isNotionObjectNotFound(error: unknown): boolean {
  * (비용이 워크스페이스 페이지 수에 비례·예측가능)가 더 저렴하다. 이 오류를 받은 호출측은
  * search 기반 폴백(getPagesUnderRootViaSearch)으로 전환한다. 작은 볼트는 예산 안에서
  * 순회가 끝나 폴백 없이 빠르게 완료된다(이중 전략의 분기점).
+ *
+ * `partial` 은 **포기 시점까지 확정적으로 찾은 페이지**다(R12-A). 두 경로는 같은 집합을
+ * 낸다고 가정할 수 없다 — search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수
+ * 있고, 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 어느 쪽이 도는지를 벽시계가
+ * 정하므로(같은 볼트에서 첫 pull=search, 재 pull=순회), 결과를 **경합시키면** 실행마다
+ * 집합이 달라진다. 그래서 부분 결과를 버리지 않고 실어 보내 호출측이 **합집합**을 만든다.
+ * 이미 치른 순회 비용을 버리지 않는 것이라 추가 요청도 없다.
  */
 export class DiscoveryTooLargeError extends Error {
-  constructor(elapsedMs: number) {
+  constructor(
+    elapsedMs: number,
+    readonly partial: readonly PageObjectResponse[] = [],
+  ) {
     super(`subtree discovery exceeded time budget (${elapsedMs}ms)`);
     this.name = "DiscoveryTooLargeError";
   }
@@ -377,75 +395,27 @@ export class NotionClient {
     return schema;
   }
 
-  async getDatabaseSchemaFull(databaseId: string): Promise<
-    Record<
-      string,
-      {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      }
-    >
-  > {
+  /**
+   * DB 속성 스키마 전체(선택지·status 그룹 포함).
+   *
+   * 옵션 `id` 까지 그대로 실어 보낸다 — 산출물에는 안 나가지만, status 뷰 필터가
+   * 옵션명이 아니라 **그룹명**(`To-do` 등)으로 오기 때문에 `groups[].optionIds` 를
+   * 옵션명으로 되돌리려면 이 id 가 있어야 한다. 예전엔 여기서 id 를 떨궈,
+   * 그룹으로 필터링된 뷰를 Bases 로 옮길 방법이 아예 없었다.
+   */
+  async getDatabaseSchemaFull(databaseId: string): Promise<Record<string, BasePropertySchema>> {
     const db = await this.fetchDatabaseModern(databaseId);
     const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
     if (!properties) return {};
 
-    const schema: Record<
-      string,
-      {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      }
-    > = {};
-
+    const schema: Record<string, BasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
-      const entry: {
-        id: string;
-        type: string;
-        options?: Array<{ name: string; color?: string }>;
-        groups?: Array<{ name: string; color?: string; optionIds?: string[] }>;
-      } = {
+      schema[name] = {
         id: prop.id as string,
         type: prop.type as string,
+        ...extractPropertyChoices(prop),
       };
-
-      if (prop.type === "select" || prop.type === "multi_select") {
-        const typeData = prop[prop.type as string] as
-          | {
-              options?: Array<{ name: string; color?: string }>;
-            }
-          | undefined;
-        if (typeData?.options) {
-          entry.options = typeData.options.map((o) => ({ name: o.name, color: o.color }));
-        }
-      }
-
-      if (prop.type === "status") {
-        const statusData = prop.status as
-          | {
-              options?: Array<{ name: string; color?: string }>;
-              groups?: Array<{ name: string; color?: string; option_ids?: string[] }>;
-            }
-          | undefined;
-        if (statusData?.options) {
-          entry.options = statusData.options.map((o) => ({ name: o.name, color: o.color }));
-        }
-        if (statusData?.groups) {
-          entry.groups = statusData.groups.map((g) => ({
-            name: g.name,
-            color: g.color,
-            optionIds: g.option_ids,
-          }));
-        }
-      }
-
-      schema[name] = entry;
     }
-
     return schema;
   }
 
@@ -638,17 +608,36 @@ export class NotionClient {
     return allBlocks;
   }
 
-  async appendChildren(blockId: string, children: unknown[]): Promise<void> {
+  /**
+   * 자식 블록을 덧붙인다. `options.after` 를 주면 그 블록 **바로 뒤**에 삽입한다
+   * (기본은 맨 끝). 자리표시자를 실제 미디어 블록으로 제자리 교체할 때 필요하다.
+   *
+   * 실측(2025-09-03): position 삽입 응답의 `results` 는 방금 넣은 블록뿐 아니라
+   * 삽입 지점 이후의 형제까지 함께 돌려준다. 앞에서부터 batch 길이만큼이 새 블록이므로
+   * 배치를 이어 붙일 때는 그 마지막 id 를 다음 기준점으로 삼는다.
+   */
+  async appendChildren(
+    blockId: string,
+    children: unknown[],
+    options?: { readonly after?: string },
+  ): Promise<string[]> {
     const batchSize = this.batchSize;
+    const created: string[] = [];
+    let after = options?.after;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
-      await this.withRateLimit(() =>
+      const response = await this.withRateLimit(() =>
         this.client.blocks.children.append({
           block_id: blockId,
           children: batch as never,
+          ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
         }),
       );
+      const ids = response.results.slice(0, batch.length).map((b) => b.id);
+      created.push(...ids);
+      if (after && ids.length > 0) after = ids[ids.length - 1];
     }
+    return created;
   }
 
   async deleteBlock(blockId: string): Promise<void> {
@@ -816,6 +805,8 @@ export class NotionClient {
    *
    * @param opts.deadlineMs `Date.now()` 기준 마감 시각. 각 페이지 처리 전 초과를 검사해
    *   초과 시 {@link DiscoveryTooLargeError}를 던진다(대규모 서브트리 → search 폴백 유도).
+   *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
+   *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
    *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
    */
   async getChildPagesRecursive(
@@ -831,7 +822,7 @@ export class NotionClient {
 
       for (const id of currentLevel) {
         if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
-          throw new DiscoveryTooLargeError(Date.now() - start);
+          throw new DiscoveryTooLargeError(Date.now() - start, all);
         }
         let children: PageObjectResponse[];
         try {
@@ -913,7 +904,16 @@ export class NotionClient {
         let bp: Parent;
         try {
           bp = ((await this.getBlock(bid)) as unknown as { parent: Parent }).parent;
-        } catch {
+        } catch (error) {
+          // 부모 해소 실패 = 이 블록에 중첩된 페이지가 결과에서 조용히 빠진다는 뜻이다.
+          // 같은 파일의 직접 순회(getChildPagesRecursive)는 스킵할 때 warn 을 남기는데
+          // 이 경로만 침묵했다 — 유실을 관측 가능하게 맞춘다(R12-B).
+          getLogger().warn(
+            `[Im-Nobsidian] 부모 블록 해소 실패 (${bid}) — 이 블록에 중첩된 페이지는 ` +
+              `search 디스커버리에서 제외됨: ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+          );
           blockOwner.set(bid, null);
           return null;
         }
@@ -1117,36 +1117,119 @@ export class NotionClient {
 
   private lastRequestTime = 0;
 
+  /**
+   * 429 이후 **클라이언트 전체**가 쉬어야 하는 시각(epoch ms).
+   *
+   * rate limit 은 요청 하나의 문제가 아니라 워크스페이스 전체에 걸린 신호다. 그러니
+   * 429 를 맞은 요청만 기다리게 두면 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+   * 슬롯을 붙잡아 남을 막는 대신, 다 같이 보는 이 게이트로 쉬게 한다.
+   */
+  private cooldownUntil = 0;
+
+  /**
+   * 요청 1건을 rate limit 슬롯 안에서 실행하고, 재시도 가능한 실패는 백오프 후 다시 시도한다.
+   *
+   * 백오프 대기는 **슬롯을 놓은 뒤** 한다. 예전 구현은 `sema.acquire()` 안에서 재시도
+   * 전체(최대 60초 x 5회)를 돌려, 불운한 요청 하나가 동시성 한 칸을 최대 5분 점유했다.
+   * 동시성 기본값이 3이므로 그런 요청 3건이면 클라이언트 전체가 멈춘다. 게다가 재시도는
+   * 로그를 한 줄도 남기지 않아, 겉보기에는 죽은 프로세스와 구분되지 않았다 — 실제로
+   * 268페이지 pull 이 진행 로그가 멈춘 채 수 분씩 정지하는 것으로 나타났다(R9).
+   * 그래서 (1) 대기 중에는 슬롯을 반납하고, (2) 429 는 {@link cooldownUntil} 전역
+   * 게이트로 함께 쉬고, (3) 모든 재시도를 경고로 남긴다.
+   */
   private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
-    await this.sema.acquire();
-    try {
-      const now = Date.now();
-      const elapsed = now - this.lastRequestTime;
-      if (elapsed < this.minRequestInterval) {
-        await sleep(this.minRequestInterval - elapsed);
+    // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
+    let backoffMs = 0;
+
+    for (let attempt = 0; ; attempt++) {
+      await this.sema.acquire();
+      try {
+        await this.waitForTurn();
+        this.lastRequestTime = Date.now();
+        return await fn();
+      } catch (error: unknown) {
+        if (!isRetryable(error) || attempt >= this.maxRetries) throw error;
+
+        // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
+        // 절반은 서버가 말한 시각보다 일찍 두드려 429 를 다시 부른다. 서버 지정값은
+        // 위로만 흔들고(1.0~1.25배), 지수 백오프에만 기존 지터를 유지한다.
+        const retryAfterMs = extractRetryAfter(error);
+        backoffMs =
+          retryAfterMs !== null
+            ? retryAfterMs * (1 + Math.random() * 0.25)
+            : this.retryBaseDelayMs *
+              Math.pow(this.retryBackoffFactor, attempt) *
+              (0.5 + Math.random() * 0.5);
+
+        // 429 는 요청 하나가 아니라 워크스페이스 전체에 걸린 신호다 — 전원 대기로 승격한다.
+        // 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다. 헤더는 게이트웨이가
+        // 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이 통째로 사라지면
+        // 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+        if (isRateLimited(error)) {
+          this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + backoffMs);
+        }
+
+        getLogger().warn(
+          `Notion API 재시도 ${attempt + 1}/${this.maxRetries} — ${Math.round(backoffMs)}ms 대기 (${describeRetryCause(error)})`,
+        );
+      } finally {
+        this.sema.release();
       }
-      this.lastRequestTime = Date.now();
-      return await this.executeWithRetry(fn);
-    } finally {
-      this.sema.release();
+
+      await sleep(backoffMs);
     }
   }
 
-  private async executeWithRetry<T>(fn: () => Promise<T>, attempt: number = 0): Promise<T> {
-    try {
-      return await fn();
-    } catch (error: unknown) {
-      if (isRetryable(error) && attempt < this.maxRetries) {
-        const baseDelay =
-          extractRetryAfter(error) ??
-          this.retryBaseDelayMs * Math.pow(this.retryBackoffFactor, attempt);
-        const jitter = baseDelay * (0.5 + Math.random() * 0.5);
-        await sleep(jitter);
-        return this.executeWithRetry(fn, attempt + 1);
-      }
-      throw error;
-    }
+  /** 슬롯을 쥔 뒤의 발사 대기 — 전역 쿨다운(429)과 최소 요청 간격을 함께 지킨다. */
+  private async waitForTurn(): Promise<void> {
+    const cooldownMs = this.cooldownUntil - Date.now();
+    if (cooldownMs > 0) await sleep(cooldownMs);
+
+    const elapsed = Date.now() - this.lastRequestTime;
+    if (elapsed < this.minRequestInterval) await sleep(this.minRequestInterval - elapsed);
   }
+}
+
+/**
+ * select/multi_select/status 속성에서 선택지·그룹을 뽑아낸다.
+ *
+ * status 만 `groups` 를 가지며, 그룹은 소속 옵션을 `option_ids` 로 가리킨다 —
+ * 그래서 옵션의 `id` 도 함께 실어야 그룹을 이름으로 되돌릴 수 있다.
+ */
+function extractPropertyChoices(prop: Record<string, unknown>): {
+  options?: BasePropertyOption[];
+  groups?: BaseStatusGroup[];
+} {
+  const type = prop.type as string;
+  if (type !== "select" && type !== "multi_select" && type !== "status") return {};
+
+  const typeData = prop[type] as
+    | {
+        options?: Array<{ id?: string; name: string; color?: string }>;
+        groups?: Array<{ name: string; color?: string; option_ids?: string[] }>;
+      }
+    | undefined;
+  if (!typeData) return {};
+
+  const result: { options?: BasePropertyOption[]; groups?: BaseStatusGroup[] } = {};
+  if (typeData.options) {
+    result.options = typeData.options.map((o) => ({ id: o.id, name: o.name, color: o.color }));
+  }
+  if (typeData.groups) {
+    result.groups = typeData.groups.map((g) => ({
+      name: g.name,
+      color: g.color,
+      optionIds: g.option_ids,
+    }));
+  }
+  return result;
+}
+
+/** rate limit(429) 인가 — 이 요청만이 아니라 클라이언트 전체가 쉬어야 하는 신호. */
+function isRateLimited(error: unknown): boolean {
+  return (
+    typeof error === "object" && error !== null && (error as { status?: unknown }).status === 429
+  );
 }
 
 function isRetryable(error: unknown): boolean {
@@ -1160,13 +1243,88 @@ function isRetryable(error: unknown): boolean {
   return status === 429 || status === 502 || status === 503 || status === 504;
 }
 
-function extractRetryAfter(error: unknown): number | null {
-  if (typeof error === "object" && error !== null && "headers" in error) {
-    const headers = (error as { headers: Record<string, string> }).headers;
-    const retryAfter = headers?.["retry-after"];
-    if (retryAfter) return Number(retryAfter) * 1000;
+/**
+ * 재시도 사유를 로그 한 줄로 요약한다.
+ *
+ * 재시도 로그의 목적은 "왜 멈춘 것처럼 보였는가"에 답하는 것이다 — 429(rate limit)인지,
+ * 5xx(노션 장애)인지, 소켓 끊김인지에 따라 운영자가 할 일이 전혀 다르므로 status·code 를
+ * 모두 싣는다. 메시지는 토큰 같은 비밀을 담지 않는 SDK 요약문이라 그대로 붙여도 안전하다.
+ */
+export function describeRetryCause(error: unknown): string {
+  if (typeof error !== "object" || error === null) return String(error);
+  const e = error as { status?: unknown; code?: unknown; message?: unknown };
+  const parts: string[] = [];
+  if (typeof e.status === "number") parts.push(`status ${e.status}`);
+  if (typeof e.code === "string") parts.push(e.code);
+  if (typeof e.message === "string" && e.message) parts.push(e.message.slice(0, 120));
+  return parts.length > 0 ? parts.join(" · ") : "알 수 없는 오류";
+}
+
+/**
+ * `Retry-After` 를 존중하되 대기 상한을 둔다. 서버가 3600(=1시간)을 주면 프로세스가
+ * 아무 말 없이 한 시간 멈춘다 — 그 위는 지수 백오프에 맡기고 재시도는 계속 이어간다.
+ */
+const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * 응답 헤더 컨테이너에서 헤더 하나를 꺼낸다 — **모양을 가정하지 않는다.**
+ *
+ * `@notionhq/client` 의 `APIResponseError.headers` 는 타입이 `unknown` 이고(fetch-types.d.ts
+ * `SupportedResponse`), 실제로는 fetch 응답의 `Headers` 인스턴스가 그대로 실려 온다.
+ * `Headers` 는 인덱스 접근(`h["retry-after"]`)에 **항상 undefined** 를 준다 — 값은
+ * `.get()` 으로만 나온다. 그래서 인덱스로만 읽던 예전 코드는 `Retry-After` 를 단 한 번도
+ * 못 봤고, 429 를 맞아도 서버가 지정한 대기 대신 지수 백오프로만 물러났다(라이브 429
+ * 폭풍에서 기록된 대기값이 전부 `base·2^n` 패턴이었던 게 그 증거다).
+ *
+ * 커스텀 `fetch` 를 주입하면 평범한 객체나 `Map` 이 올 수도 있으므로 세 모양을 모두 받는다.
+ * 평범한 객체는 대소문자를 가리지 않는다 — HTTP 헤더 이름은 원래 대소문자 구분이 없고,
+ * `Headers`/`Map` 과 달리 객체는 서버가 보낸 표기를 그대로 유지하기 때문이다.
+ */
+function readHeader(headers: unknown, name: string): string | null {
+  if (typeof headers !== "object" || headers === null) return null;
+
+  const get = (headers as { get?: unknown }).get;
+  if (typeof get === "function") {
+    // Headers · Map 둘 다 get(name) 계약을 만족한다.
+    const value: unknown = (get as (key: string) => unknown).call(headers, name);
+    return typeof value === "string" && value ? value : null;
+  }
+
+  for (const [key, value] of Object.entries(headers as Record<string, unknown>)) {
+    if (key.toLowerCase() !== name) continue;
+    return typeof value === "string" && value ? value : null;
   }
   return null;
+}
+
+/**
+ * `Retry-After` 헤더를 밀리초로 읽는다. 없거나 해석할 수 없으면 null(지수 백오프로 넘김).
+ *
+ * 숫자만 오리라 가정하면 안 된다 — RFC 9110 은 HTTP-date 형식도 허용한다
+ * (`Retry-After: Wed, 21 Oct 2015 07:28:00 GMT`). 예전 코드의 `Number(raw) * 1000` 은
+ * 이때 NaN 을 내고, `setTimeout(_, NaN)` 은 **즉시** 깨어난다 — 429 를 맞은 직후
+ * 대기 없이 곧장 재시도하는, 가장 하면 안 되는 동작이 된다. 날짜형은 초로 환산하고,
+ * 그마저 해석 불가면 null 로 떨궈 기본 백오프에 맡긴다.
+ *
+ * 재시도 대기는 실패해도 로그에 아무 흔적이 남지 않으므로(그저 빨리/오래 기다릴 뿐이다)
+ * 순수 함수로 떼어 직접 잠근다 — {@link isNotionObjectNotFound} 와 같은 이유의 export.
+ */
+export function extractRetryAfter(error: unknown): number | null {
+  if (typeof error !== "object" || error === null || !("headers" in error)) return null;
+  const raw = readHeader((error as { headers?: unknown }).headers, "retry-after");
+  if (!raw) return null;
+
+  const seconds = Number(raw);
+  let ms: number;
+  if (Number.isFinite(seconds)) {
+    ms = seconds * 1000;
+  } else {
+    const at = Date.parse(raw);
+    ms = Number.isNaN(at) ? Number.NaN : at - Date.now();
+  }
+
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  return Math.min(ms, MAX_RETRY_AFTER_MS);
 }
 
 function sleep(ms: number): Promise<void> {

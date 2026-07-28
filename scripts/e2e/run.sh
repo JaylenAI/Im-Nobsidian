@@ -3,12 +3,12 @@
 # fresh-user E2E 하니스 — "새 유저처럼" 전 명령어를 실제 Notion 대상으로 검증.
 #
 #   ./run.sh [phase ...]        지정 단계만 (기본: 안전 베이스라인)
-#   ./run.sh                    기본 = reset init pull analyze repull pushdry
+#   ./run.sh                    기본 = reset init pull analyze verify repull pushdry
 #   ./run.sh full               안전 베이스라인 + sync(양방향 멱등) + 격리 probe 왕복
 #   IM_TEST_VAULT=/path ./run.sh   볼트 경로 재정의
 #
 # 안전 규칙:
-#   · pull/repull/analyze/pushdry 는 Notion 쓰기 0 (읽기·드라이런).
+#   · pull/repull/analyze/verify/pushdry 는 Notion 쓰기 0 (읽기·드라이런).
 #   · sync 는 fresh pull 직후 실행 → 로컬==원격이라 푸시 변경 0(멱등). 기존 노트 불변.
 #   · 실쓰기(roundtrip)는 __e2e_probe__ 네임스페이스에 격리, 자기정리. 기존 노트 불변.
 #   · deleteSync 기본 false → 파괴적 전파 없음.
@@ -69,6 +69,31 @@ p_analyze() {
   fi
 }
 
+# 완결성 — 원격에 있는 것이 볼트에 빠짐없이 있는가(행 R11-B · 페이지 R12-C).
+#
+# 나머지 단계는 전부 **멱등성**을 본다(analyze·repull·pushdry·sync). 멱등성은 체계적
+# 미발견을 구조적으로 못 잡는다 — 디스커버리가 매번 같은 행을 놓치면 재실행 결과도
+# 똑같아 churn 은 0 이고 해시도 전부 일치한다. 실제로 2026-07-17 pull 은 DB 행 296개를
+# 침묵 유실한 채 이 하니스의 전 단계를 통과했고, 2026-07-28 pull 은 페이지를 268 → 342
+# 로 다르게 열거하고도 repull churn 0 을 통과했다(churn 은 created+updated 만 세므로
+# 두 번째 열거가 더 작아도 일치와 구분되지 않는다). 이 단계만 "빠짐없다"를 본다.
+# 읽기 전용(databases.retrieve + dataSources.query + search)이라 기본 베이스라인에 넣는다.
+p_verify() {
+  phase "VERIFY — 완결성(원격 행/페이지 = 볼트 행/페이지)"
+  if nobsi verify | tee "$LOGDIR/verify.log"; then
+    local remote vault premote pvault
+    remote=$(/usr/bin/grep -oE 'Remote rows: *[0-9]+' "$LOGDIR/verify.log" | /usr/bin/grep -oE '[0-9]+' | head -1)
+    vault=$(/usr/bin/grep -oE 'Vault rows: *[0-9]+' "$LOGDIR/verify.log" | /usr/bin/grep -oE '[0-9]+' | head -1)
+    premote=$(/usr/bin/grep -oE 'Remote pages: *[0-9]+' "$LOGDIR/verify.log" | /usr/bin/grep -oE '[0-9]+' | head -1)
+    pvault=$(/usr/bin/grep -oE 'Vault pages: *[0-9]+' "$LOGDIR/verify.log" | /usr/bin/grep -oE '[0-9]+' | head -1)
+    ok "완결성 PASS — 행 ${remote:-?}=${vault:-?} · 페이지 원격 ${premote:-생략} ⊆ 볼트 ${pvault:-생략}"
+    RESULTS[verify]="완결(행 ${remote:-?}=${vault:-?}·쪽 ${premote:-–}/${pvault:-–})"
+  else
+    err "완결성 FAIL — verify.log 참조(미발견/잔재/조회실패)"
+    RESULTS[verify]="불완전"
+  fi
+}
+
 p_repull() {
   phase "REPULL — pull 멱등성(재실행 시 변경 0 기대)"
   nobsi pull | tee "$LOGDIR/repull.log"
@@ -117,7 +142,7 @@ p_summary() {
   phase "요약"
   echo "  로그: $LOGDIR"
   local k
-  for k in reset init pull analyze repull pushdry sync roundtrip; do
+  for k in reset init pull analyze verify repull pushdry sync roundtrip; do
     if [[ -n "${RESULTS[$k]:-}" ]]; then
       printf "  %-10s %s\n" "$k" "${RESULTS[$k]}"
     fi
@@ -131,7 +156,7 @@ overall_status() {
   local k failed=0
   for k in "${!RESULTS[@]}"; do
     case "${RESULTS[$k]}" in
-      실패 | 위반 | 손실 | churn=*)
+      실패 | 위반 | 손실 | 불완전 | churn=*)
         failed=1
         err "단계 실패: ${k}=${RESULTS[$k]}"
         ;;
@@ -148,9 +173,9 @@ main() {
 
   local phases=("$@")
   if [[ ${#phases[@]} -eq 0 ]]; then
-    phases=(reset init pull analyze repull pushdry)
+    phases=(reset init pull analyze verify repull pushdry)
   elif [[ "${phases[0]}" == "full" ]]; then
-    phases=(reset init pull analyze repull pushdry sync roundtrip)
+    phases=(reset init pull analyze verify repull pushdry sync roundtrip)
   fi
 
   log "테스트 볼트: $VAULT"
@@ -161,6 +186,7 @@ main() {
       init)      p_init || exit 1 ;;
       pull)      p_pull ;;
       analyze)   p_analyze ;;
+      verify)    p_verify ;;
       repull)    p_repull ;;
       pushdry)   p_pushdry ;;
       sync)      p_sync ;;

@@ -68,14 +68,15 @@ describe("EmbedResolver", () => {
     expect(result.metadata.images![0]!.isExternal).toBe(false);
   });
 
-  it("![[note.md]] → 보존 링크 (이미지가 아닌 embed)", () => {
+  it("![[note.md]] → 원문 그대로 (의사 프로토콜은 Notion 이 버린다)", () => {
     const result = processor.process({
       content: "Embed: ![[other-note.md]]",
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toContain("[other-note.md](im-nobsidian://embed/other-note.md)");
-    expect(result.content).not.toContain("![[");
+    // 예전엔 `[대상](im-nobsidian://embed/…)` 로 바꿔 올렸다 — Notion 이 미지원 스킴을
+    // 링크째 버리고 라벨만 남겨 `![[대상]]` 이 평문으로 영구 붕괴했다(라이브 실측, I13).
+    expect(result.content).toBe("Embed: ![[other-note.md]]");
   });
 
   it("YouTube URL → video preserve marker", () => {

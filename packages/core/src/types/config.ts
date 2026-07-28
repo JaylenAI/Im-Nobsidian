@@ -67,6 +67,10 @@ export const ConfigSchema = z.object({
       .number()
       .min(1024)
       .default(100 * 1024 * 1024),
+    // 미디어·첨부 다운로드 1회 시도의 시간 상한 (ms, 기본 300초). 0 = 상한 없음(권장하지 않음)
+    mediaDownloadTimeoutMs: z.number().min(0).max(1_800_000).default(300_000),
+    // 페이지 1건 처리의 시간 상한 (ms, 기본 30분). 한 건이 동기화 전체를 멈춰 세우지 못하게 한다. 0 = 상한 없음
+    itemTimeoutMs: z.number().min(0).max(7_200_000).default(1_800_000),
   }),
 });
 
@@ -114,5 +118,7 @@ export const DEFAULT_CONFIG: Config = {
     mediaRetryBaseMs: 1000,
     fileConcurrency: 2,
     maxFileSizeBytes: 100 * 1024 * 1024,
+    mediaDownloadTimeoutMs: 300_000,
+    itemTimeoutMs: 1_800_000,
   },
 };

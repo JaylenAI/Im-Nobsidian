@@ -84,6 +84,12 @@ export interface PullResult {
   readonly created: number;
   readonly updated: number;
   readonly deleted: number;
+  /**
+   * 로컬에서 사라졌다가 리모트 원본으로 되살린 파일 수.
+   * updated 와 분리해 보고한다 — "수정 N건" 에 섞이면 사용자는 자기 볼트에서
+   * 파일이 없어졌다가 복구됐다는 사실 자체를 알 수 없다.
+   */
+  readonly restored: number;
   readonly conflicts: Conflict[];
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];

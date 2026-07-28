@@ -1,5 +1,10 @@
 import { describe, it, expect, vi } from "vitest";
-import { NotionClient, isNotionObjectNotFound } from "../../src/notion/client.js";
+import {
+  NotionClient,
+  isNotionObjectNotFound,
+  DiscoveryTooLargeError,
+} from "../../src/notion/client.js";
+import { setLogger } from "../../src/utils/logger.js";
 
 function createClient() {
   return new NotionClient({ token: "ntn_test_fake_token", concurrency: 1, timeoutMs: 1000 });
@@ -558,6 +563,95 @@ describe("NotionClient - getPagesUnderRootViaSearch: search 기반 무손실 디
 
     const pages = await client.getPagesUnderRootViaSearch("root");
     expect(pages.map((p) => p.id)).toEqual(["deep"]);
+  });
+});
+
+describe("R12-A — 마감 초과 시 순회 부분 결과를 버리지 않는다", () => {
+  function makePage(id: string) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root" },
+      archived: false,
+      in_trash: false,
+      properties: {},
+    } as any;
+  }
+
+  it("DiscoveryTooLargeError 가 포기 시점까지 찾은 페이지를 partial 로 싣는다", async () => {
+    const client = createClient();
+    const BUDGET_MS = 20;
+    // root 조회가 예산을 다 쓰고 자식 2개를 낸다 → 다음 레벨 진입 시 마감 초과.
+    // (실제 대규모 서브트리에서 벌어지는 일: 얕은 레벨을 찾아 놓고 깊은 가지에서 걸린다.)
+    vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) => {
+      if (id !== "root") return [];
+      await new Promise((r) => setTimeout(r, BUDGET_MS * 2));
+      return [makePage("lvl1-a"), makePage("lvl1-b")];
+    });
+
+    const err = await client
+      .getChildPagesRecursive("root", { deadlineMs: Date.now() + BUDGET_MS })
+      .then(() => null)
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(DiscoveryTooLargeError);
+    // 수정 전에는 partial 자체가 없어 이미 치른 순회 비용이 통째로 버려졌다.
+    expect((err as DiscoveryTooLargeError).partial.map((p) => p.id).sort()).toEqual([
+      "lvl1-a",
+      "lvl1-b",
+    ]);
+  });
+
+  it("마감을 안 넘기면 종전대로 전량을 반환한다(회귀 없음)", async () => {
+    const client = createClient();
+    vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) =>
+      id === "root" ? [makePage("a")] : [],
+    );
+
+    const all = await client.getChildPagesRecursive("root", { deadlineMs: Date.now() + 60_000 });
+    expect(all.map((p) => p.id)).toEqual(["a"]);
+  });
+});
+
+describe("R12-B — search 폴백의 부모 해소 실패를 침묵하지 않는다", () => {
+  function pg2(id: string, parent: any) {
+    return {
+      id,
+      last_edited_time: "2026-01-01T00:00:00.000Z",
+      parent,
+      archived: false,
+      in_trash: false,
+      properties: {},
+    } as any;
+  }
+
+  it("getBlock 실패로 페이지가 빠지면 warn 을 남긴다", async () => {
+    const warnings: string[] = [];
+    setLogger({
+      warn: (m: string) => warnings.push(m),
+      error: () => {},
+      info: () => {},
+      debug: () => {},
+    });
+    try {
+      const client = createClient();
+      vi.spyOn(client, "searchAllPages").mockResolvedValue([
+        pg2("root", { type: "workspace", workspace: true }),
+        pg2("nested", { type: "block_id", block_id: "flaky-block" }),
+      ] as any);
+      vi.spyOn(client, "getBlock").mockRejectedValue(new Error("502 bad gateway"));
+
+      const pages = await client.getPagesUnderRootViaSearch("root");
+
+      // 결과에서 빠지는 것 자체는 보수적 판단이라 유지한다 — 다만 조용히 빠지면 안 된다.
+      expect(pages).toEqual([]);
+      // 수정 전: catch 가 전부 삼켜 로그 0줄 → 유실이 관측 불가능했다.
+      expect(warnings.some((w) => w.includes("flaky-block") && w.includes("502 bad gateway"))).toBe(
+        true,
+      );
+    } finally {
+      setLogger({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} });
+    }
   });
 });
 

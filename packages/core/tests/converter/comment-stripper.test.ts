@@ -103,3 +103,45 @@ describe("CommentStripper (F26)", () => {
     expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe("줄1\n줄2");
   });
 });
+
+/*
+ * D-COMMENT-PAIR — 본문의 홑 `%%` 가 마커 구분자와 짝지어져 문장을 삼키던 결함.
+ *
+ * `%%` 를 위치로만 짝짓던 예전 구현은 `압축률 100%%` 의 `%%` 를 여는 구분자로,
+ * 바로 뒤 색상 마커의 여는 `%%` 를 닫는 구분자로 잡았다. 그 사이 문장이 통째로
+ * 삭제되고 마커 원문 조각(`im-nobsidian:color:yellow_bg/color%%`)이 본문에 노출됐다.
+ * 마커 토큰을 먼저 떼어 내는 방식으로 바꿔 구조적으로 불가능해졌다.
+ */
+describe("CommentStripper — 마커 구분자 오인 (D-COMMENT-PAIR)", () => {
+  it("홑 %% 가 있는 문장과 색상 마커가 같이 있어도 아무것도 잃지 않는다", () => {
+    const content =
+      "겹퍼센트 100%% 도 마커가 아니다.\n\n%%im-nobsidian:color:yellow_bg%%형광펜 강조%%/color%% 도 왕복.";
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  it("한 줄 안에서 섞여도 마찬가지", () => {
+    const content = "한 줄에 100%% 와 %%im-nobsidian:color:yellow_bg%%형광펜%%/color%% 같이.";
+    expect(run(content).content).toBe(content);
+  });
+
+  it("짝 없는 홑 %% 하나만 있으면 주석이 아니다", () => {
+    const content = "겹퍼센트 100%% 도 마커가 아니다.";
+    expect(run(content).content).toBe(content);
+  });
+
+  it("마커 사이에 낀 진짜 주석은 여전히 제거한다", () => {
+    const result = run("%%im-nobsidian:toggle:start%%\n\n앞 문단. %%사적 메모%% 뒤.");
+    expect(result.content).toContain("%%im-nobsidian:toggle:start%%");
+    expect(result.content).not.toContain("사적 메모");
+    expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe("사적 메모");
+  });
+
+  it("마커 뒤 주석의 앵커·offset 이 원문 기준으로 남는다", () => {
+    const content = "%%im-nobsidian:toggle:start%%\n\n앞 문단. %%사적 메모%% 뒤.";
+    const marker = (run(content).metadata.preserveMarkers ?? [])[0]!;
+    expect(marker.params.__anchor).toBe("앞 문단. ");
+    expect(marker.startIndex).toBe(content.indexOf("%%사적 메모%%"));
+  });
+});

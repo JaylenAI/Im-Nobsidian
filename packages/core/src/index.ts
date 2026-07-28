@@ -44,6 +44,9 @@ export type {
   DatabaseViewsConfig,
   PageCover,
   PageIcon,
+  BasePropertySchema,
+  BasePropertyOption,
+  BaseStatusGroup,
 } from "./types/view.js";
 
 // Config
@@ -143,7 +146,10 @@ export {
   EntryEditor,
   BaseFileGenerator,
   basesViewTypeOf,
+  basesViewMappingOf,
   NOTION_TO_BASES_VIEW,
+  translateNotionFilter,
+  resolvePropertyName,
   SidecarGenerator,
   sortEntries,
   groupEntries,
@@ -165,29 +171,51 @@ export type {
   PropertySchema,
   PropertyOption,
   FilterCondition,
-  BasePropertySchema,
   BaseFileOptions,
   BasesViewType,
+  BasesViewMapping,
+  BasesFilterNode,
+  TranslationResult,
   NotionSidecar,
   SidecarProperty,
   SidecarView,
   DegradeNote,
 } from "./view/index.js";
 
-// Audit — 충실도 측정 인프라(회귀 상시 잠금)
-export { classifyBodyFidelity, summarizeFidelity } from "./audit/index.js";
+// Audit — 충실도 측정 인프라(회귀 상시 잠금) + DB/페이지 완결성 게이트 + 렌더 감사
+export {
+  classifyBodyFidelity,
+  summarizeFidelity,
+  verifyDatabaseCompleteness,
+  verifyPageCompleteness,
+  lintRenderedMarkdown,
+  RENDER_LINE_RULES,
+  SEPARATOR_BODY,
+} from "./audit/index.js";
 export type {
   FidelityDefect,
   FidelityDefectForm,
   FidelityClassification,
   FidelityContext,
   FidelitySummary,
+  CompletenessRemoteSource,
+  CompletenessLocalSource,
+  CompletenessOptions,
+  CompletenessFailure,
+  CompletenessReport,
+  DatabaseCompleteness,
+  PageCompletenessRemoteSource,
+  PageCompletenessReport,
+  VaultCompletenessReport,
+  RenderFinding,
+  RenderLineRule,
 } from "./audit/index.js";
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
+export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 

@@ -72,7 +72,7 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
     expect(pushed).toContain("끝 문단");
   });
 
-  it("컨테이너-중첩 컬럼은 pull 때 마커 없이 평탄화된다 (degrade)", () => {
+  it("컨테이너-중첩 컬럼도 마커로 보존되어 레이아웃째 왕복한다", () => {
     const nested = [
       '<callout icon="⚠️">',
       "\t제목줄",
@@ -88,14 +88,154 @@ describe("컬럼 레이아웃 (ADR-008)", () => {
     ].join("\n");
     const { pulled, pushed } = roundtrip(nested);
 
-    // quote prefix 가 붙은 컬럼 마커는 재조립 불가 → 걷어내고 내용만 평탄화
-    expect(pulled).not.toContain("%%im-nobsidian:column");
+    // 예전엔 "인용 접두가 붙으면 재조립 불가"라 보고 마커를 걷어내 평탄화했다. 실제로는
+    // push 가 콜아웃을 먼저 <callout> 로 되돌린 뒤 컬럼을 재조립하므로(파이프라인 순서)
+    // 접두는 그 시점에 이미 탭이다 — degrade 는 살릴 수 있는 레이아웃을 버리고 있었다.
+    expect(pulled).toContain("> %%im-nobsidian:column-list:start%%");
     expect(pulled).toContain("중첩 칼럼A");
     expect(pulled).toContain("중첩 칼럼B");
-    // push 산출물에도 마커 리터럴이 새지 않는다
+    // 마커 리터럴이 Notion 으로 새지 않고 정준형 태그로 재조립된다
     expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("<columns>");
+    expect(pushed.split("\n").filter((l) => l.trim() === "<column>")).toHaveLength(2);
   });
 });
+
+// R8 D-EMPTY-COLUMN: 빈 칼럼을 "내용이 없다"는 이유로 걷어내던 탓에 3열 레이아웃이
+// pull 에서 2열로 접히고, 그 상태로 push 하면 **사용자의 Notion 열 구성 자체가 좁아졌다**.
+// 빈 칼럼은 여백을 담당하는 실제 구성요소이므로 자리를 지켜야 한다.
+describe("빈 칼럼 보존 (R8)", () => {
+  const THREE_WITH_HOLE = [
+    "<columns>",
+    "\t<column>",
+    "\t\t왼쪽",
+    "\t</column>",
+    "\t<column>",
+    "\t</column>",
+    "\t<column>",
+    "\t\t오른쪽",
+    "\t</column>",
+    "</columns>",
+  ].join("\n");
+
+  it("가운데가 빈 3열은 pull 에서 마커 3개로 남는다", () => {
+    const pulled = notionEnhancedToObsidian(THREE_WITH_HOLE);
+
+    expect((pulled.match(new RegExp(COLUMN_SEP, "g")) ?? []).length).toBe(3);
+    expect(pulled).toContain("왼쪽");
+    expect(pulled).toContain("오른쪽");
+  });
+
+  it("push 재조립도 3열을 유지한다 (레이아웃 붕괴 금지)", () => {
+    const { pushed } = roundtrip(THREE_WITH_HOLE);
+
+    expect((pushed.match(/<column(?!s)/g) ?? []).length).toBe(3);
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+  });
+
+  it("두 번째 왕복에서도 열 개수가 그대로다 (수렴)", () => {
+    const once = roundtrip(THREE_WITH_HOLE).pushed;
+    const twice = roundtrip(once).pushed;
+
+    expect(twice.trimEnd()).toBe(once.trimEnd());
+    expect((twice.match(/<column(?!s)/g) ?? []).length).toBe(3);
+  });
+
+  it("칼럼이 전부 비면 레이아웃째 사라진다 (담은 내용이 없음)", () => {
+    const allEmpty = [
+      "<columns>",
+      "\t<column>",
+      "\t</column>",
+      "\t<column>",
+      "\t</column>",
+      "</columns>",
+    ].join("\n");
+    const { pulled, pushed } = roundtrip(allEmpty);
+
+    expect(pulled.trim()).toBe("");
+    expect(pushed).not.toContain("<column");
+  });
+
+  it("마커를 칼럼 **사이 구분자**로 쓴 레거시 문서도 첫 칼럼을 잃지 않는다", () => {
+    // 정준형(칼럼마다 마커 1개)에서는 split 의 첫 조각이 빈 잔여물이지만, 레거시
+    // 구분자 표기에서는 그 조각이 진짜 첫 칼럼이다. 무조건 떨구면 "왼쪽"이 사라진다.
+    const legacy = [COLUMN_LIST_START, "왼쪽", COLUMN_SEP, "오른쪽", COLUMN_LIST_END].join("\n");
+    const pushed = obsidianToNotionEnhanced(legacy);
+
+    expect((pushed.match(/<column(?!s)/g) ?? []).length).toBe(2);
+    expect(pushed).toContain("왼쪽");
+    expect(pushed).toContain("오른쪽");
+  });
+});
+
+// R3 D-COLUMN-NEST: push 재조립이 비탐욕 한 방이라 바깥 START 가 안쪽 END 에서 닫혀
+// 중첩 한 겹이 통째로 평탄화됐다(실볼트 `올인원 가계부 _Lite_` 마커 24→22 · `영화` 49→42).
+// pull 쪽 INNERMOST_COLUMNS_RE 와 같은 "최내곽부터 반복" 관용으로 봉합한다.
+describe("칼럼 중첩·들여쓰기 재조립 (R3)", () => {
+  const NESTED = [
+    "<columns>",
+    "\t<column>",
+    "\t\tA",
+    "\t</column>",
+    "\t<column>",
+    "\t\t<columns>",
+    "\t\t\t<column>",
+    "\t\t\t\tB",
+    "\t\t\t</column>",
+    "\t\t\t<column>",
+    "\t\t\t\tC",
+    "\t\t\t</column>",
+    "\t\t</columns>",
+    "\t</column>",
+    "</columns>",
+  ].join("\n");
+
+  it("칼럼 안 칼럼이 왕복해도 평탄화되지 않는다", () => {
+    const { pulled, pushed } = roundtrip(NESTED);
+
+    // pull: 안쪽·바깥쪽 모두 마커 쌍이 남는다
+    expect(pulled.match(new RegExp(escape(COLUMN_LIST_START), "g"))).toHaveLength(2);
+    expect(pulled.match(new RegExp(escape(COLUMN_LIST_END), "g"))).toHaveLength(2);
+    expect(pulled.match(new RegExp(escape(COLUMN_SEP), "g"))).toHaveLength(4);
+    // push: 정준형 계층이 그대로 복원된다
+    expect(pushed.trim()).toBe(NESTED);
+  });
+
+  it("두 겹 왕복해도 고정점이다", () => {
+    const once = roundtrip(NESTED).pushed;
+    expect(roundtrip(once.trim()).pushed.trim()).toBe(NESTED);
+  });
+
+  // 실볼트 `영화.md`: 토글 헤딩(`### … {toggle="true"}`)의 자식 칼럼을 pull 이 4칸
+  // 들여쓴 채 내보낸다. 열 0 만 매칭하던 시절엔 그 영역이 통째로 청소에 걷혀 위젯
+  // 6개가 사라졌다 — 들여쓰기를 캡처해 재조립 결과에 다시 입힌다.
+  it("들여쓴 칼럼 마커도 재조립되고 들여쓰기가 보존된다", () => {
+    const indented = [
+      "머리말",
+      `    ${COLUMN_LIST_START}`,
+      `    ${COLUMN_SEP}`,
+      "    왼쪽",
+      `    ${COLUMN_SEP}`,
+      "    오른쪽",
+      `    ${COLUMN_LIST_END}`,
+    ].join("\n");
+
+    const pushed = obsidianToNotionEnhanced(indented);
+
+    expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toContain("    <columns>");
+    expect(pushed).toContain("    \t<column>");
+    expect(pushed).toContain("왼쪽");
+    expect(pushed).toContain("오른쪽");
+    // 들여쓰기째 왕복해도 마커 쌍이 살아 돌아온다
+    expect(notionEnhancedToObsidian(pushed)).toContain(COLUMN_LIST_START);
+  });
+});
+
+/** 정규식 리터럴로 쓰기 위한 마커 이스케이프(마커에는 `%` 만 특수문자가 아님). */
+function escape(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
 
 describe("콜아웃 아이콘/색 (ADR-008)", () => {
   it("icon+color 왕복: 스타일 마커로 실어 정준형 속성으로 재조립", () => {
@@ -323,14 +463,17 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     "</callout>",
   ].join("\n");
 
-  it("pull: 콜아웃 제목으로 흡수된 컬럼 start 마커도 걷어낸다 (평탄화 degrade)", () => {
+  it("pull: 컬럼 경계 마커를 콜아웃 제목으로 흡수하지 않는다", () => {
     const pulled = notionEnhancedToObsidian(CALLOUT_WRAPPING_COLUMNS);
+    const head = pulled.split("\n")[0]!;
 
-    expect(pulled).not.toContain("%%im-nobsidian:column");
+    // 마커가 제목 자리로 올라가면 그 줄이 본문에서 빠져 열 구성이 통째로 무너진다
+    expect(head).not.toContain("column-list:start");
+    expect(pulled).toContain("> %%im-nobsidian:column-list:start%%");
     expect(pulled).toContain("왼쪽 내용");
     expect(pulled).toContain("오른쪽 내용");
-    // 스타일 마커는 유지된다 (아이콘·색 보존)
-    expect(pulled).toContain("callout-style");
+    // 스타일 마커는 제목 줄에 그대로 유지된다 (아이콘·색 보존)
+    expect(head).toContain("callout-style");
   });
 
   it("push: 왕복해도 컬럼 마커 리터럴이 Notion 으로 새지 않는다", () => {
@@ -353,9 +496,7 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     expect(pushed).toContain("본문 내용");
   });
 
-  it("pull: 이중 중첩(콜아웃 안 콜아웃)의 구조적 탭이 남은 컬럼 마커도 걷어낸다", () => {
-    // 실측(루틴 iOS 알림 버전): quote 프리픽스 소비는 `>`+공백 1개 단위라
-    // `> > \t%%..%%` 의 탭이 남아 줄 앵커 규칙(EDGE/SEP)을 벗어났다.
+  it("이중 중첩(콜아웃 안 콜아웃)의 컬럼도 깊이째 왕복한다", () => {
     const nested = [
       '<callout icon="💡">',
       "\t바깥 콜아웃 제목",
@@ -374,12 +515,15 @@ describe("P5 잔존 결함 회귀 (콜아웃-품은-컬럼 · URL 아이콘)", (
     ].join("\n");
 
     const pulled = notionEnhancedToObsidian(nested);
-    expect(pulled).not.toContain("%%im-nobsidian:column");
-    expect(pulled).toContain("왼쪽");
-    expect(pulled).toContain("오른쪽");
+    // 깊이 2 인용(`> > `) 위에서도 마커가 살아 있어야 push 가 열 구성을 되살린다
+    expect(pulled).toContain("> > %%im-nobsidian:column-list:start%%");
+    expect(pulled).toContain("> > 왼쪽");
+    expect(pulled).toContain("> > 오른쪽");
 
     const pushed = obsidianToNotionEnhanced(pulled);
     expect(pushed).not.toContain("%%im-nobsidian:column");
+    expect(pushed).toMatch(/^\t\t<columns>$/m);
+    expect(pushed.split("\n").filter((l) => l.includes("<callout"))).toHaveLength(2);
   });
 
   it("pull: 업로드 이미지(서명 URL) 아이콘은 마커에 싣지 않는다 — 색만 보존", () => {

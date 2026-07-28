@@ -5,8 +5,20 @@ import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
+import { getBlockType, getMimeType } from "../utils/mime.js";
+import type { NotionBlockType } from "../utils/mime.js";
+import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
+import { withDeadline, DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
 
-export type NotionBlockType = "image" | "pdf" | "video" | "audio" | "file";
+/** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
+export interface FileHandlerOptions {
+  /** 다운로드에 쓸 fetch 구현(테스트 주입용). 기본 전역 fetch. */
+  readonly fetch?: typeof globalThis.fetch;
+  /** 다운로드 1회 시도의 시간 상한(ms). 기본 300초. 0 이하면 상한 없음(권장하지 않음). */
+  readonly downloadTimeoutMs?: number;
+  /** 첨부 1건 업로드 전체의 시간 상한(ms). 기본 30분. 0 이하면 상한 없음. */
+  readonly itemTimeoutMs?: number;
+}
 
 export interface FileUploadResult {
   readonly localPath: string;
@@ -21,105 +33,6 @@ export interface FileDownloadResult {
   readonly size: number;
 }
 
-const EXTENSION_TO_BLOCK_TYPE: Record<string, NotionBlockType> = {
-  ".png": "image",
-  ".jpg": "image",
-  ".jpeg": "image",
-  ".gif": "image",
-  ".svg": "image",
-  ".webp": "image",
-  ".ico": "image",
-  ".bmp": "image",
-  ".tiff": "image",
-  ".tif": "image",
-  ".avif": "image",
-  ".apng": "image",
-  ".heic": "image",
-
-  ".pdf": "pdf",
-
-  ".mp4": "video",
-  ".mov": "video",
-  ".webm": "video",
-  ".avi": "video",
-  ".mkv": "video",
-  ".flv": "video",
-  ".wmv": "video",
-  ".m4v": "video",
-  ".mpeg": "video",
-  ".ogv": "video",
-  ".3gp": "video",
-
-  ".mp3": "audio",
-  ".wav": "audio",
-  ".ogg": "audio",
-  ".m4a": "audio",
-  ".flac": "audio",
-  ".aac": "audio",
-  ".wma": "audio",
-  ".opus": "audio",
-  ".weba": "audio",
-};
-
-const EXTENSION_TO_MIME: Record<string, string> = {
-  ".png": "image/png",
-  ".jpg": "image/jpeg",
-  ".jpeg": "image/jpeg",
-  ".gif": "image/gif",
-  ".webp": "image/webp",
-  ".svg": "image/svg+xml",
-  ".bmp": "image/bmp",
-  ".ico": "image/x-icon",
-  ".tiff": "image/tiff",
-  ".tif": "image/tiff",
-  ".avif": "image/avif",
-  ".heic": "image/heic",
-  ".pdf": "application/pdf",
-  ".mp4": "video/mp4",
-  ".mov": "video/quicktime",
-  ".webm": "video/webm",
-  ".avi": "video/x-msvideo",
-  ".mkv": "video/x-matroska",
-  ".mp3": "audio/mpeg",
-  ".wav": "audio/wav",
-  ".ogg": "audio/ogg",
-  ".m4a": "audio/mp4",
-  ".flac": "audio/flac",
-  ".aac": "audio/aac",
-  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-  ".zip": "application/zip",
-  ".gz": "application/gzip",
-  ".tar": "application/x-tar",
-  ".rar": "application/vnd.rar",
-  ".7z": "application/x-7z-compressed",
-  ".py": "text/x-python",
-  ".js": "text/javascript",
-  ".ts": "text/typescript",
-  ".json": "application/json",
-  ".csv": "text/csv",
-  ".txt": "text/plain",
-  ".html": "text/html",
-  ".xml": "application/xml",
-  ".hwp": "application/x-hwp",
-  ".xls": "application/vnd.ms-excel",
-  ".doc": "application/msword",
-  ".ppt": "application/vnd.ms-powerpoint",
-};
-
-export function getBlockType(filename: string): NotionBlockType {
-  const ext = filename.match(/\.[^.]+$/)?.[0]?.toLowerCase();
-  if (!ext) return "file";
-  return EXTENSION_TO_BLOCK_TYPE[ext] ?? "file";
-}
-
-export function getMimeType(filename: string): string {
-  const ext = filename.match(/\.[^.]+$/)?.[0]?.toLowerCase();
-  if (!ext) return "application/octet-stream";
-  return EXTENSION_TO_MIME[ext] ?? "application/octet-stream";
-}
-
 function getFolderPath(filePath: string): string {
   const parts = filePath.split("/");
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
@@ -127,14 +40,25 @@ function getFolderPath(filePath: string): string {
 
 export class FileHandler {
   private readonly sema: Sema;
+  private readonly customFetch?: typeof globalThis.fetch;
+  private readonly downloadTimeoutMs: number;
+  private readonly itemTimeoutMs: number;
 
   constructor(
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
     private readonly stateDb: IStateDB,
     concurrency: number = 2,
+    options?: FileHandlerOptions,
   ) {
     this.sema = new Sema(concurrency);
+    this.customFetch = options?.fetch;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_ITEM_TIMEOUT_MS;
+  }
+
+  private get fetchFn(): typeof globalThis.fetch {
+    return this.customFetch ?? globalThis.fetch;
   }
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
@@ -146,26 +70,53 @@ export class FileHandler {
     const results: FileUploadResult[] = [];
 
     for (const file of folderFiles) {
-      const existing = this.stateDb.getFileRegistry(file.path);
-      if (existing) {
-        if (existing.fileSize === file.size) continue;
-        const buffer = await this.vaultFs.readBinary(file.path);
-        const currentHash = createHash("sha256").update(buffer).digest("hex");
-        if (existing.fileHash === currentHash) continue;
-      }
-
-      await this.sema.acquire();
-      try {
-        const result = await this.uploadFile(file, folderPageId);
-        if (result) results.push(result);
-      } catch (error) {
-        getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
-      } finally {
-        this.sema.release();
-      }
+      const result = await this.pushSingleFile(file, folderPageId);
+      if (result) results.push(result);
     }
 
     return results;
+  }
+
+  /**
+   * 첨부 1건을 폴더 페이지에 올린다 — 두 push 경로(`pushFilesForFolder` · `pushAllFiles`)의
+   * 공통 단위. 변경 없음 판정·동시성 슬롯·시간 상한·실패 격리를 모두 여기 한 곳에 둔다.
+   *
+   * 한 곳에 모은 이유는 R9a 에서 실제로 데인 적이 있어서다. 같은 다운로드 로직이
+   * image/file 핸들러에 두 벌 존재한 탓에 한쪽에만 상한이 걸린 채로 남았고, 상한 없는
+   * 쪽이 세마포어를 쥔 채 영원히 매달렸다. 여기도 같은 코드가 두 루프에 나뉘어 있었다.
+   *
+   * 상한(R9f): 업로드는 호출 1건마다 상한이 있어도(SDK 30초) 멀티파트는 파트 수만큼
+   * 호출이 늘어나는 **합성 경로**라 전체로는 여전히 무한대다. 상한을 넘긴 첨부는 경고만
+   * 남기고 나머지 첨부는 계속 올린다 — 첨부 하나가 push 전체를 멎게 하지 않는다.
+   *
+   * @returns 업로드 결과. 변경 없음(스킵)이거나 실패했으면 null.
+   */
+  private async pushSingleFile(
+    file: NonMdFileInfo,
+    folderPageId: string,
+  ): Promise<FileUploadResult | null> {
+    const existing = this.stateDb.getFileRegistry(file.path);
+    if (existing) {
+      if (existing.fileSize === file.size) return null;
+      const buffer = await this.vaultFs.readBinary(file.path);
+      const currentHash = createHash("sha256").update(buffer).digest("hex");
+      if (existing.fileHash === currentHash) return null;
+    }
+
+    // 슬롯 대기는 상한 밖이다 — 줄 서서 기다리는 것은 정지가 아니라 정상 동작이다.
+    await this.sema.acquire();
+    try {
+      return await withDeadline(
+        () => this.uploadFile(file, folderPageId),
+        this.itemTimeoutMs,
+        `첨부 업로드 ${file.path}`,
+      );
+    } catch (error) {
+      getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
+      return null;
+    } finally {
+      this.sema.release();
+    }
   }
 
   /**
@@ -209,23 +160,8 @@ export class FileHandler {
       }
 
       for (const file of files) {
-        const existing = this.stateDb.getFileRegistry(file.path);
-        if (existing) {
-          if (existing.fileSize === file.size) continue;
-          const buffer = await this.vaultFs.readBinary(file.path);
-          const currentHash = createHash("sha256").update(buffer).digest("hex");
-          if (existing.fileHash === currentHash) continue;
-        }
-
-        await this.sema.acquire();
-        try {
-          const result = await this.uploadFile(file, folderPageId);
-          if (result) results.push(result);
-        } catch (error) {
-          getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
-        } finally {
-          this.sema.release();
-        }
+        const result = await this.pushSingleFile(file, folderPageId);
+        if (result) results.push(result);
       }
     }
 
@@ -237,7 +173,8 @@ export class FileHandler {
     filename: string,
     targetFolder: string,
   ): Promise<FileDownloadResult> {
-    const response = await fetch(url);
+    // 상한 없는 fetch 는 세마포어를 쥔 채 영원히 매달릴 수 있다(utils/download-fetch 주석 참조).
+    const response = await fetchForDownload(this.fetchFn, url, this.downloadTimeoutMs);
     if (!response.ok) {
       throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
     }

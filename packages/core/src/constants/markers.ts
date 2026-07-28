@@ -42,13 +42,111 @@ export function compactMarker(body: string): string {
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
 
+/**
+ * 토글 헤딩(`### 제목 {toggle="true"}`) 보존 마커 쌍.
+ *
+ * NFM 은 토글 헤딩을 "속성 붙은 제목 + 탭 한 단계 들여쓴 자식"으로 내보낸다. Obsidian 에
+ * 대응 문법이 없어 속성을 그대로 두면 제목 뒤에 `{toggle="true"}` 가 노출되고(실볼트 256건),
+ * 자식의 구조적 탭이 4-space 로 확장되어 콜아웃이 코드블록으로 오파싱된다(524건).
+ *
+ * 끝 마커가 필요한 이유: pull 이 자식을 열 0 으로 내리면 **자식과 후속 형제가
+ * 구분되지 않는다**. NFM 원본에서는 자식만 탭을 갖고 형제는 열 0 이라 경계가 명확한데,
+ * 그 정보를 마커로 옮겨 싣지 않으면 push 가 형제까지 토글 안으로 빨아들인다.
+ * 끝 마커가 없는 구버전 볼트 문서를 위해 push 는 "다음 동급 이상 제목까지"로 폴백한다.
+ */
+export const TOGGLE_HEADING_START = compactMarker("toggle-heading");
+export const TOGGLE_HEADING_END = compactMarker("toggle-heading:end");
+
+/**
+ * 인용/콜아웃 들여쓰기 깊이 보존 마커.
+ *
+ * pull 은 구조적 들여쓰기를 Obsidian 이 코드블록으로 오파싱하지 않는 폭(2칸)으로
+ * 클램프한다 — "2칸 = 한 단계"가 관례이므로 깊이 1 은 마커 없이 복원된다.
+ * 두 단계 이상은 2칸으로 표현할 수 없어 이 마커가 깊이를 대신 싣는다
+ * (실볼트 콜아웃 머리줄 699개 중 깊이 ≥2 는 8개 — 마커 노이즈를 98.9% 줄이는 선택).
+ */
+export function calloutIndentMarker(depth: number): string {
+  return compactMarker(`callout-indent:${depth}`);
+}
+
 /** 컬럼 레이아웃 보존 마커 (block-converter). */
 export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");
 export const COLUMN_SEP = compactMarker("column");
 
+/**
+ * 칼럼 구분 마커 — **너비 비율**까지 싣는다.
+ *
+ * NFM 은 칼럼을 `<column ratio="62.5">` 로 내보낸다(실코퍼스 120노트 기준 203개 중 181개가
+ * 비율을 가지며, 그중 100개가 비균등). 구분 마커에 비율을 싣지 않으면 볼트에는 칼럼 **개수**만
+ * 남아, push 가 `<column>` 으로 재조립하며 사용자가 잡아 둔 레이아웃을 균등 분할로 되돌린다
+ * — 열 구조는 살아 있는데 폭만 매번 리셋되는 형태다(D-EMPTY-COLUMN 과 같은 종류의 손실).
+ *
+ * 비율이 없으면 {@link COLUMN_SEP} 를 그대로 쓴다 — 구버전 볼트 문서·legacy 경로와 형식을
+ * 공유해 마커 노이즈를 늘리지 않는다.
+ */
+export function columnMarker(ratio?: string): string {
+  return ratio ? compactMarker(`column:ratio=${ratio}`) : COLUMN_SEP;
+}
+
+/**
+ * 칼럼 구분 마커 한 줄의 패턴 원문.
+ *
+ * 비율 유무 두 형태를 각자 매칭하는 정규식이 pull·push·legacy 세 경로에 흩어지면
+ * 한 곳만 갱신되는 순간 그 경로에서 칼럼 경계가 사라진다(경계를 놓친 split 은 여러 칼럼을
+ * 하나로 접는다). 세 경로가 이 함수 하나를 공유한다.
+ *
+ * 값은 `50`·`62.5` 같은 십진수라 홑 `%` 가 섞이지 않는다 — 퍼센트 인코딩이 필요 없다.
+ *
+ * @param ratio `"capture"` 면 비율을 그룹 하나로 남긴다(없으면 `undefined`). `String.split`
+ *   처럼 캡처가 결과 배열에 섞이면 곤란한 자리에서는 `"ignore"` 를 쓴다.
+ */
+export function columnSepSource(ratio: "capture" | "ignore" = "capture"): string {
+  const value = ratio === "capture" ? "([\\d.]+)" : "(?:[\\d.]+)";
+  return `%%${MARKER_BRAND}:column(?::ratio=${value})?%%`;
+}
+
+/** 비율을 캡처하는 칼럼 구분 마커 패턴 원문. */
+export const COLUMN_SEP_SOURCE = columnSepSource("capture");
+
 /** 목차(table of contents) 블록 보존 마커. */
 export const TOC_MARKER = compactMarker("toc");
+
+/**
+ * 목차 블록 보존 마커 — 색까지 싣는다.
+ *
+ * NFM 은 목차를 `<table_of_contents color="gray"/>` 로 내보낸다. 마크다운 표현이 없어
+ * 변환하지 않으면 볼트에 원시 태그가 그대로 노출되고, 색을 버리면 push 마다 사용자가
+ * 지정한 색이 기본색으로 되돌아간다. 기본색은 {@link TOC_MARKER} 를 그대로 써
+ * 구버전 볼트·레거시(notion-to-md) 경로와 형식을 공유한다.
+ */
+export function tocMarker(color?: string): string {
+  return !color || color === "default" ? TOC_MARKER : compactMarker(`toc:color=${color}`);
+}
+
+/**
+ * 임베드 블록 보존 마커.
+ *
+ * `<embed src="…"></embed>` 는 NFM 전용 태그다. 그대로 두면 볼트에 원시 태그가
+ * 노출되고(실측 27개·2노트), 마커 없이 링크만 남기면 push 에서 평범한 링크 문단으로
+ * 박제되어 임베드 위젯이 사라진다. {@link MARKER_PAYLOAD_CHAR} 로 읽을 수 있도록
+ * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다.
+ */
+export function embedMarker(src: string): string {
+  return compactMarker(`embed:src=${encodeURIComponent(src)}`);
+}
+
+/**
+ * 인라인 미지원 멘션 보존 마커 — 커스텀 이모지처럼 `notion://` 스킴이라 마크다운으로
+ * 표현할 길이 없는 것들.
+ *
+ * 제목 줄 **안에 인라인으로** 박혀 오므로(`## <unknown_mention …/>노시언`, 실측 8노트)
+ * 한 줄을 차지하는 블록 마커로 처리하면 제목이 두 동강 난다.
+ */
+export function unknownMentionMarker(url: string, alt?: string): string {
+  const tail = alt ? `&alt=${encodeURIComponent(alt)}` : "";
+  return compactMarker(`unknown-mention:url=${encodeURIComponent(url)}${tail}`);
+}
 
 /**
  * synced block 보존 마커 쌍. Notion `<synced_block[_reference] url="...">` 태그를
@@ -56,7 +154,9 @@ export const TOC_MARKER = compactMarker("toc");
  * (실측: 태그를 되밀면 참조 보존, 태그 없이 내용만 되밀면 참조 소실).
  * 시작 마커에 태그 종류(kind)와 원본 url 을 실어 push 때 태그를 재조립한다.
  */
-export function syncedStartMarker(kind: "ref" | "orig", url: string): string {
+export type SyncedKind = "ref" | "orig";
+
+export function syncedStartMarker(kind: SyncedKind, url: string): string {
   return compactMarker(`synced:start:kind=${kind}&url=${encodeURIComponent(url)}`);
 }
 export const SYNCED_END = compactMarker("synced:end");
@@ -95,8 +195,48 @@ export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 // ─── 정규식 헬퍼 ───
 
 /**
+ * 마커 페이로드 한 글자 — 줄바꿈이 아니고, 종결자 `%%` 를 열지 않는 문자.
+ *
+ * 페이로드를 `[^%]` 로 끊으면 `50% 압축` 같은 **홑 `%`** 에서 마커 매칭이 깨진다.
+ * 새로 만드는 마커는 경로를 퍼센트 인코딩해 홑 `%` 가 남지 않지만, 이미 Notion 에
+ * 올라가 있는 구버전 마커에는 원문 `%` 가 그대로 들어 있다 — 그쪽도 살려야 하므로
+ * "`%` 는 받되 `%%` 는 받지 않는다"로 넓힌다(`marker-url.ts` 와 같은 이중 대응).
+ */
+export const MARKER_PAYLOAD_CHAR = "(?:[^\\n%]|%(?!%))";
+
+/**
+ * push 가 심는 미디어 자리표시자 quote 의 **머리 부분** 패턴 원문.
+ * `> 📎 파일명 %% im-nobsidian:local-image|local-file:경로 %%` 한 줄이 통째로 하나의
+ * 블록이어야 업로드 성공 뒤 image/file 블록으로 제자리 교체된다
+ * (`converter/pre-processors/embed.ts` 의 `placeholder` 주석 참조).
+ *
+ * 예전 두 줄 형태로 이미 Notion 에 올라가 있는 문서가 남아 있어 개행은 선택적으로 받는다.
+ * 뒤에 경로 캡처를 붙여 복원용으로 쓰거나(`local-image-restorer`), 앞에 `^` 를 붙여
+ * "이 줄이 자리표시자인가" 판정에 쓴다(`enhanced-md-converter`).
+ *
+ * 파일명 부분은 {@link MARKER_PAYLOAD_CHAR} 로 받는다 — `50%.png` 처럼 `%` 가 든 이름을
+ * `[^\n%]*` 로 끊으면 자리표시자 전체가 복원되지 않고 마커 원문이 본문에 노출됐다(실측).
+ */
+export const MEDIA_PLACEHOLDER_HEAD = `>\\s*📎\\s*${MARKER_PAYLOAD_CHAR}*(?:\\n>)?\\s*%%\\s*${MARKER_BRAND}:local-(?:image|file):`;
+
+/**
  * 정규식 패턴에 직접 삽입할 수 있는 브랜드 토큰.
  * 브랜드에 정규식 특수문자가 없어(하이픈은 문자클래스 밖에서 리터럴) 이스케이프 없이 사용 가능.
  * 사용 예: `new RegExp(`%% ${MARKER_BRAND_RE}:end %%`, "g")`
  */
 export const MARKER_BRAND_RE = MARKER_BRAND;
+
+/**
+ * 본문에 실린 **브랜드 마커 토큰 하나**를 통째로 잡는 패턴 — 공백형
+ * (`%% im-nobsidian:… %%`)·압축형(`%%im-nobsidian:…%%`)·닫는 토큰(`%%/color%%`)을 모두 받는다.
+ *
+ * `%%` 를 **위치로만** 짝짓는 스캐너(대표적으로 Obsidian 주석 제거기)가 마커의 구분자를
+ * 자기 구분자로 오인하면 본문이 통째로 사라진다. 실측: `100%%` 같은 홑 `%%` 가 있는 문서에
+ * `==하이라이트==` 가 함께 있으면, `100%%` 의 `%%` 와 색상 마커 여는 `%%` 가 짝지어져
+ * 그 사이 문장 전체와 하이라이트 본문이 삭제됐다(D-COMMENT-PAIR).
+ * 마커 토큰을 먼저 떼어 내는 {@link mapOutsideMarkers} 의 SSOT.
+ */
+export const MARKER_TOKEN_RE = new RegExp(
+  `%%\\s*(?:${MARKER_BRAND_RE}:${MARKER_PAYLOAD_CHAR}*|/[A-Za-z][\\w-]*)\\s*%%`,
+  "g",
+);
