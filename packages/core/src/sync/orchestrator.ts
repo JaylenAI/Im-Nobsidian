@@ -56,6 +56,7 @@ import {
 } from "../converter/notion-id-links.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
 import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
+import { pagePathCandidates } from "../utils/db-row-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
@@ -115,6 +116,11 @@ export class SyncOrchestrator {
   // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
   // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
   private _childParentIds = new Set<string>();
+
+  // 이번 pull 실행에서 이미 배정된 파일 경로. 워커 풀이 동시에 도는 동안 동명 페이지가
+  // 같은 경로를 골라 서로를 덮어쓰는 것을 막는다({@link resolveUniqueFilePath}).
+  // 실행마다 비운다 — 지난 실행에서 삭제된 경로를 영구히 막지 않기 위해.
+  private readonly claimedPaths = new Set<string>();
 
   // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
   // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
@@ -388,6 +394,8 @@ export class SyncOrchestrator {
 
   async pull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
+    // 이번 실행의 경로 선점 장부를 비운다 — 지난 실행에서 삭제된 경로를 계속 막지 않도록.
+    this.claimedPaths.clear();
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -2148,17 +2156,16 @@ export class SyncOrchestrator {
 
     if (hasChildPages && hasContent) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(`${folderPath}/${safeName}.md`);
+      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
       fileType = "folder-note";
       await this.vaultFs.ensureFolder(folderPath);
     } else if (hasChildPages && !hasContent) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(`${folderPath}/${safeName}.md`);
+      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
       fileType = "folder-only";
       await this.vaultFs.ensureFolder(folderPath);
     } else {
-      const basePath = parentPath ? `${parentPath}/${safeName}.md` : `${safeName}.md`;
-      filePath = await this.resolveUniqueFilePath(basePath);
+      filePath = await this.resolveUniqueFilePath(parentPath, safeName, pageId);
       fileType = "file";
     }
 
@@ -2915,19 +2922,58 @@ export class SyncOrchestrator {
     return null;
   }
 
-  private async resolveUniqueFilePath(basePath: string): Promise<string> {
-    if (!(await this.vaultFs.exists(basePath))) return basePath;
+  /**
+   * 신규 pull 페이지가 쓸 파일 경로를 충돌 없이 결정하고 **그 자리에서 선점**한다.
+   *
+   * DB 행과 **같은 규칙**({@link pagePathCandidates})을 쓴다. 예전에는 `(1)`, `(2)` …
+   * 순번을 99 까지 훑고 고갈되면 **원본 경로를 그대로 돌려줬는데**, 그러면 남의 노트를
+   * 조용히 덮어써 내용이 사라진다. 순번은 그때의 볼트 상태로 정해져 실행마다 페이지끼리
+   * 접미사가 뒤바뀔 수도 있었다(pull 마다 파일이 갈아엎히는 churn).
+   *
+   * 점유 판정은 세 가지를 모두 본다:
+   *   · 이번 실행의 선점 장부 — 아래 참조.
+   *   · 추적 레코드 — 다른 페이지가 소유한 경로면 피하고, 자기 소유면 그대로 재사용한다.
+   *   · 볼트 파일 — 추적되지 않는 사용자 노트가 놓여 있으면 피한다.
+   *
+   * 선점 장부가 필요한 이유는 pull 이 워커 풀로 **동시 실행**되기 때문이다. 조회와 기록
+   * 사이에 await 가 끼면 동명 페이지 여럿이 나란히 "비어 있음"을 보고 같은 경로를 고른다.
+   * 그러면 마지막에 쓴 페이지만 남고 나머지 본문이 사라진다(실측 재현: 동명 3페이지 →
+   * 파일 1개·레코드 1건). 그래서 마지막 확인과 등록을 **await 없는 동기 구간**에 묶는다 —
+   * 그 사이에는 다른 작업이 끼어들 수 없으므로 두 페이지가 같은 경로를 얻는 일이 없다.
+   */
+  private async resolveUniqueFilePath(
+    dir: string,
+    safeName: string,
+    pageId: string,
+  ): Promise<string> {
+    const candidates = pagePathCandidates(dir, safeName, pageId);
 
-    const dir = basePath.lastIndexOf("/") >= 0 ? basePath.slice(0, basePath.lastIndexOf("/")) : "";
-    const ext = ".md";
-    const name = basePath.slice(dir ? dir.length + 1 : 0, -ext.length);
+    for (const candidate of candidates) {
+      if (this.claimedPaths.has(candidate)) continue;
 
-    for (let i = 1; i <= 99; i++) {
-      const candidate = dir ? `${dir}/${name} (${i})${ext}` : `${name} (${i})${ext}`;
-      if (!(await this.vaultFs.exists(candidate))) return candidate;
+      const owner = this.stateDb.getByPath(candidate);
+      if (owner) {
+        // 자기 소유면 재사용해야 멱등하다(레코드가 남은 채 파일만 지워진 복원 시나리오).
+        if (owner.notionPageId != null && notionIdsEqual(owner.notionPageId, pageId)) {
+          this.claimedPaths.add(candidate);
+          return candidate;
+        }
+        continue;
+      }
+
+      if (await this.vaultFs.exists(candidate)) continue;
+
+      // ── 여기부터 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
+      if (this.claimedPaths.has(candidate)) continue;
+      this.claimedPaths.add(candidate);
+      return candidate;
     }
 
-    return basePath;
+    // 전체 ID(32 글자) 후보는 전역 유일하므로 위 루프에서 반드시 반환된다.
+    // 도달 불가 경로이나 방어적으로 가장 유일한 후보를 돌려준다.
+    const fallback = candidates[candidates.length - 1]!;
+    this.claimedPaths.add(fallback);
+    return fallback;
   }
 }
 
