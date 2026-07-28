@@ -83,7 +83,9 @@ export const TOC_MARKER = compactMarker("toc");
  * (실측: 태그를 되밀면 참조 보존, 태그 없이 내용만 되밀면 참조 소실).
  * 시작 마커에 태그 종류(kind)와 원본 url 을 실어 push 때 태그를 재조립한다.
  */
-export function syncedStartMarker(kind: "ref" | "orig", url: string): string {
+export type SyncedKind = "ref" | "orig";
+
+export function syncedStartMarker(kind: SyncedKind, url: string): string {
   return compactMarker(`synced:start:kind=${kind}&url=${encodeURIComponent(url)}`);
 }
 export const SYNCED_END = compactMarker("synced:end");

@@ -30,14 +30,30 @@ import {
   classifyContainerLines,
   dedentContainerBody,
   indentContainerBody,
+  stripContainerIndent,
 } from "./container-indent.js";
 
-/** NFM 원본의 토글 헤딩. 속성은 반드시 줄 끝에 온다. */
-const NFM_TOGGLE_HEADING_RE = /^(#{1,6})[ \t]+(.*?)[ \t]*\{toggle="true"\}[ \t]*$/;
+/**
+ * NFM 원본의 토글 헤딩. 속성은 반드시 줄 끝에 온다.
+ *
+ * 선행 들여쓰기를 **캡처**하는 것이 핵심이다. NFM 은 블록 계층을 탭으로 표현하므로
+ * 토글 헤딩이 늘 열 0 에 있지 않다 — 문단도 자식을 가질 수 있어
+ * `<callout>` → 문단(`\t`) → 토글 헤딩(`\t\t`) 이 실제로 나온다. 열 0 에만 앵커하면
+ * 그런 헤딩은 조용히 무동작이 되어 `{toggle="true"}` 가 본문에 노출되고, 자식이
+ * 접히지 않은 채 흩어진다(실측: 2건·1노트).
+ */
+const NFM_TOGGLE_HEADING_RE = /^([\t ]*)(#{1,6})[ \t]+(.*?)[ \t]*\{toggle="true"\}[ \t]*$/;
 
-/** 볼트 산출물의 토글 헤딩(시작 마커가 붙은 제목). */
+/**
+ * 볼트 산출물의 토글 헤딩(시작 마커가 붙은 제목).
+ *
+ * pull 이 헤딩의 들여쓰기를 보존하므로 push 도 같은 자리에서 받아야 한다. 특히 콜아웃
+ * 안 토글 헤딩은 {@link ./enhanced-md-converter.js} 의 `convertObsidianCallouts`(순서 120)가
+ * 구조 탭을 **다시 입힌 뒤** 이 복원기(순서 134)에 도달한다 — 열 0 앵커면 그 시점에
+ * 못 잡아 마커가 Notion 으로 새고 토글 헤딩이 평범한 제목으로 죽는다.
+ */
 const MARKED_TOGGLE_HEADING_RE = new RegExp(
-  `^(#{1,6})[ \\t]+(.*?)[ \\t]*${TOGGLE_HEADING_START}[ \\t]*$`,
+  `^([\\t ]*)(#{1,6})[ \\t]+(.*?)[ \\t]*${TOGGLE_HEADING_START}[ \\t]*$`,
 );
 
 /** 일반 제목 — push 폴백에서 본문 경계를 정할 때 쓴다. */
@@ -72,32 +88,38 @@ function convertLevel(lines: readonly string[]): string[] {
       continue;
     }
 
-    // 자식 구간: 탭으로 들여쓴 줄이 이어지는 동안(사이 빈 줄 허용). 열 0 의 비어있지 않은
-    // 줄이 나오면 형제이므로 거기서 끊는다 — NFM 이 주는 유일한 경계 신호다.
+    const [, indent, hashes, title] = match as unknown as [string, string, string, string];
+
+    // 자식 구간: 제목보다 **한 단계 더** 들여쓴 줄이 이어지는 동안(사이 빈 줄 허용).
+    // 제목과 같은 깊이의 비어있지 않은 줄이 나오면 형제이므로 거기서 끊는다 — NFM 이
+    // 주는 유일한 경계 신호다.
     //
     // 단, 코드블록·테이블 **내부**는 예외다. NFM 은 펜스/`<table>` 태그만 들여쓰고 내부
-    // 줄은 열 0 에 두는 비대칭 구조를 쓰므로(container-indent 주석 참조), 열 0 이라는
-    // 이유로 끊으면 코드 첫 줄에서 자식 구간이 잘려 나간다.
+    // 줄은 열 0 에 두는 비대칭 구조를 쓰므로(container-indent 주석 참조), 들여쓰기가
+    // 얕다는 이유로 끊으면 코드 첫 줄에서 자식 구간이 잘려 나간다.
+    const childIndent = `${indent}\t`;
     let lastChild = i;
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j]!;
       if (line.trim() === "") continue;
-      if (kinds[j] !== "code" && !line.startsWith("\t")) break;
+      if (kinds[j] !== "code" && !line.startsWith(childIndent)) break;
       lastChild = j;
     }
 
-    const [, hashes, title] = match as unknown as [string, string, string];
     if (lastChild === i) {
       // 자식 없는 토글 헤딩 — 속성만 마커로 바꾼다(끝 마커 불필요).
-      out.push(headingLine(hashes, title, TOGGLE_HEADING_START));
+      out.push(indent + headingLine(hashes, title, TOGGLE_HEADING_START));
       continue;
     }
 
+    // 자식을 제목과 같은 깊이로 끌어올린다 — 열 0 일 때와 같은 규칙을 상대적으로 적용한
+    // 것이며, push 의 `indentContainerBody(body, indent + "\t")` 와 정확히 역함수다.
     const body = dedentContainerBody(lines.slice(i + 1, lastChild + 1).join("\n"));
-    out.push(headingLine(hashes, title, TOGGLE_HEADING_START));
     // 중첩 토글 헤딩은 dedent 로 열 0 에 올라왔으므로 재귀가 같은 규칙으로 처리한다.
-    out.push(...convertLevel(body.split("\n")));
-    out.push(TOGGLE_HEADING_END);
+    const inner = convertLevel(body.split("\n")).join("\n");
+    out.push(indent + headingLine(hashes, title, TOGGLE_HEADING_START));
+    out.push(...(indent === "" ? inner : indentContainerBody(inner, indent)).split("\n"));
+    out.push(indent + TOGGLE_HEADING_END);
     i = lastChild;
   }
 
@@ -129,14 +151,16 @@ function restoreLevel(lines: readonly string[]): string[] {
       continue;
     }
 
-    const [, hashes, title] = match as unknown as [string, string, string];
-    const level = hashes.length;
-    const bound = findBodyEnd(lines, i + 1, level);
-    const inner = restoreLevel(lines.slice(i + 1, bound.bodyEnd));
+    const [, indent, hashes, title] = match as unknown as [string, string, string, string];
+    const bound = findBodyEnd(lines, i + 1, hashes.length);
+    // 본문은 제목과 같은 깊이에 있다(pull 대칭). 열 0 으로 내려 재귀시킨 뒤 제목보다 한
+    // 단계 깊게 되입히면 NFM 의 "제목 + 한 단계 들여쓴 자식" 구조가 그대로 복원된다.
+    const raw = stripContainerIndent(lines.slice(i + 1, bound.bodyEnd).join("\n"), indent);
+    const inner = restoreLevel(raw.split("\n"));
     const body = inner.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
 
-    out.push(headingLine(hashes, title, '{toggle="true"}'));
-    if (body.trim() !== "") out.push(...indentContainerBody(body, "\t").split("\n"));
+    out.push(indent + headingLine(hashes, title, '{toggle="true"}'));
+    if (body.trim() !== "") out.push(...indentContainerBody(body, `${indent}\t`).split("\n"));
     i = bound.consumed;
   }
 
