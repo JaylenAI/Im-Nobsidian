@@ -41,8 +41,28 @@ jobs:
           TITLE=$(grep -m1 '^# ' "$NOTES" | sed -E 's/^#[[:space:]]*//; s/^Im-Nobsidian[[:space:]]+//')
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
+      # The Obsidian plugin ships as release assets, not npm. All four are required:
+      # sql-wasm.wasm is the SQLite engine the plugin reads at runtime, so a release
+      # without it installs a plugin that loads but can never open its state database.
+      - name: Verify plugin assets exist
+        run: |
+          cd packages/obsidian-plugin
+          for f in main.js manifest.json styles.css sql-wasm.wasm; do
+            test -s "$f" || { echo "::error::plugin asset missing or empty: $f"; exit 1; }
+          done
+          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          test "$MANIFEST_VERSION" = "$TAG_VERSION" || {
+            echo "::error::manifest.json version ($MANIFEST_VERSION) != tag ($TAG_VERSION)"; exit 1;
+          }
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ steps.relmeta.outputs.title }}
           body_path: docs/07-release/RELEASE_NOTES_${{ github.ref_name }}.md
+          files: |
+            packages/obsidian-plugin/main.js
+            packages/obsidian-plugin/manifest.json
+            packages/obsidian-plugin/styles.css
+            packages/obsidian-plugin/sql-wasm.wasm
