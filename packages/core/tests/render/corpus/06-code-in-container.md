@@ -26,11 +26,7 @@ export function noop(): void {}
 목록 안의 코드도 확인한다.
 
 - 첫 항목
-  ```sh
-
-  ```
-
+	```sh
 echo hello
-```
-
+	```
 - 둘째 항목
