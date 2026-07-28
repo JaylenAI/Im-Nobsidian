@@ -11,6 +11,24 @@
 export type ContainerLineKind = "fence" | "code" | "prose";
 
 /**
+ * 컨테이너 접두 — 구조 들여쓰기와 인용 마커(`>`)가 겹쳐 붙은 줄머리의 정규식 원문.
+ *
+ * 컨테이너 안 내용을 다루는 변환기는 **반드시 이 접두를 떼고** 판정해야 한다. 열 0 에만
+ * 앵커한 판정은 콜아웃/칼럼 안에서 조용히 무동작이 되고, 그 결과가 표 사망(결함⑧)·
+ * 토글 소실(결함①) 같은 형태로 나타났다. 판정 후에는 같은 접두를 **모든 산출 줄**에
+ * 다시 입혀야 컨테이너가 중간에 끊기지 않는다.
+ */
+export const CONTAINER_PREFIX_SOURCE = "[\\t ]*(?:>[\\t ]*)*";
+
+const CONTAINER_PREFIX_RE = new RegExp(`^${CONTAINER_PREFIX_SOURCE}`);
+
+/** 줄을 컨테이너 접두와 실제 내용으로 가른다. */
+export function splitContainerPrefix(line: string): { prefix: string; body: string } {
+  const prefix = CONTAINER_PREFIX_RE.exec(line)?.[0] ?? "";
+  return { prefix, body: line.slice(prefix.length) };
+}
+
+/**
  * 컨테이너(토글/콜아웃) 본문을 blockquote(`> `)로 감싸기 전에 적용하는 dedent.
  *
  * Notion Markdown API 는 `<details>`/callout 의 직계 자식을 중첩 깊이만큼 탭으로
