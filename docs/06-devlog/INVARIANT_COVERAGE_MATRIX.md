@@ -2,7 +2,7 @@
 type: report
 title: "불변식 I1~I14 커버리지 매트릭스 (이원 도달성)"
 created: 2026-05-30
-updated: 2026-07-27
+updated: 2026-07-28
 status: active
 tags: ["project/im-nobsidian", "type/coverage", "sync/fidelity"]
 related: ["[[SYNC_FIDELITY_GOAL]]"]
@@ -50,7 +50,7 @@ summary: "I1~I14 + 드리프트 불변식의 자동테스트·이원 도달성(�
 | **I13** 마커·링크 구조 라운드트립    | `converter/roundtrip-fidelity.test.ts`, `converter/wikilink-*.test.ts`, `converter/preserve-marker-injector.test.ts` (R1~R3·R6 오프라인 회귀)                                                                                                     | `invariants/marker-roundtrip.invariant.test.ts`                                      | 별칭·괄호·임베드·`%`·컬럼 중첩 생존 |
 | **I14** 빈 칼럼 보존                 | `converter/design-fidelity-roundtrip.test.ts`(문자열 왕복)                                                                                                                                                                                        | `invariants/empty-column.invariant.test.ts`                                          | 3열(가운데 빔) → 왕복 후에도 3열    |
 | **드리프트** fixpoint 비트동일       | —                                                                                                                                                                                                                                                 | `invariants/drift.invariant.test.ts`                                                 | pull→push→pull diff empty           |
-| **렌더** 볼트 마크다운 가독 충실도   | `render/vault-render.gate.test.ts` (8지표), `converter/code-fence-boundary.test.ts`, `converter/toggle-heading*.test.ts`, `converter/callout-*.test.ts`                                                                                           | — (NFM 캐시 코퍼스, `IM_NFM_CORPUS=` 로 실 워크스페이스 지정 가능)                   | "사람 눈에 깨져 보이는가" (P1~P11)  |
+| **렌더** 볼트 마크다운 가독 충실도   | `render/vault-render.gate.test.ts` (8지표), `converter/code-fence-boundary.test.ts`, `converter/toggle-heading*.test.ts`, `converter/callout-*.test.ts`                                                                                           | E2E `analyze` — 볼트 전 `.md` 를 `lintRenderedMarkdown` 으로 훑어 결함 1건도 exit 1  | "사람 눈에 깨져 보이는가" (P1~P11)  |
 
 † I4/I7 사이드카 테스트는 `feature/i4-i7-view-fidelity` (7c9afcf·56fe9c2) — **dev 머지 완료**(2026-05-30, --no-ff). db-fidelity 라이브 불변식 동반.
 ‡ I8/I9 통합·UIUX 테스트는 `feature/i8-i9-integration-tests` (412f4a5·8ec37ce) — **dev 머지 완료**(2026-05-30, --no-ff).
@@ -60,18 +60,24 @@ summary: "I1~I14 + 드리프트 불변식의 자동테스트·이원 도달성(�
 R11·P11 이 같은 방식으로 새 나갔다. 게이트를 이름이 아니라 **무엇을 보는가**로 세워 두면
 빈칸이 눈에 보인다. 지표를 늘릴 때는 표에 줄을 더하기 전에 이 축부터 채운다.
 
-| 성질            | 묻는 것                        | 게이트                                                | 못 잡는 것                                                        |
-| --------------- | ------------------------------ | ----------------------------------------------------- | ----------------------------------------------------------------- |
-| 멱등성          | 다시 돌려도 같은가             | `repull`·`pushdry`·`sync` churn 0, 드리프트 fixpoint  | **매번 똑같이** 놓치거나 깨뜨리는 것 (R11: DB 행 296건 침묵 유실) |
-| 볼트 내부 정합  | 볼트 안 구조가 성립하는가      | `analyze` 무결성                                      | 원격을 안 본다                                                    |
-| **완결성**      | 원격 집합 = 볼트 집합인가      | `nobsi verify` (행·쪽 두 축)                          | 있는 파일의 **내용**은 안 본다                                    |
-| 내용 보존       | 원본 텍스트·블록이 남아 있는가 | 라운드트립 deep-equal, 산문 보존율, 본문 삼킴         | 내용을 **옮기기만** 하는 파손 (P11: 본문 8,200행이 코드블록 안)   |
-| **경계 / 자리** | 있어야 할 **자리**에 있는가    | 경계 드리프트(코드블록 개수·코드 행수), 구조 드리프트 | 아직: 표 셀 경계·중첩 리스트 깊이는 개수만 보고 자리는 안 본다    |
-| 사람 눈 렌더    | 열었을 때 깨져 보이는가        | 볼트 렌더 게이트 8지표                                | 코퍼스에 없는 블록 형태                                           |
+| 성질            | 묻는 것                        | 게이트                                                   | 못 잡는 것                                                        |
+| --------------- | ------------------------------ | -------------------------------------------------------- | ----------------------------------------------------------------- |
+| 멱등성          | 다시 돌려도 같은가             | `repull`·`pushdry`·`sync` churn 0, 드리프트 fixpoint     | **매번 똑같이** 놓치거나 깨뜨리는 것 (R11: DB 행 296건 침묵 유실) |
+| 볼트 내부 정합  | 볼트 안 구조가 성립하는가      | `analyze` — FS·DB 무결성 **+ 본문 렌더 린트**            | 원격을 안 본다                                                    |
+| **완결성**      | 원격 집합 = 볼트 집합인가      | `nobsi verify` (행·쪽 두 축)                             | 있는 파일의 **내용**은 안 본다                                    |
+| 내용 보존       | 원본 텍스트·블록이 남아 있는가 | 라운드트립 deep-equal, 산문 보존율, 본문 삼킴            | 내용을 **옮기기만** 하는 파손 (P11: 본문 8,200행이 코드블록 안)   |
+| **경계 / 자리** | 있어야 할 **자리**에 있는가    | 경계 드리프트(코드블록 개수·코드 행수), 구조 드리프트    | 아직: 표 셀 경계·중첩 리스트 깊이는 개수만 보고 자리는 안 본다    |
+| 사람 눈 렌더    | 열었을 때 깨져 보이는가        | 렌더 게이트 8지표 = **코퍼스 + E2E `analyze` 볼트 실물** | 원본이 있어야 아는 것(경계 드리프트) — 볼트에는 대조본이 없다     |
 
 세로로 읽으면 각 성질이 **직전 성질의 사각지대**를 맡는다. 새 결함이 나오면 먼저 "어느
 성질이 비어 있었나"를 묻고, 그 칸을 채우는 지표를 만든다 — 사례 하나를 잡는 테스트가
 아니라.
+
+지표를 만드는 것만으로는 부족하다는 것도 같은 트랙에서 드러났다. 렌더 8지표는 P8 부터
+있었지만 **테스트 트리 안에만** 있어서 코퍼스에만 물렸고, 볼트를 훑는 E2E `analyze` 는
+본문을 한 글자도 읽지 않았다. 그래서 2차 전량 E2E 가 "무결성 CLEAN · exit 0" 을 찍은
+볼트에 눈에 띄게 깨진 노트가 23개 있었다. 지표는 **출하 코드**(`core/src/audit/`)에 두고
+게이트와 하니스가 같은 것을 import 하게 한다 — 사본이 둘이 되면 둘은 갈라진다.
 
 **라이브 불변식 스위트 합계:** **10 파일 / 15 케이스**(attachment 1·block-roundtrip 1·crash-resume 2·db-fidelity 2·deep-nesting 1·deletion 2·drift 1·idempotency 3·**marker-roundtrip 1(I13)**·**empty-column 1(I14)**), 전부 `skipIf(SKIP)`.
 직전 8 파일 13 케이스 기준 **13/13 GREEN, 99.14s**(실 Notion, 2026-05-30). I13·I14 는 각각 R6·R8 브랜치에서 라이브 GREEN 확인 후 dev 머지.
