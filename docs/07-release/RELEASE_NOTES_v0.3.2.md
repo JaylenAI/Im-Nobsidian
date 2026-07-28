@@ -187,7 +187,13 @@ npm install -g im-nobsidian@0.3.2
 npm install @im-nobsidian/core@0.3.2
 ```
 
-Obsidian plugin: update via BRAT, or copy `main.js` / `manifest.json` / `styles.css` from the
-`0.3.2` release into `.obsidian/plugins/im-nobsidian/`.
+Obsidian plugin: download **all four** assets attached to this release — `main.js`,
+`manifest.json`, `styles.css` and `sql-wasm.wasm` — into
+`<vault>/.obsidian/plugins/im-notion-sync/`, then enable **Im-Notion Sync** under
+Settings → Community plugins.
+
+The folder name and the fourth file both matter: the plugin loads its SQLite engine from
+`.obsidian/plugins/<manifest.id>/sql-wasm.wasm`, so a differently-named folder or a missing
+`sql-wasm.wasm` leaves the plugin loaded but unable to open its state database.
 
 **Full changelog:** [`docs/06-devlog/CHANGELOG.md`](../06-devlog/CHANGELOG.md)
