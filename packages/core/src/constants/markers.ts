@@ -78,6 +78,42 @@ export const COLUMN_SEP = compactMarker("column");
 export const TOC_MARKER = compactMarker("toc");
 
 /**
+ * 목차 블록 보존 마커 — 색까지 싣는다.
+ *
+ * NFM 은 목차를 `<table_of_contents color="gray"/>` 로 내보낸다. 마크다운 표현이 없어
+ * 변환하지 않으면 볼트에 원시 태그가 그대로 노출되고, 색을 버리면 push 마다 사용자가
+ * 지정한 색이 기본색으로 되돌아간다. 기본색은 {@link TOC_MARKER} 를 그대로 써
+ * 구버전 볼트·레거시(notion-to-md) 경로와 형식을 공유한다.
+ */
+export function tocMarker(color?: string): string {
+  return !color || color === "default" ? TOC_MARKER : compactMarker(`toc:color=${color}`);
+}
+
+/**
+ * 임베드 블록 보존 마커.
+ *
+ * `<embed src="…"></embed>` 는 NFM 전용 태그다. 그대로 두면 볼트에 원시 태그가
+ * 노출되고(실측 27개·2노트), 마커 없이 링크만 남기면 push 에서 평범한 링크 문단으로
+ * 박제되어 임베드 위젯이 사라진다. {@link MARKER_PAYLOAD_CHAR} 로 읽을 수 있도록
+ * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다.
+ */
+export function embedMarker(src: string): string {
+  return compactMarker(`embed:src=${encodeURIComponent(src)}`);
+}
+
+/**
+ * 인라인 미지원 멘션 보존 마커 — 커스텀 이모지처럼 `notion://` 스킴이라 마크다운으로
+ * 표현할 길이 없는 것들.
+ *
+ * 제목 줄 **안에 인라인으로** 박혀 오므로(`## <unknown_mention …/>노시언`, 실측 8노트)
+ * 한 줄을 차지하는 블록 마커로 처리하면 제목이 두 동강 난다.
+ */
+export function unknownMentionMarker(url: string, alt?: string): string {
+  const tail = alt ? `&alt=${encodeURIComponent(alt)}` : "";
+  return compactMarker(`unknown-mention:url=${encodeURIComponent(url)}${tail}`);
+}
+
+/**
  * synced block 보존 마커 쌍. Notion `<synced_block[_reference] url="...">` 태그를
  * pull 때 벗겨 내용만 남기면 push 때 일반 블록으로 박제되어 **동기화 참조가 끊긴다**
  * (실측: 태그를 되밀면 참조 보존, 태그 없이 내용만 되밀면 참조 소실).
