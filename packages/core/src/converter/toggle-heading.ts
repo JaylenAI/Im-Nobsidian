@@ -27,7 +27,7 @@
  */
 import { TOGGLE_HEADING_END, TOGGLE_HEADING_START } from "../constants/markers.js";
 import {
-  classifyContainerLines,
+  containerBlockEnds,
   dedentContainerBody,
   indentContainerBody,
   stripContainerIndent,
@@ -78,8 +78,8 @@ export function convertToggleHeadings(content: string): string {
 
 function convertLevel(lines: readonly string[]): string[] {
   const out: string[] = [];
-  // 줄 성격은 문서 앞부터의 전방 스캔이라 레벨당 한 번만 계산하면 된다.
-  const kinds = classifyContainerLines(lines);
+  // 컨테이너 경계는 문서 앞부터의 전방 스캔이라 레벨당 한 번만 계산하면 된다.
+  const ends = containerBlockEnds(lines);
 
   for (let i = 0; i < lines.length; i++) {
     const match = NFM_TOGGLE_HEADING_RE.exec(lines[i]!);
@@ -94,16 +94,18 @@ function convertLevel(lines: readonly string[]): string[] {
     // 제목과 같은 깊이의 비어있지 않은 줄이 나오면 형제이므로 거기서 끊는다 — NFM 이
     // 주는 유일한 경계 신호다.
     //
-    // 단, 코드블록·테이블 **내부**는 예외다. NFM 은 펜스/`<table>` 태그만 들여쓰고 내부
-    // 줄은 열 0 에 두는 비대칭 구조를 쓰므로(container-indent 주석 참조), 들여쓰기가
-    // 얕다는 이유로 끊으면 코드 첫 줄에서 자식 구간이 잘려 나간다.
+    // 단, 코드블록·테이블은 **통째로** 삼킨다. NFM 은 펜스/`<table>` 태그만 들여쓰고 내부
+    // 줄은 열 0 에 두는 비대칭 구조를 쓰므로(container-indent 주석 참조), 들여쓰기가 얕다는
+    // 이유로 끊으면 코드 첫 줄에서 자식 구간이 잘려 나간다. 닫는 펜스도 마찬가지라 한 줄씩
+    // 판정하면 닫는 줄만 구간 밖으로 밀려나고, 그 자리에 끝 마커가 코드 **안으로** 끼어든다.
     const childIndent = `${indent}\t`;
     let lastChild = i;
     for (let j = i + 1; j < lines.length; j++) {
       const line = lines[j]!;
       if (line.trim() === "") continue;
-      if (kinds[j] !== "code" && !line.startsWith(childIndent)) break;
-      lastChild = j;
+      if (!line.startsWith(childIndent)) break;
+      lastChild = ends[j]!;
+      j = lastChild;
     }
 
     if (lastChild === i) {

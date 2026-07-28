@@ -23,8 +23,10 @@ import {
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import {
   CONTAINER_PREFIX_SOURCE,
+  codeInteriorRanges,
   dedentContainerBody,
   indentContainerBody,
+  isInsideRanges,
   nfmOpenTagSource,
   splitContainerPrefix,
 } from "./container-indent.js";
@@ -1030,7 +1032,11 @@ function toTableCell(raw: string): string {
 }
 
 function convertNotionTables(content: string): string {
-  return content.replace(NOTION_TABLE_RE, (_match, prefix: string, tableBody: string) => {
+  // 코드블록 안의 `<table>` 은 사용자가 적어 둔 **예제 코드**다. 구조로 오인해 치환하면
+  // 그 자리에서 통째로 사라진다(실측: 한 노트 `<table` 29→4 · `<tr` 158→1).
+  const code = codeInteriorRanges(content);
+  return content.replace(NOTION_TABLE_RE, (_match, prefix: string, tableBody: string, offset) => {
+    if (isInsideRanges(code, offset as number)) return _match;
     const rows: string[][] = [];
     let rowMatch: RegExpExecArray | null;
     const rowRe = new RegExp(TABLE_ROW_RE.source, TABLE_ROW_RE.flags);
