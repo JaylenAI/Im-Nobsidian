@@ -14,6 +14,10 @@ import {
   toggleColorMarker,
   blockColorMarker,
   MEDIA_PLACEHOLDER_HEAD,
+  MARKER_PAYLOAD_CHAR,
+  tocMarker,
+  embedMarker,
+  unknownMentionMarker,
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import {
@@ -68,6 +72,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertMediaTags(result);
   result = convertTabBlocks(result);
   result = preserveUnknownBlocks(result);
+  result = preserveNfmOnlyBlocks(result);
   result = convertNotionMath(result);
   result = convertNotionTables(result);
   result = convertSpans(result);
@@ -122,6 +127,7 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = convertObsidianCallouts(result);
   result = restoreMediaTags(result);
   result = restoreUnknownBlocks(result);
+  result = restoreNfmOnlyBlocks(result);
   result = restoreColorSpans(result);
   result = restoreBlockColorMarkers(result);
   result = restoreUnderlineSpans(result);
@@ -422,6 +428,24 @@ function convertDateMentions(content: string): string {
   });
 }
 
+/**
+ * 마크다운 표현이 없는 블록의 **가시 폴백** — 클릭 가능한 링크 + 권위 마커 한 쌍.
+ *
+ * 마커만 남기면 읽기뷰에서 빈 줄로 보여 사용자가 소실로 오해한다. 링크는 보여주기용이고
+ * 왕복 권위는 뒤따르는 마커(인코딩된 원본 URL)가 갖는다. 둘을 **공백 없이** 인접시켜
+ * push 때 {@link DEGRADE_LINK_SOURCE} 가 한 쌍으로 소비 → Notion drift 를 막는다.
+ *
+ * 목적지의 괄호는 반드시 인코딩한다. 짝 패턴이 `\([^)]*\)` 로 끝을 잡으므로 날 괄호가
+ * 경계를 앞당겨 끊고, 그러면 링크 잔해가 Notion 본문에 평문으로 박제된다(실측 재현:
+ * `https://ex.com/a(b)c`). `%28`/`%29` 는 경로·질의 어디서든 원문과 동치다.
+ */
+function degradeLink(label: string, url: string, marker: string): string {
+  return `[${label}](${url.replace(/\(/g, "%28").replace(/\)/g, "%29")})${marker}`;
+}
+
+/** {@link degradeLink} 가 앞세운 가시 링크. 마커 패턴 앞에 붙여 한 쌍으로 소비한다. */
+const DEGRADE_LINK_SOURCE = "(?:\\[[^\\]]*\\]\\([^)]*\\))?";
+
 // 2D: <unknown> → 보존 마커 (삭제 대신 보존)
 function preserveUnknownBlocks(content: string): string {
   let result = content.replace(NOTION_UNKNOWN_RE, (_match, id: string, attrs: string) => {
@@ -434,19 +458,41 @@ function preserveUnknownBlocks(content: string): string {
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? "bookmark";
     const marker = compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
-    // URL 을 가진 임베드/북마크는 읽기뷰에서 보이지 않는 주석 마커만 남기면
-    // 사용자가 "왜 빈 줄이지?" 하고 혼란스럽다. 클릭 가능한 링크를 앞에 붙이되,
-    // round-trip 권위는 뒤따르는 마커(인코딩된 원본 URL)가 갖는다. 링크와 마커는
-    // 공백 없이 즉시 인접시켜, 역변환 시 한 쌍으로 같이 제거 → Notion drift 방지.
     const label =
       blockType === "embed"
         ? "🔗 Embed"
         : blockType === "bookmark"
           ? "🔖 Bookmark"
           : `🔗 ${blockType}`;
-    return `[${label}](${url})${marker}`;
+    return degradeLink(label, url, marker);
   });
   return result;
+}
+
+// NFM 전용 자기완결 태그들. 이름 뒤가 `\s` 또는 `/` 로 **닫히는 것**까지 확인한다 —
+// `<table>`/`<table_of_contents>` 처럼 접두가 겹치는 이름이 실재하기 때문이다
+// ({@link nfmOpenTagSource} 주석 참조).
+const NOTION_TOC_RE = /<table_of_contents(?:\s+color="([^"]*)")?\s*\/>/g;
+/** 임베드는 여는/닫는 태그 쌍으로 오지만 내부는 항상 비어 있다(코퍼스 27개 전건 실측). */
+const NOTION_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>\s*<\/embed>/g;
+const NOTION_UNKNOWN_MENTION_RE = /<unknown_mention\s+url="([^"]*)"([^>]*?)\/>/g;
+
+/**
+ * 마크다운 표현이 없는 NFM 전용 블록을 보존 마커로 옮긴다.
+ *
+ * {@link preserveUnknownBlocks} 가 `<unknown …/>` 만 처리해, Notion 이 **이름을 붙여
+ * 내보내는** 나머지 태그들은 볼트에 원시 HTML 로 눌러앉았다(실측: `<embed>` 27개·2노트,
+ * `<unknown_mention>` 8개·8노트, `<table_of_contents>` 3개·3노트). 원시 태그는 편집뷰에
+ * 그대로 보이고, push 때는 Notion 이 해석하지 못해 평문으로 박제된다.
+ */
+function preserveNfmOnlyBlocks(content: string): string {
+  let result = content.replace(NOTION_TOC_RE, (_match, color?: string) => tocMarker(color));
+  result = result.replace(NOTION_EMBED_RE, (_match, src: string) =>
+    degradeLink("🔗 Embed", src, embedMarker(src)),
+  );
+  return result.replace(NOTION_UNKNOWN_MENTION_RE, (_match, url: string, attrs: string) =>
+    unknownMentionMarker(url, /alt="([^"]*)"/.exec(attrs)?.[1]),
+  );
 }
 
 /**
@@ -1034,11 +1080,10 @@ function restoreTabBlocks(content: string): string {
   });
 }
 
-// 앞에 즉시 인접(공백 없음)한 가시 링크 `[label](url)` 가 있으면 마커와 함께 소비한다.
-// 이는 forward 에서 URL 임베드/북마크를 "[🔗 Embed](url)%%...%%" 로 렌더한 쌍을 통째로
-// <unknown.../> 로 복원하기 위함이다. 공백 없는 인접만 매칭하므로 사용자 일반 링크는 영향 없음.
+// {@link degradeLink} 가 앞세운 가시 링크를 마커와 **한 쌍으로** 소비한다.
+// 공백 없는 인접만 매칭하므로 사용자가 직접 쓴 링크는 영향받지 않는다.
 const OBSIDIAN_UNKNOWN_RE = new RegExp(
-  `(?:\\[[^\\]]*\\]\\([^)]*\\))?%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
+  `${DEGRADE_LINK_SOURCE}%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=([^%]+)%%`,
   "g",
 );
 
@@ -1049,6 +1094,35 @@ function restoreUnknownBlocks(content: string): string {
       return `<unknown url="${decoded}" alt="${type}"/>`;
     }
     return `<unknown id="${id}" type="${type}"/>`;
+  });
+}
+
+// 페이로드는 퍼센트 인코딩되어 홑 `%` 를 남기지 않으므로 MARKER_PAYLOAD_CHAR 로 읽는다
+// (`[^%]` 로 끊으면 인코딩된 `%3A` 첫 글자에서 마커가 깨진다).
+const OBSIDIAN_TOC_RE = new RegExp(`%%${MARKER_BRAND_RE}:toc(?::color=([^%]+))?%%`, "g");
+const OBSIDIAN_EMBED_RE = new RegExp(
+  `${DEGRADE_LINK_SOURCE}%%${MARKER_BRAND_RE}:embed:src=(${MARKER_PAYLOAD_CHAR}+)%%`,
+  "g",
+);
+// url·alt 는 각각 인코딩되어 있으므로 페이로드에 남는 홑 `&` 는 우리가 넣은 구분자뿐이다.
+const OBSIDIAN_UNKNOWN_MENTION_RE = new RegExp(
+  `%%${MARKER_BRAND_RE}:unknown-mention:url=(${MARKER_PAYLOAD_CHAR}+)%%`,
+  "g",
+);
+
+/** {@link preserveNfmOnlyBlocks} 의 역함수 — 마커를 NFM 전용 태그로 되돌린다. */
+function restoreNfmOnlyBlocks(content: string): string {
+  let result = content.replace(OBSIDIAN_TOC_RE, (_match, color?: string) =>
+    color ? `<table_of_contents color="${color}"/>` : `<table_of_contents/>`,
+  );
+  result = result.replace(
+    OBSIDIAN_EMBED_RE,
+    (_match, src: string) => `<embed src="${decodeURIComponent(src)}"></embed>`,
+  );
+  return result.replace(OBSIDIAN_UNKNOWN_MENTION_RE, (_match, payload: string) => {
+    const [url, alt] = payload.split("&alt=");
+    const altAttr = alt ? ` alt="${decodeURIComponent(alt)}"` : "";
+    return `<unknown_mention url="${decodeURIComponent(url ?? "")}"${altAttr}/>`;
   });
 }
 

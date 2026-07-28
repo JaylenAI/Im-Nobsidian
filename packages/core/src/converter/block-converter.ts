@@ -18,6 +18,13 @@ import {
   BREADCRUMB_MARKER,
 } from "../constants/markers.js";
 
+/**
+ * 색을 실은 목차 마커 — `%%im-nobsidian:toc:color=gray%%`.
+ *
+ * 기본색은 {@link TOC_MARKER} 와 같은 무색 형태로 나가므로 여기서 잡는 건 유색뿐이다.
+ */
+const TOC_COLOR_MARKER_RE = new RegExp(`^%%${MARKER_BRAND}:toc:color=([a-z_]+)%%$`);
+
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
 
 const DIVIDER_PLACEHOLDER = "​%%IM-NOBSIDIAN_DIVIDER%%​";
@@ -668,8 +675,12 @@ export class BlockConverter {
     if (texts.length !== 1) return null;
 
     const text = (texts[0]?.text?.content ?? "").trim();
-    if (text === TOC_MARKER) {
-      return NotionBlockBuilder.tableOfContents();
+    // 색을 실은 변형(`%%im-nobsidian:toc:color=gray%%`)도 같이 받는다 — NFM 경로가
+    // 목차 색을 보존하므로(markers.tocMarker), 여기서 못 받으면 그 문서만 마커가
+    // 평범한 문단으로 Notion 에 기록된다.
+    const toc = TOC_COLOR_MARKER_RE.exec(text);
+    if (text === TOC_MARKER || toc) {
+      return NotionBlockBuilder.tableOfContents(toc?.[1]);
     }
     if (text === BREADCRUMB_MARKER) {
       return NotionBlockBuilder.breadcrumb();
