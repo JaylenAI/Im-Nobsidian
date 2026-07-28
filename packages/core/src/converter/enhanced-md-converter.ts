@@ -15,7 +15,12 @@ import {
   MEDIA_PLACEHOLDER_HEAD,
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
-import { dedentContainerBody, indentContainerBody } from "./container-indent.js";
+import {
+  CONTAINER_PREFIX_SOURCE,
+  dedentContainerBody,
+  indentContainerBody,
+  splitContainerPrefix,
+} from "./container-indent.js";
 import {
   applyCalloutIndent,
   clampCalloutIndent,
@@ -925,7 +930,18 @@ function unescapeNotionChars(content: string): string {
   return content.replace(/\\~/g, "~").replace(/\\\^/g, "^");
 }
 
-const NOTION_TABLE_RE = /<table[^>]*>([\s\S]*?)<\/table>/g;
+/**
+ * NFM 표 블록. 선행 그룹으로 **컨테이너 접두**(들여쓰기 + 인용 마커)를 함께 잡는다.
+ *
+ * NFM 의 비대칭 들여쓰기 때문이다 — `<table>` 태그 줄만 구조 들여쓰기를 갖고 `<tr>/<td>`
+ * 는 열 0 에 있다. 접두를 잡지 않고 치환하면 **첫 행만** 접두를 물려받고 나머지 행은
+ * 열 0 으로 떨어진다. 그러면 (a) 콜아웃이 그 자리에서 끊기고 (b) 구분행이 표 헤더와
+ * 분리돼 표가 통째로 죽는다(결함⑧⑨ — 실측 96건·15노트).
+ */
+const NOTION_TABLE_RE = new RegExp(
+  `^(${CONTAINER_PREFIX_SOURCE})<table[^>]*>([\\s\\S]*?)</table>`,
+  "gm",
+);
 const TABLE_ROW_RE = /<tr>([\s\S]*?)<\/tr>/g;
 const TABLE_CELL_RE = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g;
 
@@ -933,8 +949,22 @@ function isAlignmentRow(cells: string[]): boolean {
   return cells.every((c) => /^:?-{2,}:?$/.test(c.trim()));
 }
 
+/**
+ * 셀 내용을 파이프 표 한 칸에 안전하게 담는다.
+ *
+ * 줄바꿈은 행 자체를 끊어 표를 죽이므로 `<br>` 로 접고(Obsidian 표가 렌더하는 유일한
+ * 줄바꿈 표현), 셀 안 파이프는 열 경계로 오인되므로 이스케이프한다. 이스케이프 형태는
+ * pull 뒷단 `unescapePipes` 가 되돌리지 않도록 표 밖 규칙과 구분되는 `\|` 를 쓴다.
+ */
+function toTableCell(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\r?\n/g, "<br>")
+    .replace(/(?<!\\)\|/g, "\\|");
+}
+
 function convertNotionTables(content: string): string {
-  return content.replace(NOTION_TABLE_RE, (_match, tableBody: string) => {
+  return content.replace(NOTION_TABLE_RE, (_match, prefix: string, tableBody: string) => {
     const rows: string[][] = [];
     let rowMatch: RegExpExecArray | null;
     const rowRe = new RegExp(TABLE_ROW_RE.source, TABLE_ROW_RE.flags);
@@ -944,7 +974,7 @@ function convertNotionTables(content: string): string {
       let cellMatch: RegExpExecArray | null;
       const cellRe = new RegExp(TABLE_CELL_RE.source, TABLE_CELL_RE.flags);
       while ((cellMatch = cellRe.exec(rowMatch[1]!)) !== null) {
-        cells.push(cellMatch[1]!.trim());
+        cells.push(toTableCell(cellMatch[1]!));
       }
       if (!isAlignmentRow(cells)) {
         rows.push(cells);
@@ -965,7 +995,8 @@ function convertNotionTables(content: string): string {
       }
     }
 
-    return lines.join("\n");
+    // 표를 감싼 컨테이너의 접두를 **모든 행**에 입힌다 — 첫 행에만 남으면 표가 죽는다.
+    return lines.map((line) => prefix + line).join("\n");
   });
 }
 
@@ -1125,17 +1156,17 @@ function unescapePipes(content: string): string {
   let inTable = false;
 
   for (const line of lines) {
-    if (/^\|.*\|$/.test(line.trim()) || /^\|[\s-|]+\|$/.test(line.trim())) {
+    // 표 판정은 **컨테이너 접두를 떼고** 한다. 열 0 기준으로만 보면 콜아웃/칼럼 안 표
+    // (`> | a | b |`)가 표로 인식되지 않고, 그 순간 셀 안 이스케이프가 풀려 파이프가
+    // 열 경계로 되살아나 표가 깨진다(CONTAINER_PREFIX_SOURCE 주석 참조).
+    const trimmed = splitContainerPrefix(line).body.trim();
+    if (/^\|.*\|$/.test(trimmed) || /^\|[\s-|]+\|$/.test(trimmed)) {
       inTable = true;
       result.push(line);
-    } else {
-      if (inTable && line.trim() === "") {
-        inTable = false;
-      } else if (!/^\|/.test(line.trim())) {
-        inTable = false;
-      }
-      result.push(inTable ? line : line.replace(/\\\|/g, "|"));
+      continue;
     }
+    if (!trimmed.startsWith("|")) inTable = false;
+    result.push(inTable ? line : line.replace(/\\\|/g, "|"));
   }
 
   return result.join("\n");
