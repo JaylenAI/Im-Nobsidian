@@ -536,15 +536,21 @@ describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
     expect(out).not.toMatch(BROKEN_FENCE_RE);
   });
 
-  it("리스트형 토글-코드(normalizeCodeBlockToggles) 2탭 중첩도 변환", () => {
+  it("불릿 + 코드블록은 토글로 날조되지 않고 리스트로 남는다", () => {
+    // 결함⑭ — `normalizeCodeBlockToggles` 가 `- 제목` + 펜스를 무조건 토글로 바꿨다.
+    // NFM 에서 진짜 토글은 **항상** `<details>` 로 오므로 이 변환은 순수 오탐이었고,
+    // 열 0 `<details>` 를 주입해 바깥 컨테이너의 dedent 기준까지 0 으로 무너뜨렸다
+    // (`협업 Project & Guide.md`: 토글 본문 78줄이 통째로 코드로 오파싱).
     const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n");
     const out = notionEnhancedToObsidian(notion);
-    expect(out).toContain("> [!toggle]- 중첩 코드 토글");
-    expect(out).toContain("echo nested");
+
+    expect(out).not.toContain("[!toggle]");
+    expect(out).toBe(notion); // 손대지 않는 것이 정답
     expect(fencesBalanced(out)).toBe(true);
+    expect(obsidianToNotionEnhanced(out)).toBe(notion); // 무손실 왕복
   });
 
-  it("코드 본문에 백틱 펜스가 있으면 더 긴 펜스로 감싼다 (동적 펜스 길이)", () => {
+  it("중첩 백틱 예제도 원문 그대로 왕복한다", () => {
     const notion = [
       "- 마크다운 예제",
       "\t````markdown",
@@ -554,9 +560,10 @@ describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
       "\t````",
     ].join("\n");
     const out = notionEnhancedToObsidian(notion);
+
     expect(fencesBalanced(out)).toBe(true);
-    expect(out).toContain("> ````markdown"); // 4-백틱 외부 펜스 보존
-    expect(out).toContain("> ```js"); // 3-백틱은 내부 콘텐츠
+    expect(out).toBe(notion);
+    expect(obsidianToNotionEnhanced(out)).toBe(notion);
   });
 
   // 실데이터(Empowerment/Blog) 회귀 가드 — Notion 실제 출력의 **비대칭 들여쓰기**:

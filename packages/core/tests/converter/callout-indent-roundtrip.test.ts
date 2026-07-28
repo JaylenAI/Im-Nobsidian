@@ -142,6 +142,38 @@ describe("콜아웃 들여쓰기 클램프", () => {
     expect(notionEnhancedToObsidian(raw)).not.toContain("empty-block");
   });
 
+  it("콜아웃 본문의 상대 들여쓰기가 코드블록으로 오파싱되지 않는다", () => {
+    // 실측: 문단의 자식 이미지가 NFM 에서 한 단계 더 들여쓰여 오는데(`\t\t\t![](…)`),
+    // dedent 로 공통 폭만 벗기면 상대 탭이 살아 `> \t![](…)` 가 된다. 인용 안 탭 = 4칸 →
+    // Obsidian 이 코드로 파싱해 이미지가 회색 상자로 죽었다(`WoRV팀 노션 사용 가이드.md`).
+    const raw = [
+      `<details>`,
+      `<summary>알람 질문</summary>`,
+      `${T}알람은 수신 가능함`,
+      `${T}${T}![](https://x/a.png)`,
+      `</details>`,
+    ].join("\n");
+
+    const pulled = notionEnhancedToObsidian(raw);
+    expect(pulled.split("\n").filter((l) => /^(?:>[\t ]*)+\t/.test(l))).toHaveLength(0);
+    expect(pulled).toContain(`> ${CLAMPED_INDENT}![](https://x/a.png)`);
+
+    // push 는 클램프 폭을 다시 탭으로 되돌린다 — 자식 관계가 Notion 에서 살아남는다
+    expect(obsidianToNotionEnhanced(pulled)).toContain(`${T}![](https://x/a.png)`);
+  });
+
+  it("중첩 리스트는 클램프 대상이 아니다(상대 들여쓰기 = 중첩 깊이)", () => {
+    const raw = [
+      `<details>`,
+      `<summary>목록</summary>`,
+      `${T}- 항목`,
+      `${T}${T}- 하위`,
+      `</details>`,
+    ].join("\n");
+
+    expect(notionEnhancedToObsidian(raw)).toContain(`> ${T}- 하위`);
+  });
+
   it("콜아웃 안 코드펜스가 왕복해도 탭이 쌓이지 않는다", () => {
     const raw = [
       `- 부모`,

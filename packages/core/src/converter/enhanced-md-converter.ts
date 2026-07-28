@@ -24,7 +24,9 @@ import {
 import {
   applyCalloutIndent,
   clampCalloutIndent,
+  quoteCalloutBody,
   readCalloutIndentDepth,
+  restoreBodyIndent,
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
@@ -55,7 +57,6 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   // 재적용하지 않는다. NFM raw 형태에만 의존하므로 어떤 변환보다 앞서도 안전하다.
   result = convertToggleHeadings(result);
   result = convertSyncedBlockRef(result);
-  result = normalizeCodeBlockToggles(result);
   result = convertContainers(result);
   result = convertFencedCallouts(result);
   result = convertPageMentions(result);
@@ -165,34 +166,6 @@ function restoreWikilinkPreserveLinks(content: string): string {
   });
 }
 
-/**
- * 코드펜스 본문에 나타나는 가장 긴 백틱 런보다 1 이상 긴 펜스를 만든다(최소 3).
- *
- * CommonMark fenced-code 규칙: 본문에 펜스와 같은 길이의 백틱 런이 있으면 그 지점에서
- * 코드블록이 조기 종료된다. 토글/콜아웃 본문에 마크다운 예제(펜스 포함)가 들어가는 경우
- * 3-백틱 고정 펜스는 깨지므로, 본문을 스캔해 안전한 펜스 길이를 동적으로 결정한다.
- */
-function fenceFor(body: string): string {
-  let longest = 0;
-  const re = /`+/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(body)) !== null) longest = Math.max(longest, m[0].length);
-  return "`".repeat(Math.max(3, longest + 1));
-}
-
-function normalizeCodeBlockToggles(content: string): string {
-  // 여는/닫는 펜스의 들여쓰기를 가변(`[\t ]*`)으로 일반화하고, 펜스 길이(`{3,}`)를
-  // 백레퍼런스로 대칭 매칭한다. 중첩 토글(두 탭 들여쓰기)·긴 펜스 케이스도 변환된다.
-  return content.replace(
-    /^[\t ]*- (.+)\n[\t ]*(`{3,})(\w*)\n([\s\S]*?)\n[\t ]*\2[\t ]*$/gm,
-    (_match, title: string, _open: string, lang: string, rawBody: string) => {
-      const body = dedentContainerBody(rawBody);
-      const fence = fenceFor(body);
-      return `<details>\n<summary>${title.trim()}</summary>\n${fence}${lang}\n${body}\n${fence}\n</details>`;
-    },
-  );
-}
-
 // ── 컨테이너(토글/콜아웃/칼럼) 통합 변환 ──────────────────────────────────────
 //
 // Notion Markdown API 는 <details>/<callout>/<columns> 를 중첩 깊이만큼 탭으로 들여쓴
@@ -272,11 +245,7 @@ function toggleToCallout(title: string, rawBody: string, color?: string): string
     .filter((part) => part !== "")
     .join(" ");
   if (body.trim() === "") return head;
-  const calloutBody = body
-    .split("\n")
-    .map((line) => (line.trim() ? `> ${line}` : ">"))
-    .join("\n");
-  return `${head}\n${calloutBody}`;
+  return `${head}\n${quoteCalloutBody(body)}`;
 }
 
 // <columns>/<column> → 평탄화하되 경계를 컬럼 마커로 남긴다(ADR-008). 마커 어휘는
@@ -389,13 +358,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
     Boolean(style?.color) || (icon !== undefined && calloutTypeToEmoji(type) !== icon);
   const styleTail = needsMarker ? ` ${calloutStyleMarker({ icon, color: style?.color })}` : "";
   const calloutTitle = title ? `> [!${type}] ${title}${styleTail}` : `> [!${type}]${styleTail}`;
-  const calloutBody = rest
-    ? "\n" +
-      rest
-        .split("\n")
-        .map((line) => (line.trim() ? `> ${line}` : ">"))
-        .join("\n")
-    : "";
+  const calloutBody = rest ? `\n${quoteCalloutBody(rest)}` : "";
 
   return calloutTitle + calloutBody;
 }
@@ -655,11 +618,12 @@ function convertTogglesToHtml(content: string): string {
         const colorMatch = TOGGLE_COLOR_MARKER_RE.exec(title);
         const cleanTitle = colorMatch ? title.replace(TOGGLE_COLOR_MARKER_RE, "") : title;
         const attrs = colorMatch ? ` color="${colorMatch[1]}"` : "";
-        const bodyText = body
-          .split("\n")
-          .map((line) => line.replace(/^[ \t]*>\s?/, ""))
-          .join("\n")
-          .trim();
+        const bodyText = restoreBodyIndent(
+          body
+            .split("\n")
+            .map((line) => line.replace(/^[ \t]*>\s?/, ""))
+            .join("\n"),
+        ).trim();
         const html = `<details${attrs}>\n<summary>${cleanTitle.trim()}</summary>\n\n${bodyText}\n\n</details>`;
         return applyCalloutIndent(html, depth);
       },
@@ -781,7 +745,9 @@ function convertObsidianCallouts(content: string): string {
       }
       // 내부에 남은 토글/콜아웃 헤드(원문 깊이 2+)는 quote 한 겹이 벗겨져 이제 깊이 1 —
       // 전용 변환기를 재귀 적용해 태그 중첩으로 만든다.
-      const innerConverted = convertObsidianCallouts(convertTogglesToHtml(bodyLines.join("\n")));
+      const innerConverted = convertObsidianCallouts(
+        convertTogglesToHtml(restoreBodyIndent(bodyLines.join("\n"))),
+      );
 
       const attrs = `${style.icon ? ` icon="${style.icon}"` : ""}${style.color ? ` color="${style.color}"` : ""}`;
       const block: string[] = [`<callout${attrs}>`];
