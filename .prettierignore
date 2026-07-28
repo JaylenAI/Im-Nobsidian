@@ -1,0 +1,11 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+
+# NFM 렌더 게이트 코퍼스 — 노션 마크다운 API 출력의 **바이트 그대로**를 담는 픽스처다.
+# 들여쓰기(탭/공백)와 코드펜스 위치가 의미를 지니므로(예: 컨테이너 안 코드펜스는 여는
+# 줄만 탭 들여쓰기되고 본문은 0열) prettier 가 재정렬하면 픽스처가 표현하려던 결함
+# 형태 자체가 사라진다. 실제로 lint-staged 의 `*.md` 규칙이 커밋 시점에 이 파일들을
+# 재포맷해 게이트를 거짓 실패시킨 적이 있다.
+packages/core/tests/render/corpus/
