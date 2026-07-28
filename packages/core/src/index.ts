@@ -182,12 +182,15 @@ export type {
   DegradeNote,
 } from "./view/index.js";
 
-// Audit — 충실도 측정 인프라(회귀 상시 잠금) + DB/페이지 완결성 게이트
+// Audit — 충실도 측정 인프라(회귀 상시 잠금) + DB/페이지 완결성 게이트 + 렌더 감사
 export {
   classifyBodyFidelity,
   summarizeFidelity,
   verifyDatabaseCompleteness,
   verifyPageCompleteness,
+  lintRenderedMarkdown,
+  RENDER_LINE_RULES,
+  SEPARATOR_BODY,
 } from "./audit/index.js";
 export type {
   FidelityDefect,
@@ -204,6 +207,8 @@ export type {
   PageCompletenessRemoteSource,
   PageCompletenessReport,
   VaultCompletenessReport,
+  RenderFinding,
+  RenderLineRule,
 } from "./audit/index.js";
 
 // Utils

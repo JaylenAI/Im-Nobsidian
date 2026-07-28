@@ -19,3 +19,6 @@ export type {
   PageCompletenessReport,
   VaultCompletenessReport,
 } from "./completeness.js";
+
+export { lintRenderedMarkdown, RENDER_LINE_RULES, SEPARATOR_BODY } from "./render.js";
+export type { RenderFinding, RenderLineRule } from "./render.js";
