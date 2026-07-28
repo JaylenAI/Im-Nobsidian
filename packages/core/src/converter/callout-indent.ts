@@ -117,19 +117,49 @@ export function clampBodyIndent(line: string): string {
   return line.replace(BODY_INDENT_RE, CLAMPED_INDENT);
 }
 
+/** 줄머리의 인용 런(`> > `)만 뽑아낸다 — 빈 줄에 이웃의 중첩 깊이를 물려줄 때 쓴다. */
+const QUOTE_RUN_RE = /^(?:>[\t ]?)*/;
+
+/**
+ * 빈 줄이 물려받을 인용 런 — 앞뒤 비어 있지 않은 이웃 중 **더 얕은** 쪽.
+ *
+ * 깊이가 다르면(안쪽 컨테이너가 끝나는 자리) 얕은 쪽이 맞고, 같으면 어느 쪽이든 같다.
+ * 깊은 쪽을 고르면 이미 닫힌 컨테이너를 빈 줄이 되살려 다음 블록을 빨아들인다.
+ */
+function inheritedQuoteRun(lines: string[], i: number): string {
+  const runOf = (step: -1 | 1): string | null => {
+    for (let j = i + step; j >= 0 && j < lines.length; j += step) {
+      if (lines[j]!.trim() === "") continue;
+      return (QUOTE_RUN_RE.exec(lines[j]!)?.[0] ?? "").trimEnd();
+    }
+    return null;
+  };
+  const runs = [runOf(-1), runOf(1)].filter((r): r is string => r !== null);
+  return runs.length === 0 ? "" : runs.reduce((a, b) => (a.length <= b.length ? a : b));
+}
+
 /**
  * 컨테이너 본문을 인용(`> `)으로 감싼다 — pull 의 토글/콜아웃 공통 진입점.
  *
  * 펜스·코드·표 내부는 건드리지 않는다. 그쪽 들여쓰기는 {@link classifyContainerLines}
  * 가 정의하는 NFM 비대칭 구조라 폭을 바꾸면 왕복이 깨진다.
+ *
+ * 빈 줄은 **이웃의 인용 깊이를 물려받는다**. 무조건 `>` 하나로 내면 중첩 컨테이너의
+ * 빈 줄이 바깥 래핑에서 깊이를 잃어(이웃은 `> >` 인데 혼자 `>`) 그 지점에서 컨테이너
+ * 런이 끊긴다. 그러면 안쪽 블록이 두 조각으로 갈라져 컬럼 마커의 시작·끝이 서로 다른
+ * 콜아웃 본문에 떨어지고, push 가 레이아웃을 재조립하지 못한다(실측 41건·7노트).
  */
 export function quoteCalloutBody(body: string): string {
   const lines = body.split("\n");
   const kinds = classifyContainerLines(lines);
   return lines
-    .map((line, i) =>
-      line.trim() ? `> ${kinds[i] === "prose" ? clampBodyIndent(line) : line}` : ">",
-    )
+    .map((line, i) => {
+      if (!line.trim()) {
+        const run = inheritedQuoteRun(lines, i);
+        return run ? `> ${run}` : ">";
+      }
+      return `> ${kinds[i] === "prose" ? clampBodyIndent(line) : line}`;
+    })
     .join("\n");
 }
 
