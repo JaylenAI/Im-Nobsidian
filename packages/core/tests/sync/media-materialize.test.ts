@@ -265,6 +265,37 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
     );
   });
 
+  // S-18: 자리표시자는 push 가 quote 한 줄로만 심는다. 코드 블록 · 문단의 같은 모양 글은 형식을
+  // 설명하는 사용자의 글이다 — 그 블록을 미디어로 바꾸면 사용자의 코드가 지워진다.
+  it("코드 블록 · 문단의 자리표시자 모양 글은 미디어로 바꾸지 않는다", async () => {
+    const { client, appendChildBlocks, deleteBlock } = createTreeClient({
+      "page-1": [
+        {
+          id: "blk-code",
+          type: "code",
+          has_children: false,
+          code: { rich_text: [{ plain_text: `> ${IMG_MARKER}` }], language: "markdown" },
+        },
+        {
+          id: "blk-para",
+          type: "paragraph",
+          has_children: false,
+          paragraph: { rich_text: [{ plain_text: `형식은 > ${IMG_MARKER} 처럼` }] },
+        },
+      ],
+    });
+    const handler = new ImageHandler(mockFs, "attachments", client);
+
+    const result = await handler.materializeLocalMedia(
+      "page-1",
+      `\`\`\`md\n> ${IMG_MARKER}\n\`\`\`\n\n형식은 \`> ${IMG_MARKER}\` 처럼\n`,
+    );
+
+    expect(appendChildBlocks).not.toHaveBeenCalled();
+    expect(deleteBlock).not.toHaveBeenCalled();
+    expect(result.uploaded).toHaveLength(0);
+  });
+
   it("child_page 안으로는 내려가지 않는다 — 남의 페이지 블록을 건드리면 안 된다", async () => {
     const { client, appendChildBlocks } = createTreeClient({
       "page-1": [{ id: "sub-page", type: "child_page", has_children: true, child_page: {} }],

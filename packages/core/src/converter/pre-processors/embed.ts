@@ -37,17 +37,34 @@ export class EmbedResolver implements Processor {
     const isPush = input.context.direction === "push";
 
     const source = isPush ? dropStrayMediaMarkers(input.content) : input.content;
-    let content = source.replace(
+    // 코드 펜스 · 인라인 코드 안은 건너뛴다(S-18) — 임베드 문법을 보여 주는 글이고, Obsidian 도
+    // 임베드로 그리지 않는다. 예전에는 여기서도 자리표시자로 바꿨다. 펜스 안이면 Notion 의 코드에
+    // `> 📎 …` 가 보였고, 인라인 코드는 둘로 쪼개져 그 사이에 자리표시자 줄이 들어갔다 — 다시
+    // 받으면 노트의 그 줄이 쪼개진 채로 돌아왔다.
+    const content = mapOutsideCode(source, (segment, base) =>
+      this.resolveMarkdownImages(this.resolveEmbeds(segment, base, source, isPush, images), images),
+    );
+
+    return {
+      content,
+      metadata: { ...input.metadata, images },
+    };
+  }
+
+  /** `![[대상]]` — 첨부는 자리표시자로(push), 노트 임베드는 원문 그대로. */
+  private resolveEmbeds(
+    segment: string,
+    base: number,
+    source: string,
+    isPush: boolean,
+    images: ImageReference[],
+  ): string {
+    return segment.replace(
       OBSIDIAN_EMBED_REGEX,
-      (
-        match: string,
-        lead: string,
-        target: string,
-        trail: string,
-        offset: number,
-        whole: string,
-      ) => {
-        const span = { offset, length: match.length, whole, lead, trail };
+      (match: string, lead: string, target: string, trail: string, offset: number) => {
+        // 자리표시자를 자기 줄로 떼어 낼지는 줄 전체를 보고 정한다 — 조각이 아니라 원문 기준이다.
+        // 인라인 코드 뒤의 임베드는 조각의 맨 앞이지만 줄의 맨 앞이 아니다.
+        const span = { offset: base + offset, length: match.length, whole: source, lead, trail };
         if (isImageFile(target)) {
           images.push({ url: target, localPath: stripAlias(target), isExternal: false });
           if (isPush && !isExternalUrl(target)) {
@@ -77,8 +94,11 @@ export class EmbedResolver implements Processor {
         return match;
       },
     );
+  }
 
-    content = content.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
+  /** `![설명](url)` — 동영상 URL 은 임베드 마커로, 외부 이미지는 목록에 모은다. */
+  private resolveMarkdownImages(segment: string, images: ImageReference[]): string {
+    return segment.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
       if (isVideoUrl(url)) {
         return `${spacedMarker(`embed:type=video&url=${encodeURIComponent(url)}`)}\n[${alt || "Video"}](${url})`;
       }
@@ -87,11 +107,6 @@ export class EmbedResolver implements Processor {
       }
       return `![${alt}](${url})`;
     });
-
-    return {
-      content,
-      metadata: { ...input.metadata, images },
-    };
   }
 }
 

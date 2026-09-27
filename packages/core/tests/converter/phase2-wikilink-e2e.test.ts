@@ -220,6 +220,11 @@ describe("코드 구간 위키링크 보호 (D-WIKI-CODEFENCE)", () => {
     expect(toNotion("인라인 `[[인라인 안 링크]]` 하나.")).toBe("인라인 `[[인라인 안 링크]]` 하나.");
   });
 
+  it("두 문단의 홑 백틱 사이 [[링크]] 는 코드가 아니다 — 링크로 올린다", () => {
+    const out = toNotion("홑 백틱 ` 하나.\n\n본문 [[Unknown]] 하나.\n\n또 ` 하나.");
+    expect(out).toContain("im-nobsidian://wikilink/Unknown");
+  });
+
   it("해소되는 링크도 코드 안에서는 mention 으로 승격되지 않는다", () => {
     expect(toNotion("```\n[[My Note]]\n```")).toBe("```\n[[My Note]]\n```");
   });
