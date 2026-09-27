@@ -20,9 +20,10 @@ import type {
   BasePropertyOption,
   BaseStatusGroup,
 } from "../types/view.js";
-import type { Config } from "../types/config.js";
+import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId } from "../utils/id.js";
+import { completeTruncatedMarkdown } from "./markdown-completion.js";
 
 /**
  * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
@@ -77,6 +78,8 @@ export interface NotionClientOptions {
   readonly retryBackoffFactor?: number;
   readonly pageSize?: number;
   readonly batchSize?: number;
+  /** 잘린 Markdown 을 채우려고 다시 받는 블록 수 상한 (S-06) */
+  readonly markdownCompletionMaxBlocks?: number;
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -91,6 +94,7 @@ export class NotionClient {
   private readonly retryBackoffFactor: number;
   private readonly defaultPageSize: number;
   private readonly batchSize: number;
+  private readonly markdownCompletionMaxBlocks: number;
 
   constructor(options: NotionClientOptions) {
     this.client = new Client({
@@ -111,6 +115,8 @@ export class NotionClient {
     this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
     this.defaultPageSize = options.pageSize ?? 100;
     this.batchSize = options.batchSize ?? 100;
+    this.markdownCompletionMaxBlocks =
+      options.markdownCompletionMaxBlocks ?? DEFAULT_CONFIG.advanced.markdownCompletionMaxBlocks;
   }
 
   /** config.advanced 의 운영 튜닝값으로 클라이언트를 생성한다 (매직넘버 단일 진실원). */
@@ -126,6 +132,7 @@ export class NotionClient {
       retryBackoffFactor: a.retryBackoffFactor,
       pageSize: a.pageSize,
       batchSize: a.batchSize,
+      markdownCompletionMaxBlocks: a.markdownCompletionMaxBlocks,
       ...(fetch ? { fetch } : {}),
     });
   }
@@ -217,8 +224,29 @@ export class NotionClient {
 
   // ─── Markdown API ───
 
+  /**
+   * 페이지 마크다운. 블록이 많아 잘린 부분은 블록 ID 로 다시 받아 채운다(S-06 —
+   * {@link completeTruncatedMarkdown}). 돌려준 `unknown_block_ids` 는 권한이 닿지 않아 끝내
+   * 읽지 못한 블록이고, 그 자리는 원래 블록을 지키는 태그로 남아 있다.
+   */
   async getPageMarkdown(pageId: string): Promise<PageMarkdownResponse> {
-    return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: pageId }));
+    const { response, refetched } = await completeTruncatedMarkdown(
+      await this.retrieveMarkdown(pageId),
+      (blockId) => this.retrieveMarkdown(blockId),
+      { maxFetches: this.markdownCompletionMaxBlocks, isNotFound: isNotionObjectNotFound },
+    );
+    if (refetched > 0) {
+      const left = response.unknown_block_ids.length;
+      getLogger().info(
+        `[Im-Nobsidian] Markdown API 가 잘라 보낸 블록 ${refetched}개를 다시 받아 채움 (${pageId})` +
+          (left > 0 ? ` — 권한이 없어 ${left}개는 자리표시로 남김` : ""),
+      );
+    }
+    return response;
+  }
+
+  private retrieveMarkdown(id: string): Promise<PageMarkdownResponse> {
+    return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: id }));
   }
 
   async replacePageMarkdown(pageId: string, markdown: string): Promise<PageMarkdownResponse> {

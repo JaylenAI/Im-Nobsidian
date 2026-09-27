@@ -71,6 +71,9 @@ export const ConfigSchema = z.object({
     mediaDownloadTimeoutMs: z.number().min(0).max(1_800_000).default(300_000),
     // 페이지 1건 처리의 시간 상한 (ms, 기본 30분). 한 건이 동기화 전체를 멈춰 세우지 못하게 한다. 0 = 상한 없음
     itemTimeoutMs: z.number().min(0).max(7_200_000).default(1_800_000),
+    // Markdown API 가 잘라 보낸 블록(S-06)을 다시 받는 수의 상한. 기본 요청 간격(350ms)으로
+    // 3,000개 ≈ 17분 — itemTimeoutMs(30분) 안에서 끝난다. 넘으면 페이지는 블록 API 로 받는다
+    markdownCompletionMaxBlocks: z.number().int().min(0).max(100_000).default(3000),
   }),
 });
 
@@ -120,5 +123,6 @@ export const DEFAULT_CONFIG: Config = {
     maxFileSizeBytes: 100 * 1024 * 1024,
     mediaDownloadTimeoutMs: 300_000,
     itemTimeoutMs: 1_800_000,
+    markdownCompletionMaxBlocks: 3000,
   },
 };
