@@ -63,6 +63,14 @@ import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties, rowTitle } from "./row-properties.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
+import {
+  ancestorFolders,
+  databaseFolderIndex,
+  enclosingDatabaseFolder,
+  folderContainer,
+  parentFolderOf,
+  type FolderLookup,
+} from "./folder-container.js";
 
 /** DB 행을 보낼 때 견줄 기준 — 속성 · 제목 · 본문(null 이면 모름: 본문을 보낸다). */
 interface RowState {
@@ -71,18 +79,39 @@ interface RowState {
   readonly body: string | null;
 }
 
+/** 자동 발견된 DB 1개의 동기화 설정 — 상태 메타 `discovered_dbs` 에 목록으로 둔다. */
+interface DiscoveredDbConfig {
+  databaseId: string;
+  localFolder: string;
+  titleProperty: string;
+}
+
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
-  | { kind: "ok"; config: { databaseId: string; localFolder: string; titleProperty: string } }
+  | { kind: "ok"; config: DiscoveredDbConfig }
   | { kind: "linked"; originalDbId: string }
   | { kind: "inaccessible" }
   | { kind: "error" };
+
+/** 자동 발견 DB 목록을 보존하는 상태 메타 키. */
+const DISCOVERED_DBS_META_KEY = "discovered_dbs";
 
 /** 접근 불가 DB denylist 를 보존하는 상태 메타 키. */
 const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
 
 /** linked view 컨테이너 → 원본 DB 매핑을 보존하는 상태 메타 키(nohyph → nohyph). */
 const LINKED_DBS_META_KEY = "linked_dbs";
+
+/** 자동 발견 DB 목록. 없거나 깨졌으면 빈 목록 — 설정 · 볼트 추적분만으로 계속한다. */
+function parseDiscoveredDbs(raw: string | null): DiscoveredDbConfig[] {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed) ? (parsed as DiscoveredDbConfig[]) : [];
+  } catch {
+    return [];
+  }
+}
 
 /** 전략 → 선택지 매핑. propagateResolution 이 push 방향을 정할 때 사용. */
 function strategyToChoice(strategy: ConflictStrategy): ResolutionChoice {
@@ -109,6 +138,11 @@ export class SyncOrchestrator {
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
   private readonly conflictResolver: ConflictResolver;
+  /** DB 폴더 → DB id. 자동 발견 목록이 바뀔 때만 다시 만든다({@link folderLookup}). */
+  private dbFolderCache: {
+    readonly raw: string | null;
+    readonly index: Map<string, string>;
+  } | null = null;
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
@@ -239,13 +273,25 @@ export class SyncOrchestrator {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
     }
 
+    // 둘 자리가 없는 새 노트는 만들지 않고 이유와 함께 실패로 남긴다. dry-run 도 같은 판정을
+    // 쓴다 — 실제 push 가 거절할 노트를 «생성» 으로 세지 않는다(S-04).
+    const refused = this.refusedCreates(filtered);
+    const refusedFailures: FailedOperation[] = [...refused].map(([path, error]) => ({
+      path,
+      operation: "create",
+      error,
+    }));
+    const applicable = filtered.filter((c) => !refused.has(c.path));
+
     if (options?.dryRun) {
-      const dryCreated = filtered.filter((c) => c.type === "created").length;
-      const dryUpdated = filtered.filter((c) => c.type === "modified" || c.type === "moved").length;
-      const dryDeleted = filtered.filter((c) => c.type === "deleted").length;
+      const dryCreated = applicable.filter((c) => c.type === "created").length;
+      const dryUpdated = applicable.filter(
+        (c) => c.type === "modified" || c.type === "moved",
+      ).length;
+      const dryDeleted = applicable.filter((c) => c.type === "deleted").length;
       let dryProgress = 0;
-      const dryTotal = filtered.length;
-      for (const change of filtered) {
+      const dryTotal = applicable.length;
+      for (const change of applicable) {
         const op =
           change.type === "created"
             ? ("create" as const)
@@ -258,35 +304,22 @@ export class SyncOrchestrator {
         created: dryCreated,
         updated: dryUpdated,
         deleted: dryDeleted,
-        failed: [],
+        failed: refusedFailures,
         duration: Date.now() - startTime,
       };
     }
 
     this.stateDb.setMeta("push_in_progress", "true");
 
-    const folderPaths = new Set<string>();
-    for (const change of filtered) {
-      const parts = change.path.split("/");
-      if (parts.length > 1) {
-        for (let i = 1; i < parts.length; i++) {
-          folderPaths.add(parts.slice(0, i).join("/"));
-        }
-      }
-    }
-
-    const sortedFolders = [...folderPaths].sort(
-      (a, b) => a.split("/").length - b.split("/").length,
-    );
-    for (const folderPath of sortedFolders) {
+    for (const folderPath of this.foldersToEnsure(applicable)) {
       await this.ensureFolderPage(folderPath);
     }
 
     const counts = { created: 0, updated: 0, deleted: 0 };
-    const failed: FailedOperation[] = [];
+    const failed: FailedOperation[] = [...refusedFailures];
 
     let completed = 0;
-    const total = filtered.length;
+    const total = applicable.length;
 
     const opOf = (change: LocalChange): "create" | "update" | "delete" =>
       change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update";
@@ -317,7 +350,7 @@ export class SyncOrchestrator {
     // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패분은 변경 객체째 재시도 큐로.
     const retryQueue: LocalChange[] = [];
     await runPool(
-      filtered,
+      applicable,
       async (change) => {
         if (options?.signal?.aborted) return;
         options?.onProgress?.(++completed, total, { path: change.path, operation: opOf(change) });
@@ -342,6 +375,18 @@ export class SyncOrchestrator {
         `[Im-Nobsidian] Push ${retryQueue.length}건 재시도 (${retryWaitMs / 1000}초 후)`,
       );
       await new Promise((r) => setTimeout(r, retryWaitMs));
+
+      // 첫 차례에 새 행이 생기면 그 아래 폴더가 그제서야 페이지 자리가 된다 — 재시도 전에
+      // 폴더를 다시 본다. 못 만들면 그 아래 노트가 이유와 함께 실패로 남는다.
+      try {
+        for (const folderPath of this.foldersToEnsure(retryQueue)) {
+          await this.ensureFolderPage(folderPath);
+        }
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 재시도 전 폴더 페이지 준비 실패: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
 
       await runPool(
         retryQueue,
@@ -808,16 +853,9 @@ export class SyncOrchestrator {
     if (this.isDatabaseMode) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);
 
-    const cachedRaw = this.stateDb.getMeta("discovered_dbs");
-    if (cachedRaw) {
-      try {
-        const cached = JSON.parse(cachedRaw) as Array<{ databaseId?: string }>;
-        for (const entry of cached) {
-          if (entry.databaseId) ids.push(entry.databaseId);
-        }
-      } catch {
-        // 캐시가 깨졌으면 설정·볼트 추적분만으로 대조한다(검증 자체는 계속).
-      }
+    // 캐시가 깨졌으면 설정·볼트 추적분만으로 대조한다(검증 자체는 계속).
+    for (const entry of parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))) {
+      if (entry.databaseId) ids.push(entry.databaseId);
     }
 
     const databases = await verifyDatabaseCompleteness(this.notionClient, this.stateDb, {
@@ -1068,16 +1106,7 @@ export class SyncOrchestrator {
     let restored = 0;
 
     try {
-      const cachedRaw = this.stateDb.getMeta("discovered_dbs");
-      let dbConfigs: Array<{ databaseId: string; localFolder: string; titleProperty: string }> = [];
-
-      if (cachedRaw) {
-        try {
-          dbConfigs = JSON.parse(cachedRaw);
-        } catch {
-          dbConfigs = [];
-        }
-      }
+      const dbConfigs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
 
       const configuredIds = new Set(
         (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
@@ -1284,7 +1313,7 @@ export class SyncOrchestrator {
 
       // 발견·강등·정리 결과를 캐시에 1회 반영(접근 불가 DB 는 stillSyncable 에서 빠져 제거됨).
       if (changed || inaccessibleChanged || stillSyncable.length !== dbConfigs.length) {
-        this.stateDb.setMeta("discovered_dbs", JSON.stringify(stillSyncable));
+        this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(stillSyncable));
       }
       if (inaccessibleChanged) {
         this.stateDb.setMeta(INACCESSIBLE_DBS_META_KEY, JSON.stringify([...inaccessibleIds]));
@@ -1499,6 +1528,12 @@ export class SyncOrchestrator {
       return;
     }
 
+    const rowDatabaseId = this.newRowDatabaseOf(path);
+    if (rowDatabaseId) {
+      await this.pushCreateRow(path, rowDatabaseId);
+      return;
+    }
+
     const content = await this.vaultFs.readFile(path);
     const title = extractTitle(path);
     const parentId = await this.resolveNotionParent(path);
@@ -1636,6 +1671,149 @@ export class SyncOrchestrator {
     });
 
     // 생성·매핑·이미지·최종 synced 까지 모두 끝났으므로 WAL 을 완료 처리한다.
+    this.stateDb.markPendingCompleted(walOpId);
+  }
+
+  /**
+   * DB 폴더에 새로 생긴 노트를 그 DB 의 행으로 만든다(S-04).
+   *
+   * 갱신(pushRowUpdate)과 같은 규칙이다 — 속성은 DB 스키마의 속성으로, 본문은 본문으로 보내고
+   * 본문에 속성 YAML 을 끼우지 않는다. DB 에 없는 키(`cover` · `aliases` …)는 보내지 않는다.
+   * 예전에는 자동 발견 DB 폴더의 새 노트가 DB 폴더 이름의 빈 페이지 아래 페이지로 만들어졌다.
+   *
+   * 생성 요청은 페이지와 같이 WAL 을 먼저 적는다. 요청이 적용됐는지 모르고 끝나면(S-07) 다음
+   * 시도가 DB 에서 같은 제목의 짝 없는 행을 찾아 입양하고 로컬 내용으로 맞춘다.
+   */
+  private async pushCreateRow(path: string, databaseId: string): Promise<void> {
+    const content = await this.vaultFs.readFile(path);
+    // frontmatter 를 못 읽으면 만들지 않는다 — 파이프라인은 읽지 못한 frontmatter 를 «속성
+    // 없음» 으로 넘겨, 제목만 있는 행이 생기고 속성은 사라진다.
+    let current: ReturnType<typeof parseFrontmatter>;
+    try {
+      current = parseFrontmatter(content);
+    } catch (error) {
+      throw new Error(
+        `frontmatter 를 읽지 못해 행을 만들지 않음 (${path}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const title = rowTitle(current.data, path);
+
+    // 보낼 것을 먼저 다 만든다 — WAL 은 생성 요청 바로 앞에 적어야, 스키마를 읽지 못해 요청을
+    // 보내지도 않은 실행이 «적용됐는지 모름» 기록을 남기지 않는다.
+    const mapper = await this.rowSchemas.mapperFor(databaseId);
+    const { properties, skipped } = mapper.toNotionPropertyChanges(
+      diffRowProperties(null, current.data),
+      title,
+    );
+    if (skipped.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 새 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `변환 불가): ${path} — ${skipped.join(", ")}`,
+      );
+    }
+    const selectedPath = this.pipeline.selectPath(content);
+    if (selectedPath === "block-api") {
+      getLogger().warn(
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+      );
+    }
+    const conversionResult = this.pipeline.convertToNotion(content, {
+      direction: "push",
+      path: selectedPath,
+      filePath: path,
+      parentMode: "database",
+    });
+
+    const placeholder = this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: null,
+      notionParentId: databaseId,
+      contentHash: "",
+      notionLastEdited: null,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: "db-row",
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
+    const existingOp = this.stateDb.getIncompleteOpByState(placeholder.id, "create");
+    if (existingOp) {
+      const orphan = await this.findUntrackedRowByTitle(databaseId, title);
+      if (orphan) {
+        this.adoptOrphanPage(path, orphan.id, databaseId, placeholder);
+        this.stateDb.markPendingCompleted(existingOp.id);
+        getLogger().info(`[Im-Nobsidian] 앞선 생성 요청이 적용돼 있었음 — 행 입양: ${path}`);
+        // 입양한 행은 이 노트가 보낸 요청으로 생긴 것이다. 반쯤 채워졌을 수 있어 원격과 견줘
+        // 다른 속성과 본문을 모두 보낸다.
+        await this.pushUpdate(path, { overwriteRemote: true });
+        return;
+      }
+    }
+
+    const walOpId =
+      existingOp?.id ??
+      this.stateDb.recordPendingOperation({
+        syncStateId: placeholder.id,
+        operation: "create",
+        direction: "push",
+        payload: JSON.stringify({ path, parentId: databaseId, parentType: "database", title }),
+      });
+
+    const page = await this.pushCreatePage(
+      databaseId,
+      "database",
+      title,
+      conversionResult.content,
+      properties,
+    );
+
+    // 매핑을 먼저 적는다 — 첨부 업로드가 실패해도 다음 시도는 새로 만들지 않고 갱신한다.
+    this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: page.id,
+      notionParentId: databaseId,
+      contentHash: "",
+      notionLastEdited: page.last_edited_time,
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: "db-row",
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
+
+    await this.syncEmbeddedMedia(page.id, conversionResult, path);
+
+    const fileStat = await this.vaultFs.getFileStat(path);
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: path,
+        notionPageId: page.id,
+        notionParentId: databaseId,
+        contentHash: computeHash(content),
+        notionLastEdited: page.last_edited_time,
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: "db-row",
+        status: "synced",
+        baseSnapshot: Buffer.from(content, "utf-8"),
+        localMtime: fileStat?.mtime ?? null,
+        localFileSize: fileStat?.size ?? null,
+      });
+      this.stateDb.upsertWikilink({
+        obsidianPath: path,
+        notionPageId: page.id,
+        title,
+        aliases: extractAliases(current.data),
+      });
+      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
+    });
+
     this.stateDb.markPendingCompleted(walOpId);
   }
 
@@ -2751,6 +2929,11 @@ export class SyncOrchestrator {
   }
 
   private async ensureFolderPage(folderPath: string): Promise<void> {
+    // DB 폴더는 DB 다. 폴더 이름과 같은 제목의 행은 폴더 노트가 아니다 — 아래 폴더 노트 규칙을
+    // 타면 그 행을 폴더의 페이지로 여겨 폴더 레코드를 지운다.
+    const lookup = this.folderLookup();
+    if (lookup.databaseAt(folderPath)) return;
+
     const folderNotePath = `${folderPath}/${folderPath.split("/").pop()}.md`;
     const folderNoteRecord = this.stateDb.getByPath(folderNotePath);
 
@@ -2765,8 +2948,12 @@ export class SyncOrchestrator {
       return;
     }
 
-    const existing = this.stateDb.getByPath(folderPath);
-    if (existing?.notionPageId) return;
+    // 이미 자리가 있는 폴더(폴더 페이지 · 페이지 이름의 하위 폴더)는 만들지 않는다. DB 폴더
+    // 안의 다른 하위 폴더는 만들 자리가 없다 — 그 안의 노트가 이유와 함께 실패로 남는다
+    // (resolveNotionParent). 예전에는 DB 폴더와 함께 빈 페이지로 만들었다(S-04).
+    if (folderContainer(folderPath, lookup) || enclosingDatabaseFolder(folderPath, lookup)) {
+      return;
+    }
 
     const parts = folderPath.split("/");
     const folderName = parts[parts.length - 1]!;
@@ -2775,14 +2962,8 @@ export class SyncOrchestrator {
     if (parts.length > 1) {
       const parentPath = parts.slice(0, -1).join("/");
       await this.ensureFolderPage(parentPath);
-      const parentNotePath = `${parentPath}/${parentPath.split("/").pop()}.md`;
-      const parentNote = this.stateDb.getByPath(parentNotePath);
-      const parentRecord = this.stateDb.getByPath(parentPath);
-      if (parentNote?.notionPageId) {
-        parentId = parentNote.notionPageId;
-      } else if (parentRecord?.notionPageId) {
-        parentId = parentRecord.notionPageId;
-      }
+      const parent = folderContainer(parentPath, this.folderLookup());
+      if (parent?.kind === "page") parentId = parent.pageId;
     }
 
     // 폴더 페이지 생성에는 WAL 이 없다. 생성 요청이 적용됐는데 응답을 못 받으면(S-07 —
@@ -2810,26 +2991,129 @@ export class SyncOrchestrator {
     });
   }
 
+  /**
+   * 변경을 올리기 전에 Notion 에 있어야 하는 폴더 — 새로 만들거나 옮기는 «페이지» 의 조상뿐,
+   * 얕은 것부터. 행은 DB 에 들고, 이미 있는 페이지의 갱신 · 삭제는 부모를 쓰지 않는다. 예전에는
+   * 모든 변경의 조상을 폴더 페이지로 만들어, DB 폴더와 DB 를 품은 폴더가 Notion 에 빈 페이지로
+   * 생겼다(S-04).
+   */
+  private foldersToEnsure(changes: readonly LocalChange[]): string[] {
+    const folders = new Set<string>();
+    for (const change of changes) {
+      if (change.type !== "created" && change.type !== "moved") continue;
+      if (this.newRowDatabaseOf(change.path)) continue;
+      for (const folder of ancestorFolders(change.path)) folders.add(folder);
+    }
+    return [...folders].sort((a, b) => a.split("/").length - b.split("/").length);
+  }
+
+  /**
+   * 둘 자리가 없어 만들지 않을 새 노트 → 이유. 같은 push 에서 생길 새 행도 자리로 센다 —
+   * `DB/행.md` 와 `DB/행/노트.md` 를 함께 만들면 행이 먼저 생기고 노트는 그 아래로 간다.
+   */
+  private refusedCreates(changes: readonly LocalChange[]): Map<string, string> {
+    const recorded = this.folderLookup();
+    const newRows = new Set(
+      changes
+        .filter((c) => c.type === "created" && this.newRowDatabaseOf(c.path))
+        .map((c) => c.path),
+    );
+    const lookup: FolderLookup = {
+      databaseAt: recorded.databaseAt,
+      // 새 행은 아직 id 가 없다 — 여기서는 자리가 있는지만 본다.
+      pageIdAt: (path) => recorded.pageIdAt(path) ?? (newRows.has(path) ? "(새 행)" : null),
+    };
+    const refused = new Map<string, string>();
+    for (const change of changes) {
+      if (change.type !== "created" || newRows.has(change.path)) continue;
+      const reason = this.placementRefusal(change.path, lookup);
+      if (reason) refused.set(change.path, reason);
+    }
+    return refused;
+  }
+
+  /**
+   * 새 페이지를 둘 자리가 없는 이유 — DB 폴더 안의, 같은 이름의 행이 없는 폴더. 자리가 있으면
+   * null. DB 에는 행만 들어 그런 폴더는 Notion 에 같은 것이 없다. 예전에는 그 폴더를 빈 페이지로
+   * 만들어 그 아래에 뒀다(S-04).
+   */
+  private placementRefusal(filePath: string, lookup: FolderLookup): string | null {
+    const folder = parentFolderOf(filePath);
+    if (!folder || folderContainer(folder, lookup)) return null;
+    const databaseFolder = enclosingDatabaseFolder(folder, lookup);
+    if (!databaseFolder) return null;
+    const rowName = folder.slice(databaseFolder.length + 1).split("/")[0];
+    return (
+      `같은 이름의 행이 Notion 에 없는 폴더라 만들지 않음 — ` +
+      `DB 폴더(${databaseFolder}) 안의 «${rowName}» 폴더는 그 이름의 행 아래 페이지 자리다. ` +
+      `행으로 올리려면 DB 폴더 바로 아래로 옮기세요`
+    );
+  }
+
+  /**
+   * 새 페이지 · 옮긴 페이지가 놓일 부모 페이지 — 폴더 노트 · 폴더 페이지 · 페이지 이름의 하위
+   * 폴더(DB 를 품은 페이지 · 행)의 페이지. DB 폴더 직속 노트는 행이라 여기 오지 않는다.
+   */
   private async resolveNotionParent(filePath: string): Promise<string> {
-    const parts = filePath.split("/");
-    if (parts.length <= 1) return this.config.notion.rootPageId;
+    const folder = parentFolderOf(filePath);
+    if (!folder) return this.config.notion.rootPageId;
 
-    const folderPath = parts.slice(0, -1).join("/");
-    const folderRecord = this.stateDb.getByPath(folderPath);
-    if (folderRecord?.notionPageId) return folderRecord.notionPageId;
+    const lookup = this.folderLookup();
+    const container = folderContainer(folder, lookup);
+    if (container?.kind === "page") return container.pageId;
+    if (container?.kind === "database") {
+      throw new Error("DB 폴더의 노트는 페이지가 아니라 행이다");
+    }
+    // 폴더 페이지는 파일보다 먼저 만든다(foldersToEnsure). 여기 온 것은 둘 자리가 없는 폴더이거나,
+    // 같은 push 에서 새 행이 생겨 그 아래 폴더의 자리가 그제서야 정해진 경우다 — 루트에 두면
+    // 엉뚱한 곳에 생기므로 실패로 남긴다. 재시도가 폴더를 다시 본다.
+    throw new Error(
+      this.placementRefusal(filePath, lookup) ??
+        `폴더(${folder})의 Notion 페이지가 아직 없어 만들지 않음 — 다음 push 가 폴더부터 만든다`,
+    );
+  }
 
-    const folderName = parts[parts.length - 2]!;
-    const folderNotePath = `${folderPath}/${folderName}.md`;
-    const folderNoteRecord = this.stateDb.getByPath(folderNotePath);
-    if (folderNoteRecord?.notionPageId) return folderNoteRecord.notionPageId;
+  /**
+   * 폴더 판정에 쓰는 조회 — DB 폴더(설정 · 자동 발견)와 추적 레코드. DB 폴더 표는 자동 발견
+   * 목록이 바뀔 때만 다시 만든다(pull 이 새 DB 를 발견하면 바뀐다).
+   */
+  private folderLookup(): FolderLookup {
+    const raw = this.stateDb.getMeta(DISCOVERED_DBS_META_KEY);
+    if (!this.dbFolderCache || this.dbFolderCache.raw !== raw) {
+      this.dbFolderCache = {
+        raw,
+        // 설정 DB 를 앞에 둔다 — 같은 폴더를 가리키면 설정이 주인이다.
+        index: databaseFolderIndex([
+          ...(this.config.notion.databases ?? []),
+          ...parseDiscoveredDbs(raw),
+        ]),
+      };
+    }
+    const index = this.dbFolderCache.index;
+    return {
+      databaseAt: (folder) => index.get(folder) ?? null,
+      pageIdAt: (path) => this.stateDb.getByPath(path)?.notionPageId ?? null,
+    };
+  }
 
-    return this.config.notion.rootPageId;
+  /**
+   * 이 경로에 새로 생긴 노트가 들어갈 DB — DB 폴더 직속이면 그 DB, 아니면 null(페이지).
+   * DB 모드는 모든 노트가 루트 DB 의 행이고 따로 처리한다(pushCreate).
+   */
+  private newRowDatabaseOf(path: string): string | null {
+    if (this.isDatabaseMode) return null;
+    return this.folderLookup().databaseAt(parentFolderOf(path));
   }
 
   private repairFolderRecords(): void {
     const allRecords = this.stateDb.getAll();
+    const lookup = this.folderLookup();
+    // DB 폴더의 같은 이름 행은 폴더 노트가 아니다(ensureFolderPage 와 같은 이유).
     const folderRecords = allRecords.filter(
-      (r) => r.fileType === "folder-note" && !r.obsidianPath.endsWith(".md"),
+      (r) =>
+        r.fileType === "folder-note" &&
+        !r.obsidianPath.endsWith(".md") &&
+        !lookup.databaseAt(r.obsidianPath),
     );
     for (const folder of folderRecords) {
       const folderName = folder.obsidianPath.split("/").pop()!;
@@ -3121,7 +3405,8 @@ export class SyncOrchestrator {
    * 5xx)에서 클라이언트가 다시 보내지 않고(S-07), 같은 실행의 재시도(pushCreate)와 다음
    * 실행의 재개(여기)가 모두 이 검색-입양을 거친다. 자식 목록을 **읽지 못하면** 자리표시를
    * 지우지 않는다 — 읽지 못한 것을 "없다" 로 보면 다음 push 가 같은 페이지를 또 만든다.
-   * 한계: DB 모드(부모가 database)는 child_page 검색이 불가하므로 자리표시 제거 후
+   * DB 폴더의 행(`parentType: "database"`)은 자식 목록이 아니라 DB 조회로 같은 제목의 짝 없는
+   * 행을 찾는다. 한계: DB 모드의 행은 부모를 폴더 페이지로 적어 찾지 못하고, 자리표시 제거 후
    * 재생성으로 폴백한다.
    */
   private async recoverInterruptedPushOps(): Promise<void> {
@@ -3135,7 +3420,12 @@ export class SyncOrchestrator {
         continue;
       }
 
-      let payload: { path?: string; parentId?: string; title?: string } = {};
+      let payload: {
+        path?: string;
+        parentId?: string;
+        parentType?: "page" | "database";
+        title?: string;
+      } = {};
       try {
         payload = JSON.parse(op.payload ?? "{}") as typeof payload;
       } catch {
@@ -3160,7 +3450,11 @@ export class SyncOrchestrator {
       let adopted: string | null = null;
       if (parentId && title) {
         try {
-          adopted = (await this.findChildPageByTitle(parentId, title))?.id ?? null;
+          const orphan =
+            payload.parentType === "database"
+              ? await this.findUntrackedRowByTitle(parentId, title)
+              : await this.findChildPageByTitle(parentId, title);
+          adopted = orphan?.id ?? null;
         } catch (error) {
           // 읽지 못함 ≠ 없음. op 와 자리표시를 그대로 두면 이번 push 의 pushCreate 가 다시
           // 확인하고, 그래도 못 읽으면 그 항목만 실패로 남는다 — 중복 생성은 없다.
@@ -3218,6 +3512,30 @@ export class SyncOrchestrator {
       const inTrash = (page as { in_trash?: boolean }).in_trash === true;
       if (inTrash || page.archived) continue;
       return page;
+    }
+    return null;
+  }
+
+  /**
+   * DB 에서 제목이 같고 아직 아무 레코드도 짝으로 삼지 않은(휴지통 제외) 행을 찾는다 — 앞선
+   * 행 생성 요청이 남긴 고아 후보다. 제목 속성은 이름이 DB 마다 달라 속성 id(`title`)로 거른다.
+   *
+   * `null` 은 «끝까지 조회했고 없었다» 일 때만이다. 조회에 실패하면 던진다({@link findChildPageByTitle}
+   * 와 같은 이유 — 읽지 못한 것을 «없다» 로 보면 같은 행을 하나 더 만든다).
+   */
+  private async findUntrackedRowByTitle(
+    databaseId: string,
+    title: string,
+  ): Promise<PageObjectResponse | null> {
+    const rows = await this.notionClient.queryAllDatabasePages(databaseId, {
+      property: "title",
+      title: { equals: title },
+    });
+    for (const row of rows) {
+      if (this.stateDb.getByNotionId(row.id)) continue;
+      const inTrash = (row as { in_trash?: boolean }).in_trash === true;
+      if (inTrash || row.archived) continue;
+      return row;
     }
     return null;
   }
