@@ -59,6 +59,7 @@ import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folde
 import { pagePathCandidates } from "../utils/db-row-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
 import { replacePageBody } from "./page-body.js";
+import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties, rowTitle } from "./row-properties.js";
 import { parseFrontmatter } from "../utils/frontmatter.js";
@@ -82,14 +83,6 @@ const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
 
 /** linked view 컨테이너 → 원본 DB 매핑을 보존하는 상태 메타 키(nohyph → nohyph). */
 const LINKED_DBS_META_KEY = "linked_dbs";
-
-/**
- * 증분 pull 워터마크 안전창(F20). Notion search 는 인덱싱 지연이 있어 생성 직후 페이지가
- * 결과에 안 잡히는데, 워터마크를 그대로 쓰면 다음 pull 부터 last_edited < since 로
- * 영원히 제외된다(실측 재현: 신규 하위 페이지가 편집 전까지 3회 연속 미발견).
- * 이 창만큼 되돌려 조회하면 지연 인덱싱분을 다음 pull 이 회수한다.
- */
-const INCREMENTAL_SAFETY_WINDOW_MS = 15 * 60_000;
 
 /** 전략 → 선택지 매핑. propagateResolution 이 push 방향을 정할 때 사용. */
 function strategyToChoice(strategy: ConflictStrategy): ResolutionChoice {
@@ -442,6 +435,9 @@ export class SyncOrchestrator {
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
+    // 감지한 원격 변경과 그중 적용을 마친 것 — 받지 못한 변경이 다음 기준 시각을 묶는다.
+    let detected: readonly RemoteChange[] = [];
+    const applied = new Set<RemoteChange>();
 
     // M2: pull 의 모든 종료 경로가 동일하게 마감되도록 단일 헬퍼로 모은다 —
     // 기록된 파일(writtenPaths)의 본문 링크·frontmatter relation 후처리(resolveNotionLinks)와
@@ -454,7 +450,18 @@ export class SyncOrchestrator {
       restored = 0,
     ): Promise<PullResult> => {
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
-      this.stateDb.setMeta("last_pull_at", new Date().toISOString());
+      // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
+      // 있으면 그 수정 시각 앞으로 묶는다. 경로를 좁힌 pull 은 범위 밖을 받지 않았으므로
+      // 옮기지 않는다 — 옮기면 범위 밖 변경이 다음 조회 창 밖으로 밀린다.
+      if (!options?.paths) {
+        this.stateDb.setMeta(
+          "last_pull_at",
+          nextPullWatermark(
+            new Date(startTime).toISOString(),
+            detected.filter((change) => !applied.has(change)),
+          ),
+        );
+      }
       this.stateDb.setMeta("last_sync_at", new Date().toISOString());
       this.stateDb.setMeta("pull_in_progress", "");
       return {
@@ -472,21 +479,11 @@ export class SyncOrchestrator {
       };
     };
 
-    const lastPull = this.stateDb.getMeta("last_pull_at") ?? this.stateDb.getMeta("last_sync_at");
-    const trackedCount = this.stateDb.getAll().length;
-    // 증분(searchRecentPages) 은 in_trash 페이지를 못 보므로 삭제를 감지하지 못한다(I10).
-    // deleteSync 가 켜진 경우엔 삭제 전파가 필요하니 반드시 전체 스캔(detectRemoteChanges)을
-    // 타게 해 사라진 추적 페이지를 잡는다. 꺼진 경우엔 어차피 삭제를 전파하지 않으므로 빠른
-    // 증분 경로가 안전하다(누락해도 사용자 설정상 무동작).
-    const canUseIncremental =
-      !this.isDatabaseMode &&
-      !!lastPull &&
-      trackedCount > 0 &&
-      !options?.force &&
-      !this.config.sync.deleteSync;
-    const remoteChanges = canUseIncremental
-      ? await this.detectRemoteChangesIncremental(lastPull!)
+    const watermark = this.incrementalWatermark(options?.force === true);
+    const remoteChanges = watermark
+      ? await this.detectRemoteChangesIncremental(watermark)
       : await this.detectRemoteChanges();
+    detected = remoteChanges;
 
     const filtered = options?.paths
       ? remoteChanges.filter((c) => {
@@ -648,6 +645,7 @@ export class SyncOrchestrator {
             this.config.advanced.itemTimeoutMs,
             `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
           );
+          applied.add(change);
           const record = this.stateDb.getByNotionId(change.pageId);
           const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
           const op =
@@ -682,6 +680,7 @@ export class SyncOrchestrator {
               this.config.advanced.itemTimeoutMs,
               `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
             );
+            applied.add(change);
             const record = this.stateDb.getByNotionId(change.pageId);
             getLogger().info(
               `[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`,
@@ -749,12 +748,10 @@ export class SyncOrchestrator {
     const files = await this.vaultFs.listMarkdownFiles();
     const localChanges = this.changeDetector.detectLocalChanges(files);
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
-    // 증분은 삭제(in_trash)를 못 본다(I10). deleteSync 시 status 가 원격 삭제를 보고할 수
-    // 있도록 전체 스캔으로 우회한다. 꺼진 경우엔 삭제를 행동에 옮기지 않으므로 증분으로 충분.
-    const remoteChanges =
-      lastSyncAt && !this.config.sync.deleteSync
-        ? await this.detectRemoteChangesIncremental(lastSyncAt)
-        : await this.detectRemoteChanges();
+    const watermark = this.incrementalWatermark();
+    const remoteChanges = watermark
+      ? await this.detectRemoteChangesIncremental(watermark)
+      : await this.detectRemoteChanges();
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
     const conflicts: Conflict[] = await this.buildConflictsFromRecords(
@@ -2223,6 +2220,23 @@ export class SyncOrchestrator {
   }
 
   /**
+   * 증분 감지의 기준 시각 — 쓸 수 없으면 null(전체 대조). pull 과 status 가 같은 규칙을 읽는다:
+   * 둘이 갈리면 status 가 「원격 변경 없음」 이라고 한 것을 pull 이 받는다.
+   *
+   * - 기준 시각은 `last_pull_at` 뿐이다. push 도 올리는 `last_sync_at` 은 «그 앞의 원격 변경을
+   *   받았다» 는 뜻이 아니다 — push 만 한 볼트가 그 시각부터 증분으로 조회하면 그 전에 원격에만
+   *   있던 페이지를 영영 받지 못한다.
+   * - 증분(searchRecentPages)은 in_trash 페이지를 못 보므로 삭제를 감지하지 못한다(I10).
+   *   deleteSync 가 켜진 경우엔 삭제 전파가 필요하니 반드시 전체 대조로 사라진 추적 페이지를
+   *   잡는다. 꺼진 경우엔 어차피 삭제를 전파하지 않으므로 빠른 증분 경로가 안전하다.
+   */
+  private incrementalWatermark(force = false): string | null {
+    const lastPull = this.stateDb.getMeta("last_pull_at");
+    if (!lastPull || force || this.isDatabaseMode || this.config.sync.deleteSync) return null;
+    return this.stateDb.getAll().length > 0 ? lastPull : null;
+  }
+
+  /**
    * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
    * 만든다. **삭제는 의도적으로 감지하지 않는다**: search API 는 in_trash/archived 페이지를
    * 반환하지 않아(=사라진 것을 증분만으로는 구분 불가) 삭제 판정에는 전체 enumeration 이
@@ -2234,11 +2248,7 @@ export class SyncOrchestrator {
     this._childParentIds.clear();
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
-    const sinceMs = Date.parse(since);
-    const safeSince = Number.isFinite(sinceMs)
-      ? new Date(sinceMs - INCREMENTAL_SAFETY_WINDOW_MS).toISOString()
-      : since;
-    const recentPages = await this.notionClient.searchRecentPages(safeSince);
+    const recentPages = await this.notionClient.searchRecentPages(incrementalSearchSince(since));
     const untracked: Array<{ page: (typeof recentPages)[number]; parentId: string }> = [];
 
     for (const page of recentPages) {
