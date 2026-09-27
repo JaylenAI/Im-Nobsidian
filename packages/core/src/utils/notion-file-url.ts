@@ -30,3 +30,46 @@ export const NOTION_ATTACHMENT_URI_RE = /^attachment:([0-9a-f-]+):(.+)$/;
 export function isNotionAttachmentUri(url: string): boolean {
   return NOTION_ATTACHMENT_URI_RE.test(url);
 }
+
+/** Notion 이 파일을 저장한 id 의 모양 — 대시가 든 UUID. */
+const STORED_FILE_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Notion 에 저장된 파일의 id — 같은 파일이면 URL 모양이 달라도 같은 값이다(S-05).
+ *
+ * - 서명 URL `…/<space>/<fileId>/<이름>?…` — prod-files-secure · file.notion.so/f/f ·
+ *   옛 secure.notion-static.com
+ * - 내부 참조 `file://{"source":"attachment:<fileId>:<이름>", …}` — markdown API 가 파일 블록에
+ *   쓴다
+ *
+ * 서명(쿼리)은 받을 때마다 바뀌지만 이 id 는 블록의 파일을 바꾸지 않는 한 그대로다. 블록 id 와도,
+ * 올릴 때 받은 file_upload id 와도 다르다(실측) — 그래서 올린 블록의 응답에서 읽어 둔다.
+ *
+ * @returns 소문자 id. Notion 이 호스팅한 파일이 아니면 null.
+ */
+export function notionFileIdOf(url: string): string | null {
+  let id: string | undefined;
+  try {
+    if (url.startsWith("file://")) {
+      const json = JSON.parse(decodeURIComponent(url.slice("file://".length))) as {
+        source?: unknown;
+      };
+      if (typeof json.source === "string") id = NOTION_ATTACHMENT_URI_RE.exec(json.source)?.[1];
+    } else if (isNotionHostedFileUrl(url)) {
+      const segments = new URL(url).pathname.split("/");
+      id = segments[segments.length - 2];
+    }
+  } catch {
+    return null;
+  }
+  return id && STORED_FILE_ID_RE.test(id) ? id.toLowerCase() : null;
+}
+
+/** 미디어 블록(image · file · pdf · video · audio)이 가리키는 파일 URL. 미디어 블록이 아니면 null. */
+export function fileUrlOfBlock(block: { readonly type?: string }): string | null {
+  const media = block.type
+    ? ((block as Record<string, unknown>)[block.type] as
+        { file?: { url?: string }; external?: { url?: string } } | undefined)
+    : undefined;
+  return media?.file?.url ?? media?.external?.url ?? null;
+}

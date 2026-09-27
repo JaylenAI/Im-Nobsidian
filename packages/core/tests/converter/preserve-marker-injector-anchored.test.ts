@@ -61,9 +61,25 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
 
   it("F29: __raw 마커는 원문 페이로드로 렌더 (k=v 아님)", () => {
     const result = run("본문", [
-      { type: "local-image", params: { __raw: "probe-image.png", __anchor: "" }, startIndex: 0 },
+      { type: "probe-raw", params: { __raw: "payload-1", __anchor: "" }, startIndex: 0 },
     ]);
-    expect(result).toContain("%% im-nobsidian:local-image:probe-image.png %%");
+    expect(result).toContain("%% im-nobsidian:probe-raw:payload-1 %%");
+  });
+
+  it.each([
+    ["캡션을 고쳐 설명이 달라진 임베드", "![[a.png|새 설명|300]]"],
+    ["파일을 바꿔 받은 사본", "![[attachments/Note-0123.png|설명]]"],
+    ["Notion 에서 지운 미디어", "앞 문단\n\n뒤 문단"],
+  ])("S-19: 미디어 마커는 %s 에도 재삽입하지 않음 — 전용 복원기 소관", (_label, content) => {
+    const result = run(content, [
+      {
+        type: "local-image",
+        params: { __raw: "a.png%7C%EC%84%A4%EB%AA%85%7C300", __anchor: "앞 문단" },
+        startIndex: 0,
+      },
+      { type: "local-file", params: { __raw: "docs%2Fspec.pdf", __anchor: "" }, startIndex: 0 },
+    ]);
+    expect(result).toBe(content);
   });
 
   it("F29: ![[임베드]] 로 복원된 local-image 마커는 재삽입하지 않음", () => {

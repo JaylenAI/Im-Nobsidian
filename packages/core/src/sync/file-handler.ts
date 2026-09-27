@@ -5,7 +5,7 @@ import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
-import { getBlockType, getMimeType } from "../utils/mime.js";
+import { getBlockType, getMimeType, isNotionUploadable } from "../utils/mime.js";
 import type { NotionBlockType } from "../utils/mime.js";
 import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 import { withDeadline, DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
@@ -38,6 +38,15 @@ function getFolderPath(filePath: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
+/** 볼트의 첨부를 올릴 것과 Notion 이 받지 않아 올리지 않을 것으로 나눈 목록. */
+interface UploadCandidates {
+  readonly uploadable: NonMdFileInfo[];
+  readonly unsupported: NonMdFileInfo[];
+}
+
+/** 로그에 싣는 파일 이름 수 — 나머지는 개수로만 말한다. */
+const LOGGED_NAMES = 5;
+
 export class FileHandler {
   private readonly sema: Sema;
   private readonly customFetch?: typeof globalThis.fetch;
@@ -62,8 +71,8 @@ export class FileHandler {
   }
 
   async pushFilesForFolder(folderPageId: string, folderPath: string): Promise<FileUploadResult[]> {
-    const allFiles = await this.listUploadableFiles();
-    const folderFiles = allFiles.filter((f) => getFolderPath(f.path) === folderPath);
+    const { uploadable } = await this.listUploadableFiles();
+    const folderFiles = uploadable.filter((f) => getFolderPath(f.path) === folderPath);
 
     if (folderFiles.length === 0) return [];
 
@@ -112,7 +121,9 @@ export class FileHandler {
         `첨부 업로드 ${file.path}`,
       );
     } catch (error) {
-      getLogger().warn(`파일 업로드 실패 (${file.path}):`, error);
+      // 사유만 남긴다 — 오류 객체를 통째로 넘기면 응답 헤더까지 쏟아져 사유가 묻힌다.
+      const reason = error instanceof Error ? error.message : String(error);
+      getLogger().warn(`파일 업로드 실패 (${file.path}): ${reason}`);
       return null;
     } finally {
       this.sema.release();
@@ -120,18 +131,36 @@ export class FileHandler {
   }
 
   /**
-   * 업로드 후보 목록 — 도구 내부 산출물(`.base`/`.notion.json`)은 제외한다.
-   * node 측 VaultFS 는 과거 `.base` 를 워커에서 빼는 식으로 우회했지만, Obsidian
-   * 어댑터는 모든 파일을 반환하므로 플러그인 push 가 사이드카를 Notion 첨부로
-   * 오염시켰다. 소비자인 여기서 일괄 차단해 구현체 간 동작을 통일한다.
+   * 업로드 후보 목록 — 도구 내부 산출물(`.base`/`.notion.json`)은 아예 빼고, Notion 이 받지 않는
+   * 형식은 따로 모은다.
+   *
+   * 내부 산출물: node 측 VaultFS 는 과거 `.base` 를 워커에서 빼는 식으로 우회했지만, Obsidian
+   * 어댑터는 모든 파일을 반환하므로 플러그인 push 가 사이드카를 Notion 첨부로 오염시켰다.
+   * 소비자인 여기서 일괄 차단해 구현체 간 동작을 통일한다.
+   *
+   * 받지 않는 형식(S-14): 올리면 업로드를 만들 때 400 으로 거절된다. 등록되지 않으니 push 할
+   * 때마다 같은 요청을 다시 보내 같은 이유로 실패했다(실볼트 `.ipynb` 22개).
    */
-  private async listUploadableFiles(): Promise<NonMdFileInfo[]> {
-    const allFiles = await this.vaultFs.listNonMarkdownFiles();
-    return allFiles.filter((f) => !isDbArtifactPath(f.path));
+  private async listUploadableFiles(): Promise<UploadCandidates> {
+    const uploadable: NonMdFileInfo[] = [];
+    const unsupported: NonMdFileInfo[] = [];
+    for (const file of await this.vaultFs.listNonMarkdownFiles()) {
+      if (isDbArtifactPath(file.path)) continue;
+      (isNotionUploadable(file.path) ? uploadable : unsupported).push(file);
+    }
+    return { uploadable, unsupported };
   }
 
   async pushAllFiles(): Promise<FileUploadResult[]> {
-    const allFiles = await this.listUploadableFiles();
+    const { uploadable: allFiles, unsupported } = await this.listUploadableFiles();
+    if (unsupported.length > 0) {
+      const names = unsupported.slice(0, LOGGED_NAMES).map((f) => f.path);
+      const rest = unsupported.length - names.length;
+      getLogger().info(
+        `[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 첨부 ${unsupported.length}개: ` +
+          `${names.join(", ")}${rest > 0 ? ` 외 ${rest}개` : ""}`,
+      );
+    }
     if (allFiles.length === 0) return [];
 
     const filesByFolder = new Map<string, NonMdFileInfo[]>();

@@ -98,6 +98,7 @@ function createMockNotionClient() {
 
 function createMockImageHandler() {
   return {
+    restoreUploadedMedia: vi.fn().mockImplementation(async (md: string) => md),
     downloadAllImages: vi.fn().mockImplementation(async (md: string) => ({
       content: md,
       downloads: [],
@@ -426,6 +427,40 @@ describe("DatabaseSyncer", () => {
       expect(writtenContent).toContain("## Section 1");
       expect(writtenContent).toContain("Some content here.");
       expect(writtenContent).toContain("- Item 1");
+    });
+
+    it("올린 미디어는 행 id · 노트 경로로 먼저 되찾고 남은 것만 내려받는다(S-05)", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Note" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Note");
+      mockNotionClient.getPageMarkdown.mockResolvedValue({
+        markdown: "![](https://prod-files-secure.s3.us-west-2.amazonaws.com/s/f/a.png)",
+        truncated: false,
+        unknown_block_ids: [],
+      });
+      mockImageHandler.restoreUploadedMedia.mockResolvedValue("![[assets/a.png|300]]");
+
+      await syncer.pullAll();
+
+      const mdCall = (mockVaultFs.writeFile as any).mock.calls.find((c: string[]) =>
+        c[0].endsWith(".md"),
+      );
+      expect(mockImageHandler.restoreUploadedMedia).toHaveBeenCalledWith(
+        expect.stringContaining("prod-files-secure"),
+        "page-1",
+        mdCall[0],
+      );
+      expect(mockImageHandler.downloadAllImages).toHaveBeenCalledWith(
+        "![[assets/a.png|300]]",
+        "Note",
+        "page-1",
+      );
+      expect(mdCall[1]).toContain("![[assets/a.png|300]]");
     });
 
     it("API 에러 시 failed에 기록하고 계속 진행", async () => {
