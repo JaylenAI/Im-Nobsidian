@@ -7,7 +7,12 @@
  */
 import { NotionClient } from "../../src/notion/client.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
-import { createMockNotionClient, createMockVaultFs } from "./mock-orchestrator.js";
+import { EDIT_TIME_RESOLUTION_MS } from "../../src/sync/remote-observation.js";
+import {
+  createMockNotionClient,
+  createMockVaultFs,
+  MOCK_BOT_USER_ID,
+} from "./mock-orchestrator.js";
 
 /** 메모리 볼트 — 이름을 바꿔도 내용 · 수정 시각은 그대로다(파일 시스템의 rename 처럼). */
 export class MemoryVault {
@@ -109,9 +114,27 @@ export interface MemoryPage {
   /** 제목 밖의 속성 — Notion 이 돌려주는 모양(`{ type, [type]: 값 }`). */
   properties: Record<string, unknown>;
   lastEdited: string;
+  /** 마지막으로 고친 사용자 — 이 통합이 고쳤으면 {@link MOCK_BOT_USER_ID}. */
+  lastEditedBy: string;
   archived: boolean;
   /** 본문 — 만들 때 · 바꿀 때 보낸 markdown. 자식 페이지 태그는 읽을 때 붙인다. */
   body: string;
+  /** 아이콘 · 커버 — Notion 이 돌려주는 모양. 없으면 undefined. */
+  icon?: Record<string, unknown>;
+  cover?: Record<string, unknown>;
+}
+
+/** Notion 에서 사람이 고친 것으로 적는 편집자 id. */
+export const HUMAN_USER_ID = "human-user-id";
+
+export interface MemoryNotionOptions {
+  /**
+   * 수정 시각을 이 기기 시계(`Date.now()`)로 적고 분 단위로 자른다 — Notion 처럼(N-05). 시험이
+   * `vi.setSystemTime` 으로 시각을 정한다. 기본은 편집마다 1초씩 가는 시계라 시각이 늘 다르다.
+   */
+  readonly minuteClock?: boolean;
+  /** 페이지 아래에 페이지를 만들면 부모의 수정 시각도 오른다 — Notion 처럼(실측, N-05). */
+  readonly bumpParentOnCreate?: boolean;
 }
 
 type PropertyRequest = Record<string, unknown>;
@@ -133,15 +156,21 @@ function titleOf(request: PropertyRequest): string {
     .join("");
 }
 
-/** 메모리 Notion — 만든 페이지 · 행의 제목 · 부모 · 속성 · 수정 시각을 기억한다. */
-export function memoryNotion() {
+/** 메모리 Notion — 만든 페이지 · 행의 제목 · 부모 · 속성 · 수정 시각 · 편집자를 기억한다. */
+export function memoryNotion(options: MemoryNotionOptions = {}) {
   const client = createMockNotionClient();
   const pages = new Map<string, MemoryPage>();
   let clock = 0;
-  const tick = () => new Date(Date.UTC(2026, 8, 2) + ++clock * 1000).toISOString();
+  const tick = () =>
+    options.minuteClock
+      ? new Date(
+          Math.floor(Date.now() / EDIT_TIME_RESOLUTION_MS) * EDIT_TIME_RESOLUTION_MS,
+        ).toISOString()
+      : new Date(Date.UTC(2026, 8, 2) + ++clock * 1000).toISOString();
   const view = (page: MemoryPage) => ({
     id: page.id,
     last_edited_time: page.lastEdited,
+    last_edited_by: { object: "user", id: page.lastEditedBy },
     archived: page.archived,
     in_trash: page.archived,
     parent:
@@ -152,16 +181,29 @@ export function memoryNotion() {
       title: { id: "title", type: "title", title: [{ plain_text: page.title }] },
       ...page.properties,
     },
+    icon: page.icon ?? null,
+    cover: page.cover ?? null,
   });
   const find = (id: string): MemoryPage => {
     const page = pages.get(id);
     if (!page) throw new Error(`object_not_found: ${id}`);
     return page;
   };
-  const touch = (id: string): MemoryPage => {
+  /** 이 통합(봇)이 고친 것으로 적는다 — 사람의 편집은 {@link edit}. */
+  const touch = (id: string, editor = MOCK_BOT_USER_ID): MemoryPage => {
     const page = find(id);
     page.lastEdited = tick();
+    page.lastEditedBy = editor;
     return page;
+  };
+  /** Notion 에서 사람이 고친다 — 수정 시각과 편집자가 바뀐다. */
+  const edit = (
+    id: string,
+    change: (page: MemoryPage) => void,
+    editor = HUMAN_USER_ID,
+  ): MemoryPage => {
+    change(find(id));
+    return touch(id, editor);
   };
   const add = (
     parent: string,
@@ -182,10 +224,12 @@ export function memoryNotion() {
       parentType: row ? "database" : "page",
       properties,
       lastEdited: tick(),
+      lastEditedBy: MOCK_BOT_USER_ID,
       archived: false,
       body,
     };
     pages.set(id, page);
+    if (options.bumpParentOnCreate && !row && pages.has(parent)) touch(parent);
     return page;
   };
   const create = async ({
@@ -228,6 +272,12 @@ export function memoryNotion() {
     (page: { properties: { title: { title: Array<{ plain_text: string }> } } }) =>
       page.properties.title.title.map((t) => t.plain_text).join(""),
   );
+  client.extractIcon.mockImplementation((page: unknown) =>
+    NotionClient.prototype.extractIcon.call(client as never, page as never),
+  );
+  client.extractCover.mockImplementation((page: unknown) =>
+    NotionClient.prototype.extractCover.call(client as never, page as never),
+  );
   client.movePage.mockImplementation(async (id: string, parentId: string) => {
     touch(id).parent = parentId;
   });
@@ -254,9 +304,10 @@ export function memoryNotion() {
         )
         .map(view),
   );
+  // 응답은 바꾼 뒤의 본문이다 — 다시 읽은 것과 같다(실측, N-05).
   client.replacePageMarkdown.mockImplementation(async (id: string, markdown: string) => {
     touch(id).body = markdown;
-    return { markdown: "", truncated: false, unknown_block_ids: [] };
+    return { markdown: markdownOf(id), truncated: false, unknown_block_ids: [] };
   });
   client.getPageMarkdown.mockImplementation(async (id: string) => ({
     markdown: markdownOf(id),
@@ -267,7 +318,11 @@ export function memoryNotion() {
     touch(id).archived = true;
   });
   client.searchRecentPages.mockImplementation(async () =>
-    [...pages.values()].map((page) => ({ id: page.id, last_edited_time: page.lastEdited })),
+    [...pages.values()].map((page) => ({
+      id: page.id,
+      last_edited_time: page.lastEdited,
+      last_edited_by: { id: page.lastEditedBy },
+    })),
   );
   // 전체 대조(deleteSync)의 순회 — 루트 아래의 휴지통이 아닌 페이지. Notion 은 부모를 휴지통에
   // 넣으면 그 아래도 함께 넣는다 — 시험이 둘 다 표시한다.
@@ -289,5 +344,5 @@ export function memoryNotion() {
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   );
-  return { client, pages, add, touch };
+  return { client, pages, add, touch, edit };
 }

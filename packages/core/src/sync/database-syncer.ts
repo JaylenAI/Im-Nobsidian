@@ -3,12 +3,14 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import type { VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
-import type { Conflict, FailedOperation } from "../types/sync.js";
+import type { Conflict, FailedOperation, SyncRecord } from "../types/sync.js";
 import type { DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
-import { resolvePullConflict } from "./conflict-detector.js";
+import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
+import { diffRowProperties } from "./row-properties.js";
+import { noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath } from "../utils/db-row-path.js";
@@ -17,12 +19,22 @@ import { notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
+import { snapshotFrontmatter } from "../utils/frontmatter.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
+import {
+  compareRemote,
+  NO_OBSERVATION,
+  observationOf,
+  observedRecordFields,
+  remoteBodyFingerprint,
+  type ObservationContext,
+  type RemoteVerdict,
+} from "./remote-observation.js";
 
 export interface DatabaseSyncResult {
   created: number;
@@ -51,9 +63,13 @@ export interface DatabaseSyncResult {
   linkedOriginalDbId?: string;
 }
 
-/** {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. */
+/**
+ * {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. `unchanged` 는 받아 보니 로컬과 같아
+ * 파일을 쓰지 않은 행이다 — 원격을 본 기록만 새로 적었다.
+ */
 type PullPageOutcome =
   | { action: "written"; path: string }
+  | { action: "unchanged"; path: string }
   | { action: "skipped"; path: string }
   | { action: "conflict"; path: string; conflict: Conflict };
 
@@ -78,6 +94,11 @@ export class DatabaseSyncer {
     private readonly vaultFs: VaultFS,
     private readonly pipeline: ConversionPipeline,
     private readonly imageHandler: ImageHandler,
+    /**
+     * 이번 동기화가 원격을 보는 기준(N-05) — 오케스트레이터가 실행마다 정한다. 따로 쓰면(시험)
+     * 아무것도 가라앉았다고 보지 않는다 — 수정 시각이 같은 행도 받아서 견준다.
+     */
+    private readonly observation: () => ObservationContext = () => NO_OBSERVATION,
   ) {
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
@@ -190,7 +211,9 @@ export class DatabaseSyncer {
         let restoring = false;
 
         if (record) {
-          // 리모트가 마지막 동기화 시점과 동일하면 건너뜀. 단 두 가지 예외가 있다.
+          // 리모트가 지난번에 본 그대로면 건너뜀. 수정 시각이 같아도 같은 분 안의 편집일 수
+          // 있으면(«확인 안 됨», N-05) 받아서 견준다 — 같으면 파일을 쓰지 않는다. 단 두 가지
+          // 예외가 있다.
           //  · 레코드 경로가 현재 DB 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유
           //    폴더 잔류) 원격 무변경이어도 재처리해 현 폴더로 재배치한다.
           //  · 로컬 파일이 사라졌으면 되살린다(R13). 이 확인이 없으면 pullDatabasePage
@@ -200,7 +223,7 @@ export class DatabaseSyncer {
           //    여기서 이미 같은 판정을 거친다"는 (틀린) 전제로 db-row 를 제외해 두었기에
           //    양쪽 어디에도 복원 경로가 없는 상태였다.
           const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
-          if (page.last_edited_time === record.notionLastEdited && !misplaced) {
+          if (!misplaced && this.remoteVerdict(record, page) === "unchanged") {
             if (await this.vaultFs.exists(record.obsidianPath)) continue;
             restoring = true;
           }
@@ -227,7 +250,7 @@ export class DatabaseSyncer {
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
         }
-        // skipped(local-first): 카운트하지 않음
+        // skipped(local-first) · unchanged(받아 보니 그대로): 카운트하지 않음
       } catch (error) {
         failed.push({
           path: `${dbConfig.localFolder}/${page.id}`,
@@ -461,7 +484,13 @@ export class DatabaseSyncer {
     page: PageObjectResponse,
     filePath: string,
     options?: { downloadMedia?: boolean },
-  ): Promise<{ content: string; title: string; properties: Record<string, unknown> }> {
+  ): Promise<{
+    content: string;
+    title: string;
+    properties: Record<string, unknown>;
+    /** 받은 원격 본문의 지문(`remoteBodyFingerprint`). */
+    bodyFingerprint: string;
+  }> {
     const downloadMedia = options?.downloadMedia !== false;
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
@@ -499,6 +528,7 @@ export class DatabaseSyncer {
     }
 
     const mdResult = await this.notionClient.getPageMarkdown(page.id);
+    const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);
     let markdown = notionEnhancedToObsidian(mdResult.markdown);
@@ -531,7 +561,66 @@ export class DatabaseSyncer {
       },
       { properties, notionExportCompact: exportCompact },
     );
-    return { content, title, properties };
+    return { content, title, properties, bodyFingerprint };
+  }
+
+  /**
+   * 행의 본문 밖이 지난 동기화 사본 그대로인가(N-05) — 제목과 보낼 수 있는 속성, 그리고
+   * {@link renderRow} 로 받는 행이면 아이콘 · 커버. push 는 원격을 덮어써도 되는지, pull 은 받을
+   * 것이 있는지를 이 규칙으로 가른다. 읽기 전용 속성(수식 · 롤업 · 수정 시각)은 보지 않는다 —
+   * 로컬에서 고칠 수 없고 push 가 보내지 않는다.
+   *
+   * @param mapper 그 행의 DB 스키마를 읽은 매퍼.
+   * @param base 지난 동기화 시점의 frontmatter.
+   * @param path 지난 동기화 시점의 경로 — 파일 이름을 따르던 제목을 가른다.
+   * @param decorated 아이콘 · 커버도 견주나 — {@link renderRow} 로 받는 행만 그것을 노트에 적는다.
+   */
+  rowOutsideBodyUnchanged(
+    mapper: PropertyMapper,
+    page: PageObjectResponse,
+    base: Readonly<Record<string, unknown>>,
+    path: string,
+    decorated: boolean,
+  ): boolean {
+    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
+    const { changed, cleared } = diffRowProperties(
+      mapper.pickWritable(mapper.fromNotionProperties(raw)),
+      mapper.pickWritable(base),
+    );
+    return (
+      this.notionClient.extractTitle(page) === noteTitle(base, path) &&
+      Object.keys(changed).length === 0 &&
+      cleared.length === 0 &&
+      (!decorated || this.decorationsUnchanged(page, base))
+    );
+  }
+
+  /**
+   * 원격 행의 아이콘 · 커버가 `frontmatter` 에 적힌 그대로인가 — {@link renderRow} 가 적는 모양으로
+   * 견준다(N-05). Notion 에 올린 파일은 읽을 때마다 주소가 바뀌고(서명) 커버는 볼트로 내려받아
+   * 적으므로, 있는지만 견준다.
+   */
+  private decorationsUnchanged(
+    page: PageObjectResponse,
+    frontmatter: Readonly<Record<string, unknown>>,
+  ): boolean {
+    const icon = this.notionClient.extractIcon(page);
+    const cover = this.notionClient.extractCover(page);
+    return (
+      sameDecoration(
+        icon === null ? null : { uploaded: icon.type === "file", value: icon.value },
+        frontmatter.icon,
+      ) &&
+      sameDecoration(
+        cover === null ? null : { uploaded: cover.type === "file", value: cover.url },
+        frontmatter.cover,
+      )
+    );
+  }
+
+  /** 레코드가 지난번에 본 원격 행과 지금 행을 견준다 — 이번 동기화의 기준으로(N-05). */
+  private remoteVerdict(record: SyncRecord, page: PageObjectResponse): RemoteVerdict {
+    return compareRemote(record, page, this.observation().botUserId);
   }
 
   private async pullDatabasePage(
@@ -555,7 +644,13 @@ export class DatabaseSyncer {
       );
     }
 
-    const { content: finalContent, title, properties } = await this.renderRow(page, filePath);
+    const {
+      content: finalContent,
+      title,
+      properties,
+      bodyFingerprint,
+    } = await this.renderRow(page, filePath);
+    const seenAt = this.observation().seenAt;
 
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.
     // (신규 페이지는 existingRecord 가 없으므로 충돌 검사 없이 바로 기록 — 로컬 파일 미존재)
@@ -574,11 +669,27 @@ export class DatabaseSyncer {
         localExists = await this.vaultFs.exists(readPath);
       }
 
+      // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
+      // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 행은 되살린다.
+      const base = snapshotFrontmatter(existingRecord.baseSnapshot);
+      const remoteUnchanged =
+        localExists &&
+        base !== null &&
+        bodyFingerprint === existingRecord.notionBodyFingerprint &&
+        this.rowOutsideBodyUnchanged(
+          this.propertyMapper,
+          page,
+          base,
+          existingRecord.obsidianPath,
+          true,
+        );
+
       const resolution = resolvePullConflict({
         record: existingRecord,
         localContent,
         localExists,
         remoteContent: finalContent,
+        remoteUnchanged,
         remoteChange: {
           pageId: page.id,
           type: "modified",
@@ -589,6 +700,13 @@ export class DatabaseSyncer {
       });
 
       if (resolution.action === "skip") {
+        // 원격이 지난 사본 그대로다 — 본 것만 적는다. 로컬 편집은 다음 push 가 올린다.
+        if (resolution.remoteUnchanged) {
+          this.stateDb.setRemoteObservation(existingRecord.id, {
+            ...observationOf(page, seenAt),
+            bodyFingerprint,
+          });
+        }
         // local-first: 로컬 보존, 리모트 변경 무시(재배치 대상이어도 파일은 원위치 유지)
         return { action: "skipped", path: recordPath ?? filePath };
       }
@@ -600,6 +718,28 @@ export class DatabaseSyncer {
           path: recordPath ?? filePath,
           conflict: resolution.conflict!,
         };
+      }
+      // 받아 보니 로컬과 같다 — 파일을 다시 쓰지 않고 본 것만 적는다. 페이지의 같은 자리(I5)와
+      // 같은 이유다: 같은 분 안의 편집인지 확인하려고 받은 행(N-05) · 수정 시각만 바뀐 행을
+      // «업데이트» 로 세지 않는다. 파일 끝 개행만 다르면 로컬을 그대로 두고 로컬을 사본으로
+      // 적는다. 재배치할 행은 옮겨야 하므로 아래로 간다.
+      if (localExists && sameNoteContent(localContent, finalContent) && readPath === filePath) {
+        const stat = await this.vaultFs.getFileStat(filePath);
+        this.stateDb.upsert({
+          obsidianPath: filePath,
+          notionPageId: page.id,
+          notionParentId: dbConfig.databaseId,
+          contentHash: computeHash(localContent),
+          ...observedRecordFields(page, seenAt, bodyFingerprint),
+          localLastModified: existingRecord.localLastModified,
+          syncDirection: existingRecord.syncDirection,
+          fileType: "db-row",
+          status: "synced",
+          baseSnapshot: Buffer.from(localContent, "utf-8"),
+          localMtime: stat?.mtime ?? existingRecord.localMtime,
+          localFileSize: stat?.size ?? existingRecord.localFileSize,
+        });
+        return { action: "unchanged", path: filePath };
       }
       // resolution.action === "write" → 아래로 진행하여 덮어쓰기
     }
@@ -621,7 +761,7 @@ export class DatabaseSyncer {
         notionPageId: page.id,
         notionParentId: dbConfig.databaseId,
         contentHash: hash,
-        notionLastEdited: page.last_edited_time,
+        ...observedRecordFields(page, seenAt, bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType: "db-row",
@@ -658,4 +798,17 @@ function extractAliases(properties: Record<string, unknown>): string[] {
       .map((s) => s.trim())
       .filter(Boolean);
   return [];
+}
+
+/**
+ * 원격 아이콘 · 커버 하나가 frontmatter 에 적힌 값과 같은가. Notion 에 올린 파일(`uploaded`)은
+ * 있는지만 본다. `remote` 는 원격에 없으면 null.
+ */
+function sameDecoration(
+  remote: { readonly uploaded: boolean; readonly value: string } | null,
+  written: unknown,
+): boolean {
+  const present = written !== undefined && written !== null && written !== "";
+  if (remote === null) return !present;
+  return remote.uploaded ? present : written === remote.value;
 }
