@@ -10,6 +10,15 @@ export function normalizeNotionId(id: string): string {
   return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`;
 }
 
+/** 대시 포함(8-4-4-4-12) 또는 대시 없는 32 hex Notion ID 전체 일치 패턴. */
+const NOTION_ID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[0-9a-f]{32}$/i;
+
+/** 값 전체가 Notion ID(페이지 · 사용자 · DB) 모양인지. */
+export function isNotionId(value: string): boolean {
+  return NOTION_ID_RE.test(value);
+}
+
 export function notionIdsEqual(a: string, b: string): boolean {
   return a.replace(/-/g, "") === b.replace(/-/g, "");
 }

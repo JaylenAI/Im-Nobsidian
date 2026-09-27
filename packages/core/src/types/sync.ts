@@ -31,6 +31,17 @@ export interface LocalChange {
   readonly movedFrom?: string;
 }
 
+/**
+ * DB 행 frontmatter 의 속성 차이 — 지난 동기화 시점과 비교해 바뀐 것만(S-01).
+ * `title` 은 속성이 아니라 행 제목이라 여기 들어가지 않는다.
+ */
+export interface RowPropertyChanges {
+  /** 새로 생겼거나 값이 바뀐 속성과 그 새 값. 날짜는 적힌 모양의 문자열로 되돌려 둔다. */
+  readonly changed: Readonly<Record<string, unknown>>;
+  /** 로컬에서 비웠거나 지운 속성 이름. */
+  readonly cleared: readonly string[];
+}
+
 export interface RemoteChange {
   readonly pageId: string;
   readonly type: "created" | "modified" | "deleted" | "moved";

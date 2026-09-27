@@ -33,3 +33,47 @@ function unquoteFrontmatterDates(out: string): string {
   const fm = out.slice(0, fmEnd).replace(QUOTED_DATE_LINE_RE, "$1$2$3");
   return fm + out.slice(fmEnd);
 }
+
+/**
+ * YAML 이 날짜로 읽은 값(`Date`)을 적힌 모양의 문자열로 되돌린다.
+ *
+ * gray-matter(js-yaml)는 따옴표 없는 `2026-07-14` 를 UTC 자정의 `Date` 로 읽는다. 그리고
+ * 위 {@link unquoteFrontmatterDates} 때문에 pull 이 쓴 날짜는 모두 따옴표가 없다. 속성
+ * 변환이 받는 값이 `Date` 면 날짜로 알아보지 못해 **조용히 빠지고**(`String(date)` 는
+ * `Tue Jul 14 …`), 같은 날짜라도 한쪽만 따옴표가 있으면 «바뀐 값» 으로 보인다. 자정이면
+ * 날짜만, 아니면 ISO 문자열로 돌려준다. 배열 · 객체(`{start, end}`) 안쪽도 같게 바꾼다.
+ */
+export function plainFrontmatterValue(value: unknown): unknown {
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return String(value);
+    const iso = value.toISOString();
+    return iso.endsWith("T00:00:00.000Z") ? iso.slice(0, 10) : iso;
+  }
+  if (Array.isArray(value)) return value.map(plainFrontmatterValue);
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([k, v]) => [
+        k,
+        plainFrontmatterValue(v),
+      ]),
+    );
+  }
+  return value;
+}
+
+/**
+ * frontmatter 와 본문을 가른다. YAML 이 깨졌으면 «매번» 던진다.
+ *
+ * gray-matter 캐시를 쓰지 않는다(옵션 객체를 넘기면 캐시를 건너뛴다). gray-matter 는 파싱
+ * «전에» 캐시에 자리를 만들어 두므로, 파싱이 실패하면 `data: {}` 인 자리가 남고 같은 문자열의
+ * 다음 호출은 던지지 않고 그것을 돌려준다. push 는 실패한 항목을 한 번 더 시도하므로, 깨진
+ * frontmatter 를 첫 시도에서 거절해도 재시도에서 «속성 없음» 으로 읽혀 행의 속성을 모두
+ * 지우는 요청이 나간다. 본문은 변환 파이프라인(FrontmatterExtractor)과 같게 앞뒤 공백을 걷어 낸다.
+ */
+export function parseFrontmatter(content: string): {
+  data: Record<string, unknown>;
+  body: string;
+} {
+  const parsed = matter(content, {});
+  return { data: parsed.data as Record<string, unknown>, body: parsed.content.trim() };
+}

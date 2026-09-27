@@ -1,8 +1,6 @@
 import matter from "gray-matter";
 import { stringifyFrontmatter } from "../utils/frontmatter.js";
-
-/** 대시 포함(8-4-4-4-12) 또는 대시 없는 32 hex Notion ID 전체 일치 패턴. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[0-9a-f]{32}$/i;
+import { isNotionId } from "../utils/id.js";
 
 /**
  * frontmatter 의 relation/people 속성에 박힌 원시 Notion UUID 를 `[[제목]]` 위키링크로 치환한다.
@@ -44,7 +42,7 @@ export function resolveFrontmatterRelations(
   let count = 0;
   const resolveValue = (value: unknown): unknown => {
     if (typeof value === "string") {
-      if (!UUID_RE.test(value)) return value;
+      if (!isNotionId(value)) return value;
       const title = idToTitle.get(value.replace(/-/g, ""));
       if (!title) return value;
       count++;

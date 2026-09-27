@@ -58,6 +58,16 @@ import { extractInlineDbIds } from "../utils/inline-db-refs.js";
 import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { pagePathCandidates } from "../utils/db-row-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
+import { RowSchemaCache } from "./row-schema-cache.js";
+import { diffRowProperties, rowTitle } from "./row-properties.js";
+import { parseFrontmatter } from "../utils/frontmatter.js";
+
+/** DB 행을 보낼 때 견줄 기준 — 속성 · 제목 · 본문(null 이면 모름: 본문을 보낸다). */
+interface RowState {
+  readonly properties: Readonly<Record<string, unknown>>;
+  readonly title: string;
+  readonly body: string | null;
+}
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
@@ -102,6 +112,8 @@ export class SyncOrchestrator {
   private readonly fileHandler: FileHandler;
   private readonly databaseSyncer: DatabaseSyncer;
   private readonly propertyMapper: PropertyMapper;
+  /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
+  private readonly rowSchemas: RowSchemaCache;
   private readonly conflictResolver: ConflictResolver;
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
@@ -189,6 +201,10 @@ export class SyncOrchestrator {
     };
     this.propertyMapper.setWikilinkResolver(wikilinkResolver);
     this.notionClient.setWikilinkResolver(wikilinkResolver);
+    this.rowSchemas = new RowSchemaCache(
+      (databaseId) => notionClient.getDatabaseSchema(databaseId),
+      wikilinkResolver,
+    );
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
     this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
@@ -203,6 +219,7 @@ export class SyncOrchestrator {
 
     this.cleanupInterruptedSync();
     this.repairFolderRecords();
+    this.rowSchemas.clear();
     await this.recoverInterruptedPushOps();
 
     const stats = await this.vaultFs.listMarkdownFileStats();
@@ -396,6 +413,7 @@ export class SyncOrchestrator {
     const startTime = Date.now();
     // 이번 실행의 경로 선점 장부를 비운다 — 지난 실행에서 삭제된 경로를 계속 막지 않도록.
     this.claimedPaths.clear();
+    this.rowSchemas.clear();
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -1509,9 +1527,11 @@ export class SyncOrchestrator {
       await this.ensureDbSchema();
       effectiveParentId = this.config.notion.databaseId!;
       effectiveParentType = "database";
+      // 행 제목은 frontmatter `title` 이 먼저다 — 갱신(pushRowUpdate)과 같은 규칙이어야
+      // 만든 뒤 첫 갱신에서 제목이 뒤집히지 않는다.
       effectiveProperties = this.propertyMapper.toNotionProperties(
         conversionResult.properties,
-        title,
+        rowTitle(conversionResult.properties, path),
       );
     }
 
@@ -1647,10 +1667,22 @@ export class SyncOrchestrator {
     }
   }
 
-  private async pushUpdate(path: string): Promise<void> {
+  /**
+   * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파). 페이지는
+   *   원래 본문을 통째로 바꾸므로 차이가 없고, DB 행만 비교 기준이 달라진다(pushRowUpdate).
+   */
+  private async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<void> {
     const content = await this.vaultFs.readFile(path);
     const record = this.stateDb.getByPath(path);
     if (!record?.notionPageId) return;
+
+    const rowDatabaseId = this.rowDatabaseOf(record);
+    if (rowDatabaseId) {
+      await this.pushRowUpdate(path, record, rowDatabaseId, content, {
+        overwriteRemote: options?.overwriteRemote === true,
+      });
+      return;
+    }
 
     const updatePath = this.pipeline.selectPath(content);
     if (updatePath === "block-api") {
@@ -1670,16 +1702,10 @@ export class SyncOrchestrator {
 
     await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path);
 
+    // 페이지는 속성이 제목뿐이다 — 나머지 frontmatter 는 본문 첫머리 YAML 블록으로 간다
+    // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
     let propsToUpdate: Record<string, unknown> | undefined;
-    if (
-      this.isDatabaseMode &&
-      conversionResult.properties &&
-      Object.keys(conversionResult.properties).length > 0
-    ) {
-      await this.ensureDbSchema();
-      const title = extractTitle(path);
-      propsToUpdate = this.propertyMapper.toNotionProperties(conversionResult.properties, title);
-    } else if (conversionResult.properties?.title) {
+    if (conversionResult.properties?.title) {
       const titleStr = String(conversionResult.properties.title);
       propsToUpdate = {
         title: { title: [{ text: { content: titleStr } }] },
@@ -1722,6 +1748,170 @@ export class SyncOrchestrator {
         aliases,
       });
     });
+  }
+
+  /**
+   * 이 레코드가 DB 행이면 그 DB id, 페이지면 null.
+   *
+   * 행인지는 전역 모드가 아니라 **레코드** 가 정한다. 페이지 모드 볼트에도 자동 발견된 DB 의
+   * 행(`db-row`)이 있다 — 전역 모드로 가르면 그 행이 페이지로 밀려 속성은 제목만 가고
+   * 나머지는 본문 첫머리에 YAML 로 끼워진다(S-01 · S-02).
+   */
+  private rowDatabaseOf(record: SyncRecord): string | null {
+    if (record.fileType === "db-row") {
+      if (!record.notionParentId) {
+        // 행을 페이지처럼 밀면 속성이 본문으로 새므로, 어느 DB 의 행인지 모르면 멈춘다.
+        throw new Error(`DB 행인데 소속 DB 를 알 수 없음: ${record.obsidianPath}`);
+      }
+      return record.notionParentId;
+    }
+    if (this.isDatabaseMode) return this.config.notion.databaseId!;
+    return null;
+  }
+
+  /**
+   * DB 행 갱신(S-01 · S-02).
+   *
+   * 행은 페이지가 아니다. 속성은 DB 스키마의 속성으로 보내고 본문에 YAML 로 끼우지 않는다.
+   * 무엇을 보낼지는 비교 기준이 정한다 — 보내기 전에 행을 한 번 읽어 고른다.
+   *
+   * - 원격이 지난 동기화 뒤 그대로면 지난 동기화 사본(baseSnapshot)과 견줘 **바뀐 것만**
+   *   보낸다. 통째로 보내면 로컬이 평문으로만 아는 서식(굵게 · 링크 · 멘션)이 매번 지워진다.
+   *   본문도 바뀌었을 때만 보낸다 — 다시 쓰면 블록 ID 와 블록에 달린 댓글이 사라진다.
+   * - 원격도 바뀌었으면 똑같이 로컬에서 바꾼 것만 보내되 notionLastEdited 를 올리지 않는다.
+   *   올리면 다음 pull 이 원격 변경을 «이미 받은 것» 으로 여겨 영영 가져오지 않는다.
+   * - 충돌 해소 결과를 보낼 때(`overwriteRemote`)는 원격의 지금 값과 견줘 다른 것을 모두
+   *   보내고 본문도 보낸다 — 로컬이 이긴다(페이지가 본문을 통째로 바꾸는 것과 같다).
+   */
+  private async pushRowUpdate(
+    path: string,
+    record: SyncRecord,
+    databaseId: string,
+    content: string,
+    options: { overwriteRemote: boolean },
+  ): Promise<void> {
+    const pageId = record.notionPageId!;
+    // frontmatter 를 못 읽으면 멈춘다. 파이프라인은 읽지 못한 frontmatter 를 «속성 없음» 으로
+    // 넘기므로, 그대로 견주면 모든 속성을 지우라는 요청이 된다.
+    let current: ReturnType<typeof parseFrontmatter>;
+    try {
+      current = parseFrontmatter(content);
+    } catch (error) {
+      throw new Error(
+        `frontmatter 를 읽지 못해 행을 보내지 않음 (${path}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+
+    const mapper = await this.rowSchemas.mapperFor(databaseId);
+    const remote = await this.notionClient.getPage(pageId);
+    const remoteChanged = remote.last_edited_time !== record.notionLastEdited;
+    const against = options.overwriteRemote
+      ? this.remoteRowState(mapper, remote)
+      : this.baseRowState(record);
+
+    const title = rowTitle(current.data, path);
+    const { properties, skipped } = mapper.toNotionPropertyChanges(
+      diffRowProperties(
+        against?.properties ?? null,
+        options.overwriteRemote ? mapper.pickWritable(current.data) : current.data,
+      ),
+      against?.title === title ? null : title,
+    );
+    if (skipped.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `비울 수 없는 속성 · 변환 불가): ${path} — ${skipped.join(", ")}`,
+      );
+    }
+
+    const bodyChanged = against?.body == null || against.body !== current.body;
+    let conversionResult: ConversionResult | null = null;
+    if (bodyChanged) {
+      const selectedPath = this.pipeline.selectPath(content);
+      if (selectedPath === "block-api") {
+        getLogger().warn(
+          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        );
+      }
+      conversionResult = this.pipeline.convertToNotion(content, {
+        direction: "push",
+        path: selectedPath,
+        filePath: path,
+        parentMode: "database",
+      });
+      await this.pushUpdatePage(pageId, conversionResult.content, record.baseSnapshot);
+      await this.syncEmbeddedMedia(pageId, conversionResult, path);
+    }
+
+    // notionLastEdited 는 서버가 돌려준 값으로 적는다(pushUpdate 와 같은 이유 — I5).
+    // 보낸 것이 없으면(스키마에 없는 키만 바뀜) 원격은 그대로이므로 옛 값을 둔다.
+    let lastEditedTime: string | null = null;
+    if (Object.keys(properties).length > 0) {
+      lastEditedTime = (await this.notionClient.updatePageProperties(pageId, properties))
+        .last_edited_time;
+    } else if (bodyChanged) {
+      lastEditedTime = (await this.notionClient.getPage(pageId)).last_edited_time;
+    }
+    if (remoteChanged && !options.overwriteRemote) {
+      lastEditedTime = null;
+      getLogger().info(
+        `[Im-Nobsidian] Notion 에서도 바뀐 행 — 로컬에서 바꾼 것만 보냈고 Notion 쪽 변경은 ` +
+          `다음 pull 에서 받음: ${path}`,
+      );
+    }
+
+    const hash = computeHash(content);
+    const fileStat = await this.vaultFs.getFileStat(path);
+    this.stateDb.transaction(() => {
+      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
+      this.stateDb.updateStatus(record.id, "synced");
+      if (lastEditedTime) this.stateDb.setNotionLastEdited(record.id, lastEditedTime);
+      if (fileStat) {
+        this.stateDb.updateStatCache(record.id, fileStat.mtime, fileStat.size);
+      }
+      if (conversionResult) {
+        this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
+      }
+      this.stateDb.upsertWikilink({
+        obsidianPath: path,
+        notionPageId: pageId,
+        title,
+        aliases: extractAliases(current.data),
+      });
+    });
+  }
+
+  /**
+   * 지난 동기화 시점의 행. 사본이 없거나 읽지 못하면 null — 호출측은 비교할 기준이 없다고
+   * 보고 비어 있지 않은 속성을 모두 보낸다(지우는 요청은 보내지 않는다).
+   */
+  private baseRowState(record: SyncRecord): RowState | null {
+    if (!record.baseSnapshot) return null;
+    try {
+      const base = parseFrontmatter(record.baseSnapshot.toString("utf-8"));
+      return {
+        properties: base.data,
+        title: rowTitle(base.data, record.obsidianPath),
+        body: base.body,
+      };
+    } catch {
+      return null;
+    }
+  }
+
+  /** 원격의 지금 행 — 보낼 수 있는 속성만. 본문은 읽지 않는다(null: 늘 보낸다). */
+  private remoteRowState(
+    mapper: PropertyMapper,
+    page: Awaited<ReturnType<NotionClient["getPage"]>>,
+  ): RowState {
+    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
+    return {
+      properties: mapper.pickWritable(mapper.fromNotionProperties(raw)),
+      title: this.notionClient.extractTitle(page),
+      body: null,
+    };
   }
 
   // ──────────────────────────────────────────────────────────────────────────
@@ -1856,8 +2046,10 @@ export class SyncOrchestrator {
     // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
     if (!result.success) return;
 
-    // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push.
-    await this.pushUpdate(record.obsidianPath);
+    // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push. 해소가 지난
+    // 동기화 사본을 해소 결과로 바꿔 두었으므로 «사본과 달라진 것» 은 없다 — 원격에 맞춰
+    // 보내도록 알린다(DB 행).
+    await this.pushUpdate(record.obsidianPath, { overwriteRemote: true });
   }
 
   // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.
@@ -2338,6 +2530,11 @@ export class SyncOrchestrator {
     // 표시 전용 호출(diff)은 첨부를 내려받지 않는다 — 비교를 보려다 볼트에 파일이 생기면
     // 안 된다. 이때 새 미디어는 원격 URL 그대로 남지만, 비교 화면에서만 보이는 차이다.
     const downloadMedia = options?.downloadMedia !== false;
+    if (record.fileType === "db-row") {
+      // 행은 pull 과 같은 렌더러로 — 페이지처럼 렌더하면 본문 첫머리의 옛 속성 블록이
+      // 실제 속성 값을 덮는다(S-02). 충돌 «원격 선택» 은 이 렌더를 파일에 그대로 쓴다.
+      return this.databaseSyncer.renderRow(page, record.obsidianPath, { downloadMedia });
+    }
     const fetched = await this.fetchPageMarkdown(pageId);
     let markdown = fetched.content;
 

@@ -1,6 +1,7 @@
 import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE } from "../../constants/markers.js";
+import { getLogger } from "../../utils/logger.js";
 
 const YAML_PROPERTIES_REGEX = new RegExp(
   "```yaml\\n# " + MARKER_BRAND_RE + ":properties\\n([\\s\\S]*?)```\\n*(?:---\\n*)?",
@@ -20,15 +21,38 @@ export class PropertiesTableRestorer implements Processor {
 
     const yamlMatch = input.content.match(YAML_PROPERTIES_REGEX);
     if (yamlMatch) {
+      if (input.context.parentMode === "database") {
+        return this.dropFromRow(input, YAML_PROPERTIES_REGEX);
+      }
       return this.restoreFromYaml(input, yamlMatch);
     }
 
     const tableMatch = input.content.match(LEGACY_TABLE_REGEX);
     if (tableMatch) {
+      if (input.context.parentMode === "database") {
+        return this.dropFromRow(input, LEGACY_TABLE_REGEX);
+      }
       return this.restoreFromTable(input, tableMatch);
     }
 
     return { content: input.content, metadata: input.metadata };
+  }
+
+  /**
+   * DB 행 본문 첫머리의 속성 블록은 예전 push 가 행을 페이지로 밀며 잘못 끼운 것이다(S-02).
+   * 행의 속성은 Notion 속성이 정본이다 — 블록 값으로 덮으면 Notion 에서 고친 속성이 옛 값으로
+   * 보인다. 그래서 값은 버리고 블록만 걷어 낸다. Notion 쪽 블록은 이 행의 본문을 다음에
+   * push 할 때 사라진다.
+   */
+  private dropFromRow(input: ProcessorInput, pattern: RegExp): ProcessorOutput {
+    getLogger().warn(
+      `[Im-Nobsidian] DB 행 본문 첫머리의 속성 블록을 뺌 — 예전 버전이 잘못 끼운 것이고 ` +
+        `속성은 Notion 속성 값을 따른다: ${input.context.filePath}`,
+    );
+    return {
+      content: input.content.replace(pattern, "").trimStart(),
+      metadata: input.metadata,
+    };
   }
 
   private restoreFromYaml(input: ProcessorInput, match: RegExpMatchArray): ProcessorOutput {

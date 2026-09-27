@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { generateId, normalizeNotionId, notionIdsEqual } from "../../src/utils/id.js";
+import { generateId, isNotionId, normalizeNotionId, notionIdsEqual } from "../../src/utils/id.js";
 
 describe("generateId", () => {
   it("UUID 형식 생성", () => {
@@ -51,5 +51,18 @@ describe("notionIdsEqual", () => {
     expect(
       notionIdsEqual("35a13b18d38280cf9057e37e6e473e41", "aaaabbbbccccddddeeee111122223333"),
     ).toBe(false);
+  });
+});
+
+describe("isNotionId", () => {
+  it("대시 있는 UUID 와 32 hex 를 알아본다(대소문자 무관)", () => {
+    expect(isNotionId("35a13b18-d382-80cf-9057-e37e6e473e41")).toBe(true);
+    expect(isNotionId("35A13B18D38280CF9057E37E6E473E41")).toBe(true);
+  });
+
+  it("값의 일부만 ID 이거나 모양이 다르면 아니다", () => {
+    expect(isNotionId("[[35a13b18d38280cf9057e37e6e473e41]]")).toBe(false);
+    expect(isNotionId("35a13b18d38280cf9057e37e6e473e4")).toBe(false);
+    expect(isNotionId("홍길동")).toBe(false);
   });
 });
