@@ -9,6 +9,7 @@ import { describe, it, expect } from "vitest";
 import {
   baseEmbedPaths,
   extractChildTags,
+  hasBodyBesidesChildren,
   restoreChildTags,
   type ChildTag,
 } from "../../src/converter/child-tags.js";
@@ -43,6 +44,20 @@ describe("extractChildTags — Notion 이 준 본문의 자식 태그", () => {
 
   it("url 에 id 가 없는 태그는 자식으로 세지 않는다", () => {
     expect(extractChildTags(`<database inline="true">이름뿐</database>`)).toEqual([]);
+  });
+});
+
+describe("hasBodyBesidesChildren — 자식 말고 본문이 있는가 (S-17)", () => {
+  it("자식 태그 · 빈 블록 · 빈 줄뿐이면 본문이 없다", () => {
+    expect(hasBodyBesidesChildren("")).toBe(false);
+    expect(hasBodyBesidesChildren(`${PAGE_TAG}\n${DB_TAG}\n`)).toBe(false);
+    expect(hasBodyBesidesChildren(`<empty-block/>\n${PAGE_TAG}\n\n<empty-block/>`)).toBe(false);
+  });
+
+  it("글이 한 줄이라도 있으면 본문이 있다 — 자식 태그 앞뒤 어디든", () => {
+    expect(hasBodyBesidesChildren(`첫 줄\n${PAGE_TAG}`)).toBe(true);
+    expect(hasBodyBesidesChildren(`${PAGE_TAG}\n# 제목`)).toBe(true);
+    expect(hasBodyBesidesChildren(`${DB_TAG}\n---`)).toBe(true);
   });
 });
 

@@ -73,8 +73,16 @@ export class MemoryVault {
     fs.writeFile.mockImplementation(async (path: string, content: string) =>
       this.write(path, content),
     );
+    // Obsidian 어댑터처럼 폴더 경로를 받으면 그 아래를 통째로 지운다(vault.trash 는 폴더도 받는다).
     fs.deleteFile.mockImplementation(async (path: string) => {
       this.files.delete(path);
+      if (!this.folders.has(path)) return;
+      for (const file of [...this.files.keys()]) {
+        if (file.startsWith(`${path}/`)) this.files.delete(file);
+      }
+      for (const folder of [...this.folders]) {
+        if (folder === path || folder.startsWith(`${path}/`)) this.folders.delete(folder);
+      }
     });
     fs.ensureFolder.mockImplementation(async (folder: string) => this.addFolders(`${folder}/`));
     return fs as unknown as VaultFS;
@@ -97,6 +105,8 @@ export interface MemoryPage {
   parent: string;
   lastEdited: string;
   archived: boolean;
+  /** 본문 — 만들 때 · 바꿀 때 보낸 markdown. 자식 페이지 태그는 읽을 때 붙인다. */
+  body: string;
 }
 
 /** 메모리 Notion — 만든 페이지의 제목 · 부모 · 수정 시각을 기억한다. */
@@ -123,14 +133,31 @@ export function memoryNotion() {
     page.lastEdited = tick();
     return page;
   };
-  const add = (parent: string, title: string): MemoryPage => {
+  const add = (parent: string, title: string, body = ""): MemoryPage => {
     const id = `00000000-0000-4000-8000-${String(pages.size + 1).padStart(12, "0")}`;
-    const page = { id, title, parent, lastEdited: tick(), archived: false };
+    const page = { id, title, parent, lastEdited: tick(), archived: false, body };
     pages.set(id, page);
     return page;
   };
-  const create = async ({ parentId, title }: { parentId: string; title: string }) =>
-    view(add(parentId, title));
+  const create = async ({
+    parentId,
+    title,
+    markdown,
+  }: {
+    parentId: string;
+    title: string;
+    markdown?: string;
+  }) => view(add(parentId, title, markdown));
+  // Notion Markdown API 처럼 본문 뒤에 자식 페이지를 `<page>` 태그로 싣는다(휴지통 제외).
+  const markdownOf = (id: string): string => {
+    const children = [...pages.values()]
+      .filter((page) => page.parent === id && !page.archived)
+      .map(
+        (page) =>
+          `<page url="https://www.notion.so/${page.id.replace(/-/g, "")}">${page.title}</page>`,
+      );
+    return [find(id).body, ...children].filter((part) => part.length > 0).join("\n");
+  };
 
   client.createPageWithMarkdown.mockImplementation(create);
   client.createPage.mockImplementation(create);
@@ -149,16 +176,35 @@ export function memoryNotion() {
       return view(page);
     },
   );
-  client.replacePageMarkdown.mockImplementation(async (id: string) => {
-    touch(id);
+  client.replacePageMarkdown.mockImplementation(async (id: string, markdown: string) => {
+    touch(id).body = markdown;
     return { markdown: "", truncated: false, unknown_block_ids: [] };
   });
+  client.getPageMarkdown.mockImplementation(async (id: string) => ({
+    markdown: markdownOf(id),
+    truncated: false,
+    unknown_block_ids: [],
+  }));
   client.archivePage.mockImplementation(async (id: string) => {
     touch(id).archived = true;
   });
   client.searchRecentPages.mockImplementation(async () =>
     [...pages.values()].map((page) => ({ id: page.id, last_edited_time: page.lastEdited })),
   );
+  // 전체 대조(deleteSync)의 순회 — 루트 아래의 휴지통이 아닌 페이지. Notion 은 부모를 휴지통에
+  // 넣으면 그 아래도 함께 넣는다 — 시험이 둘 다 표시한다.
+  client.getChildPagesRecursive.mockImplementation(async (rootId: string) => {
+    const found: Array<ReturnType<typeof view>> = [];
+    const walk = (parentId: string): void => {
+      for (const page of pages.values()) {
+        if (page.parent !== parentId || page.archived) continue;
+        found.push(view(page));
+        walk(page.id);
+      }
+    };
+    walk(rootId);
+    return found;
+  });
   // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
   client.fetchAllChildren.mockImplementation(async (parentId: string) =>
     [...pages.values()]

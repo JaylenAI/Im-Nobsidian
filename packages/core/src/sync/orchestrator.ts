@@ -48,6 +48,7 @@ import {
   obsidianToNotionEnhanced,
 } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
+import { hasBodyBesidesChildren } from "../converter/child-tags.js";
 import {
   resolveNotionIdWikilinks,
   degradeUnresolvedNotionIdWikilinks,
@@ -2770,7 +2771,10 @@ export class SyncOrchestrator {
         // 다만 그쪽이 실제로 복원하는지는 오래 참이 아니었다: 원격 무변경이면 로컬 존재를
         // 묻지도 않고 건너뛰어, 지운 행이 어느 경로로도 돌아오지 않았다. R13 에서 그
         // 존재 확인을 넣어 이 제외가 비로소 근거를 갖는다(tests/sync/db-row-restore-deleted).
+        // push 가 만든 폴더 페이지(폴더 레코드)도 실체가 폴더다 — 안의 노트를 되살리면 폴더도
+        // 생긴다. 예전에는 폴더 경로에 확장자 없는 파일을 썼다(S-17).
         (r.fileType === "file" || r.fileType === "folder-note") &&
+        !isFolderRecord(r) &&
         r.notionPageId !== null &&
         inAnyPathScope(r.obsidianPath, paths),
     );
@@ -3069,10 +3073,17 @@ export class SyncOrchestrator {
   private async pullUpdate(
     change: RemoteChange,
   ): Promise<{ path?: string; conflict?: Conflict; unchanged?: boolean }> {
-    const record = this.stateDb.getByNotionId(change.pageId);
+    let record = this.stateDb.getByNotionId(change.pageId);
     if (!record) return {};
 
     const page = await this.notionClient.getPage(change.pageId);
+
+    // push 가 만든 폴더 페이지에는 볼트 파일이 없다 — 폴더로 받는다(S-17).
+    if (isFolderRecord(record)) {
+      const folderNote = await this.pullFolderRecord(record, page);
+      if (!folderNote) return { path: record.obsidianPath, unchanged: true };
+      record = folderNote;
+    }
 
     // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
     // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
@@ -3175,9 +3186,89 @@ export class SyncOrchestrator {
     return { path: record.obsidianPath };
   }
 
+  /**
+   * push 가 만든 폴더 페이지(폴더 레코드)의 원격 변경을 받는다(S-17). 폴더 레코드에는 볼트 파일이
+   * 없다 — 예전에는 폴더 경로를 파일로 읽어 «빈 로컬 파일» 과 원격 본문의 충돌로 남겼다.
+   *
+   * - 자식 말고 본문이 없으면 받을 것이 없다. 그 아래에 페이지가 생겨도 Notion 이 수정 시각을
+   *   올린다 — 시각만 맞춰 다음 pull 이 다시 읽지 않게 한다.
+   * - 본문이 생겼으면 그 페이지는 이제 폴더 노트다(ADR-012) — 레코드를 폴더 노트 경로로 옮겨 적고
+   *   돌려준다. 호출자가 보통 노트처럼 받는다: 로컬 폴더 노트가 없으면 쓰고, 올리지 않은 로컬
+   *   폴더 노트가 있으면 그 노트와의 충돌이 된다.
+   * - 폴더 노트를 둘 자리가 없으면 본문은 Notion 에만 둔다 — 시각만 맞추고 알린다. DB 모드는
+   *   노트가 행이고, v0.3 이 DB 폴더 자리에 만든 폴더 페이지는 그 폴더가 DB 라 행만 든다.
+   *
+   * @returns 폴더 노트로 옮겨 적은 레코드. 받을 것이 없으면 null.
+   * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
+   *         이 변경 앞에 묶인다).
+   */
+  private async pullFolderRecord(
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<SyncRecord | null> {
+    const folder = record.obsidianPath;
+    const remoteGone =
+      (page as { in_trash?: boolean }).in_trash === true ||
+      (page as { archived?: boolean }).archived === true;
+    if (remoteGone) return null;
+
+    const { markdown } = await this.notionClient.getPageMarkdown(page.id);
+    if (!hasBodyBesidesChildren(markdown)) {
+      this.stateDb.setNotionLastEdited(record.id, page.last_edited_time);
+      return null;
+    }
+    const noPlace = this.isDatabaseMode
+      ? "DB 모드는 폴더 노트를 받지 않음"
+      : this.folderLookup().databaseAt(folder)
+        ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
+        : null;
+    if (noPlace) {
+      getLogger().warn(
+        `[Im-Nobsidian] 폴더(${folder})의 Notion 페이지에 본문이 있지만 ${noPlace} — Notion 에만 있다`,
+      );
+      this.stateDb.setNotionLastEdited(record.id, page.last_edited_time);
+      return null;
+    }
+
+    if (this.stateDb.getIncompleteOpByState(record.id, "move")) {
+      throw new Error(
+        `폴더(${folder})의 이동을 Notion 에 반영하기 전이라 폴더 페이지의 본문을 받지 않음 — ` +
+          `push 뒤 pull 이 받는다`,
+      );
+    }
+    const notePath = folderNoteOf(folder);
+    if (this.stateDb.getByPath(notePath)) {
+      // 두 겹으로 생긴 폴더(S-15 이전 push) — 폴더 노트가 다른 페이지다.
+      throw new Error(
+        `폴더(${folder})의 Notion 페이지에 본문이 생겼지만 폴더 노트(${notePath})가 다른 ` +
+          `페이지라 받지 않음 — 두 페이지 중 하나를 정리해야 한다`,
+      );
+    }
+
+    this.stateDb.transaction(() => {
+      this.stateDb.updatePath(record.id, notePath);
+      this.stateDb.deleteWikilink(folder);
+    });
+    getLogger().info(
+      `[Im-Nobsidian] 폴더 페이지에 Notion 에서 쓴 본문을 폴더 노트로 받음: ${folder} → ${notePath}`,
+    );
+    return this.stateDb.getByPath(notePath);
+  }
+
   private async pullDelete(pageId: string): Promise<string | null> {
     const record = this.stateDb.getByNotionId(pageId);
     if (!record) return null;
+
+    // push 가 만든 폴더 페이지는 추적만 놓는다 — 볼트에서는 폴더다. 안의 노트는 각자의 레코드가
+    // 지운다. 예전에는 폴더 경로를 파일처럼 지워, Obsidian 에서는 올리지 않은 노트까지 폴더째
+    // 휴지통으로 갔다(S-17).
+    if (isFolderRecord(record)) {
+      this.stateDb.transaction(() => {
+        this.stateDb.delete(record.id);
+        this.stateDb.deleteWikilink(record.obsidianPath);
+      });
+      return null;
+    }
 
     if (this.config.sync.deleteSync) {
       try {
@@ -3943,6 +4034,15 @@ export class SyncOrchestrator {
 
     const parentRecord = this.stateDb.getByNotionId(parentId);
     if (parentRecord) {
+      // push 가 만든 폴더 페이지는 폴더 경로 자체로 추적한다 — 그 폴더가 자식의 자리다. 예전에는
+      // 폴더 노트 파일처럼 마지막 조각을 떼어 한 층 위에 받았다(S-16). v0.3 이 DB 폴더 자리에 만든
+      // 폴더 페이지는 빼고 예전 자리에 둔다 — DB 폴더에는 행만 든다.
+      if (
+        isFolderRecord(parentRecord) &&
+        !this.folderLookup().databaseAt(parentRecord.obsidianPath)
+      ) {
+        return parentRecord.obsidianPath;
+      }
       if (parentRecord.fileType === "folder-note" || parentRecord.fileType === "folder-only") {
         const pathParts = parentRecord.obsidianPath.split("/");
         pathParts.pop();
