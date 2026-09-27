@@ -29,8 +29,9 @@
 | 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 완료 `94f72d7` |
 | 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 완료 `e241a06` |
 | 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문 | 완료 `a5bc2af` |
-| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 진행 중        |
-| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기           |
+| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 완료 `11ed8c3` |
+| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 완료           |
+| 1    | `fix/incremental-new-subtree`                | S-08 새 하위 트리의 자식이 증분 pull 에서 영영 빠짐                             | 대기           |
 | 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기           |
 | 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경이 Notion 에 안 가고 push 마다 updated 로 셈                 | 대기           |
 | 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                     | 대기           |
@@ -38,7 +39,7 @@
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                               | 대기           |
 | 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                             | 대기           |
 | A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변) | 대기           |
-| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조 · S-08 · N-01                                | 대기           |
+| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조(S-08 인덱스 지연) · N-01                     | 대기           |
 | A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`           | 대기           |
 | A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                       | 대기           |
 | 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-09 변환 왕복                                                           | 대기           |
