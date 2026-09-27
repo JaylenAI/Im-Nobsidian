@@ -24,30 +24,31 @@
 원격 감지는 search 의 `last_edited_time`(분 단위 · 인덱스 지연)에 기대고, search 는
 휴지통 페이지를 돌려주지 않으므로 **원격 삭제는 전체 대조(reconcile)로만** 잡힌다.
 
-| 단계 | 브랜치                                       | 봉합 대상                                                                                                          | 상태           |
-| ---- | -------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | -------------- |
-| 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                                                   | 완료 `94f72d7` |
-| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                                                                 | 완료 `e241a06` |
-| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문                                    | 완료 `a5bc2af` |
-| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                                                       | 완료 `11ed8c3` |
-| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                                                              | 완료 `6a573dd` |
-| 1    | `fix/incremental-new-subtree`                | S-08 새 하위 트리의 자식이 증분 pull 에서 영영 빠짐                                                                | 완료 `3a66a59` |
-| 1    | `fix/pull-watermark`                         | 재시도까지 실패 · 중단으로 건너뛴 pull 항목이 다음 증분 조회 창 밖으로 빠짐                                        | 완료 `8b2ac52` |
-| 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지 · 자동 발견 DB 폴더의 새 파일이 행이 아니라 페이지로 감                                     | 완료           |
-| 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경이 Notion 에 안 가고 push 마다 updated 로 셈                                                    | 대기           |
-| 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음 | 대기           |
-| 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                                                        | 대기           |
-| 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)                                         | 대기           |
-| 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                  | 대기           |
-| 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                                                                | 대기           |
-| A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변)                                    | 대기           |
-| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조(S-08 인덱스 지연) · N-01                                                        | 대기           |
-| A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`                                              | 대기           |
-| A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                                                          | 대기           |
-| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-09 변환 왕복                                                                                              | 대기           |
-| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                                                        | 대기           |
-| 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                                                          | 대기           |
-| 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                          | 대기           |
+| 단계 | 브랜치                                       | 봉합 대상                                                                                                                                | 상태           |
+| ---- | -------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                                                                         | 완료 `94f72d7` |
+| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                                                                                       | 완료 `e241a06` |
+| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문                                                          | 완료 `a5bc2af` |
+| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                                                                             | 완료 `11ed8c3` |
+| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                                                                                    | 완료 `6a573dd` |
+| 1    | `fix/incremental-new-subtree`                | S-08 새 하위 트리의 자식이 증분 pull 에서 영영 빠짐                                                                                      | 완료 `3a66a59` |
+| 1    | `fix/pull-watermark`                         | 재시도까지 실패 · 중단으로 건너뛴 pull 항목이 다음 증분 조회 창 밖으로 빠짐                                                              | 완료 `8b2ac52` |
+| 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지 · 자동 발견 DB 폴더의 새 파일이 행이 아니라 페이지로 감                                                           | 완료 `f9ec6c1` |
+| 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경 · 이동이 Notion 에 안 가고 push 마다 updated 로 셈                                                                   | 완료           |
+| 1    | `fix/folder-note-create`                     | S-15 새 폴더와 그 폴더 노트를 한 push 에 만들면 폴더 페이지가 둘 · 형제가 두 부모로 갈림 · 다음 pull 이 폴더 페이지를 `(id)` 파일로 받음 | 대기           |
+| 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음                       | 대기           |
+| 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                                                                              | 대기           |
+| 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)                                                               | 대기           |
+| 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                                        | 대기           |
+| 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                                                                                      | 대기           |
+| A    | `refactor/orchestrator-modules`              | 4,338줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변)                                                          | 대기           |
+| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조(S-08 인덱스 지연) · N-01                                                                              | 대기           |
+| A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록(옮김 · 폴더 이동 포함) · 항목별 push/pull/discard · CLI `discard` · N-02 dry-run 삭제 수                      | 대기           |
+| A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                                                                                | 대기           |
+| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-09 변환 왕복                                                                                                                    | 대기           |
+| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                                                                              | 대기           |
+| 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                                                                                | 대기           |
+| 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
 pushdry 0.1초 · 단위 1,662 통과 · 불변식 15/15 · 블록 ID 71/72 유지.
