@@ -28,10 +28,13 @@
 | ---- | -------------------------------------------- | ------------------------------------------------------------------------------- | -------------- |
 | 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 완료 `94f72d7` |
 | 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 완료 `e241a06` |
-| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문 | 진행 중        |
-| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 대기           |
+| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문 | 완료 `a5bc2af` |
+| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 진행 중        |
 | 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기           |
 | 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기           |
+| 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경이 Notion 에 안 가고 push 마다 updated 로 셈                 | 대기           |
+| 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                     | 대기           |
+| 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)      | 대기           |
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                               | 대기           |
 | 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                             | 대기           |
 | A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변) | 대기           |
