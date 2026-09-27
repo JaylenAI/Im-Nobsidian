@@ -34,7 +34,10 @@ export class Modal {
   constructor(app: unknown) {
     this.app = app;
   }
-  close() {}
+  /** Obsidian 처럼 닫으면 onClose 를 부른다 — 단추로 닫든 Esc 로 닫든. */
+  close() {
+    (this as { onClose?: () => void }).onClose?.();
+  }
   open() {}
 }
 

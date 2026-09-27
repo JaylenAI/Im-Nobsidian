@@ -1,17 +1,21 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { RESOLUTION_CHOICES } from "./conflict-choices.js";
 
 export class ConflictModal extends Modal {
-  private readonly onResolve: (choice: ResolutionChoice) => void;
+  private answered = false;
 
+  /**
+   * @param onResolve 고른 것을 한 번 알린다. 고르지 않고 닫으면(Esc · 바깥 클릭) null — 예전에는
+   *   아무것도 알리지 않아, 기다리던 해결 흐름이 멈추고 남은 충돌을 묻지 않았다(N-06).
+   */
   constructor(
     app: App,
     private readonly conflict: Conflict,
-    onResolve: (choice: ResolutionChoice) => void,
+    private readonly onResolve: (choice: ResolutionChoice | null) => void,
   ) {
     super(app);
-    this.onResolve = onResolve;
   }
 
   onOpen(): void {
@@ -30,40 +34,32 @@ export class ConflictModal extends Modal {
 
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
 
-    new Setting(buttonContainer)
-      .setName("로컬 유지")
-      .setDesc("현재 Obsidian 파일을 유지합니다")
-      .addButton((btn) =>
-        btn
-          .setButtonText("로컬 유지")
-          .setCta()
-          .onClick(() => this.selectChoice("local")),
-      );
-
-    new Setting(buttonContainer)
-      .setName("원격 유지")
-      .setDesc("Notion 버전으로 덮어씁니다")
-      .addButton((btn) =>
-        btn.setButtonText("원격 유지").onClick(() => this.selectChoice("remote")),
-      );
-
-    new Setting(buttonContainer)
-      .setName("자동 병합")
-      .setDesc("3-way merge로 두 변경사항을 합칩니다")
-      .addButton((btn) => btn.setButtonText("자동 병합").onClick(() => this.selectChoice("merge")));
-
-    new Setting(buttonContainer)
-      .setName("복제")
-      .setDesc("현재 파일을 유지하고 Notion 버전을 .conflict 파일로 저장합니다")
-      .addButton((btn) => btn.setButtonText("복제").onClick(() => this.selectChoice("duplicate")));
+    for (const [choice, { label, description }] of Object.entries(RESOLUTION_CHOICES) as Array<
+      [ResolutionChoice, (typeof RESOLUTION_CHOICES)[ResolutionChoice]]
+    >) {
+      new Setting(buttonContainer)
+        .setName(label)
+        .setDesc(description)
+        .addButton((btn) => {
+          btn.setButtonText(label).onClick(() => this.selectChoice(choice));
+          if (choice === "local") btn.setCta();
+        });
+    }
   }
 
   onClose(): void {
     this.contentEl.empty();
+    this.answer(null);
   }
 
   private selectChoice(choice: ResolutionChoice): void {
+    this.answer(choice);
     this.close();
+  }
+
+  private answer(choice: ResolutionChoice | null): void {
+    if (this.answered) return;
+    this.answered = true;
     this.onResolve(choice);
   }
 

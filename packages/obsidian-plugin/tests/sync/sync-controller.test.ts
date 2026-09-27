@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { getLogger, setLogger, type SyncOrchestrator } from "@im-nobsidian/core";
+import {
+  getLogger,
+  setLogger,
+  type Conflict,
+  type ResolutionChoice,
+  type SyncOrchestrator,
+} from "@im-nobsidian/core";
 import { SyncController } from "../../src/sync/sync-controller.js";
 import type { SyncControllerHooks } from "../../src/sync/sync-controller.js";
 
@@ -11,6 +17,9 @@ interface MockOrchestrator {
   statusLocal: ReturnType<typeof vi.fn>;
   recordLocalRename: ReturnType<typeof vi.fn>;
   recordLocalDelete: ReturnType<typeof vi.fn>;
+  listConflicts: ReturnType<typeof vi.fn>;
+  clearStaleConflicts: ReturnType<typeof vi.fn>;
+  resolveConflict: ReturnType<typeof vi.fn>;
 }
 
 function createMockOrchestrator(): MockOrchestrator {
@@ -49,7 +58,19 @@ function createMockOrchestrator(): MockOrchestrator {
     }),
     recordLocalRename: vi.fn(),
     recordLocalDelete: vi.fn(),
+    listConflicts: vi.fn().mockResolvedValue([]),
+    clearStaleConflicts: vi.fn(() => []),
+    resolveConflict: vi.fn(async (conflict: Conflict, choice: ResolutionChoice) => ({
+      path: conflict.syncRecord.obsidianPath,
+      choice,
+      success: true,
+    })),
   };
+}
+
+/** 충돌 하나 — 컨트롤러는 경로만 본다. */
+function conflictAt(path: string): Conflict {
+  return { syncRecord: { obsidianPath: path } } as Conflict;
 }
 
 function createHooks(): {
@@ -319,6 +340,171 @@ describe("SyncController", () => {
       mock.statusLocal.mockRejectedValue(new Error("db locked"));
       const { hooks } = createHooks();
       await expect(makeController(mock, hooks).refreshStatus(false)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("충돌 해결 (N-06)", () => {
+    it("충돌로 표시된 노트만 읽고 pull 을 돌리지 않는다 — 고른 것을 오케스트레이터로 풀어 Notion 에 올린다", async () => {
+      const a = conflictAt("a.md");
+      const b = conflictAt("b.md");
+      mock.listConflicts.mockResolvedValue([a, b]);
+      const choose = vi.fn(async (conflict: Conflict) =>
+        conflict === a ? ("local" as const) : ("merge" as const),
+      );
+      const { hooks, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      expect(mock.pull).not.toHaveBeenCalled();
+      expect(mock.sync).not.toHaveBeenCalled();
+      expect(choose).toHaveBeenCalledTimes(2);
+      expect(mock.resolveConflict.mock.calls).toEqual([
+        [a, "local"],
+        [b, "merge"],
+      ]);
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it("양쪽이 이미 같은 충돌은 묻지 않고 표시만 푼다", async () => {
+      const same = conflictAt("same.md");
+      const real = conflictAt("real.md");
+      mock.listConflicts.mockResolvedValue([same, real]);
+      mock.clearStaleConflicts.mockReturnValue(["same.md"]);
+      const choose = vi.fn(async () => "remote" as const);
+      const { hooks, onNotice } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      expect(choose).toHaveBeenCalledTimes(1);
+      expect(choose).toHaveBeenCalledWith(real);
+      expect(onNotice).toHaveBeenLastCalledWith(
+        "Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 0건 · 양쪽이 이미 같아 표시만 푼 1건",
+      );
+    });
+
+    it("고르지 않고 창을 닫으면 그 충돌은 남기고 다음 충돌을 묻는다", async () => {
+      const a = conflictAt("a.md");
+      const b = conflictAt("b.md");
+      mock.listConflicts.mockResolvedValue([a, b]);
+      const choose = vi.fn(async (conflict: Conflict) => (conflict === a ? null : "local"));
+      const { hooks, onNotice, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      expect(mock.resolveConflict.mock.calls).toEqual([[b, "local"]]);
+      expect(onNotice).toHaveBeenLastCalledWith("Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 1건");
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+    });
+
+    it("Notion 에 올리지 못한 충돌은 이유를 알리고 남긴다 — 다음 충돌은 계속 묻는다", async () => {
+      const a = conflictAt("a.md");
+      const b = conflictAt("b.md");
+      mock.listConflicts.mockResolvedValue([a, b]);
+      mock.resolveConflict.mockRejectedValueOnce(new Error("bad gateway"));
+      const { hooks, onNotice, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => "local");
+
+      expect(mock.resolveConflict).toHaveBeenCalledTimes(2);
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 충돌을 해결하지 못함 (a.md) — bad gateway. 충돌로 남겨 두었습니다.",
+        8000,
+      );
+      expect(onNotice).toHaveBeenLastCalledWith(
+        "Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 0건 · 실패 1건",
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+    });
+
+    it("자동 병합이 겹치는 줄을 남기면 그 파일에서 고치라고 알리고 남긴다", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
+      mock.resolveConflict.mockResolvedValue({
+        path: "a.md",
+        choice: "merge",
+        success: false,
+        mergeHadConflicts: true,
+      });
+      const { hooks, onNotice, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => "merge");
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 자동 병합이 겹치는 줄을 남겼습니다 — a.md 에서 충돌 표시(<<<<<<<)를 고친 뒤 다시 해결하세요.",
+        8000,
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+    });
+
+    it("해결한 충돌은 고른 것을 화면 말로 알린다 — 내부 코드값을 보이지 않는다", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
+      const { hooks, onNotice } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => "duplicate");
+
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: a.md → 복제");
+    });
+
+    it("충돌 목록을 읽지 못하면 이유를 알리고 아무것도 풀지 않는다", async () => {
+      mock.listConflicts.mockRejectedValue(new Error("충돌 노트의 원격을 읽지 못함 (a.md): 502"));
+      const choose = vi.fn();
+      const { hooks, onNotice } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      expect(choose).not.toHaveBeenCalled();
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 충돌 목록을 읽지 못함 — 충돌 노트의 원격을 읽지 못함 (a.md): 502",
+        8000,
+      );
+    });
+
+    it("충돌이 없으면 그렇다고 알린다", async () => {
+      const { hooks, onNotice, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(vi.fn());
+
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 충돌이 없습니다.");
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it("동기화 중에는 풀지 않는다", async () => {
+      let finish: (() => void) | null = null;
+      mock.sync.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = () =>
+              resolve({
+                pull: { created: 0, updated: 0, deleted: 0 },
+                push: { created: 0, updated: 0, deleted: 0 },
+                conflicts: [],
+                duration: 0,
+              });
+          }),
+      );
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const syncing = controller.vaultSync();
+      await controller.resolveConflicts(vi.fn());
+      finish!();
+      await syncing;
+
+      expect(mock.listConflicts).not.toHaveBeenCalled();
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 동기화가 끝난 뒤 충돌을 해결하세요.");
+    });
+
+    it("푸는 동안에는 자동 동기화가 끼어들지 않는다 — 병합 결과를 쓴 파일이 동기화를 부른다", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.resolveConflicts(async () => {
+        await controller.vaultSync();
+        return "merge";
+      });
+
+      expect(mock.sync).not.toHaveBeenCalled();
+      expect(mock.resolveConflict).toHaveBeenCalledTimes(1);
     });
   });
 

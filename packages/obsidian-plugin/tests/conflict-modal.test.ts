@@ -69,6 +69,23 @@ describe("ConflictModal", () => {
     expect(() => modal.onClose()).not.toThrow();
   });
 
+  it("고르지 않고 닫으면(Esc · 바깥 클릭) 고르지 않았다고 한 번 알린다 (N-06)", () => {
+    modal.onOpen();
+    modal.close();
+    modal.close();
+
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith(null);
+  });
+
+  it("단추로 고르면 고른 것만 알린다 — 닫히며 다시 알리지 않는다", () => {
+    modal.onOpen();
+    (modal as unknown as { selectChoice(choice: string): void }).selectChoice("local");
+
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith("local");
+  });
+
   it("다른 충돌 데이터로도 생성 가능", () => {
     const anotherConflict = {
       ...mockConflict,
