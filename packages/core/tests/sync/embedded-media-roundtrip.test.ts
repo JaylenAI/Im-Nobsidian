@@ -337,6 +337,36 @@ describe("임베드 미디어 왕복(S-05 · S-19)", () => {
     expect(notion.pages.get(pageId)!.body).not.toContain("im-nobsidian");
   });
 
+  it("추적을 놓은 페이지를 새로 받아도 올린 미디어는 임베드로 되찾는다 — 기록은 페이지에 붙어 있다", async () => {
+    // 원격 삭제 충돌을 «로컬 유지» 로 풀면 추적을 놓는다(ADR-019). 그 페이지를 Notion 휴지통에서
+    // 되살리면 다음 pull 은 처음 보는 페이지로 받는다 — 올린 미디어의 기록은 남아 있다.
+    db.delete(db.getByPath("Note.md")!.id);
+    vault.files.delete("Note.md");
+    editInNotion((body) => body.replace("뒤 문단", "뒤 문단 — Notion 에서 고침"));
+
+    const pull = await orchestrator.pull();
+
+    expect(pull).toMatchObject({ created: 1, failed: [] });
+    expect(note()).toBe(NOTE.replace("뒤 문단", "뒤 문단 — Notion 에서 고침").trimEnd());
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("옛 push 가 올린 페이지를 처음 받으면 캡션의 대상으로 볼트 파일을 찾는다 — 사본을 받지 않는다", async () => {
+    // R1 은 캡션에 임베드 대상 전체를 적었다. 기록이 없으니 캡션으로 찾는다.
+    const legacy = await notion.client.createPage({
+      parentId: "root-page-id",
+      title: "옛 노트",
+      markdown: `옛 문단\n\n![assets/a.png\\|설명\\|300](${signedUrl("0dd00000-0000-4000-9000-000000000001", "a.png")})`,
+    });
+    notion.edit(legacy.id, () => {});
+
+    const pull = await orchestrator.pull();
+
+    expect(pull).toMatchObject({ created: 1, failed: [] });
+    expect(vault.read("옛 노트.md")?.trimEnd()).toBe(`옛 문단\n\n${IMAGE_EMBED}`);
+    expect(download).not.toHaveBeenCalled();
+  });
+
   it("다시 push 해도 같은 모양으로 오간다 — 올릴 때마다 기록을 새로 적는다", async () => {
     await pushLocalEdit();
     editInNotion((body) => body.replace("뒤 문단", "뒤 문단 — Notion 에서 고침"));
