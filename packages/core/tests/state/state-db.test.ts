@@ -1,5 +1,9 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import Database from "better-sqlite3";
 import { StateDB } from "../../src/state/state-db.js";
+import { INITIAL_MIGRATION } from "../../src/state/migrations/001-initial.js";
+import { FILE_REGISTRY_MIGRATION } from "../../src/state/migrations/002-file-registry.js";
+import { STAT_CACHE_MIGRATION } from "../../src/state/migrations/003-stat-cache.js";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -141,6 +145,138 @@ describe("StateDB", () => {
       const synced = db.getByStatus("synced");
       expect(synced).toHaveLength(1);
       expect(synced[0]!.obsidianPath).toBe("a.md");
+    });
+  });
+
+  describe("원격을 본 기록 (N-05)", () => {
+    const upsertNote = (overrides: Partial<Parameters<StateDB["upsert"]>[0]> = {}) =>
+      db.upsert({
+        obsidianPath: "note.md",
+        notionPageId: "page-1",
+        contentHash: "h",
+        notionLastEdited: "2026-09-01T10:00:00.000Z",
+        localLastModified: "2026-09-01T10:00:00Z",
+        syncDirection: "both",
+        fileType: "file",
+        status: "synced",
+        ...overrides,
+      });
+
+    it("upsert 가 세 칸을 적고 읽는다 — 주지 않으면 null 이다", () => {
+      upsertNote({
+        notionLastEditedBy: "user-1",
+        notionSeenAt: "2026-09-01T10:03:00.000Z",
+        notionBodyFingerprint: "fp-1",
+      });
+      expect(db.getByPath("note.md")).toMatchObject({
+        notionLastEditedBy: "user-1",
+        notionSeenAt: "2026-09-01T10:03:00.000Z",
+        notionBodyFingerprint: "fp-1",
+      });
+
+      upsertNote();
+      expect(db.getByPath("note.md")).toMatchObject({
+        notionLastEditedBy: null,
+        notionSeenAt: null,
+        notionBodyFingerprint: null,
+      });
+    });
+
+    it("setRemoteObservation — 지문을 주지 않으면 있던 지문을 둔다", () => {
+      const record = upsertNote({ notionBodyFingerprint: "fp-1" });
+
+      db.setRemoteObservation(record.id, {
+        lastEdited: "2026-09-01T10:05:00.000Z",
+        lastEditedBy: "user-2",
+        seenAt: "2026-09-01T10:06:00.000Z",
+      });
+
+      expect(db.getByPath("note.md")).toMatchObject({
+        notionLastEdited: "2026-09-01T10:05:00.000Z",
+        notionLastEditedBy: "user-2",
+        notionSeenAt: "2026-09-01T10:06:00.000Z",
+        notionBodyFingerprint: "fp-1",
+      });
+    });
+
+    it("setRemoteObservation — 지문을 주면 함께 바꾸고, null 이면 지운다", () => {
+      const record = upsertNote({ notionBodyFingerprint: "fp-1" });
+      const seen = { lastEdited: "2026-09-01T10:05:00.000Z", lastEditedBy: null, seenAt: null };
+
+      db.setRemoteObservation(record.id, { ...seen, bodyFingerprint: "fp-2" });
+      expect(db.getByPath("note.md")!.notionBodyFingerprint).toBe("fp-2");
+
+      db.setRemoteObservation(record.id, { ...seen, bodyFingerprint: null });
+      expect(db.getByPath("note.md")!.notionBodyFingerprint).toBeNull();
+    });
+
+    it("setNotionBodyFingerprint 는 지문만 바꾼다", () => {
+      const record = upsertNote({
+        notionLastEditedBy: "user-1",
+        notionSeenAt: "2026-09-01T10:03:00.000Z",
+      });
+
+      db.setNotionBodyFingerprint(record.id, "fp-3");
+
+      expect(db.getByPath("note.md")).toMatchObject({
+        notionLastEdited: "2026-09-01T10:00:00.000Z",
+        notionLastEditedBy: "user-1",
+        notionSeenAt: "2026-09-01T10:03:00.000Z",
+        notionBodyFingerprint: "fp-3",
+      });
+    });
+  });
+
+  describe("스키마 4 마이그레이션 — 원격을 본 기록", () => {
+    /** 앞선 버전(스키마 3)이 만든 DB — 원격을 본 레코드 하나, 로컬에만 있는 레코드 하나. */
+    function createSchema3Db(path: string): void {
+      const raw = new Database(path);
+      raw.exec(INITIAL_MIGRATION);
+      raw.exec(FILE_REGISTRY_MIGRATION);
+      raw.exec(STAT_CACHE_MIGRATION);
+      const insert = raw.prepare(
+        `INSERT INTO sync_state (id, obsidian_path, notion_page_id, content_hash, notion_last_edited,
+           local_last_modified, sync_direction, file_type, status)
+         VALUES (?, ?, ?, 'h', ?, '2026-09-01T00:00:00Z', 'both', 'file', 'synced')`,
+      );
+      insert.run("a", "seen.md", "page-a", "2026-09-01T00:00:00.000Z");
+      insert.run("b", "local-only.md", null, null);
+      raw.close();
+    }
+
+    it("원격을 본 레코드는 지금 본 것으로 적고, 본 적 없는 레코드는 비워 둔다", () => {
+      const path = join(tempDir, "schema3.db");
+      createSchema3Db(path);
+      const before = Date.now();
+
+      const upgraded = StateDB.open(path);
+      try {
+        const seen = upgraded.getByPath("seen.md")!;
+        expect(seen).toMatchObject({ notionLastEditedBy: null, notionBodyFingerprint: null });
+        // SQLite 의 'now' 는 밀리초까지다 — 연 때 안이어야 한다
+        const seenAt = Date.parse(seen.notionSeenAt!);
+        expect(seenAt).toBeGreaterThanOrEqual(before - 1);
+        expect(seenAt).toBeLessThanOrEqual(Date.now());
+        expect(upgraded.getByPath("local-only.md")!.notionSeenAt).toBeNull();
+        expect(upgraded.getMeta("schema_version")).toBe("4");
+      } finally {
+        upgraded.close();
+      }
+    });
+
+    it("다시 열어도 되풀이하지 않는다 — 본 때가 그대로다", () => {
+      const path = join(tempDir, "schema3.db");
+      createSchema3Db(path);
+      const first = StateDB.open(path);
+      const seenAt = first.getByPath("seen.md")!.notionSeenAt;
+      first.close();
+
+      const again = StateDB.open(path);
+      try {
+        expect(again.getByPath("seen.md")!.notionSeenAt).toBe(seenAt);
+      } finally {
+        again.close();
+      }
     });
   });
 
