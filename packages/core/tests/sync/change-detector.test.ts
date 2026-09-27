@@ -39,6 +39,7 @@ describe("ChangeDetector", () => {
     const originalContent = "# Original";
     db.upsert({
       obsidianPath: "note.md",
+      notionPageId: "page-1",
       contentHash: computeHash(originalContent),
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -60,6 +61,7 @@ describe("ChangeDetector", () => {
     const content = "# Same";
     db.upsert({
       obsidianPath: "note.md",
+      notionPageId: "page-2",
       contentHash: computeHash(content),
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -76,6 +78,7 @@ describe("ChangeDetector", () => {
   it("삭제된 파일 감지", () => {
     db.upsert({
       obsidianPath: "deleted.md",
+      notionPageId: "page-3",
       contentHash: "abc",
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -95,6 +98,7 @@ describe("ChangeDetector", () => {
 
     db.upsert({
       obsidianPath: "old/note.md",
+      notionPageId: "page-4",
       contentHash: hash,
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -116,6 +120,7 @@ describe("ChangeDetector", () => {
     const existing = "# Existing";
     db.upsert({
       obsidianPath: "existing.md",
+      notionPageId: "page-5",
       contentHash: computeHash(existing),
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -124,6 +129,7 @@ describe("ChangeDetector", () => {
     });
     db.upsert({
       obsidianPath: "to-delete.md",
+      notionPageId: "page-6",
       contentHash: "xxx",
       localLastModified: "2026-05-08T09:00:00Z",
       syncDirection: "both",
@@ -140,5 +146,29 @@ describe("ChangeDetector", () => {
 
     const types = changes.map((c) => c.type).sort();
     expect(types).toEqual(["created", "deleted", "modified"]);
+  });
+
+  it("페이지 ID 가 없는 자리표시는 «생성» 이다 — 수정 경로는 보낼 페이지가 없다", async () => {
+    // pushCreate 가 생성 요청 전에 남기는 WAL 자리표시. 생성이 모호하게 실패하면 남는다.
+    db.upsert({
+      obsidianPath: "pending.md",
+      notionPageId: null,
+      contentHash: "",
+      localLastModified: "2026-05-08T09:00:00Z",
+      syncDirection: "both",
+      fileType: "file",
+      status: "pending",
+    });
+
+    const slow = detector.detectLocalChanges([
+      { path: "pending.md", content: "# 본문", mtime: "2026-05-08T10:00:00Z" },
+    ]);
+    const fast = await detector.detectLocalChangesFast(
+      [{ path: "pending.md", mtime: "2026-05-08T10:00:00Z", size: 10 }],
+      async () => "# 본문",
+    );
+
+    expect(slow.map((c) => c.type)).toEqual(["created"]);
+    expect(fast.map((c) => c.type)).toEqual(["created"]);
   });
 });

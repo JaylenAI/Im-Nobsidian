@@ -1,4 +1,4 @@
-import type { LocalChange } from "../types/sync.js";
+import type { LocalChange, SyncRecord } from "../types/sync.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { FileStatInfo } from "./vault-fs.js";
 import { computeHash } from "../utils/hash.js";
@@ -7,6 +7,17 @@ export interface FileInfo {
   readonly path: string;
   readonly content: string;
   readonly mtime: string;
+}
+
+/**
+ * 이 파일의 짝인 Notion 페이지를 알고 있는가.
+ *
+ * 페이지 ID 가 없는 레코드는 끝나지 않은 생성의 자리표시다(pushCreate 의 WAL). 해시가
+ * 비어 있어 예전에는 "수정" 으로 분류됐고, 수정 경로는 페이지 ID 가 없으면 아무것도 보내지
+ * 않은 채 updated 로 셌다. 짝이 없으니 "생성" 이다 — 생성 경로가 입양 확인부터 한다.
+ */
+function hasRemotePage(record: SyncRecord | null): record is SyncRecord {
+  return record !== null && Boolean(record.notionPageId);
 }
 
 export class ChangeDetector {
@@ -23,7 +34,7 @@ export class ChangeDetector {
       existingPaths.add(file.path);
       const record = this.stateDb.getByPath(file.path);
 
-      if (!record) {
+      if (!hasRemotePage(record)) {
         const content = await readFile(file.path);
         changes.push({
           path: file.path,
@@ -76,7 +87,7 @@ export class ChangeDetector {
       existingPaths.add(file.path);
       const record = this.stateDb.getByPath(file.path);
 
-      if (!record) {
+      if (!hasRemotePage(record)) {
         changes.push({
           path: file.path,
           type: "created",
