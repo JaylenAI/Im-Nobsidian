@@ -23,6 +23,7 @@ import type {
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId } from "../utils/id.js";
+import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 
 /**
@@ -637,16 +638,7 @@ export class NotionClient {
       const block = await this.withRateLimit(() =>
         this.client.blocks.retrieve({ block_id: blockId }),
       );
-      const b = block as unknown as {
-        type: string;
-        file?: { file?: { url: string }; external?: { url: string } };
-        pdf?: { file?: { url: string }; external?: { url: string } };
-        video?: { file?: { url: string }; external?: { url: string } };
-        audio?: { file?: { url: string }; external?: { url: string } };
-        image?: { file?: { url: string }; external?: { url: string } };
-      };
-      const media = b.file ?? b.pdf ?? b.video ?? b.audio ?? b.image;
-      return media?.file?.url ?? media?.external?.url ?? null;
+      return fileUrlOfBlock(block as { type?: string });
     } catch {
       return null;
     }
@@ -741,8 +733,20 @@ export class NotionClient {
     children: unknown[],
     options?: { readonly after?: string },
   ): Promise<string[]> {
+    return (await this.appendChildBlocks(blockId, children, options)).map((b) => b.id);
+  }
+
+  /**
+   * {@link appendChildren} 과 같되 새로 만든 블록을 통째로 돌려준다. 파일을 붙인 미디어 블록은
+   * 응답에 Notion 이 저장한 파일의 URL 이 실려 온다 — 다시 조회하지 않고 그 파일을 알아 둔다(S-05).
+   */
+  async appendChildBlocks(
+    blockId: string,
+    children: unknown[],
+    options?: { readonly after?: string },
+  ): Promise<(BlockObjectResponse | PartialBlockObjectResponse)[]> {
     const batchSize = this.batchSize;
-    const created: string[] = [];
+    const created: (BlockObjectResponse | PartialBlockObjectResponse)[] = [];
     let after = options?.after;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
@@ -755,9 +759,9 @@ export class NotionClient {
           }),
         NOT_IDEMPOTENT,
       );
-      const ids = response.results.slice(0, batch.length).map((b) => b.id);
-      created.push(...ids);
-      if (after && ids.length > 0) after = ids[ids.length - 1];
+      const blocks = response.results.slice(0, batch.length);
+      created.push(...blocks);
+      if (after && blocks.length > 0) after = blocks[blocks.length - 1]!.id;
     }
     return created;
   }
