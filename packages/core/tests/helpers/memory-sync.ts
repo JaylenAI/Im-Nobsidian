@@ -104,13 +104,36 @@ export interface MemoryPage {
   readonly id: string;
   title: string;
   parent: string;
+  /** 부모가 DB 면 행이다 — 속성을 갖고, DB 조회(queryAllDatabasePages)로만 보인다. */
+  readonly parentType: "page" | "database";
+  /** 제목 밖의 속성 — Notion 이 돌려주는 모양(`{ type, [type]: 값 }`). */
+  properties: Record<string, unknown>;
   lastEdited: string;
   archived: boolean;
   /** 본문 — 만들 때 · 바꿀 때 보낸 markdown. 자식 페이지 태그는 읽을 때 붙인다. */
   body: string;
 }
 
-/** 메모리 Notion — 만든 페이지의 제목 · 부모 · 수정 시각을 기억한다. */
+type PropertyRequest = Record<string, unknown>;
+
+/** 보낸 속성 값(요청 모양)을 Notion 이 돌려주는 모양으로 — 글은 pull 이 읽는 `plain_text` 를 채운다. */
+function storedProperty(request: PropertyRequest): Record<string, unknown> {
+  const [type, value] = Object.entries(request)[0]!;
+  const text = (items: unknown) =>
+    (items as Array<{ text?: { content?: string } }>).map((item) => ({
+      ...item,
+      plain_text: item.text?.content ?? "",
+    }));
+  return { type, [type]: type === "rich_text" ? text(value) : value };
+}
+
+function titleOf(request: PropertyRequest): string {
+  return (request.title as Array<{ text: { content: string } }>)
+    .map((t) => t.text.content)
+    .join("");
+}
+
+/** 메모리 Notion — 만든 페이지 · 행의 제목 · 부모 · 속성 · 수정 시각을 기억한다. */
 export function memoryNotion() {
   const client = createMockNotionClient();
   const pages = new Map<string, MemoryPage>();
@@ -121,8 +144,14 @@ export function memoryNotion() {
     last_edited_time: page.lastEdited,
     archived: page.archived,
     in_trash: page.archived,
-    parent: { type: "page_id", page_id: page.parent },
-    properties: { title: { id: "title", type: "title", title: [{ plain_text: page.title }] } },
+    parent:
+      page.parentType === "database"
+        ? { type: "database_id", database_id: page.parent }
+        : { type: "page_id", page_id: page.parent },
+    properties: {
+      title: { id: "title", type: "title", title: [{ plain_text: page.title }] },
+      ...page.properties,
+    },
   });
   const find = (id: string): MemoryPage => {
     const page = pages.get(id);
@@ -134,25 +163,49 @@ export function memoryNotion() {
     page.lastEdited = tick();
     return page;
   };
-  const add = (parent: string, title: string, body = ""): MemoryPage => {
+  const add = (
+    parent: string,
+    title: string,
+    body = "",
+    row?: { readonly properties?: Record<string, PropertyRequest> },
+  ): MemoryPage => {
     const id = `00000000-0000-4000-8000-${String(pages.size + 1).padStart(12, "0")}`;
-    const page = { id, title, parent, lastEdited: tick(), archived: false, body };
+    const properties = Object.fromEntries(
+      Object.entries(row?.properties ?? {})
+        .filter(([key]) => key !== "title")
+        .map(([key, value]) => [key, storedProperty(value)]),
+    );
+    const page: MemoryPage = {
+      id,
+      title,
+      parent,
+      parentType: row ? "database" : "page",
+      properties,
+      lastEdited: tick(),
+      archived: false,
+      body,
+    };
     pages.set(id, page);
     return page;
   };
   const create = async ({
     parentId,
+    parentType,
     title,
     markdown,
+    properties,
   }: {
     parentId: string;
+    parentType?: "page" | "database";
     title: string;
     markdown?: string;
-  }) => view(add(parentId, title, markdown));
+    properties?: Record<string, PropertyRequest>;
+  }) =>
+    view(add(parentId, title, markdown, parentType === "database" ? { properties } : undefined));
   // Notion Markdown API 처럼 본문 뒤에 자식 페이지를 `<page>` 태그로 싣는다(휴지통 제외).
   const markdownOf = (id: string): string => {
     const children = [...pages.values()]
-      .filter((page) => page.parent === id && !page.archived)
+      .filter((page) => page.parent === id && page.parentType === "page" && !page.archived)
       .map(
         (page) =>
           `<page url="https://www.notion.so/${page.id.replace(/-/g, "")}">${page.title}</page>`,
@@ -179,11 +232,27 @@ export function memoryNotion() {
     touch(id).parent = parentId;
   });
   client.updatePageProperties.mockImplementation(
-    async (id: string, props: { title?: { title: Array<{ text: { content: string } }> } }) => {
+    async (id: string, props: Record<string, PropertyRequest>) => {
       const page = touch(id);
-      if (props.title) page.title = props.title.title.map((t) => t.text.content).join("");
+      for (const [key, value] of Object.entries(props)) {
+        if (key === "title") page.title = titleOf(value);
+        else page.properties[key] = storedProperty(value);
+      }
       return view(page);
     },
+  );
+  // DB 조회 — 휴지통이 아닌 행. 생성 요청이 적용됐는지 모를 때 행을 찾는 경로가 제목 조건을 쓴다.
+  client.queryAllDatabasePages.mockImplementation(
+    async (databaseId: string, filter?: { title?: { equals?: string } }) =>
+      [...pages.values()]
+        .filter(
+          (page) =>
+            page.parentType === "database" &&
+            page.parent === databaseId &&
+            !page.archived &&
+            (filter?.title?.equals === undefined || page.title === filter.title.equals),
+        )
+        .map(view),
   );
   client.replacePageMarkdown.mockImplementation(async (id: string, markdown: string) => {
     touch(id).body = markdown;
@@ -206,7 +275,7 @@ export function memoryNotion() {
     const found: Array<ReturnType<typeof view>> = [];
     const walk = (parentId: string): void => {
       for (const page of pages.values()) {
-        if (page.parent !== parentId || page.archived) continue;
+        if (page.parent !== parentId || page.parentType !== "page" || page.archived) continue;
         found.push(view(page));
         walk(page.id);
       }
@@ -217,7 +286,7 @@ export function memoryNotion() {
   // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
   client.fetchAllChildren.mockImplementation(async (parentId: string) =>
     [...pages.values()]
-      .filter((page) => page.parent === parentId && !page.archived)
+      .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   );
   return { client, pages, add, touch };

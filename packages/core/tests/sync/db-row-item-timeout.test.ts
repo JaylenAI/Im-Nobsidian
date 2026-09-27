@@ -1,9 +1,12 @@
 /**
- * R9e — DB 행 1건의 시간 상한.
+ * R9e — DB 행 1건의 시간 상한 (pull).
  *
  * R9b 는 오케스트레이터의 페이지 루프 4곳에만 `withDeadline` 을 걸었다. 그런데 지정 볼트의
  * 887개 파일 중 **629개가 DB 행**이라, 정작 다수 경로가 상한 없이 남아 있었다. R9a 의
  * image/file 핸들러 비대칭과 같은 결함군이다 — 같은 계약이 두 경로에 있으면 한쪽만 빠진다.
+ *
+ * 설정 DB 행의 push 는 이제 오케스트레이터의 변경 목록을 탄다 — 그 상한은 페이지와 같은
+ * 변경 1건의 상한이다(`tests/sync/configured-db-row-push.test.ts`).
  *
  * 여기서 잠그는 것은 두 가지다:
  *   1. 끝나지 않는 행 1건이 **유한한, 그리고 보고되는 실패**로 바뀐다.
@@ -26,7 +29,7 @@ const never = () => new Promise<never>(() => {});
 /** 상한 초과를 몇십 ms 안에 관측하기 위한 값. 정상 경로는 이보다 훨씬 빨리 끝난다. */
 const ITEM_TIMEOUT_MS = 40;
 
-/** 경로별로 다른 제목·본문 — 제목으로 hang 분기를 고르고, 해시 충돌(rename 오탐)도 피한다. */
+/** 경로별로 다른 제목·본문. */
 function rowMarkdown(path: string): string {
   const title = path.split("/").pop()!.replace(/\.md$/, "");
   return `---\ntitle: ${title}\n---\n\n${title} 본문`;
@@ -93,14 +96,6 @@ function createMockNotionClient() {
     getPageMarkdown: vi
       .fn()
       .mockResolvedValue({ markdown: "본문", truncated: false, unknown_block_ids: [] }),
-    replacePageMarkdown: vi
-      .fn()
-      .mockResolvedValue({ markdown: "", truncated: false, unknown_block_ids: [] }),
-    createPageWithMarkdown: vi
-      .fn()
-      .mockResolvedValue({ id: "new-page", last_edited_time: "2026-07-27T00:00:00.000Z" }),
-    restoreLeadingHeading: vi.fn().mockResolvedValue(false),
-    updatePageProperties: vi.fn().mockResolvedValue(undefined),
     extractTitle: vi.fn().mockImplementation((page: { id: string }) => `제목 ${page.id}`),
     extractCover: vi.fn().mockReturnValue(null),
     extractIcon: vi.fn().mockReturnValue(null),
@@ -205,79 +200,6 @@ describe("DB 행 1건 시간 상한 (R9e)", () => {
 
       expect(result.failed).toHaveLength(0);
       expect(result.created).toBe(1);
-    });
-  });
-
-  describe("push", () => {
-    beforeEach(() => {
-      vaultFs.listMarkdownFiles = vi.fn().mockResolvedValue([
-        { path: "databases/tasks/멈춘 행.md", content: "", mtime: "2026-07-27T00:00:00.000Z" },
-        { path: "databases/tasks/정상 행.md", content: "", mtime: "2026-07-27T00:00:00.000Z" },
-      ]);
-    });
-
-    it("끝나지 않는 행은 상한에서 끊기고 나머지는 계속 올라간다", async () => {
-      notionClient.createPageWithMarkdown.mockImplementation(({ title }: { title: string }) =>
-        title === "멈춘 행"
-          ? never()
-          : Promise.resolve({ id: "new-page", last_edited_time: "2026-07-27T00:00:00.000Z" }),
-      );
-
-      const result = await syncer.pushAll();
-
-      expect(result.failed).toHaveLength(1);
-      expect(result.failed[0].error).toContain("시간 상한 초과");
-      expect(result.failed[0].error).toContain("push databases/tasks/멈춘 행.md");
-      expect(result.created).toBe(1);
-    });
-
-    it("상한에 걸린 행은 동기화 완료로 기록되지 않는다 (거짓 동기화 차단)", async () => {
-      vaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "databases/tasks/멈춘 행.md", content: "", mtime: "2026-07-27T00:00:00.000Z" },
-        ]);
-      notionClient.createPageWithMarkdown.mockImplementation(never);
-
-      const result = await syncer.pushAll();
-
-      expect(result.created).toBe(0);
-      // 해시가 전진하면 다음 push 에서 스킵되어 변경이 영원히 전달되지 않는다.
-      expect(stateDb.upsert).not.toHaveBeenCalled();
-      expect(result.failed[0].error).toContain("시간 상한 초과");
-    });
-
-    /**
-     * 상한을 걸려고 루프 본문을 메서드로 떼어낸 리팩터링이 실패 처리의 **의미**를 바꾸지
-     * 않았는지 잠근다. 본문 push 실패는 다른 예외와 달리 레코드를 `error` 로 내려
-     * 해시 전진을 막아야 하고, operation 도 create 가 아니라 update 다.
-     */
-    it("본문 push 실패는 여전히 update 실패로 기록되고 레코드가 error 로 내려간다", async () => {
-      vaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "databases/tasks/정상 행.md", content: "", mtime: "2026-07-27T00:00:00.000Z" },
-        ]);
-      stateDb.getByPath.mockReturnValue({
-        id: "rec-1",
-        obsidianPath: "databases/tasks/정상 행.md",
-        notionPageId: "existing-page",
-        contentHash: "옛 해시",
-      });
-      notionClient.replacePageMarkdown.mockRejectedValue(new Error("본문 교체 실패"));
-
-      const result = await syncer.pushAll();
-
-      expect(result.failed).toEqual([
-        {
-          path: "databases/tasks/정상 행.md",
-          operation: "update",
-          error: "본문 교체 실패",
-        },
-      ]);
-      expect(stateDb.updateStatus).toHaveBeenCalledWith("rec-1", "error");
-      expect(stateDb.updateHash).not.toHaveBeenCalled();
-      expect(result.updated).toBe(0);
     });
   });
 });

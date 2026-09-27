@@ -265,15 +265,5 @@ describe("ChangeDetector", () => {
       );
       expect(edited.changes.map((c) => [c.type, c.path])).toEqual([["modified", "a.md"]]);
     });
-
-    it("짝짓지 않을 경로(설정 DB 폴더)는 같은 내용이어도 생성 + 삭제", () => {
-      track("Tasks/행.md", "# 행", "row-1");
-      const scan = detector.scanLocalChanges(
-        [{ path: "Tasks/새 이름.md", content: "# 행", mtime: T0 }],
-        { excludeFromMoves: (path) => path.startsWith("Tasks/") },
-      );
-      expect(scan.changes.map((c) => c.type).sort()).toEqual(["created", "deleted"]);
-      expect(scan.adoptions).toEqual([]);
-    });
   });
 });
