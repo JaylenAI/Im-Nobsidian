@@ -9,6 +9,7 @@ import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoint
 import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
+import type { PullOutcome } from "./pull-outcome.js";
 import { diffRowProperties } from "./row-properties.js";
 import { noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
@@ -62,16 +63,6 @@ export interface DatabaseSyncResult {
    */
   linkedOriginalDbId?: string;
 }
-
-/**
- * {@link DatabaseSyncer.pullDatabasePage} 의 처리 결과. `unchanged` 는 받아 보니 로컬과 같아
- * 파일을 쓰지 않은 행이다 — 원격을 본 기록만 새로 적었다.
- */
-type PullPageOutcome =
-  | { action: "written"; path: string }
-  | { action: "unchanged"; path: string }
-  | { action: "skipped"; path: string }
-  | { action: "conflict"; path: string; conflict: Conflict };
 
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
@@ -626,7 +617,7 @@ export class DatabaseSyncer {
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
-  ): Promise<PullPageOutcome> {
+  ): Promise<PullOutcome> {
     const safeName = sanitizeFileName(this.notionClient.extractTitle(page));
 
     const existingRecord = this.stateDb.getByNotionId(page.id);
@@ -706,6 +697,7 @@ export class DatabaseSyncer {
             ...observationOf(page, seenAt),
             bodyFingerprint,
           });
+          return { action: "unchanged", path: recordPath ?? filePath };
         }
         // local-first: 로컬 보존, 리모트 변경 무시(재배치 대상이어도 파일은 원위치 유지)
         return { action: "skipped", path: recordPath ?? filePath };
