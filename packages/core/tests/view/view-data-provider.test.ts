@@ -269,6 +269,23 @@ describe("ViewDataProvider", () => {
       expect(entries.find((e) => e.path.includes("Empty"))?.title).toBe("Empty");
     });
 
+    it("깨진 frontmatter 행은 다시 읽어도 빠지고, 구분선으로 시작하는 행은 속성 없이 보인다", async () => {
+      const p = new ViewDataProvider(
+        createMockVaultFs({
+          ".im-nobsidian/db-views.json": JSON.stringify(sampleViewsConfig),
+          "jobs/Broken.md": "---\ntitle: 깨짐\n단계: [할 일\n---\n\n본문",
+          "jobs/Divider.md": "---\n- 목록 하나\n- 목록 둘\n---\n\n본문",
+        }),
+      );
+      // gray-matter 캐시로 두 번째 읽기에서 깨진 행이 «속성 없는 행» 으로 나타났다.
+      for (let i = 0; i < 2; i++) {
+        const entries = await p.collectEntries("jobs");
+        expect(entries.map((e) => e.path)).toEqual(["jobs/Divider.md"]);
+        expect(entries[0]!.title).toBe("Divider");
+        expect(entries[0]!.properties).toEqual({});
+      }
+    });
+
     it("배열 아이콘은 첫 문자열로 degrade(카드 깨짐 방지)", async () => {
       const p = new ViewDataProvider(
         createMockVaultFs({
