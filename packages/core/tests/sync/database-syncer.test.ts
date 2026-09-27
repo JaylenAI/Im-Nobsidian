@@ -73,6 +73,7 @@ function createMockNotionClient() {
       id: "new-page-id",
       last_edited_time: "2026-05-16T01:00:00.000Z",
     }),
+    restoreLeadingHeading: vi.fn().mockResolvedValue(false),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
     extractTitle: vi.fn().mockReturnValue("Test Page"),
     extractCover: vi.fn().mockReturnValue(null),
@@ -750,6 +751,73 @@ describe("DatabaseSyncer", () => {
           notionPageId: "new-page-id",
           fileType: "db-row",
         }),
+      );
+    });
+
+    // N-04 — Notion 은 markdown 으로 행을 만들 때 맨 앞 `# H1` 을 버린다(2026-09-27 실측).
+    const H1_ROW = "databases/tasks/New Task.md";
+    const H1_CONTENT = "---\ntitle: New Task\n---\n\n# Content\n\nBody text.";
+    const givenH1Row = () => {
+      mockVaultFs.listMarkdownFiles = vi
+        .fn()
+        .mockResolvedValue([
+          { path: H1_ROW, content: H1_CONTENT, mtime: "2026-05-16T00:00:00.000Z" },
+        ]);
+      (mockVaultFs.readFile as any).mockResolvedValue(H1_CONTENT);
+    };
+
+    it("새 행이 `# 제목` 으로 시작하면 만든 뒤 되살리고, 되살린 뒤의 수정 시각을 적는다 (N-04)", async () => {
+      givenH1Row();
+      mockNotionClient.restoreLeadingHeading.mockResolvedValueOnce(true);
+      mockNotionClient.getPage.mockResolvedValueOnce({
+        id: "new-page-id",
+        last_edited_time: "2026-05-16T01:01:00.000Z",
+      });
+
+      const result = await syncer.pushAll();
+
+      expect(result).toMatchObject({ created: 1, failed: [] });
+      expect(mockNotionClient.restoreLeadingHeading).toHaveBeenCalledWith(
+        "new-page-id",
+        expect.stringMatching(/^# Content\n/),
+      );
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: H1_ROW,
+          notionPageId: "new-page-id",
+          contentHash: computeHash(H1_CONTENT),
+          notionLastEdited: "2026-05-16T01:01:00.000Z",
+          status: "synced",
+        }),
+      );
+    });
+
+    it("제목을 되살리지 못하면 매핑은 적고 해시를 비워 실패로 남긴다 — 다음 push 가 새로 만들지 않고 갱신한다 (N-04)", async () => {
+      givenH1Row();
+      mockNotionClient.restoreLeadingHeading.mockRejectedValueOnce(new Error("Notion 503"));
+
+      const result = await syncer.pushAll();
+
+      expect(result.created).toBe(0);
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          path: H1_ROW,
+          operation: "create",
+          error: expect.stringContaining("Notion 503"),
+        }),
+      ]);
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(1);
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: H1_ROW,
+          notionPageId: "new-page-id",
+          contentHash: "",
+          status: "pending",
+          baseSnapshot: null,
+        }),
+      );
+      expect(mockStateDb.upsertWikilink).toHaveBeenCalledWith(
+        expect.objectContaining({ obsidianPath: H1_ROW, notionPageId: "new-page-id" }),
       );
     });
 

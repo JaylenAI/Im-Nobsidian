@@ -137,6 +137,12 @@ interface PendingFolderMove {
   readonly to: string;
 }
 
+/** push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null. */
+interface CreatedPage {
+  readonly page: PageObjectResponse;
+  readonly markdown: string | null;
+}
+
 /** 자동 발견된 DB 1개의 동기화 설정 — 상태 메타 `discovered_dbs` 에 목록으로 둔다. */
 interface DiscoveredDbConfig {
   databaseId: string;
@@ -1727,13 +1733,14 @@ export class SyncOrchestrator {
         payload: JSON.stringify({ path, parentId, title }),
       });
 
-    const page = await this.pushCreatePage(
+    const created = await this.pushCreatePage(
       effectiveParentId,
       effectiveParentType,
       title,
       conversionResult.content,
       effectiveProperties,
     );
+    const { page } = created;
 
     // 페이지 생성 직후 매핑을 먼저 기록(전이 상태 pending). 이후 이미지 업로드 등이
     // 실패해도 이 레코드 덕에 다음 시도는 pushCreate(중복) 가 아니라 pushUpdate 로
@@ -1753,6 +1760,7 @@ export class SyncOrchestrator {
       localFileSize: null,
     });
 
+    const lastEdited = await this.restoreCreatedHeading(created, path);
     await this.syncEmbeddedMedia(page.id, conversionResult, path);
 
     const hash = computeHash(content);
@@ -1764,7 +1772,7 @@ export class SyncOrchestrator {
         notionPageId: page.id,
         notionParentId: parentId,
         contentHash: hash,
-        notionLastEdited: page.last_edited_time,
+        notionLastEdited: lastEdited,
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType: isFolderNotePath(path) ? "folder-note" : "file",
@@ -1878,13 +1886,14 @@ export class SyncOrchestrator {
         payload: JSON.stringify({ path, parentId: databaseId, parentType: "database", title }),
       });
 
-    const page = await this.pushCreatePage(
+    const created = await this.pushCreatePage(
       databaseId,
       "database",
       title,
       conversionResult.content,
       properties,
     );
+    const { page } = created;
 
     // 매핑을 먼저 적는다 — 첨부 업로드가 실패해도 다음 시도는 새로 만들지 않고 갱신한다.
     this.stateDb.upsert({
@@ -1902,6 +1911,7 @@ export class SyncOrchestrator {
       localFileSize: null,
     });
 
+    const lastEdited = await this.restoreCreatedHeading(created, path);
     await this.syncEmbeddedMedia(page.id, conversionResult, path);
 
     const fileStat = await this.vaultFs.getFileStat(path);
@@ -1911,7 +1921,7 @@ export class SyncOrchestrator {
         notionPageId: page.id,
         notionParentId: databaseId,
         contentHash: computeHash(content),
-        notionLastEdited: page.last_edited_time,
+        notionLastEdited: lastEdited,
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType: "db-row",
@@ -4068,22 +4078,28 @@ export class SyncOrchestrator {
     }
   }
 
+  /**
+   * 페이지 · 행을 만든다. 본문을 markdown 으로 보냈으면 그 markdown 도 돌려준다 — Notion 이 만들며
+   * 버린 맨 앞 `# H1` 을 호출측이 매핑을 적은 뒤 되살린다({@link restoreCreatedHeading}). 블록으로
+   * 보냈으면 null 이다 — 블록은 보낸 그대로 생긴다.
+   */
   private async pushCreatePage(
     parentId: string,
     parentType: "page" | "database",
     title: string,
     markdownContent: string,
     properties?: Record<string, unknown>,
-  ): Promise<PageObjectResponse> {
+  ): Promise<CreatedPage> {
     if (this.config.conversion.preferMarkdownApi !== false) {
-      const enhanced = obsidianToNotionEnhanced(markdownContent);
-      return await this.notionClient.createPageWithMarkdown({
+      const markdown = obsidianToNotionEnhanced(markdownContent);
+      const page = await this.notionClient.createPageWithMarkdown({
         parentId,
         parentType,
         title,
-        markdown: enhanced,
+        markdown,
         properties,
       });
+      return { page, markdown };
     }
 
     const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
@@ -4096,7 +4112,32 @@ export class SyncOrchestrator {
     if (blocks.length > 0) {
       await this.notionClient.appendChildren(page.id, blocks);
     }
-    return page;
+    return { page, markdown: null };
+  }
+
+  /**
+   * 만들며 버려진 맨 앞 `# H1` 을 되살리고(N-04) 적을 페이지 수정 시각을 돌려준다. 되살렸으면
+   * 서버가 다시 준 시각이다 — 만들 때의 시각을 적으면 다음 pull 이 이 교체를 원격 수정으로 본다(I5).
+   *
+   * 호출측이 매핑을 먼저 적고, 첨부를 올리기 전에 부른다 — 교체가 자리표시자를 첨부로 바꾼 본문을
+   * 되돌리지 않는다. 여기서 던지면 그 항목만 실패하고, 다음 push 는 새로 만들지 않고 갱신으로 본문을
+   * 다시 보낸다(본문 교체는 맨 앞 H1 을 남긴다).
+   */
+  private async restoreCreatedHeading(created: CreatedPage, path: string): Promise<string> {
+    const { page, markdown } = created;
+    if (markdown === null) return page.last_edited_time;
+    try {
+      if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
+        return page.last_edited_time;
+      }
+      return (await this.notionClient.getPage(page.id)).last_edited_time;
+    } catch (error) {
+      throw new Error(
+        `맨 앞 제목을 Notion 에 되살리지 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**

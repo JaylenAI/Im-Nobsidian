@@ -837,18 +837,32 @@ export class DatabaseSyncer {
       properties: notionProps,
     });
 
+    // Notion 이 만들며 버린 맨 앞 `# H1` 을 되살린다(N-04). 되살렸으면 서버가 다시 준 수정 시각을
+    // 적는다 — 만들 때의 시각이면 다음 pull 이 이 교체를 원격 수정으로 본다. 실패해도 행은 생겼으니
+    // 매핑은 적되 해시를 비운다 — 다음 push 가 새로 만들지 않고 갱신 경로로 본문을 다시 보낸다.
+    let lastEdited = page.last_edited_time;
+    let restoreError: string | null = null;
+    try {
+      if (await this.notionClient.restoreLeadingHeading(page.id, enhanced)) {
+        lastEdited = (await this.notionClient.getPage(page.id)).last_edited_time;
+      }
+    } catch (error) {
+      restoreError = error instanceof Error ? error.message : String(error);
+    }
+    const restored = restoreError === null;
+
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: filePath,
         notionPageId: page.id,
         notionParentId: dbConfig.databaseId,
-        contentHash: hash,
-        notionLastEdited: page.last_edited_time,
+        contentHash: restored ? hash : "",
+        notionLastEdited: lastEdited,
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType: "db-row",
-        status: "synced",
-        baseSnapshot: Buffer.from(content, "utf-8"),
+        status: restored ? "synced" : "pending",
+        baseSnapshot: restored ? Buffer.from(content, "utf-8") : null,
       });
 
       this.stateDb.upsertWikilink({
@@ -858,6 +872,16 @@ export class DatabaseSyncer {
         aliases: extractAliases(frontmatter),
       });
     });
+    if (!restored) {
+      return {
+        action: "failed",
+        failure: {
+          path: filePath,
+          operation: "create",
+          error: `맨 앞 제목을 Notion 에 되살리지 못함 — 다음 push 가 본문을 다시 보낸다: ${restoreError}`,
+        },
+      };
+    }
     return { action: "created" };
   }
 
