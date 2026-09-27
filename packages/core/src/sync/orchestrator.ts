@@ -2593,6 +2593,10 @@ export class SyncOrchestrator {
   // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.
   // deleteSync=false 면 로컬 삭제를 pending 으로만 기록하고 Notion 은 보존하므로
   // false 를 돌려준다 → 호출부가 deleted 카운트를 올리지 않아 보고가 정직해진다.
+  //
+  // 지우기 전에 원격을 본다(F-f) — pull 하지 않은 Notion 편집이 있으면 지우지 않는다. 휴지통으로
+  // 보내면 그 편집은 볼트에도 Notion 에도 보이지 않는다. 이어지는 pull 이 파일을 되살려 받는다
+  // (로컬 파일이 없으면 원격을 쓴다). 원격이 이미 사라졌으면 추적만 놓는다.
   private async pushDelete(path: string): Promise<boolean> {
     const record = this.stateDb.getByPath(path);
     if (!record?.notionPageId) return false;
@@ -2602,14 +2606,20 @@ export class SyncOrchestrator {
       return false;
     }
 
-    try {
-      await this.notionClient.archivePage(record.notionPageId);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes("archived ancestor")) {
-        // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
-      } else {
-        throw error;
+    const presence = await remotePresence(this.notionClient, record.notionPageId);
+    if (presence.kind === "alive") {
+      if (!this.overwritesRemote(record, false)) {
+        refuseUnpulledDeletion(await this.remoteDrift(record, presence.page), path);
+      }
+      try {
+        await this.notionClient.archivePage(record.notionPageId);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes("archived ancestor")) {
+          // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
+        } else {
+          throw error;
+        }
       }
     }
     this.stateDb.transaction(() => {
@@ -5069,6 +5079,22 @@ function refuseUnpulledBody(drift: RemoteDrift, path: string): void {
         `push 하세요: ${path}`,
     );
   }
+}
+
+/**
+ * 로컬에서 지운 노트의 원격을 지울 수 없으면 던진다 — pull 하지 않은 Notion 편집(본문 · 제목 ·
+ * 속성)을 휴지통으로 보내지 않는다(F-f). 본문만 보는 {@link refuseUnpulledBody} 와 달리 본문 밖의
+ * 편집도 지키고, 바뀌었는지 모르면 지우지 않는다.
+ */
+function refuseUnpulledDeletion(drift: RemoteDrift, path: string): void {
+  if (drift === "none") return;
+  const reason =
+    drift === "unknown"
+      ? "Notion 에서 바뀌었는지 확인하지 못한 페이지"
+      : "Notion 에서도 바뀐 페이지";
+  throw new Error(
+    `${reason}라 지우지 않음 — pull 이 되살려 받습니다. 받은 뒤에도 필요 없으면 다시 지우세요: ${path}`,
+  );
 }
 
 /**
