@@ -62,6 +62,21 @@ export function extractChildTags(markdown: string): ChildTag[] {
   return children;
 }
 
+/**
+ * 자식 페이지 · 자식 DB 태그와 빈 블록 말고 본문이 있는가 — Notion 이 돌려준 원문 그대로 본다.
+ * push 가 만든 폴더 페이지는 자식만 싣는다. 본문이 생겼으면 누가 Notion 에서 그 페이지에 글을
+ * 쓴 것이다(S-17).
+ */
+export function hasBodyBesidesChildren(markdown: string): boolean {
+  return (
+    markdown
+      .replace(CHILD_PAGE_TAG_RE, "")
+      .replace(CHILD_DATABASE_TAG_RE, "")
+      .replace(/<empty-block\/>/g, "")
+      .trim().length > 0
+  );
+}
+
 /** {@link restoreChildTags} 가 `.base` 임베드를 DB 와 맞출 때 쓰는 단서. */
 export interface ChildTagRestoreOptions {
   /**
