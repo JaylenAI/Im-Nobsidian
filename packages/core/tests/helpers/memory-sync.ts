@@ -159,5 +159,11 @@ export function memoryNotion() {
   client.searchRecentPages.mockImplementation(async () =>
     [...pages.values()].map((page) => ({ id: page.id, last_edited_time: page.lastEdited })),
   );
+  // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
+  client.fetchAllChildren.mockImplementation(async (parentId: string) =>
+    [...pages.values()]
+      .filter((page) => page.parent === parentId && !page.archived)
+      .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
+  );
   return { client, pages, add, touch };
 }

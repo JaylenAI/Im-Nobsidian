@@ -612,12 +612,21 @@ describe("SyncOrchestrator", () => {
       expect(store.get("projects")).toMatchObject({ notionPageId: "page-id-123" });
     });
 
-    it("부모 목록을 읽지 못하면 만들지 않고 멈춘다 — 읽지 못함 ≠ 없음", async () => {
+    it("부모 목록을 읽지 못하면 만들지 않고 그 안의 노트를 이유와 함께 실패로 남긴다 — 읽지 못함 ≠ 없음", async () => {
       mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
 
-      await expect(orchestrator.push()).rejects.toThrow("HTTP 502");
+      const result = await orchestrator.push();
+
       expect(mockNotionClient.createPage).not.toHaveBeenCalled();
       expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      // 예전에는 push 전체가 멈췄다 — 이제 그 폴더의 노트만 서버가 말한 이유와 함께 남는다.
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          path: "projects/note.md",
+          operation: "create",
+          error: expect.stringContaining("HTTP 502"),
+        }),
+      ]);
     });
   });
 
