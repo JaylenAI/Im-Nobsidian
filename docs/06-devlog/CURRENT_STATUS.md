@@ -1,6 +1,6 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-09-27
+> 마지막 업데이트: 2026-09-28
 > 버전: **v0.3.2 릴리스 완료** · **v0.4.0 트랙 진행 중** — 심층 QA 결함 23건 봉합 +
 > Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
 
@@ -36,14 +36,14 @@
 | 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지 · 자동 발견 DB 폴더의 새 파일이 행이 아니라 페이지로 감                                                                    | 완료 `f9ec6c1` |
 | 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경 · 이동이 Notion 에 안 가고 push 마다 updated 로 셈                                                                            | 완료 `3c24094` |
 | 1    | `fix/folder-note-create`                     | S-15 새 폴더와 그 폴더 노트를 한 push 에 만들면 폴더 페이지가 둘 · 형제가 두 부모로 갈림 · 다음 pull 이 폴더 페이지를 `(id)` 파일로 받음          | 완료 `72730c9` |
-| 1    | `fix/folder-record-pull`                     | S-16 폴더 레코드 아래 새 Notion 페이지를 한 층 위에 받음 · S-17 폴더 레코드의 원격 수정을 파일처럼 받음                                           | 완료           |
-| 1    | `fix/leading-h1-create`                      | N-04 새 페이지 · 행을 만들면 맨 앞 `# H1` 이 Notion 에서 사라짐                                                                                   | 대기           |
+| 1    | `fix/folder-record-pull`                     | S-16 폴더 레코드 아래 새 Notion 페이지를 한 층 위에 받음 · S-17 폴더 레코드의 원격 수정을 파일처럼 받음                                           | 완료 `3ac56e9` |
+| 1    | `fix/leading-h1-create`                      | N-04 새 페이지 · 행을 만들면 맨 앞 `# H1` 이 Notion 에서 사라짐                                                                                   | 완료           |
 | 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음                                | 대기           |
 | 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                                                                                       | 대기           |
 | 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)                                                                        | 대기           |
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                                                 | 대기           |
 | 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                                                                                               | 대기           |
-| A    | `refactor/orchestrator-modules`              | 4,569줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변)                                                                   | 대기           |
+| A    | `refactor/orchestrator-modules`              | 4,610줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변)                                                                   | 대기           |
 | A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조(S-08 인덱스 지연) · N-01                                                                                       | 대기           |
 | A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록(옮김 · 폴더 이동 포함) · 항목별 push/pull/discard · CLI `discard` · N-02 dry-run 삭제 수 · N-03 dry-run 이 상태를 바꿈 | 대기           |
 | A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                                                                                         | 대기           |
@@ -54,7 +54,7 @@
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
 pushdry 0.1초 · 단위 1,662 통과 · 불변식 15/15 · 블록 ID 71/72 유지.
-결함 목록과 재현 절차는 `journal/2026-09-27.md` 에 남긴다.
+결함 목록과 재현 절차는 `journal/2026-09-27.md` 에, N-04 부터는 `journal/2026-09-28.md` 에 남긴다.
 
 ## R0~R12 — 실데이터 E2E 기반 충실도·견고성 트랙 (dev 머지 완료)
 
