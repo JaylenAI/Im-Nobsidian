@@ -151,6 +151,27 @@ describe("코드 안의 임베드 (S-18)", () => {
     const result = roundtrip(doc);
     expect(result.outputBody).toBe(result.inputBody);
   });
+
+  // 자리표시자 형식을 설명하는 노트 — 코드 안의 같은 모양 글은 push 가 심은 것이 아니다.
+  const DESCRIBED = [
+    ["코드 펜스", `앞 문단\n\n\`\`\`md\n${PLACEHOLDER}\n\`\`\`\n\n뒤 문단`],
+    ["인라인 코드", `자리표시자는 \`${PLACEHOLDER}\` 처럼 생겼다`],
+  ];
+
+  it.each(DESCRIBED)(
+    "%s 안의 자리표시자 모양 글은 pull 이 임베드로 바꾸지 않는다",
+    (_label, doc) => {
+      expect(pull(doc!)).toBe(doc);
+    },
+  );
+
+  it.each(DESCRIBED)(
+    "%s 안의 자리표시자 모양 글이 기본 파이프라인을 오가도 그대로다",
+    (_label, doc) => {
+      const result = roundtrip(doc!);
+      expect(result.outputBody).toBe(result.inputBody);
+    },
+  );
 });
 
 describe("비이미지 로컬 임베드 pull 복원 (D5)", () => {

@@ -354,11 +354,19 @@ function mediaBlock(
     : { type: "file", file: { ...file, name: baseName(vaultTarget) } };
 }
 
-/** 블록의 rich_text 를 평문으로 이어 붙인다. 자리표시자 탐지에만 쓰므로 타입별 분기 없이 훑는다. */
-function plainTextOf(block: { readonly type: string } & Record<string, unknown>): string {
-  const body = block[block.type] as { rich_text?: Array<{ plain_text?: string }> } | undefined;
-  if (!body?.rich_text) return "";
-  return body.rich_text.map((r) => r.plain_text ?? "").join("");
+/**
+ * push 가 심은 자리표시자라면 그 마커를 돌려준다.
+ *
+ * 자리표시자는 quote 한 줄로만 심는다(`EmbedResolver`). 코드 블록 · 문단의 같은 모양 글은 형식을
+ * 설명하는 사용자의 글이다 — 예전에는 블록 종류를 가리지 않아, 그 블록을 미디어로 바꾸고 지웠다(S-18).
+ */
+function placeholderMarkerOf(
+  block: { readonly type: string } & Record<string, unknown>,
+): RegExpExecArray | null {
+  if (block.type !== "quote") return null;
+  const body = block.quote as { rich_text?: Array<{ plain_text?: string }> } | undefined;
+  const text = (body?.rich_text ?? []).map((r) => r.plain_text ?? "").join("");
+  return PLACEHOLDER_MARKER_RE.exec(text);
 }
 
 export class ImageHandler {
@@ -840,7 +848,7 @@ export class ImageHandler {
     const hits: PlaceholderHit[] = [];
 
     for (const block of children) {
-      const marker = PLACEHOLDER_MARKER_RE.exec(plainTextOf(block));
+      const marker = placeholderMarkerOf(block);
       if (marker) {
         hits.push({
           parentId: rootId,
