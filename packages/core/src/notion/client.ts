@@ -61,6 +61,12 @@ export class DiscoveryTooLargeError extends Error {
   }
 }
 
+/**
+ * 두 번 적용되면 결과가 달라지는 쓰기 — 모호한 실패(타임아웃 · 5xx)에서 다시 보내지 않는다.
+ * 판정 기준은 {@link NotionClient} 의 `withRateLimit` 주석에 있다.
+ */
+const NOT_IDEMPOTENT = { idempotent: false } as const;
+
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
@@ -91,6 +97,11 @@ export class NotionClient {
       auth: options.token,
       timeoutMs: options.timeoutMs ?? 30000,
       logLevel: LogLevel.ERROR,
+      // 재시도는 withRateLimit 한 곳에서만 한다. SDK 5.x 는 기본으로 429·529 를 2회
+      // 재시도하는데, 켜 둔 채면 두 층이 곱해져 429 가 이어질 때 호출 1건이
+      // (1+2)×(1+maxRetries) 번 나간다. SDK 쪽 대기는 rate limit 슬롯을 쥔 채,
+      // 전역 쿨다운 밖에서, 로그 없이 흐른다.
+      retry: false,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
     this.sema = new Sema(options.concurrency ?? 3);
@@ -157,6 +168,7 @@ export class NotionClient {
           properties: properties as never,
           children: params.children as never,
         }) as Promise<PageObjectResponse>,
+      NOT_IDEMPOTENT,
     );
   }
 
@@ -186,6 +198,7 @@ export class NotionClient {
           properties: properties as never,
           markdown: params.markdown,
         }) as Promise<PageObjectResponse>,
+      NOT_IDEMPOTENT,
     );
   }
 
@@ -225,19 +238,21 @@ export class NotionClient {
     pageId: string,
     patches: Array<{ oldStr: string; newStr: string; replaceAll?: boolean }>,
   ): Promise<PageMarkdownResponse> {
-    return this.withRateLimit(() =>
-      this.client.pages.updateMarkdown({
-        page_id: pageId,
-        type: "update_content",
-        update_content: {
-          content_updates: patches.map((p) => ({
-            old_str: p.oldStr,
-            new_str: p.newStr,
-            replace_all_matches: p.replaceAll ?? false,
-          })),
-          allow_deleting_content: true,
-        },
-      }),
+    return this.withRateLimit(
+      () =>
+        this.client.pages.updateMarkdown({
+          page_id: pageId,
+          type: "update_content",
+          update_content: {
+            content_updates: patches.map((p) => ({
+              old_str: p.oldStr,
+              new_str: p.newStr,
+              replace_all_matches: p.replaceAll ?? false,
+            })),
+            allow_deleting_content: true,
+          },
+        }),
+      NOT_IDEMPOTENT,
     );
   }
 
@@ -626,12 +641,14 @@ export class NotionClient {
     let after = options?.after;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
-      const response = await this.withRateLimit(() =>
-        this.client.blocks.children.append({
-          block_id: blockId,
-          children: batch as never,
-          ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
-        }),
+      const response = await this.withRateLimit(
+        () =>
+          this.client.blocks.children.append({
+            block_id: blockId,
+            children: batch as never,
+            ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
+          }),
+        NOT_IDEMPOTENT,
       );
       const ids = response.results.slice(0, batch.length).map((b) => b.id);
       created.push(...ids);
@@ -1136,8 +1153,19 @@ export class NotionClient {
    * 268페이지 pull 이 진행 로그가 멈춘 채 수 분씩 정지하는 것으로 나타났다(R9).
    * 그래서 (1) 대기 중에는 슬롯을 반납하고, (2) 429 는 {@link cooldownUntil} 전역
    * 게이트로 함께 쉬고, (3) 모든 재시도를 경고로 남긴다.
+   *
+   * `idempotent: false` 는 두 번 적용되면 결과가 달라지는 쓰기다(페이지 생성 · 블록
+   * 덧붙이기 · 부분 치환). 이런 요청은 서버가 «처리하지 않았다» 고 분명히 말한 실패만
+   * 다시 보낸다. 타임아웃 · 연결 끊김 · 5xx 는 요청이 이미 적용됐을 수 있고 Notion 은
+   * 멱등 키를 받지 않으므로, 다시 보내면 같은 페이지 · 같은 블록이 두 벌 생긴다.
+   * 그런 실패는 호출측으로 올린다 — 페이지 생성은 WAL(pending_operations)이 부모에서
+   * 제목으로 찾아 입양한다.
    */
-  private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
+  private async withRateLimit<T>(
+    fn: () => Promise<T>,
+    options?: { readonly idempotent?: boolean },
+  ): Promise<T> {
+    const idempotent = options?.idempotent ?? true;
     // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
     let backoffMs = 0;
 
@@ -1148,7 +1176,7 @@ export class NotionClient {
         this.lastRequestTime = Date.now();
         return await fn();
       } catch (error: unknown) {
-        if (!isRetryable(error) || attempt >= this.maxRetries) throw error;
+        if (!isRetryable(error, idempotent) || attempt >= this.maxRetries) throw error;
 
         // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
         // 절반은 서버가 말한 시각보다 일찍 두드려 429 를 다시 부른다. 서버 지정값은
@@ -1161,11 +1189,11 @@ export class NotionClient {
               Math.pow(this.retryBackoffFactor, attempt) *
               (0.5 + Math.random() * 0.5);
 
-        // 429 는 요청 하나가 아니라 워크스페이스 전체에 걸린 신호다 — 전원 대기로 승격한다.
-        // 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다. 헤더는 게이트웨이가
-        // 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이 통째로 사라지면
-        // 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
-        if (isRateLimited(error)) {
+        // 429 · 529 는 요청 하나가 아니라 워크스페이스(또는 서비스) 전체에 걸린 신호다 —
+        // 전원 대기로 승격한다. 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다.
+        // 헤더는 게이트웨이가 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이
+        // 통째로 사라지면 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+        if (isExplicitRejection(error)) {
           this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + backoffMs);
         }
 
@@ -1225,22 +1253,39 @@ function extractPropertyChoices(prop: Record<string, unknown>): {
   return result;
 }
 
-/** rate limit(429) 인가 — 이 요청만이 아니라 클라이언트 전체가 쉬어야 하는 신호. */
-function isRateLimited(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && (error as { status?: unknown }).status === 429
-  );
+function statusOf(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
 }
 
-function isRetryable(error: unknown): boolean {
+/**
+ * 서버가 요청을 «처리하지 않고» 거절했다고 분명히 말한 실패 — rate limit(429) ·
+ * 서비스 과부하(529). 어떤 요청이든 다시 보내도 중복이 생기지 않는다. 이 요청만이 아니라
+ * 클라이언트 전체가 쉬어야 하는 신호이기도 하다.
+ */
+function isExplicitRejection(error: unknown): boolean {
+  const status = statusOf(error);
+  return status === 429 || status === 529;
+}
+
+/**
+ * 요청이 서버에 적용됐는지 알 수 없는 실패 — 응답을 받지 못했거나(타임아웃 · 연결 끊김)
+ * 서버가 처리 도중 넘어졌다(5xx). Notion 문서도 503 을 "60초 안에 응답하지 못함" 으로
+ * 적는다. 두 번 적용해도 결과가 같은 요청만 다시 보낸다.
+ */
+function isAmbiguousFailure(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
-  const code = (error as { code?: string }).code;
+  const code = (error as { code?: unknown }).code;
   if (code === "notionhq_client_request_timeout" || code === "ECONNRESET" || code === "ETIMEDOUT") {
     return true;
   }
-  if (!("status" in error)) return false;
-  const status = (error as { status: number }).status;
-  return status === 429 || status === 502 || status === 503 || status === 504;
+  const status = statusOf(error);
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isRetryable(error: unknown, idempotent: boolean): boolean {
+  return isExplicitRejection(error) || (idempotent && isAmbiguousFailure(error));
 }
 
 /**
