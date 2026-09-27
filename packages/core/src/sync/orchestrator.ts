@@ -1080,18 +1080,26 @@ export class SyncOrchestrator {
 
       let remoteContent = "";
       let remoteLastEdited: string | null = null;
-      if (record.notionPageId) {
+      if (record.notionPageId && options?.fullRender) {
+        // 해소할 목록은 원격을 읽지 못하면 이유와 함께 실패한다(N-06). 빈 원격으로 충돌을 만들면
+        // 병합은 원격이 모든 줄을 지운 것으로 보고, 원격 유지는 로컬을 빈 파일로 덮는다.
         try {
-          if (options?.fullRender) {
-            const page = await this.notionClient.getPage(record.notionPageId);
-            remoteLastEdited = (page as { last_edited_time?: string }).last_edited_time ?? null;
-            remoteContent = (await this.renderRemotePage(record, record.notionPageId, page))
-              .content;
-          } else {
-            remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
-          }
+          const page = await this.notionClient.getPage(record.notionPageId);
+          remoteLastEdited = (page as { last_edited_time?: string }).last_edited_time ?? null;
+          remoteContent = (await this.renderRemotePage(record, record.notionPageId, page)).content;
+        } catch (error) {
+          throw new Error(
+            `충돌 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { cause: error },
+          );
+        }
+      } else if (record.notionPageId) {
+        try {
+          remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
         } catch {
-          // 페이지가 삭제된 경우
+          // 상태 표시용 미리보기 — 읽지 못하면 원격을 비워 둔 채 충돌이 있다는 것만 보인다.
         }
       }
 
@@ -2471,7 +2479,7 @@ export class SyncOrchestrator {
   /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
   async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
     const result = await this.conflictResolver.resolve(conflict, choice);
-    await this.propagateResolution(conflict, choice, result);
+    await this.propagateOrReopen(conflict, choice, result);
     return result;
   }
 
@@ -2481,7 +2489,7 @@ export class SyncOrchestrator {
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult> {
     const result = await this.conflictResolver.resolveByStrategy(conflict, strategy);
-    await this.propagateResolution(conflict, strategyToChoice(strategy), result);
+    await this.propagateOrReopen(conflict, strategyToChoice(strategy), result);
     return result;
   }
 
@@ -2500,6 +2508,31 @@ export class SyncOrchestrator {
   /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */
   generateConflictDiff(conflict: Conflict): string {
     return this.conflictResolver.generateDiff(conflict);
+  }
+
+  /**
+   * 해소 결과를 Notion 에 올린다. 올리지 못하면 충돌로 되돌리고 오류를 그대로 던진다(N-06).
+   *
+   * 해소는 지난 동기화 사본을 해소 결과로 바꿔 둔다. 그 결과가 Notion 에 없는데 «해결됨» 으로
+   * 남으면, 다음 pull 은 로컬을 바뀌지 않은 것으로 보고 바뀐 원격으로 덮는다 — 고른 로컬 · 병합
+   * 결과가 사라진다. 해소 전의 사본으로 되돌리면 다음 pull 이 다시 충돌로 본다. 볼트 파일(병합
+   * 결과 · `.conflict` 사본)은 그대로 둔다 — 사용자가 고른 것이다.
+   */
+  private async propagateOrReopen(
+    conflict: Conflict,
+    choice: ResolutionChoice,
+    result: ResolutionResult,
+  ): Promise<void> {
+    try {
+      await this.propagateResolution(conflict, choice, result);
+    } catch (error) {
+      const record = conflict.syncRecord;
+      this.stateDb.transaction(() => {
+        this.stateDb.updateHash(record.id, record.contentHash, record.baseSnapshot);
+        this.stateDb.updateStatus(record.id, "conflict");
+      });
+      throw error;
+    }
   }
 
   /**

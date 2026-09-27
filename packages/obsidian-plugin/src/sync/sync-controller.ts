@@ -6,7 +6,9 @@ import type {
   RemoteChange,
   Conflict,
   RenameKind,
+  ResolutionChoice,
 } from "@im-nobsidian/core";
+import { RESOLUTION_CHOICES } from "../conflict-choices.js";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
 export type SyncPhase = "ready" | "syncing" | "error" | "conflict";
@@ -48,9 +50,13 @@ export interface SyncControllerHooks {
  * 옮겨 ① 플러그인 셸은 배선만 담당하고 ② sync 실행 로직은 mock orchestrator + spy hooks 로
  * Obsidian 런타임 없이 단위 테스트할 수 있게 한다.
  */
+/** 알림이 사용자가 읽고 고칠 것을 담을 때 — 기본보다 오래 둔다. */
+const ACTIONABLE_NOTICE_MS = 8000;
+
 export class SyncController {
   private abortController: AbortController | null = null;
   private vaultSyncing = false;
+  private resolving = false;
 
   constructor(
     private readonly orchestrator: SyncOrchestrator,
@@ -163,7 +169,8 @@ export class SyncController {
    * 않고 상태바만 갱신하며, 재진입을 자체 가드로 막는다.
    */
   async vaultSync(): Promise<void> {
-    if (this.vaultSyncing) return;
+    // 충돌을 푸는 동안에는 끼어들지 않는다 — 병합 결과를 쓴 파일이 이 동기화를 부른다.
+    if (this.vaultSyncing || this.resolving) return;
     this.vaultSyncing = true;
     this.hooks.onStatusBar?.("syncing");
     try {
@@ -280,9 +287,91 @@ export class SyncController {
     return this.orchestrator.status();
   }
 
-  /** 충돌 해결 흐름용 무알림 pull — 결과의 conflicts 로 모달을 띄우는 건 셸이 담당. */
-  pullForResolve(): ReturnType<SyncOrchestrator["pull"]> {
-    return this.orchestrator.pull();
+  /**
+   * 충돌을 하나씩 물어 푼다 — CLI `resolve` 와 같은 순서(N-06).
+   *
+   * - 목록은 충돌로 표시된 노트만 읽는다. 예전에는 pull 을 돌려 목록을 얻었다 — 풀기도 전에 다른
+   *   노트를 원격으로 덮어썼다.
+   * - 양쪽이 이미 같아진 충돌은 묻지 않고 표시만 푼다.
+   * - 푸는 것은 오케스트레이터다 — 고른 결과를 Notion 에 올리고, 올리지 못하면 충돌로 남긴다.
+   *   예전에는 ConflictResolver 만 불러 볼트와 상태 DB 만 바꿨고, 다음 sync 가 바뀐 원격으로
+   *   고른 로컬 · 병합 결과를 덮었다.
+   *
+   * @param choose 충돌 하나를 무엇으로 풀지 묻는다(모달). 고르지 않으면 null — 그 충돌은 남는다.
+   */
+  async resolveConflicts(
+    choose: (conflict: Conflict) => Promise<ResolutionChoice | null>,
+  ): Promise<void> {
+    if (this.isSyncing() || this.vaultSyncing || this.resolving) {
+      this.hooks.onNotice?.("Im-Nobsidian: 동기화가 끝난 뒤 충돌을 해결하세요.");
+      return;
+    }
+    this.resolving = true;
+    try {
+      await this.resolveEach(choose);
+    } finally {
+      this.resolving = false;
+    }
+    await this.refreshStatus();
+  }
+
+  private async resolveEach(
+    choose: (conflict: Conflict) => Promise<ResolutionChoice | null>,
+  ): Promise<void> {
+    let conflicts: Conflict[];
+    try {
+      conflicts = await this.orchestrator.listConflicts();
+    } catch (error) {
+      this.hooks.onNotice?.(
+        `Im-Nobsidian: 충돌 목록을 읽지 못함 — ${errorMessage(error)}`,
+        ACTIONABLE_NOTICE_MS,
+      );
+      return;
+    }
+    if (conflicts.length === 0) {
+      this.hooks.onNotice?.("Im-Nobsidian: 충돌이 없습니다.");
+      this.hooks.onStatusBar?.("ready");
+      return;
+    }
+
+    const cleared = new Set(this.orchestrator.clearStaleConflicts(conflicts));
+    let resolved = 0;
+    let remaining = 0;
+    let failed = 0;
+    for (const conflict of conflicts) {
+      const path = conflict.syncRecord.obsidianPath;
+      if (cleared.has(path)) continue;
+      const choice = await choose(conflict);
+      if (!choice) {
+        remaining++;
+        continue;
+      }
+      try {
+        const result = await this.orchestrator.resolveConflict(conflict, choice);
+        if (result.success) {
+          resolved++;
+          this.hooks.onNotice?.(`Im-Nobsidian: ${path} → ${RESOLUTION_CHOICES[choice].label}`);
+        } else {
+          remaining++;
+          this.hooks.onNotice?.(
+            `Im-Nobsidian: 자동 병합이 겹치는 줄을 남겼습니다 — ${path} 에서 충돌 표시(<<<<<<<)를 고친 뒤 다시 해결하세요.`,
+            ACTIONABLE_NOTICE_MS,
+          );
+        }
+      } catch (error) {
+        failed++;
+        this.hooks.onNotice?.(
+          `Im-Nobsidian: 충돌을 해결하지 못함 (${path}) — ${errorMessage(error)}. 충돌로 남겨 두었습니다.`,
+          ACTIONABLE_NOTICE_MS,
+        );
+      }
+    }
+
+    const parts = [`해결 ${resolved}건`, `남음 ${remaining}건`];
+    if (failed > 0) parts.push(`실패 ${failed}건`);
+    if (cleared.size > 0) parts.push(`양쪽이 이미 같아 표시만 푼 ${cleared.size}건`);
+    this.hooks.onNotice?.(`Im-Nobsidian: 충돌 해결 — ${parts.join(" · ")}`);
+    this.hooks.onStatusBar?.(remaining + failed > 0 ? "conflict" : "ready");
   }
 }
 

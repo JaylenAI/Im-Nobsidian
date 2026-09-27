@@ -13,6 +13,13 @@ export interface ResolutionResult {
   readonly mergeHadConflicts?: boolean;
 }
 
+/**
+ * 충돌을 볼트 파일과 상태 DB 에서 푼다. **Notion 에는 올리지 않는다.**
+ *
+ * 앱은 `SyncOrchestrator.resolveConflict` 를 쓴다 — 이 클래스로 푼 뒤 고른 결과를 Notion 에 올리고,
+ * 올리지 못하면 충돌로 되돌린다. 이 클래스만 부르면 지난 동기화 사본만 해결 결과로 바뀌어, 다음
+ * pull 이 바뀐 원격으로 고른 로컬 · 병합 결과를 덮는다(N-06).
+ */
 export class ConflictResolver {
   constructor(
     private readonly stateDb: IStateDB,

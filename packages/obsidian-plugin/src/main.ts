@@ -2,7 +2,6 @@ import { Plugin, Notice, MarkdownRenderChild, requestUrl, TFolder, type TFile } 
 import {
   NotionClient,
   SyncOrchestrator,
-  ConflictResolver,
   DEFAULT_CONFIG,
   ViewDataProvider,
   EntryEditor,
@@ -496,55 +495,17 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   private async resolveConflicts(): Promise<void> {
-    if (!this.syncController || !this.stateDb) {
+    if (!this.syncController) {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
-
-    const conflictRecords = this.stateDb.getByStatus("conflict");
-    if (conflictRecords.length === 0) {
-      new Notice("Im-Nobsidian: 충돌이 없습니다.");
-      return;
-    }
-
-    try {
-      const pullResult = await this.syncController.pullForResolve();
-
-      if (pullResult.conflicts.length === 0) {
-        new Notice("Im-Nobsidian: 해결할 충돌이 없습니다.");
-        this.updateStatusBar("ready");
-        return;
-      }
-
-      const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
-      const resolver = new ConflictResolver(this.stateDb, vaultAdapter);
-
-      for (const conflict of pullResult.conflicts) {
-        await this.showConflictModal(conflict, resolver);
-      }
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      new Notice(`충돌 해결 실패: ${msg}`);
-    }
+    await this.syncController.resolveConflicts((conflict) => this.askConflictChoice(conflict));
   }
 
-  private showConflictModal(conflict: Conflict, resolver: ConflictResolver): Promise<void> {
+  /** 충돌 하나를 무엇으로 풀지 모달로 묻는다. 고르지 않고 닫으면 null. */
+  private askConflictChoice(conflict: Conflict): Promise<ResolutionChoice | null> {
     return new Promise((resolve) => {
-      const modal = new ConflictModal(this.app, conflict, async (choice: ResolutionChoice) => {
-        const result = await resolver.resolve(conflict, choice);
-
-        if (result.success) {
-          new Notice(`충돌 해결: ${result.path} → ${choice}`);
-        } else if (result.mergeHadConflicts) {
-          new Notice(`자동 병합 완료 (수동 확인 필요): ${result.path}`, 5000);
-        }
-
-        const remaining = this.stateDb?.getByStatus("conflict") ?? [];
-        this.updateStatusBar(remaining.length > 0 ? "conflict" : "ready");
-
-        resolve();
-      });
-      modal.open();
+      new ConflictModal(this.app, conflict, resolve).open();
     });
   }
 
