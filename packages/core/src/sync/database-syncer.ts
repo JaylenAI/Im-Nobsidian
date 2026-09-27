@@ -488,10 +488,26 @@ export class DatabaseSyncer {
     }
   }
 
-  private async pullDatabasePage(
+  /**
+   * 행 하나를 pull 이 쓰는 모양 그대로 렌더한다 — 파일은 쓰지 않는다.
+   *
+   * pull(pullDatabasePage)과 충돌 비교 · 원격 선택 해소 · 원격 미리보기(오케스트레이터의
+   * renderRemotePage)가 같은 렌더를 봐야 한다. 행을 페이지처럼 렌더하면 커버 · 아이콘 ·
+   * 첨부 속성이 빠지고, 본문 첫머리의 옛 속성 블록 값이 실제 속성을 덮는다(S-02).
+   *
+   * 본문을 읽지 못하면 던진다 — 행은 실패로 남고 레코드가 그대로라 다음 pull 이 다시
+   * 받는다. 예전에는 빈 본문으로 넘어가, 로컬이 그대로인 행은 본문이 지워진 채 «동기화
+   * 완료» 로 기록됐다(S-10). 읽지 못한 것은 비어 있는 것이 아니다.
+   *
+   * @param options.downloadMedia false 면 첨부를 내려받지 않는다(표시 전용). 비교를 보려다
+   *   볼트에 파일이 생기면 안 된다 — 그 대가로 아직 내려받지 않은 첨부는 원격 URL 로 남는다.
+   */
+  async renderRow(
     page: PageObjectResponse,
-    dbConfig: DatabaseSyncConfig,
-  ): Promise<PullPageOutcome> {
+    filePath: string,
+    options?: { downloadMedia?: boolean },
+  ): Promise<{ content: string; title: string; properties: Record<string, unknown> }> {
+    const downloadMedia = options?.downloadMedia !== false;
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
 
@@ -500,11 +516,13 @@ export class DatabaseSyncer {
     );
     properties.title = title;
 
-    await this.localizeFileProperties(
-      (page as unknown as { properties: Record<string, unknown> }).properties,
-      properties,
-      safeName,
-    );
+    if (downloadMedia) {
+      await this.localizeFileProperties(
+        (page as unknown as { properties: Record<string, unknown> }).properties,
+        properties,
+        safeName,
+      );
+    }
 
     const cover = this.notionClient.extractCover(page);
     const icon = this.notionClient.extractIcon(page);
@@ -515,7 +533,9 @@ export class DatabaseSyncer {
       // 로컬라이즈 경로(P3-A)로 첨부에 내려받고, 외부 URL(unsplash 등)은 원형 유지한다.
       // (기존 구현은 downloadAllImages 결과를 `![cover](..)` 형태로 재매치했지만 성공
       // 시 결과가 `![[..]]` 위키링크라 항상 미스매치 → 서명 URL 폴백이 되는 버그였다)
-      const local = await this.imageHandler.localizeNotionFileUrl(cover.url, `${safeName}-cover`);
+      const local = downloadMedia
+        ? await this.imageHandler.localizeNotionFileUrl(cover.url, `${safeName}-cover`)
+        : null;
       properties.cover = local ? `[[${local}]]` : cover.url;
     }
 
@@ -523,15 +543,12 @@ export class DatabaseSyncer {
       properties.icon = icon.value;
     }
 
-    // 본문을 읽지 못하면 던진다 — 행은 실패로 남고 레코드가 그대로라 다음 pull 이 다시
-    // 받는다. 예전에는 빈 본문으로 넘어가, 로컬이 그대로인 행은 본문이 지워진 채 «동기화
-    // 완료» 로 기록됐다(S-10). 읽지 못한 것은 비어 있는 것이 아니다.
     const mdResult = await this.notionClient.getPageMarkdown(page.id);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);
     let markdown = notionEnhancedToObsidian(mdResult.markdown);
 
-    if (this.config.conversion.imageDownload === "immediate" && markdown) {
+    if (downloadMedia && this.config.conversion.imageDownload === "immediate" && markdown) {
       try {
         const imageResult = await this.imageHandler.downloadAllImages(markdown, title);
         markdown = imageResult.content;
@@ -540,7 +557,7 @@ export class DatabaseSyncer {
       }
     }
 
-    if (markdown) {
+    if (downloadMedia && markdown) {
       try {
         const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
         markdown = fileResult.content;
@@ -548,6 +565,25 @@ export class DatabaseSyncer {
         getLogger().warn(`[DB Sync] 파일 다운로드 실패 (${title}):`, error);
       }
     }
+
+    const content = this.pipeline.convertToMarkdown(
+      markdown,
+      {
+        direction: "pull",
+        path: "markdown-api",
+        filePath,
+        parentMode: "database",
+      },
+      { properties, notionExportCompact: exportCompact },
+    );
+    return { content, title, properties };
+  }
+
+  private async pullDatabasePage(
+    page: PageObjectResponse,
+    dbConfig: DatabaseSyncConfig,
+  ): Promise<PullPageOutcome> {
+    const safeName = sanitizeFileName(this.notionClient.extractTitle(page));
 
     const existingRecord = this.stateDb.getByNotionId(page.id);
     // F24: 동명 형제 DB 폴더 분리 후 레코드가 옛 공유 폴더를 가리키면(직속 아님) 현재
@@ -564,16 +600,7 @@ export class DatabaseSyncer {
       );
     }
 
-    const finalContent = this.pipeline.convertToMarkdown(
-      markdown,
-      {
-        direction: "pull",
-        path: "markdown-api",
-        filePath,
-        parentMode: "database",
-      },
-      { properties, notionExportCompact: exportCompact },
-    );
+    const { content: finalContent, title, properties } = await this.renderRow(page, filePath);
 
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.
     // (신규 페이지는 existingRecord 가 없으므로 충돌 검사 없이 바로 기록 — 로컬 파일 미존재)
