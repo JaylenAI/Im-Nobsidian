@@ -20,6 +20,7 @@ import {
   completionHeader,
   failedCountText,
 } from "../utils/format.js";
+import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 
 export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
@@ -29,7 +30,10 @@ export const pullCommand = new Command("pull")
     "--force",
     "증분 감지를 건너뛰고 전체 스캔 (search 인덱싱 지연으로 누락된 신규 페이지·DB 복구)",
   )
+  .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
+    const json = options.json === true;
+    if (json) enableJsonMode();
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -40,21 +44,31 @@ export const pullCommand = new Command("pull")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      console.log(`\n${header("  Pulling from Notion...")}`);
-      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
-      console.log("");
+      if (!json) {
+        console.log(`\n${header("  Pulling from Notion...")}`);
+        if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+        console.log("");
+      }
 
       const result = await orchestrator.pull({
         dryRun: options.dryRun,
         paths: options.path,
         force: options.force,
-        onProgress: (current, total, item) => {
-          const icon = operationIcon(item.operation);
-          const label = operationLabel(item.operation);
-          const prog = progress(current, total);
-          console.log(`  ${icon} ${item.path} ${prog} ${label}`);
-        },
+        onProgress: json
+          ? undefined
+          : (current, total, item) => {
+              const icon = operationIcon(item.operation);
+              const label = operationLabel(item.operation);
+              const prog = progress(current, total);
+              console.log(`  ${icon} ${item.path} ${prog} ${label}`);
+            },
       });
+
+      if (json) {
+        printJson(pullJson(result));
+        if (result.failed.length > 0) process.exitCode = 1;
+        return;
+      }
 
       if (result.imageCount > 0) {
         console.log(

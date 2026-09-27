@@ -18,12 +18,16 @@ import {
   completionHeader,
   failedCountText,
 } from "../utils/format.js";
+import { enableJsonMode, printJson, pushJson } from "../utils/json-output.js";
 
 export const pushCommand = new Command("push")
   .description("로컬 변경사항을 Notion에 반영")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("-p, --path <paths...>", "특정 경로만 push")
+  .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
+    const json = options.json === true;
+    if (json) enableJsonMode();
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -34,20 +38,30 @@ export const pushCommand = new Command("push")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      console.log(`\n${header("  Pushing to Notion...")}`);
-      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
-      console.log("");
+      if (!json) {
+        console.log(`\n${header("  Pushing to Notion...")}`);
+        if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+        console.log("");
+      }
 
       const result = await orchestrator.push({
         dryRun: options.dryRun,
         paths: options.path,
-        onProgress: (current, total, item) => {
-          const icon = operationIcon(item.operation);
-          const label = operationLabel(item.operation);
-          const prog = progress(current, total);
-          console.log(`  ${icon} ${item.path} ${prog} ${label}`);
-        },
+        onProgress: json
+          ? undefined
+          : (current, total, item) => {
+              const icon = operationIcon(item.operation);
+              const label = operationLabel(item.operation);
+              const prog = progress(current, total);
+              console.log(`  ${icon} ${item.path} ${prog} ${label}`);
+            },
       });
+
+      if (json) {
+        printJson(pushJson(result));
+        if (result.failed.length > 0) process.exitCode = 1;
+        return;
+      }
 
       const failedCount = result.failed.length;
       console.log(`\n  ${completionHeader("Push", failedCount)}`);
