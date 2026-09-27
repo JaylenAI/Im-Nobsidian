@@ -33,6 +33,11 @@ export function isFolderNotePath(filePath: string): boolean {
   return parts[parts.length - 1]!.replace(/\.md$/, "") === parts[parts.length - 2];
 }
 
+/** 폴더의 폴더 노트 경로 — 폴더 이름과 같은 이름의 노트(`A/B` → `A/B/B.md`). */
+export function folderNoteOf(folder: string): string {
+  return `${folder}/${folder.slice(folder.lastIndexOf("/") + 1)}.md`;
+}
+
 /** 파일이 아니라 폴더를 추적하는 레코드인가 — push 가 만든 폴더 페이지 · 폴더로만 받은 페이지. */
 export function isFolderRecord(record: {
   readonly fileType: string;
@@ -83,9 +88,8 @@ export function folderContainer(folder: string, lookup: FolderLookup): FolderCon
   const databaseId = lookup.databaseAt(folder);
   if (databaseId) return { kind: "database", databaseId };
 
-  const name = folder.slice(folder.lastIndexOf("/") + 1);
   const pageId =
-    lookup.pageIdAt(`${folder}/${name}.md`) ?? // 폴더 노트
+    lookup.pageIdAt(folderNoteOf(folder)) ?? // 폴더 노트
     lookup.pageIdAt(folder) ?? // push 가 만든 폴더 페이지
     lookup.pageIdAt(`${folder}.md`); // DB 를 품은 페이지 · 행의 하위 폴더
   return pageId ? { kind: "page", pageId } : null;
