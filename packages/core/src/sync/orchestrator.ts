@@ -29,6 +29,7 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
+import type { PullOutcome } from "./pull-outcome.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver } from "../conflict/resolver.js";
@@ -780,17 +781,17 @@ export class SyncOrchestrator {
           return path;
         }
         case "modified": {
-          const result = await this.pullUpdate(change);
-          if (result.conflict) {
-            conflicts.push(result.conflict);
-          } else if (result.path && !result.unchanged) {
-            // unchanged=true 는 content_hash 동일 no-op(가짜 수정) — 파일 재기록·churn 없음.
-            // updated 카운트에 넣지 않아 보고가 정직해진다(I5).
-            writtenPaths.push(result.path);
+          const outcome = await this.pullUpdate(change);
+          if (outcome.action === "conflict") {
+            conflicts.push(outcome.conflict);
+          } else if (outcome.action === "written") {
+            writtenPaths.push(outcome.path);
             if (restoreIds.has(change.pageId)) counts.restored++;
             else counts.updated++;
           }
-          return result.path;
+          // unchanged(받을 것이 없음 — I5) · skipped(local-first 가 로컬을 지킴)는 받은 것이 아니다.
+          // 세지 않고, sync 의 이어지는 push 에서도 빼지 않는다(F-h).
+          return outcome.path;
         }
         case "deleted": {
           const record = this.stateDb.getByNotionId(change.pageId);
@@ -3337,18 +3338,16 @@ export class SyncOrchestrator {
     return { content, title, properties, bodyFingerprint: fetched.fingerprint };
   }
 
-  private async pullUpdate(
-    change: RemoteChange,
-  ): Promise<{ path?: string; conflict?: Conflict; unchanged?: boolean }> {
+  private async pullUpdate(change: RemoteChange): Promise<PullOutcome> {
     let record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) return {};
+    if (!record) return { action: "unchanged" };
 
     const page = await this.notionClient.getPage(change.pageId);
 
     // push 가 만든 폴더 페이지에는 볼트 파일이 없다 — 폴더로 받는다(S-17).
     if (isFolderRecord(record)) {
       const folderNote = await this.pullFolderRecord(record, page);
-      if (!folderNote) return { path: record.obsidianPath, unchanged: true };
+      if (!folderNote) return { action: "unchanged", path: record.obsidianPath };
       record = folderNote;
     }
 
@@ -3359,7 +3358,7 @@ export class SyncOrchestrator {
       (page as { in_trash?: boolean }).in_trash === true ||
       (page as { archived?: boolean }).archived === true;
     if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
-      return { unchanged: true };
+      return { action: "unchanged", path: record.obsidianPath };
     }
 
     const rendered = await this.renderRemotePage(record, change.pageId, page);
@@ -3393,18 +3392,18 @@ export class SyncOrchestrator {
     });
 
     if (resolution.action === "skip") {
-      // 원격이 지난 사본 그대로다 — 본 것만 적는다. 받은 것이 없으니 세지 않는다. 받은 것으로
-      // 세면 sync 가 그 노트를 이어지는 push 에서 빼(pull 이 쓴 노트) 로컬 편집이 올라가지 않는다.
+      // 원격이 지난 사본 그대로다 — 본 것만 적는다. 로컬 편집은 이어지는 push 가 올린다.
       if (resolution.remoteUnchanged) {
         this.recordObservation(record.id, page, rendered.bodyFingerprint);
-        return { path: record.obsidianPath, unchanged: true };
+        return { action: "unchanged", path: record.obsidianPath };
       }
-      // local-first: 로컬 보존, 리모트 변경 무시
-      return { path: record.obsidianPath };
+      // local-first: 로컬을 지키고 원격 변경은 받지 않는다. 본 것도 적지 않는다 — 로컬을 올려
+      // 원격을 맞출 때까지 다음 pull 이 다시 본다.
+      return { action: "skipped", path: record.obsidianPath };
     }
     if (resolution.action === "conflict") {
       this.stateDb.updateStatus(record.id, "conflict");
-      return { conflict: resolution.conflict };
+      return { action: "conflict", path: record.obsidianPath, conflict: resolution.conflict! };
     }
 
     // I5 false-churn 차단: 리모트 변환 결과가 디스크 내용과 바이트 동일하면 Notion 이
@@ -3431,7 +3430,7 @@ export class SyncOrchestrator {
         localMtime: stat?.mtime ?? record.localMtime ?? null,
         localFileSize: stat?.size ?? record.localFileSize ?? null,
       });
-      return { path: record.obsidianPath, unchanged: true };
+      return { action: "unchanged", path: record.obsidianPath };
     }
 
     await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
@@ -3463,7 +3462,7 @@ export class SyncOrchestrator {
       });
     });
 
-    return { path: record.obsidianPath };
+    return { action: "written", path: record.obsidianPath };
   }
 
   /**

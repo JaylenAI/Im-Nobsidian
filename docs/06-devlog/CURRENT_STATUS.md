@@ -40,7 +40,8 @@
 | 1    | `fix/leading-h1-create`                      | N-04 새 페이지 · 행을 만들면 맨 앞 `# H1` 이 Notion 에서 사라짐                                                                                          | 완료 `d384e98` |
 | 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음                                       | 완료 `3950eb5` |
 | 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜 · 구분선으로 시작하는 본문을 frontmatter 로 읽어 push 가 본문을 지움 · 첫 줄 `---js` 를 실행 | 완료 `9cd08ac` |
-| 1    | `fix/same-minute-remote-edit`                | N-05 관찰한 분 안의 Notion 수정을 pull 이 영영 못 받고, 다음 push 가 충돌 없이 덮어씀 · 이 도구가 만든 자식 · 읽기 전용 속성 변화를 충돌로 올림          | 완료           |
+| 1    | `fix/same-minute-remote-edit`                | N-05 관찰한 분 안의 Notion 수정을 pull 이 영영 못 받고, 다음 push 가 충돌 없이 덮어씀 · 이 도구가 만든 자식 · 읽기 전용 속성 변화를 충돌로 올림          | 완료 `a89994a` |
+| 1    | `fix/pull-skip-not-written`                  | F-h local-first 가 지킨 노트를 pull 이 받은 것으로 세어, 플러그인 Sync · 자동 동기화 · `watch` 가 그 로컬 편집을 영영 올리지 않음                        | 완료           |
 | 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)                                                                               | 대기           |
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                                                        | 대기           |
 | 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                                                                                                      | 대기           |
