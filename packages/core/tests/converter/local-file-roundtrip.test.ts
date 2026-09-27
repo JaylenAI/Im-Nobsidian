@@ -113,6 +113,15 @@ describe("코드 안의 임베드 (S-18)", () => {
     expect(push("`코드` 뒤 ![[a.png]] 끝")).toBe(`\`코드\` 뒤\n\n${PLACEHOLDER}\n\n끝`);
   });
 
+  // 코드에 붙은 임베드는 조각의 맨 앞·맨 끝에 온다. 조각만 보고 정하면 줄머리·줄끝으로
+  // 잘못 알아, 자리표시자가 코드와 한 줄에 붙어 quote 가 되지 못한다.
+  it.each([
+    ["바로 뒤", "`코드`![[a.png]] 끝", `\`코드\`\n\n${PLACEHOLDER}\n\n끝`],
+    ["바로 앞", "앞 ![[a.png]]`코드`", `앞\n\n${PLACEHOLDER}\n\n\`코드\``],
+  ])("인라인 코드 %s에 붙은 임베드도 자기 줄로 떼어 올린다", (_label, doc, expected) => {
+    expect(push(doc)).toBe(expected);
+  });
+
   it("두 문단의 홑 백틱 사이 임베드는 코드가 아니다 — 자리표시자로 올린다", () => {
     expect(push("홑 ` 하나\n\n![[a.png]]\n\n또 ` 하나")).toBe(
       `홑 \` 하나\n\n${PLACEHOLDER}\n\n또 \` 하나`,
