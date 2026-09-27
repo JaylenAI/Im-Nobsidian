@@ -58,6 +58,40 @@ describe("비이미지 로컬 임베드 push (D5)", () => {
   });
 });
 
+// S-19: v0.3.2 의 pull 은 Notion 에서 고치거나 지운 미디어의 마커를 노트에 되살렸다. 그 마커를
+// 그대로 올리면 자리표시자로 읽혀 옛 파일을 한 번 더 올린다 — 임베드만 자리표시자가 된다.
+describe("노트에 홀로 남은 미디어 마커 (S-19)", () => {
+  it("마커만 있는 줄은 보내지 않는다 — 임베드는 그대로 자리표시자가 된다", () => {
+    expect(push("![[a.png|새 설명]]\n%% im-nobsidian:local-image:a.png %%\n\n뒤 문단")).toBe(
+      "> 📎 a.png %% im-nobsidian:local-image:a.png%7C%EC%83%88%20%EC%84%A4%EB%AA%85 %%\n\n\n뒤 문단",
+    );
+  });
+
+  it("글 끝에 붙은 마커도 뗀다 — 마커 없는 옛 보존 기록이 줄 가운데에 넣었다", () => {
+    expect(push("앞 문단%% im-nobsidian:local-file:docs%2Fspec.pdf %%")).toBe("앞 문단");
+  });
+
+  it("코드 안의 마커는 그대로 둔다 — 마커 형식을 설명하는 글이다", () => {
+    const doc =
+      "```\n%% im-nobsidian:local-image:a.png %%\n```\n\n`%% im-nobsidian:local-file:b.pdf %%` 형식";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("볼트에 남은 자리표시자는 그대로 둔다 — 올리면 제자리 블록으로 바뀐다", () => {
+    const placeholder = "> 📎 a.png %% im-nobsidian:local-image:a.png %%";
+    expect(push(placeholder)).toBe(placeholder);
+  });
+
+  it("pull 은 건드리지 않는다", () => {
+    const input: ProcessorInput = {
+      content: "%% im-nobsidian:local-image:a.png %%",
+      metadata: {},
+      context: pullContext,
+    };
+    expect(new EmbedResolver().process(input).content).toBe(input.content);
+  });
+});
+
 describe("비이미지 로컬 임베드 pull 복원 (D5)", () => {
   it("local-file 마커 쌍을 ![[경로]] 로 복원한다", () => {
     expect(pull("> 📎 spec.pdf\n> %% im-nobsidian:local-file:docs/spec.pdf %%")).toBe(

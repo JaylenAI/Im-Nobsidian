@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import type { ImageReference } from "../../types/convert.js";
-import { spacedMarker } from "../../constants/markers.js";
+import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR, spacedMarker } from "../../constants/markers.js";
+import { mapOutsideCode } from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
 
 /**
@@ -18,6 +19,15 @@ const MARKDOWN_IMAGE_REGEX = /!\[([^\]]*)\]\(([^)]+)\)/g;
 
 const VIDEO_HOSTS = ["youtube.com", "youtu.be", "vimeo.com"];
 
+/**
+ * 노트에 홀로 남은 미디어 마커 — 같은 줄 앞에 `📎` 가 없는 것. push 가 심는 자리표시자
+ * (`> 📎 이름 %% …:local-image:… %%`)와 가른다.
+ */
+const STRAY_MEDIA_MARKER_RE = new RegExp(
+  `(?<!📎[^\\n]*)%%\\s*${MARKER_BRAND_RE}:local-(?:image|file):${MARKER_PAYLOAD_CHAR}+?\\s*%%`,
+  "gu",
+);
+
 export class EmbedResolver implements Processor {
   readonly name = "EmbedResolver";
   readonly order = 60;
@@ -26,7 +36,8 @@ export class EmbedResolver implements Processor {
     const images: ImageReference[] = input.metadata.images ? [...input.metadata.images] : [];
     const isPush = input.context.direction === "push";
 
-    let content = input.content.replace(
+    const source = isPush ? dropStrayMediaMarkers(input.content) : input.content;
+    let content = source.replace(
       OBSIDIAN_EMBED_REGEX,
       (
         match: string,
@@ -82,6 +93,21 @@ export class EmbedResolver implements Processor {
       metadata: { ...input.metadata, images },
     };
   }
+}
+
+/**
+ * 노트에 홀로 남은 미디어 마커를 뗀다(S-19).
+ *
+ * push 는 임베드만 자리표시자로 바꾸므로 노트에 마커가 따로 있을 까닭이 없다. 있다면 v0.3.2 의
+ * pull 이 남긴 것이다 — Notion 에서 캡션을 고치거나 미디어를 지우면 보존 마커 주입기가 push 때의
+ * 마커를 되살렸다. 그대로 올리면 자리표시자로 읽혀 옛 파일을 한 번 더 올리고, 지운 미디어가
+ * 되살아난다. 사용자가 쓴 것이 아니고, 읽기 화면에서는 주석이라 보이지도 않는다.
+ *
+ * 보내는 본문에서만 뗀다 — push 는 볼트에 쓰지 않는다. 마커만 있던 줄은 빈 줄이 된다. 코드 안의
+ * 마커(마커 형식을 설명하는 글)는 건드리지 않는다.
+ */
+function dropStrayMediaMarkers(content: string): string {
+  return mapOutsideCode(content, (segment) => segment.replace(STRAY_MEDIA_MARKER_RE, ""));
 }
 
 /** `경로|300` 형태의 표시 별칭을 떼고 실제 볼트 경로만 남긴다. */

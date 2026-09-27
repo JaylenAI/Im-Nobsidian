@@ -32,9 +32,10 @@ const CALLOUT_PLACEHOLDER_RE = new RegExp(
 // C. pull 의 보존 마커 주입기(PreserveMarkerInjector)가 되살린 로컬 첨부 마커 한 줄:
 //    %% brand:local-file:<경로|별칭> %%
 //    주입기는 파이프라인 안에서 이 재작성보다 먼저 돌아, .base 임베드가 아직 없다고 보고
-//    push 때 저장한 마커를 다시 넣는다. 같은 .base 로 임베드를 되살렸으면 그 줄은 할 일이
+//    push 때 저장한 마커를 다시 넣었다. 같은 .base 로 임베드를 되살렸으면 그 줄은 할 일이
 //    끝난 노이즈다 — S-03 실측: 자식 DB 가 있는 폴더 노트를 push 한 뒤 다시 받으면 임베드
-//    바로 아래에 이 줄이 남았다.
+//    바로 아래에 이 줄이 남았다. 주입기는 이제 미디어 마커를 넣지 않지만(S-19), 예전 판이
+//    노트에 남긴 줄이 Notion 에 글로 올라가 있으면 받을 때 다시 온다.
 const LOCAL_FILE_MARKER_LINE_RE = new RegExp(
   `^[ \\t]*%%\\s*${MARKER_BRAND_RE}:local-file:(${MARKER_PAYLOAD_CHAR}+?)\\s*%%[ \\t]*$`,
 );

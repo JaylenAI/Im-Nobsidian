@@ -5,9 +5,15 @@
  * 크기가 보였고, 캡션을 고치면 pull 이 임베드를 알아보지 못해 사본을 받았다. 이제 캡션에는 설명만
  * 싣고, 어느 임베드였는지는 Notion 이 저장한 파일 id 로 적어 둔다.
  *
- * 메모리 Notion 에 미디어 블록을 더한다 — 본문의 자리표시자 줄을 quote 블록으로 보여 주고, 그 뒤에
- * 붙인 미디어 블록은 markdown API 처럼 `![캡션](서명 URL)` · `<file src="…">이름</file>` 으로
- * 싣는다(E2E r1 에서 본 모양). 실제 StateDB(임시 파일) · 메모리 볼트와 함께 돌린다.
+ * S-19 — Notion 에서 미디어를 고치거나 지운 뒤 받으면, 보존 마커 주입기가 push 때의 자리표시자
+ * 마커를 «잃은 마커» 로 보고 노트에 되살렸다. 다음 push 가 그 마커를 자리표시자로 읽어 옛 파일을
+ * 한 번 더 올렸다 — 미디어가 둘이 되고, 지운 미디어가 되살아났다(E2E r2 M6 · M8). 그래서 여기서는
+ * 노트를 통째로 견준다.
+ *
+ * 메모리 Notion 에 미디어 블록을 더한다 — 본문에서 미디어 마커가 든 줄을 블록으로 보여 주고, 그
+ * 뒤에 붙인 미디어 블록은 markdown API 처럼 싣는다. 이미지는 `![캡션](서명 URL)`, 파일은
+ * `<file src="file://{…attachment:<파일 id>:<이름>…}">캡션</file>` 이다(E2E r2 에서 본 모양).
+ * 실제 StateDB(임시 파일) · 메모리 볼트와 함께 돌린다.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
@@ -20,16 +26,26 @@ import { createConfig } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
 const SPACE_ID = "5d2f8a41-3c7e-4b19-9e0a-7f6d2c1b8a93";
-const NOTE = "# 노트\n\n앞 문단\n\n![[assets/a.png|설명|300]]\n\n![[docs/계약서.pdf]]\n\n뒤 문단\n";
+const IMAGE_EMBED = "![[assets/a.png|설명|300]]";
+const NOTE = `# 노트\n\n앞 문단\n\n${IMAGE_EMBED}\n\n![[docs/계약서.pdf]]\n\n뒤 문단\n`;
 
-/** 자리표시자 한 줄 — push 가 본문에 심는다. */
-const PLACEHOLDER_LINE = /^> (📎 .* %% im-nobsidian:local-(?:image|file):.* %%)$/u;
+/** 미디어 마커가 든 줄 — push 가 심은 자리표시자(`> 📎 …`)이거나, 노트에 홀로 남은 마커다. */
+const MARKER_LINE = /^(?:> )?(.*%% im-nobsidian:local-(?:image|file):.* %%)$/u;
 
 function signedUrl(fileId: string, name: string): string {
   return (
     `https://prod-files-secure.s3.us-west-2.amazonaws.com/${SPACE_ID}/${fileId}/` +
     `${encodeURIComponent(name)}?X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=sig`
   );
+}
+
+/** markdown API 가 파일 블록의 src 에 싣는 내부 참조. */
+function internalFileUrl(fileId: string, name: string, blockId: string): string {
+  const source = {
+    source: `attachment:${fileId}:${name}`,
+    permissionRecord: { table: "block", id: blockId, spaceId: SPACE_ID },
+  };
+  return `file://${encodeURIComponent(JSON.stringify(source))}`;
 }
 
 interface MediaRequest {
@@ -43,34 +59,36 @@ interface MediaBody {
   readonly caption: { readonly text: { readonly content: string } }[];
 }
 
-/** 메모리 Notion 에 미디어 블록을 더한다. */
-function withMediaBlocks(notion: ReturnType<typeof memoryNotion>): void {
+/** 메모리 Notion 에 미디어 블록을 더한다. 올린 파일 이름을 올린 순서대로 돌려준다. */
+function withMediaBlocks(notion: ReturnType<typeof memoryNotion>): string[] {
   const uploads = new Map<string, string>();
+  const uploaded: string[] = [];
   let stored = 0;
   const childPages = notion.client.fetchAllChildren.getMockImplementation()!;
 
   notion.client.uploadFile.mockImplementation(async (_blob: Blob, name: string) => {
     const id = `upload-${uploads.size + 1}`;
     uploads.set(id, name);
+    uploaded.push(name);
     return id;
   });
-  // 자리표시자 줄은 quote 블록이다 — 블록 id 는 `<페이지>#<줄 번호>`.
+  // 마커가 든 줄은 블록이다 — 자리표시자는 quote, 홀로 남은 마커는 문단. 블록 id 는 `<페이지>#<줄 번호>`.
   notion.client.fetchAllChildren.mockImplementation(async (parentId: string) => {
     const lines = notion.pages.get(parentId)?.body.split("\n") ?? [];
-    const quotes = lines.flatMap((line, i) => {
-      const text = PLACEHOLDER_LINE.exec(line)?.[1];
-      return text
-        ? [
-            {
-              id: `${parentId}#${i}`,
-              type: "quote",
-              has_children: false,
-              quote: { rich_text: [{ plain_text: text }] },
-            },
-          ]
-        : [];
+    const markerBlocks = lines.flatMap((line, i) => {
+      const text = MARKER_LINE.exec(line)?.[1];
+      if (!text) return [];
+      const type = line.startsWith("> ") ? "quote" : "paragraph";
+      return [
+        {
+          id: `${parentId}#${i}`,
+          type,
+          has_children: false,
+          [type]: { rich_text: [{ plain_text: text }] },
+        },
+      ];
     });
-    return [...quotes, ...(await childPages(parentId))];
+    return [...markerBlocks, ...(await childPages(parentId))];
   });
   // 자리표시자 뒤에 붙인 미디어 블록 — 그 줄을 Notion 이 돌려주는 모양으로 바꾼다. 자리표시자
   // 블록을 지우는 요청(deleteBlock)은 여기서 이미 끝난 셈이다.
@@ -82,30 +100,32 @@ function withMediaBlocks(notion: ReturnType<typeof memoryNotion>): void {
       const created = blocks.map((block) => {
         const body = block[block.type]!;
         const name = uploads.get(body.file_upload.id)!;
-        const fileId = `00000000-0000-4000-9000-${String(++stored).padStart(12, "0")}`;
-        const url = signedUrl(fileId, name);
+        const blockId = `media-${++stored}`;
+        const fileId = `00000000-0000-4000-9000-${String(stored).padStart(12, "0")}`;
         const caption = body.caption.map((c) => c.text.content).join("");
         lines[at] =
           block.type === "image"
-            ? `![${caption.replace(/\|/g, "\\|")}](${url})`
-            : `<file src="${url}">${name}</file>`;
+            ? `![${caption.replace(/\|/g, "\\|")}](${signedUrl(fileId, name)})`
+            : `<file src="${internalFileUrl(fileId, name, blockId)}">${caption}</file>`;
         return {
-          id: `media-${stored}`,
+          id: blockId,
           type: block.type,
-          [block.type]: { type: "file", file: { url } },
+          [block.type]: { type: "file", file: { url: signedUrl(fileId, name) } },
         };
       });
       page.body = lines.join("\n");
       return created;
     },
   );
+  return uploaded;
 }
 
-describe("임베드 미디어 왕복(S-05)", () => {
+describe("임베드 미디어 왕복(S-05 · S-19)", () => {
   let tempDir: string;
   let db: StateDB;
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
+  let uploaded: string[];
   let download: ReturnType<typeof vi.fn>;
   let orchestrator: SyncOrchestrator;
   let pageId: string;
@@ -115,7 +135,7 @@ describe("임베드 미디어 왕복(S-05)", () => {
     db = StateDB.open(join(tempDir, "state.db"));
     vault = new MemoryVault();
     notion = memoryNotion();
-    withMediaBlocks(notion);
+    uploaded = withMediaBlocks(notion);
     download = vi.fn(
       async () =>
         new Response(new Uint8Array([1, 2, 3]), {
@@ -169,11 +189,32 @@ describe("임베드 미디어 왕복(S-05)", () => {
     return [...vault.files.keys()].filter((path) => path.startsWith("attachments/"));
   }
 
+  /** 받은 노트 — 끝 줄바꿈은 메모리 Notion 이 본문을 저장하는 방식의 차이라 보지 않는다. */
+  function note(): string | undefined {
+    return vault.read("Note.md")?.trimEnd();
+  }
+
+  /** 로컬에서 글을 고쳐 본문 push 를 일으키고, 그 push 가 올린 파일 이름을 돌려준다. */
+  async function pushLocalEdit(): Promise<string[]> {
+    vault.write("Note.md", vault.read("Note.md")!.replace("앞 문단", "앞 문단 — 로컬에서 고침"));
+    const before = uploaded.length;
+    expect(await orchestrator.push()).toMatchObject({ updated: 1, failed: [] });
+    return uploaded.slice(before);
+  }
+
+  /** Notion 본문에 실린 미디어 줄. */
+  function mediaLines(): string[] {
+    return notion.pages
+      .get(pageId)!
+      .body.split("\n")
+      .filter((line) => line.startsWith("![") || line.startsWith("<file"));
+  }
+
   it("Notion 캡션에는 설명만 보인다 — 경로 · 크기 · 파일 이름을 싣지 않는다", () => {
     const body = notion.pages.get(pageId)!.body;
 
     expect(body).toMatch(/^!\[설명\]\(https:\/\/prod-files-secure/m);
-    expect(body).toMatch(/^<file src="https:\/\/prod-files-secure[^"]+">계약서\.pdf<\/file>$/m);
+    expect(body).toMatch(/^<file src="file:\/\/[^"]+"><\/file>$/m);
     expect(body).not.toContain("assets/a.png");
     expect(body).not.toContain("im-nobsidian:local-");
   });
@@ -184,10 +225,7 @@ describe("임베드 미디어 왕복(S-05)", () => {
     const pull = await orchestrator.pull();
 
     expect(pull).toMatchObject({ updated: 1, failed: [] });
-    // 끝 줄바꿈은 메모리 Notion 이 본문을 저장하는 방식의 차이라 보지 않는다.
-    expect(vault.read("Note.md")?.trimEnd()).toBe(
-      NOTE.replace("뒤 문단", "뒤 문단 — Notion 에서 고침").trimEnd(),
-    );
+    expect(note()).toBe(NOTE.replace("뒤 문단", "뒤 문단 — Notion 에서 고침").trimEnd());
     expect(download).not.toHaveBeenCalled();
     expect(attachments()).toEqual([]);
   });
@@ -197,7 +235,7 @@ describe("임베드 미디어 왕복(S-05)", () => {
 
     await orchestrator.pull();
 
-    expect(vault.read("Note.md")).toContain("![[assets/a.png|새 설명|300]]");
+    expect(note()).toBe(NOTE.replace(IMAGE_EMBED, "![[assets/a.png|새 설명|300]]").trimEnd());
     expect(download).not.toHaveBeenCalled();
   });
 
@@ -206,8 +244,30 @@ describe("임베드 미디어 왕복(S-05)", () => {
 
     await orchestrator.pull();
 
-    expect(vault.read("Note.md")).toContain("![[assets/a.png|300]]");
+    expect(note()).toBe(NOTE.replace(IMAGE_EMBED, "![[assets/a.png|300]]").trimEnd());
     expect(download).not.toHaveBeenCalled();
+  });
+
+  it("Notion 에서 파일 블록에 캡션을 달면 그 설명으로 받는다", async () => {
+    editInNotion((body) => body.replace("></file>", ">계약서 사본</file>"));
+
+    await orchestrator.pull();
+
+    expect(note()).toBe(
+      NOTE.replace("![[docs/계약서.pdf]]", "![[docs/계약서.pdf|계약서 사본]]").trimEnd(),
+    );
+    expect(download).not.toHaveBeenCalled();
+  });
+
+  it("Notion 에서 캡션을 고친 뒤 push 해도 미디어를 한 번씩만 올린다(S-19)", async () => {
+    editInNotion((body) => body.replace("![설명]", "![새 설명]"));
+    await orchestrator.pull();
+
+    const pushed = await pushLocalEdit();
+
+    expect(pushed.sort()).toEqual(["a.png", "계약서.pdf"]);
+    expect(mediaLines()).toHaveLength(2);
+    expect(mediaLines()[0]).toMatch(/^!\[새 설명\]\(/);
   });
 
   it("Notion 에서 같은 이름의 다른 파일로 바꾸면 사본을 받는다 — 옛 로컬 파일로 되돌리지 않는다", async () => {
@@ -222,18 +282,68 @@ describe("임베드 미디어 왕복(S-05)", () => {
 
     expect(download).toHaveBeenCalledTimes(1);
     expect(attachments()).toHaveLength(1);
-    expect(vault.read("Note.md")).toContain(`![[${attachments()[0]}|설명]]`);
+    expect(note()).toBe(NOTE.replace(IMAGE_EMBED, `![[${attachments()[0]}|설명]]`).trimEnd());
     expect(vault.read("assets/a.png")).toBe("PNG");
   });
 
+  it("Notion 에서 바꾼 파일을 받은 뒤 push 해도 옛 파일을 다시 올리지 않는다(S-19)", async () => {
+    editInNotion((body) =>
+      body.replace(
+        /(!\[설명\]\(https:\/\/[^/]+\/[^/]+\/)[^/]+/,
+        "$1ffffffff-0000-4000-9000-000000000099",
+      ),
+    );
+    await orchestrator.pull();
+
+    const pushed = await pushLocalEdit();
+
+    expect(pushed).not.toContain("a.png");
+    expect(mediaLines()).toHaveLength(2);
+  });
+
+  it("Notion 에서 미디어를 지우면 임베드도 지운다 — 다음 push 가 되살리지 않는다(S-19)", async () => {
+    editInNotion((body) =>
+      body
+        .split("\n")
+        .filter((line) => !line.startsWith("![설명]"))
+        .join("\n"),
+    );
+
+    await orchestrator.pull();
+
+    expect(note()).not.toContain("a.png");
+    expect(note()).not.toContain("im-nobsidian");
+    expect(note()).toContain("![[docs/계약서.pdf]]");
+
+    const pushed = await pushLocalEdit();
+
+    expect(pushed).toEqual(["계약서.pdf"]);
+    expect(mediaLines()).toHaveLength(1);
+  });
+
+  it("노트에 홀로 남은 미디어 마커는 올리지 않는다 — v0.3.2 의 pull 이 남긴 것(S-19)", async () => {
+    vault.write(
+      "Note.md",
+      NOTE.replace(
+        IMAGE_EMBED,
+        `${IMAGE_EMBED}\n%% im-nobsidian:local-image:assets%2Fa.png%7C%EC%84%A4%EB%AA%85%7C300 %%`,
+      ),
+    );
+
+    const pushed = await pushLocalEdit();
+
+    expect(pushed.sort()).toEqual(["a.png", "계약서.pdf"]);
+    expect(mediaLines()).toHaveLength(2);
+    expect(notion.pages.get(pageId)!.body).not.toContain("im-nobsidian");
+  });
+
   it("다시 push 해도 같은 모양으로 오간다 — 올릴 때마다 기록을 새로 적는다", async () => {
-    vault.write("Note.md", NOTE.replace("앞 문단", "앞 문단 — 로컬에서 고침"));
-    expect(await orchestrator.push()).toMatchObject({ updated: 1, failed: [] });
+    await pushLocalEdit();
     editInNotion((body) => body.replace("뒤 문단", "뒤 문단 — Notion 에서 고침"));
 
     await orchestrator.pull();
 
-    expect(vault.read("Note.md")?.trimEnd()).toBe(
+    expect(note()).toBe(
       NOTE.replace("앞 문단", "앞 문단 — 로컬에서 고침")
         .replace("뒤 문단", "뒤 문단 — Notion 에서 고침")
         .trimEnd(),
