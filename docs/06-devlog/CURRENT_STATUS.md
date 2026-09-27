@@ -27,8 +27,8 @@
 | 단계 | 브랜치                                       | 봉합 대상                                                                       | 상태           |
 | ---- | -------------------------------------------- | ------------------------------------------------------------------------------- | -------------- |
 | 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 완료 `94f72d7` |
-| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 진행 중        |
-| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시                                     | 대기           |
+| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 완료 `e241a06` |
+| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문 | 진행 중        |
 | 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 대기           |
 | 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기           |
 | 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기           |
@@ -38,7 +38,7 @@
 | A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조 · S-08 · N-01                                | 대기           |
 | A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`           | 대기           |
 | A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                       | 대기           |
-| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-08 변환 왕복                                                           | 대기           |
+| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-09 변환 왕복                                                           | 대기           |
 | 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                     | 대기           |
 | 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                       | 대기           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                       | 대기           |
