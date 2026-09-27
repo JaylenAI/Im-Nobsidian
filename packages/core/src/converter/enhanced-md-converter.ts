@@ -21,6 +21,8 @@ import {
   unknownMentionMarker,
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
+import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
+import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
   codeInteriorRanges,
@@ -875,7 +877,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
 /**
  * 빈 문단 토큰(`<empty-block/>`). 선행 여백을 **인용 접두 앞**에서 받아야 한다 —
  * 여백을 인용 뒤에만 두면 `\t> <empty-block/>`(리스트/칼럼 안 콜아웃의 빈 줄)이 매칭되지
@@ -884,7 +885,7 @@ const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
 const NOTION_EMPTY_BLOCK_RE = /^([\t ]*(?:>[\t ]*)*)<empty-block\/>[\t ]*\n?/gm;
 
 function convertPageLinks(content: string): string {
-  return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
+  return content.replace(CHILD_PAGE_TAG_RE, (_match, _url: string, text: string) => {
     const cleaned = text.replace(/\*\*/g, "").trim();
     return `[[${cleaned}]]`;
   });
@@ -894,18 +895,15 @@ function convertPageLinks(content: string): string {
 // (db-placeholder-rewriter)가 어느 .base 로 임베드를 재작성해야 할지 알 수 없다.
 // url 호스트는 www.notion.so / app.notion.com/p 로 갈리는 것이 실측됐으므로 32-hex 만 취한다.
 function convertDatabaseBlocks(content: string): string {
-  return content.replace(
-    /<database\b([^>]*)>([\s\S]*?)<\/database>/g,
-    (_match, attrs: string, title: string) => {
-      const clean = title.trim();
-      const placeholder = `**${clean}** *(Notion DB)*`;
-      const idMatch = /\burl="[^"]*?([a-f0-9]{32})[^"]*"/.exec(attrs);
-      if (!idMatch?.[1]) return placeholder;
-      return `${placeholder}${compactMarker(
-        `child-database:id=${idMatch[1]}&title=${encodeURIComponent(clean)}`,
-      )}`;
-    },
-  );
+  return content.replace(CHILD_DATABASE_TAG_RE, (_match, attrs: string, title: string) => {
+    const clean = title.trim();
+    const placeholder = `**${clean}** *(Notion DB)*`;
+    const id = databaseTagId(attrs);
+    if (!id) return placeholder;
+    return `${placeholder}${compactMarker(
+      `child-database:id=${id}&title=${encodeURIComponent(clean)}`,
+    )}`;
+  });
 }
 
 // 블록 색: NFM raw 는 문단/제목/리스트/인용의 색을 줄 끝 `{color="…"}` 로 내보낸다

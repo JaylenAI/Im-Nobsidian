@@ -38,6 +38,16 @@ export function isNotionObjectNotFound(error: unknown): boolean {
 }
 
 /**
+ * Notion SDK 의 400(`validation_error`) 판별 — 요청이 **적용되지 않고** 거절됐다는 신호다.
+ * 본문 교체가 자식 페이지 · 자식 DB 를 지우게 될 때도 이 코드로 거절된다
+ * ({@link NotionClient.replacePageMarkdown}).
+ */
+export function isNotionValidationError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (error as { code?: unknown }).code === "validation_error";
+}
+
+/**
  * 서브트리 직접 순회(getChildPagesRecursive) 비용이 시간 예산을 초과했을 때 던지는 신호.
  * 순회 비용은 **서브트리 전체 블록 수**에 비례(중첩 페이지 무손실 탐색을 위해 모든 블록을
  * 깊이 순회)하므로, 콘텐츠가 많은 대규모 서브트리에서는 워크스페이스 search 기반 디스커버리
@@ -249,6 +259,14 @@ export class NotionClient {
     return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: id }));
   }
 
+  /**
+   * 본문을 통째로 바꾼다. 자식 페이지 · 자식 DB 는 **지우지 않는다**(S-03).
+   *
+   * `allow_deleting_content: true` 로 보내면 새 본문에 `<page>` · `<database>` 태그가 없는
+   * 자식을 Notion 이 휴지통으로 보낸다. 삭제를 허용하지 않으면 무엇이 지워질지 나열하며
+   * `validation_error` 로 거절하고 아무것도 바꾸지 않는다(2026-09-27 실측) — 호출측이
+   * 자식 태그를 되돌려 놓고 다시 보낸다(`sync/page-body.ts`).
+   */
   async replacePageMarkdown(pageId: string, markdown: string): Promise<PageMarkdownResponse> {
     return this.withRateLimit(() =>
       this.client.pages.updateMarkdown({
@@ -256,7 +274,7 @@ export class NotionClient {
         type: "replace_content",
         replace_content: {
           new_str: markdown,
-          allow_deleting_content: true,
+          allow_deleting_content: false,
         },
       }),
     );
@@ -277,7 +295,8 @@ export class NotionClient {
               new_str: p.newStr,
               replace_all_matches: p.replaceAll ?? false,
             })),
-            allow_deleting_content: true,
+            // 부분 치환도 자식을 지우지 않는다 — 이유는 replacePageMarkdown 과 같다.
+            allow_deleting_content: false,
           },
         }),
       NOT_IDEMPOTENT,
