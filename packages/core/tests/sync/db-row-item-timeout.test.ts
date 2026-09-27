@@ -99,6 +99,7 @@ function createMockNotionClient() {
     createPageWithMarkdown: vi
       .fn()
       .mockResolvedValue({ id: "new-page", last_edited_time: "2026-07-27T00:00:00.000Z" }),
+    restoreLeadingHeading: vi.fn().mockResolvedValue(false),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
     extractTitle: vi.fn().mockImplementation((page: { id: string }) => `제목 ${page.id}`),
     extractCover: vi.fn().mockReturnValue(null),

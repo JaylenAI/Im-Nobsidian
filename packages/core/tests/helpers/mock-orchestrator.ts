@@ -96,6 +96,7 @@ export function createMockNotionClient() {
       parent: { type: "page_id", page_id: "root-page-id" },
       properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
     }),
+    restoreLeadingHeading: vi.fn().mockResolvedValue(false),
     uploadFile: vi.fn().mockResolvedValue("file-upload-id"),
     listChildren: vi.fn().mockResolvedValue({ results: [] }),
     getChildPagesRecursive: vi.fn().mockResolvedValue([]),

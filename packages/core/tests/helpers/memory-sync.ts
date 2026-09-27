@@ -5,6 +5,7 @@
  * 수정 시각을, Notion 은 만든 페이지의 제목 · 부모 · 수정 시각을 기억해야 한다. 시험마다 따로
  * 두면 한쪽만 고쳐져 같은 동작을 서로 다르게 흉내 낸다.
  */
+import { NotionClient } from "../../src/notion/client.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createMockNotionClient, createMockVaultFs } from "./mock-orchestrator.js";
 
@@ -159,8 +160,16 @@ export function memoryNotion() {
     return [find(id).body, ...children].filter((part) => part.length > 0).join("\n");
   };
 
-  client.createPageWithMarkdown.mockImplementation(create);
+  // Notion 은 markdown 으로 만들 때 맨 앞 `# H1` 을 버린다(N-04, 실측). 본문 교체는 남긴다.
+  client.createPageWithMarkdown.mockImplementation(
+    async (params: { parentId: string; title: string; markdown: string }) =>
+      create({ ...params, markdown: params.markdown.replace(/^\n*# [^\n]*\n?/, "") }),
+  );
   client.createPage.mockImplementation(create);
+  // 되살릴지는 제품이 정한다 — 전송(replacePageMarkdown)만 이 메모리로 흉내 낸다.
+  client.restoreLeadingHeading.mockImplementation(async (id: string, markdown: string) =>
+    NotionClient.prototype.restoreLeadingHeading.call(client as never, id, markdown),
+  );
   client.getPage.mockImplementation(async (id: string) => view(find(id)));
   client.extractTitle.mockImplementation(
     (page: { properties: { title: { title: Array<{ plain_text: string }> } } }) =>

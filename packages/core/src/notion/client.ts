@@ -48,6 +48,18 @@ export function isNotionValidationError(error: unknown): boolean {
 }
 
 /**
+ * markdown 이 `# H1` 으로 시작하는가(앞의 빈 줄은 건너뛴다).
+ *
+ * Notion 은 markdown 으로 페이지 · 행을 만들 때(`pages.create`) 맨 앞의 H1 을 버린다. 가운데 H1 ·
+ * 맨 앞 `##` 는 남기고, 본문 교체(`replace_content`)는 맨 앞 H1 도 남긴다(N-04, 2026-09-27 실측).
+ * `#태그` 처럼 `#` 뒤에 공백이 없으면 제목이 아니다.
+ */
+export function startsWithHeading1(markdown: string): boolean {
+  const first = markdown.split("\n").find((line) => line.trim().length > 0);
+  return first !== undefined && /^ {0,3}#[ \t]+\S/.test(first);
+}
+
+/**
  * 서브트리 직접 순회(getChildPagesRecursive) 비용이 시간 예산을 초과했을 때 던지는 신호.
  * 순회 비용은 **서브트리 전체 블록 수**에 비례(중첩 페이지 무손실 탐색을 위해 모든 블록을
  * 깊이 순회)하므로, 콘텐츠가 많은 대규모 서브트리에서는 워크스페이스 search 기반 디스커버리
@@ -217,6 +229,21 @@ export class NotionClient {
         }) as Promise<PageObjectResponse>,
       NOT_IDEMPOTENT,
     );
+  }
+
+  /**
+   * {@link createPageWithMarkdown} 이 버린 맨 앞 `# H1` 을 되살린다 — 그 markdown 이 H1 으로
+   * 시작할 때만 같은 markdown 으로 본문을 한 번 바꾼다({@link startsWithHeading1}).
+   *
+   * 만든 직후, 하위 페이지를 만들기 전에 부른다 — 교체가 지울 자식이 없다. 호출측은 먼저 페이지
+   * 매핑을 적어 둔다: 여기서 실패해도 다음 push 가 새로 만들지 않고 본문을 다시 보낸다.
+   *
+   * @returns 본문을 바꿨으면 true
+   */
+  async restoreLeadingHeading(pageId: string, markdown: string): Promise<boolean> {
+    if (!startsWithHeading1(markdown)) return false;
+    await this.replacePageMarkdown(pageId, markdown);
+    return true;
   }
 
   async updatePageProperties(
