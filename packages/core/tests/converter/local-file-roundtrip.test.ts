@@ -3,6 +3,7 @@ import { EmbedResolver } from "../../src/converter/pre-processors/embed.js";
 import { LocalImageRestorer } from "../../src/converter/post-processors/local-image-restorer.js";
 import { PreserveMarkerInjector } from "../../src/converter/post-processors/preserve-marker-injector.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
+import { roundtrip } from "./roundtrip-fidelity.js";
 
 const pushContext = {
   direction: "push" as const,
@@ -89,6 +90,57 @@ describe("노트에 홀로 남은 미디어 마커 (S-19)", () => {
       context: pullContext,
     };
     expect(new EmbedResolver().process(input).content).toBe(input.content);
+  });
+});
+
+// S-18: 코드 안의 임베드는 임베드 문법을 보여 주는 글이다 — Obsidian 도 임베드로 그리지 않는다.
+// 예전 push 는 여기도 자리표시자로 바꿔, 펜스 안이면 Notion 코드에 `> 📎 …` 가 보였고 인라인
+// 코드는 둘로 쪼개져 그 사이에 자리표시자 줄이 들어갔다.
+describe("코드 안의 임베드 (S-18)", () => {
+  const PLACEHOLDER = "> 📎 a.png %% im-nobsidian:local-image:a.png %%";
+
+  it("코드 펜스 안의 임베드는 그대로 올린다", () => {
+    const doc = "```md\n![[a.png]]\n![[docs/spec.pdf|사본]]\n```";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("인라인 코드 안의 임베드는 그대로 올린다 — 문단을 쪼개지 않는다", () => {
+    const doc = "형식은 `![[b.pdf]]` 처럼 쓴다";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("인라인 코드 뒤의 임베드는 자기 줄로 떼어 올린다 — 코드는 앞 문단에 남는다", () => {
+    expect(push("`코드` 뒤 ![[a.png]] 끝")).toBe(`\`코드\` 뒤\n\n${PLACEHOLDER}\n\n끝`);
+  });
+
+  it("두 문단의 홑 백틱 사이 임베드는 코드가 아니다 — 자리표시자로 올린다", () => {
+    expect(push("홑 ` 하나\n\n![[a.png]]\n\n또 ` 하나")).toBe(
+      `홑 \` 하나\n\n${PLACEHOLDER}\n\n또 \` 하나`,
+    );
+  });
+
+  it("코드 안의 동영상 이미지 링크는 임베드 마커로 바꾸지 않는다", () => {
+    const doc = "```\n![영상](https://youtu.be/abc)\n```";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("코드 안의 임베드는 올릴 목록에 넣지 않는다", () => {
+    const input: ProcessorInput = {
+      content: "`![[a.png]]`\n\n![[b.png]]",
+      metadata: {},
+      context: pushContext,
+    };
+    expect(new EmbedResolver().process(input).metadata.images).toEqual([
+      { url: "b.png", localPath: "b.png", isExternal: false },
+    ]);
+  });
+
+  it.each([
+    ["코드 펜스", "앞 문단\n\n```md\n![[a.png]]\n![[docs/spec.pdf|사본]]\n```\n\n뒤 문단"],
+    ["인라인 코드", "형식은 `![[b.pdf]]` 처럼 쓴다\n\n![[a.png|설명]]"],
+  ])("%s — 임베드가 기본 파이프라인을 오가도 그대로다", (_label, doc) => {
+    const result = roundtrip(doc);
+    expect(result.outputBody).toBe(result.inputBody);
   });
 });
 

@@ -367,6 +367,30 @@ describe("임베드 미디어 왕복(S-05 · S-19)", () => {
     expect(download).not.toHaveBeenCalled();
   });
 
+  it("코드 안의 임베드는 올리지 않고 글자 그대로 오간다(S-18)", async () => {
+    const code =
+      "# 코드\n\n형식은 `![[assets/a.png]]` 처럼 쓴다\n\n```md\n![[docs/계약서.pdf]]\n```\n\n끝 문단\n";
+    vault.write("Code.md", code);
+    const before = uploaded.length;
+
+    expect(await orchestrator.push()).toMatchObject({ created: 1, failed: [] });
+
+    const codePageId = db.getByPath("Code.md")!.notionPageId!;
+    const body = notion.pages.get(codePageId)!.body;
+    expect(uploaded.slice(before)).toEqual([]);
+    expect(body).toContain("형식은 `![[assets/a.png]]` 처럼 쓴다");
+    expect(body).toContain("```md\n![[docs/계약서.pdf]]\n```");
+
+    notion.edit(codePageId, (page) => {
+      page.body = page.body.replace("끝 문단", "끝 문단 — Notion 에서 고침");
+    });
+    await orchestrator.pull();
+
+    expect(vault.read("Code.md")?.trimEnd()).toBe(
+      code.replace("끝 문단", "끝 문단 — Notion 에서 고침").trimEnd(),
+    );
+  });
+
   it("다시 push 해도 같은 모양으로 오간다 — 올릴 때마다 기록을 새로 적는다", async () => {
     await pushLocalEdit();
     editInNotion((body) => body.replace("뒤 문단", "뒤 문단 — Notion 에서 고침"));
