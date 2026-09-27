@@ -37,8 +37,8 @@
 | 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경 · 이동이 Notion 에 안 가고 push 마다 updated 로 셈                                                                            | 완료 `3c24094` |
 | 1    | `fix/folder-note-create`                     | S-15 새 폴더와 그 폴더 노트를 한 push 에 만들면 폴더 페이지가 둘 · 형제가 두 부모로 갈림 · 다음 pull 이 폴더 페이지를 `(id)` 파일로 받음          | 완료 `72730c9` |
 | 1    | `fix/folder-record-pull`                     | S-16 폴더 레코드 아래 새 Notion 페이지를 한 층 위에 받음 · S-17 폴더 레코드의 원격 수정을 파일처럼 받음                                           | 완료 `3ac56e9` |
-| 1    | `fix/leading-h1-create`                      | N-04 새 페이지 · 행을 만들면 맨 앞 `# H1` 이 Notion 에서 사라짐                                                                                   | 완료           |
-| 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음                                | 대기           |
+| 1    | `fix/leading-h1-create`                      | N-04 새 페이지 · 행을 만들면 맨 앞 `# H1` 이 Notion 에서 사라짐                                                                                   | 완료 `d384e98` |
+| 1    | `fix/configured-db-row-push`                 | 설정 DB · DB 모드 행을 행 경로로 — 모든 속성 push · 수정 시각 덮어씀 · 충돌 무시 · 새 행의 폴더 페이지와 입양 없음                                | 완료           |
 | 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                                                                                       | 대기           |
 | 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync 에서 DB 행이 원격 삭제로 판정될 수 있음(시험으로 확인부터)                                                                        | 대기           |
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                                                 | 대기           |

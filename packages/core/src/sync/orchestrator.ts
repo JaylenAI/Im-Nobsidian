@@ -12,6 +12,7 @@ import type {
   Conflict,
   ConflictStrategy,
   FailedOperation,
+  FileType,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult } from "../types/convert.js";
@@ -332,15 +333,14 @@ export class SyncOrchestrator {
     const excludeSet = options?.excludePaths ? new Set(options.excludePaths) : null;
     const filtered = (
       options?.paths ? eligible.filter((c) => inAnyPathScope(c.path, options.paths)) : eligible
-    ).filter((c) => !this.isConfiguredDbPath(c.path) && (!excludeSet || !excludeSet.has(c.path)));
+    ).filter((c) => !excludeSet || !excludeSet.has(c.path));
     // 범위를 좁힌 push 는 그 범위 안의 폴더만 옮긴다. 노트의 부모는 폴더 레코드의 페이지라, 폴더
     // 페이지를 옮기기 전에도 노트는 맞는 자리로 간다.
     const folderMoves = this.pendingFolderMoves(plan).filter((move) =>
       inAnyPathScope(move.to, options?.paths),
     );
 
-    const hasDbConfigs = (this.config.notion.databases?.length ?? 0) > 0;
-    if (filtered.length === 0 && folderMoves.length === 0 && !hasDbConfigs) {
+    if (filtered.length === 0 && folderMoves.length === 0) {
       return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
     }
 
@@ -498,17 +498,6 @@ export class SyncOrchestrator {
         }
       } catch (error) {
         getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
-      }
-    }
-
-    if ((this.config.notion.databases?.length ?? 0) > 0) {
-      try {
-        const dbResult = await this.databaseSyncer.pushAll();
-        counts.created += dbResult.created;
-        counts.updated += dbResult.updated;
-        failed.push(...dbResult.failed);
-      } catch (error) {
-        getLogger().warn("[Im-Nobsidian] DB Push 중 오류:", error);
       }
     }
 
@@ -1675,20 +1664,6 @@ export class SyncOrchestrator {
     // 규칙이어야 만든 뒤 첫 갱신에서 제목이 뒤집히지 않는다. 행도 같다(pushRowUpdate).
     const title = noteTitle(conversionResult.properties, path);
 
-    let effectiveParentId = parentId;
-    let effectiveParentType: "page" | "database" = "page";
-    let effectiveProperties = conversionResult.properties;
-
-    if (this.isDatabaseMode) {
-      await this.ensureDbSchema();
-      effectiveParentId = this.config.notion.databaseId!;
-      effectiveParentType = "database";
-      effectiveProperties = this.propertyMapper.toNotionProperties(
-        conversionResult.properties,
-        title,
-      );
-    }
-
     // I12 WAL(쓰기-우선): 페이지를 만들기 전에 자리표시 state(notion_page_id=null) +
     // pending_operations(create) 를 먼저 기록한다. 생성 요청이 적용됐는데 응답이 유실되거나
     // (timeout) 프로세스가 죽어 매핑 기록 전에 중단되면, 다음 push 시작 시 recoverInterruptedPushOps
@@ -1713,8 +1688,8 @@ export class SyncOrchestrator {
     // 미완료 op 가 남아 있다 = 앞선 시도의 생성 요청이 적용됐는지 모른다(S-07 — 클라이언트는
     // 모호한 실패에서 생성 요청을 다시 보내지 않는다). 다시 만들기 전에 부모에서 제목으로
     // 찾아 입양한다. 목록을 읽지 못하면 던져서 이 항목만 실패로 남긴다 — 중복보다 낫다.
-    if (existingOp && effectiveParentType === "page") {
-      const orphan = await this.findChildPageByTitle(effectiveParentId, title);
+    if (existingOp) {
+      const orphan = await this.findChildPageByTitle(parentId, title);
       if (orphan) {
         this.adoptOrphanPage(path, orphan.id, parentId, placeholder);
         this.stateDb.markPendingCompleted(existingOp.id);
@@ -1734,11 +1709,11 @@ export class SyncOrchestrator {
       });
 
     const created = await this.pushCreatePage(
-      effectiveParentId,
-      effectiveParentType,
+      parentId,
+      "page",
       title,
       conversionResult.content,
-      effectiveProperties,
+      conversionResult.properties,
     );
     const { page } = created;
 
@@ -1798,17 +1773,20 @@ export class SyncOrchestrator {
   }
 
   /**
-   * DB 폴더에 새로 생긴 노트를 그 DB 의 행으로 만든다(S-04).
+   * DB 폴더(설정 · 자동 발견)에 새로 생긴 노트, 그리고 DB 모드의 새 노트를 그 DB 의 행으로
+   * 만든다(S-04).
    *
    * 갱신(pushRowUpdate)과 같은 규칙이다 — 속성은 DB 스키마의 속성으로, 본문은 본문으로 보내고
    * 본문에 속성 YAML 을 끼우지 않는다. DB 에 없는 키(`cover` · `aliases` …)는 보내지 않는다.
-   * 예전에는 자동 발견 DB 폴더의 새 노트가 DB 폴더 이름의 빈 페이지 아래 페이지로 만들어졌다.
+   * 예전에는 자동 발견 DB 폴더의 새 노트가 DB 폴더 이름의 빈 페이지 아래 페이지로 만들어졌고,
+   * 설정 DB 의 행은 WAL 없이 따로 만들어졌으며, DB 모드는 조상 폴더를 페이지로 만들었다.
    *
    * 생성 요청은 페이지와 같이 WAL 을 먼저 적는다. 요청이 적용됐는지 모르고 끝나면(S-07) 다음
    * 시도가 DB 에서 같은 제목의 짝 없는 행을 찾아 입양하고 로컬 내용으로 맞춘다.
    */
   private async pushCreateRow(path: string, databaseId: string): Promise<void> {
     const content = await this.vaultFs.readFile(path);
+    const fileType = this.newRowFileType(path);
     // frontmatter 를 못 읽으면 만들지 않는다 — 파이프라인은 읽지 못한 frontmatter 를 «속성
     // 없음» 으로 넘겨, 제목만 있는 행이 생기고 속성은 사라진다.
     let current: ReturnType<typeof parseFrontmatter>;
@@ -1857,7 +1835,7 @@ export class SyncOrchestrator {
       notionLastEdited: null,
       localLastModified: new Date().toISOString(),
       syncDirection: "both",
-      fileType: "db-row",
+      fileType,
       status: "pending",
       baseSnapshot: null,
       localMtime: null,
@@ -1904,7 +1882,7 @@ export class SyncOrchestrator {
       notionLastEdited: page.last_edited_time,
       localLastModified: new Date().toISOString(),
       syncDirection: "both",
-      fileType: "db-row",
+      fileType,
       status: "pending",
       baseSnapshot: null,
       localMtime: null,
@@ -1924,7 +1902,7 @@ export class SyncOrchestrator {
         notionLastEdited: lastEdited,
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
-        fileType: "db-row",
+        fileType,
         status: "synced",
         baseSnapshot: Buffer.from(content, "utf-8"),
         localMtime: fileStat?.mtime ?? null,
@@ -2084,6 +2062,15 @@ export class SyncOrchestrator {
     }
     if (this.isDatabaseMode) return this.config.notion.databaseId!;
     return null;
+  }
+
+  /**
+   * 새 행의 레코드 종류. DB 모드의 노트는 행이어도 페이지 레코드로 적는다 — DB 모드의 pull · 복원 ·
+   * 렌더는 그 볼트의 노트를 모두 페이지 레코드로 다루고, 행인지는 전역 모드로 가른다(rowDatabaseOf).
+   */
+  private newRowFileType(path: string): FileType {
+    if (!this.isDatabaseMode) return "db-row";
+    return isFolderNotePath(path) ? "folder-note" : "file";
   }
 
   /**
@@ -3369,19 +3356,9 @@ export class SyncOrchestrator {
   // 옛 페이지를 두고 새 페이지를 만들거나(내용도 바꾼 경우), 짝을 지어도 아무것도 하지 않았다.
   // ──────────────────────────────────────────────────────────────────────────
 
-  /** 설정 DB 폴더의 경로 — 그 행은 DB 동기화(databaseSyncer)가 따로 다룬다. */
-  private isConfiguredDbPath(path: string): boolean {
-    return (this.config.notion.databases ?? []).some((db) =>
-      path.startsWith(db.localFolder.endsWith("/") ? db.localFolder : `${db.localFolder}/`),
-    );
-  }
-
-  /** 변경 감지 옵션 — 플러그인이 적어 둔 이름 변경 힌트와, 이동으로 짝짓지 않을 설정 DB 경로. */
+  /** 변경 감지 옵션 — 플러그인이 적어 둔 이름 변경 힌트. */
   private localScanOptions(): LocalScanOptions & { readonly hints: RenameHints } {
-    return {
-      hints: this.renameHints(),
-      excludeFromMoves: (path) => this.isConfiguredDbPath(path),
-    };
+    return { hints: this.renameHints() };
   }
 
   private renameHints(): RenameHints {
@@ -3698,7 +3675,7 @@ export class SyncOrchestrator {
    *
    * 예전에는 폴더 페이지를 먼저 만들고 폴더 노트를 그 아래에 만들어 같은 이름의 페이지가 두 겹으로
    * 생기고, 형제 노트는 어느 쪽이 먼저 생겼느냐에 따라 두 부모로 갈렸다(S-15). DB 모드는 모든 노트가
-   * 루트 DB 의 행이라 폴더 노트가 폴더의 자리가 아니다 — 폴더 페이지만 본다.
+   * 루트 DB 의 행이라 마련할 폴더가 없다({@link foldersToEnsure}).
    *
    * 자리를 마련하지 못한 폴더는 이유를 적어 두고 넘어간다({@link unpreparedFolders}) — 그 안의 노트와
    * 하위 폴더가 그 이유로 실패한다. 예전 첫 차례는 폴더 하나를 못 만들면 push 전체가 멈췄다.
@@ -3724,7 +3701,7 @@ export class SyncOrchestrator {
         continue;
       }
       try {
-        const note = this.isDatabaseMode ? undefined : newNotes.get(folderNoteOf(folder));
+        const note = newNotes.get(folderNoteOf(folder));
         const lookup = this.folderLookup();
         if (note && !lookup.databaseAt(folder)) {
           if (this.adoptFolderPage(folder, note.path)) continue;
@@ -3948,7 +3925,7 @@ export class SyncOrchestrator {
     if (container?.kind === "database") {
       throw new Error("DB 폴더의 노트는 페이지가 아니라 행이다");
     }
-    if (isFolderNotePath(filePath) && !this.isDatabaseMode) {
+    if (isFolderNotePath(filePath)) {
       // push 가 만든 폴더 페이지는 폴더 노트가 삼는다(prepareFolders) — 여기 왔으면 아직 삼지 못한
       // 것이다. 그 아래에 만들면 같은 이름의 페이지가 두 겹이 된다(S-15).
       const folderRecord = this.stateDb.getByPath(folder);
@@ -4002,14 +3979,14 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 이 경로에 새로 생긴 노트가 들어갈 DB — DB 폴더 직속이면 그 DB, 아니면 null(페이지).
-   * DB 모드는 모든 노트가 루트 DB 의 행이고 따로 처리한다(pushCreate).
+   * 이 경로에 새로 생긴 노트가 들어갈 DB — DB 폴더(설정 · 자동 발견) 직속이면 그 DB, 아니면
+   * null(페이지). DB 모드는 모든 노트가 루트 DB 의 행이다 — 폴더는 Notion 의 자리를 정하지 않는다.
    */
   private newRowDatabaseOf(
     path: string,
     lookup: FolderLookup = this.folderLookup(),
   ): string | null {
-    if (this.isDatabaseMode) return null;
+    if (this.isDatabaseMode) return this.config.notion.databaseId!;
     return lookup.databaseAt(parentFolderOf(path));
   }
 

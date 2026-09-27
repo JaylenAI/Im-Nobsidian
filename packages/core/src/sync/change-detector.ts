@@ -20,11 +20,6 @@ export interface FileInfo {
 export interface LocalScanOptions {
   /** 플러그인이 적어 둔 이름 변경 힌트. */
   readonly hints?: RenameHints;
-  /**
-   * 이동으로 짝짓지 않을 경로 — 설정 DB 폴더의 행. 그 행의 이름 변경은 DB 동기화가 따로
-   * 다룬다.
-   */
-  readonly excludeFromMoves?: (path: string) => boolean;
 }
 
 /**
@@ -126,7 +121,6 @@ export class ChangeDetector {
     moveOrigins: ReadonlyMap<string, string>,
     options: LocalScanOptions | undefined,
   ): LocalScan {
-    const excluded = options?.excludeFromMoves ?? (() => false);
     const changes: LocalChange[] = [];
     const untracked: Array<{ path: string; hash: string }> = [];
     const existing = new Set<string>();
@@ -135,8 +129,7 @@ export class ChangeDetector {
       existing.add(file.path);
       const { record, hash } = file;
       if (!hasRemotePage(record)) {
-        if (record === null && !excluded(file.path))
-          untracked.push({ path: file.path, hash: hash! });
+        if (record === null) untracked.push({ path: file.path, hash: hash! });
         else
           changes.push({
             path: file.path,
@@ -173,9 +166,8 @@ export class ChangeDetector {
         // 폴더 페이지는 파일이 아니다 — 폴더가 사라진 것은 파일 목록으로 알 수 없다.
         !isFolderRecord(record),
     );
-    const movable = missing.filter((record) => !excluded(record.obsidianPath));
     const pairs = pairLocalMoves(
-      movable.map((record) => ({
+      missing.map((record) => ({
         path: record.obsidianPath,
         hash: record.contentHash,
         origin: moveOrigins.get(record.id),
@@ -184,7 +176,7 @@ export class ChangeDetector {
       options?.hints ?? EMPTY_RENAME_HINTS,
     );
 
-    const recordAt = new Map(movable.map((record) => [record.obsidianPath, record]));
+    const recordAt = new Map(missing.map((record) => [record.obsidianPath, record]));
     const hashAt = new Map(untracked.map((file) => [file.path, file.hash]));
     const adoptions: LocalMoveAdoption[] = [];
     for (const pair of pairs) {
