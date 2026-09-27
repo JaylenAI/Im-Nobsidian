@@ -1,8 +1,51 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-07-28
-> 버전: **v0.3.2 릴리스 완료** — `R0~R13` 실데이터 충실도·견고성 트랙 + `P1~P11` 볼트 렌더
-> 트랙을 묶어 dev→main 통일 후 태그·릴리스 발행
+> 마지막 업데이트: 2026-09-27
+> 버전: **v0.3.2 릴리스 완료** · **v0.4.0 트랙 진행 중** — 심층 QA 결함 23건 봉합 +
+> Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
+
+## v0.4.0 트랙 — 심층 QA 결함 봉합 + Git 식 증분 동기화 (진행 중)
+
+2026-09-27 심층 QA(`5142bdf`)가 결함 23건(P0 8건)을 찾았다. 그리고 "Obsidian Git 처럼
+바뀐 것만 보고 바뀐 것만 올리고 내리는가" 에 대한 답은 **아니다** 였다.
+
+| 무엇                      | 실측 (지정 볼트 · 1,269 레코드 · 발견 DB 166개)                                | 원인                                                                      |
+| ------------------------- | ------------------------------------------------------------------------------ | ------------------------------------------------------------------------- |
+| push                      | 바뀐 파일만 — `push --dry-run` 0.1초                                           | 해시 증분(`detectLocalChangesFast`)                                       |
+| pull · sync (원격 무변경) | **523.5초 · 509.9초**                                                          | 매 pull 이 발견 DB 166개를 **전부** 다시 조회 (`pullDiscoveredDatabases`) |
+| 변경 목록                 | 로컬 A/M/D · 원격 · 충돌 목록은 있으나 원격은 페이지 ID 로만, 항목별 조작 없음 | —                                                                         |
+
+**목표.** 원격 무변경 sync 를 초 단위로 끝내고, 변경 목록에서 항목마다 push · pull ·
+되돌리기 · diff 를 할 수 있게 한다. 결함 23건과 이후 찾은 것(SDK 이중 재시도,
+`pull --dry-run` 이 DB 행을 쓰는 N-01)을 함께 봉합한 뒤, 실데이터 E2E 가 초록불일 때만
+`v0.4.0` 으로 릴리스한다.
+
+**API 한계(숨기지 않는다).** Notion 은 공개 HTTPS 없이 받을 수 있는 변경 피드가 없다.
+원격 감지는 search 의 `last_edited_time`(분 단위 · 인덱스 지연)에 기대고, search 는
+휴지통 페이지를 돌려주지 않으므로 **원격 삭제는 전체 대조(reconcile)로만** 잡힌다.
+
+| 단계 | 브랜치                                       | 봉합 대상                                                                       | 상태 |
+| ---- | -------------------------------------------- | ------------------------------------------------------------------------------- | ---- |
+| 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 대기 |
+| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 대기 |
+| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시                                     | 대기 |
+| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 대기 |
+| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기 |
+| 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기 |
+| 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                               | 대기 |
+| 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                             | 대기 |
+| A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변) | 대기 |
+| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조 · S-08 · N-01                                | 대기 |
+| A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`           | 대기 |
+| A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                       | 대기 |
+| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-08 변환 왕복                                                           | 대기 |
+| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                     | 대기 |
+| 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                       | 대기 |
+| 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                       | 대기 |
+
+기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
+pushdry 0.1초 · 단위 1,662 통과 · 불변식 15/15 · 블록 ID 71/72 유지.
+결함 목록과 재현 절차는 `journal/2026-09-27.md` 에 남긴다.
 
 ## R0~R12 — 실데이터 E2E 기반 충실도·견고성 트랙 (dev 머지 완료)
 
