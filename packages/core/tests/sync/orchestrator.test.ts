@@ -144,12 +144,14 @@ describe("SyncOrchestrator", () => {
     });
 
     it("삭제된 파일 Notion에서 아카이브", async () => {
+      // 지난번에 본 원격 그대로다 — 지우기 전에 원격을 본다(F-f). 바뀌었으면 지우지 않는다.
       const deletedRecord = {
         id: 1,
         obsidianPath: "deleted.md",
         notionPageId: "page-del",
         contentHash: "some-hash",
         status: "synced",
+        ...settledObservation(MOCK_REMOTE_EDITED),
       };
 
       mockStateDb.getByPath.mockImplementation((path: string) =>

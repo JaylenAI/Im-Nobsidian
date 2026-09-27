@@ -1,4 +1,4 @@
-import { getLogger } from "@im-nobsidian/core";
+import { getLogger, isRemoteDeletion } from "@im-nobsidian/core";
 import type {
   SyncOrchestrator,
   ProgressCallback,
@@ -8,7 +8,7 @@ import type {
   RenameKind,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import { RESOLUTION_CHOICES } from "../conflict-choices.js";
+import { choiceText } from "../conflict-choices.js";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
 export type SyncPhase = "ready" | "syncing" | "error" | "conflict";
@@ -350,7 +350,7 @@ export class SyncController {
         const result = await this.orchestrator.resolveConflict(conflict, choice);
         if (result.success) {
           resolved++;
-          this.hooks.onNotice?.(`Im-Nobsidian: ${path} → ${RESOLUTION_CHOICES[choice].label}`);
+          this.hooks.onNotice?.(`Im-Nobsidian: ${path} → ${choiceText(conflict, choice).label}`);
         } else {
           remaining++;
           this.hooks.onNotice?.(
@@ -361,7 +361,10 @@ export class SyncController {
       } catch (error) {
         failed++;
         this.hooks.onNotice?.(
-          `Im-Nobsidian: 충돌을 해결하지 못함 (${path}) — ${errorMessage(error)}. 충돌로 남겨 두었습니다.`,
+          // Notion 에서 지운 노트는 충돌로 되돌리지 않는다 — 무엇이 남았는지는 오류가 말한다.
+          isRemoteDeletion(conflict)
+            ? `Im-Nobsidian: ${errorMessage(error)}`
+            : `Im-Nobsidian: 충돌을 해결하지 못함 (${path}) — ${errorMessage(error)}. 충돌로 남겨 두었습니다.`,
           ACTIONABLE_NOTICE_MS,
         );
       }

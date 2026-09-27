@@ -30,10 +30,16 @@ import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
-import { applyRemoteDeletion, remotePresence } from "./remote-deletion.js";
+import {
+  applyRemoteDeletion,
+  remoteDeletionChange,
+  remoteDeletionConflict,
+  remotePresence,
+  type RemoteDeletionOutcome,
+} from "./remote-deletion.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
-import { ConflictResolver } from "../conflict/resolver.js";
+import { ConflictResolver, choiceForStrategy, isRemoteDeletion } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
@@ -202,20 +208,6 @@ function parseDiscoveredDbs(raw: string | null): DiscoveredDbConfig[] {
     return Array.isArray(parsed) ? (parsed as DiscoveredDbConfig[]) : [];
   } catch {
     return [];
-  }
-}
-
-/** 전략 → 선택지 매핑. propagateResolution 이 push 방향을 정할 때 사용. */
-function strategyToChoice(strategy: ConflictStrategy): ResolutionChoice {
-  switch (strategy) {
-    case "local-first":
-      return "local";
-    case "remote-first":
-      return "remote";
-    case "duplicate":
-      return "duplicate";
-    case "manual":
-      return "merge";
   }
 }
 
@@ -798,13 +790,10 @@ export class SyncOrchestrator {
           return outcome.path;
         }
         case "deleted": {
-          const record = this.stateDb.getByNotionId(change.pageId);
-          const path = await this.pullDelete(change.pageId);
-          if (path) {
-            counts.deleted++;
-            return path;
-          }
-          return record?.obsidianPath;
+          const outcome = await this.pullDelete(change);
+          if (outcome.action === "deleted") counts.deleted++;
+          else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
+          return outcome.path;
         }
         default:
           return undefined;
@@ -1080,27 +1069,46 @@ export class SyncOrchestrator {
 
       let remoteContent = "";
       let remoteLastEdited: string | null = null;
-      if (record.notionPageId && options?.fullRender) {
-        // 해소할 목록은 원격을 읽지 못하면 이유와 함께 실패한다(N-06). 빈 원격으로 충돌을 만들면
-        // 병합은 원격이 모든 줄을 지운 것으로 보고, 원격 유지는 로컬을 빈 파일로 덮는다.
+      let remoteGone = false;
+      if (record.notionPageId) {
         try {
-          const page = await this.notionClient.getPage(record.notionPageId);
-          remoteLastEdited = (page as { last_edited_time?: string }).last_edited_time ?? null;
-          remoteContent = (await this.renderRemotePage(record, record.notionPageId, page)).content;
+          // 휴지통 · 보관 · 없음이면 원격에서 지운 노트의 충돌이다 — 렌더할 본문이 없다.
+          const presence = await remotePresence(this.notionClient, record.notionPageId);
+          if (presence.kind === "gone") {
+            remoteGone = true;
+          } else if (options?.fullRender) {
+            remoteLastEdited = presence.page.last_edited_time;
+            remoteContent = (
+              await this.renderRemotePage(record, record.notionPageId, presence.page)
+            ).content;
+          } else {
+            remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
+          }
         } catch (error) {
-          throw new Error(
-            `충돌 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-            { cause: error },
-          );
-        }
-      } else if (record.notionPageId) {
-        try {
-          remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
-        } catch {
+          // 해소할 목록은 원격을 읽지 못하면 이유와 함께 실패한다(N-06). 빈 원격으로 충돌을 만들면
+          // 병합은 원격이 모든 줄을 지운 것으로 보고, 원격 유지는 로컬을 빈 파일로 덮는다.
+          if (options?.fullRender) {
+            throw new Error(
+              `충돌 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+              { cause: error },
+            );
+          }
           // 상태 표시용 미리보기 — 읽지 못하면 원격을 비워 둔 채 충돌이 있다는 것만 보인다.
         }
+      }
+
+      if (remoteGone) {
+        conflicts.push(
+          remoteDeletionConflict(
+            record,
+            localContent,
+            remoteChanges.find((c) => c.pageId === record.notionPageId && c.type === "deleted") ??
+              remoteDeletionChange(record),
+          ),
+        );
+        continue;
       }
 
       const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
@@ -2488,9 +2496,7 @@ export class SyncOrchestrator {
     conflict: Conflict,
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult> {
-    const result = await this.conflictResolver.resolveByStrategy(conflict, strategy);
-    await this.propagateOrReopen(conflict, strategyToChoice(strategy), result);
-    return result;
+    return this.resolveConflict(conflict, choiceForStrategy(conflict, strategy));
   }
 
   /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. */
@@ -2526,6 +2532,16 @@ export class SyncOrchestrator {
     try {
       await this.propagateResolution(conflict, choice, result);
     } catch (error) {
+      // 원격에서 지운 노트를 «로컬 유지» 로 풀면 추적을 놓은 뒤 새 페이지를 만든다 — 만들지 못해도
+      // 파일은 추적하지 않는 새 노트로 남아 다음 push 가 만든다. 되돌릴 충돌이 없다.
+      if (isRemoteDeletion(conflict)) {
+        throw new Error(
+          `Notion 에 다시 만들지 못함 — 파일은 그대로이고 다음 push 가 다시 만든다 (${
+            conflict.syncRecord.obsidianPath
+          }): ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
       const record = conflict.syncRecord;
       this.stateDb.transaction(() => {
         this.stateDb.updateHash(record.id, record.contentHash, record.baseSnapshot);
@@ -2542,6 +2558,8 @@ export class SyncOrchestrator {
    * - merge 실패(충돌 마커 잔존): 사용자가 직접 풀어야 하므로 conflict 상태 유지·push 안 함.
    * - local / merge(성공) / duplicate: 해소된 로컬 내용을 Notion 에 재push(pushUpdate 가
    *   변환·이미지·속성·해시·notionLastEdited 를 한 트랜잭션으로 재조정) → 무손실 수렴.
+   * - 원격에서 지운 노트: local 은 새 페이지로 만들고(pushCreate), remote 는 볼트에서 지운 것으로
+   *   끝난다.
    */
   private async propagateResolution(
     conflict: Conflict,
@@ -2550,6 +2568,13 @@ export class SyncOrchestrator {
   ): Promise<void> {
     const record = conflict.syncRecord;
     if (!record.notionPageId) return;
+
+    // 원격에서 지운 노트 — «원격 유지» 는 볼트에서 지운 것으로 끝났다. «로컬 유지» 는 추적을 놓은
+    // 파일을 새 페이지로 만든다(지운 페이지는 휴지통에 그대로 둔다).
+    if (isRemoteDeletion(conflict)) {
+      if (choice === "local") await this.pushCreate(record.obsidianPath);
+      return;
+    }
 
     if (choice === "remote") {
       this.recordUnverifiedObservation(record.id, conflict.remoteChange.lastEdited);
@@ -2568,6 +2593,10 @@ export class SyncOrchestrator {
   // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.
   // deleteSync=false 면 로컬 삭제를 pending 으로만 기록하고 Notion 은 보존하므로
   // false 를 돌려준다 → 호출부가 deleted 카운트를 올리지 않아 보고가 정직해진다.
+  //
+  // 지우기 전에 원격을 본다(F-f) — pull 하지 않은 Notion 편집이 있으면 지우지 않는다. 휴지통으로
+  // 보내면 그 편집은 볼트에도 Notion 에도 보이지 않는다. 이어지는 pull 이 파일을 되살려 받는다
+  // (로컬 파일이 없으면 원격을 쓴다). 원격이 이미 사라졌으면 추적만 놓는다.
   private async pushDelete(path: string): Promise<boolean> {
     const record = this.stateDb.getByPath(path);
     if (!record?.notionPageId) return false;
@@ -2577,14 +2606,20 @@ export class SyncOrchestrator {
       return false;
     }
 
-    try {
-      await this.notionClient.archivePage(record.notionPageId);
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : String(error);
-      if (msg.includes("archived ancestor")) {
-        // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
-      } else {
-        throw error;
+    const presence = await remotePresence(this.notionClient, record.notionPageId);
+    if (presence.kind === "alive") {
+      if (!this.overwritesRemote(record, false)) {
+        refuseUnpulledDeletion(await this.remoteDrift(record, presence.page), path);
+      }
+      try {
+        await this.notionClient.archivePage(record.notionPageId);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        if (msg.includes("archived ancestor")) {
+          // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
+        } else {
+          throw error;
+        }
       }
     }
     this.stateDb.transaction(() => {
@@ -3043,12 +3078,7 @@ export class SyncOrchestrator {
     // 남은 것은 살아 있지만 범위 밖으로 옮겨졌다.
     deleted.push(...alive.keys());
 
-    return deleted.map((record) => ({
-      pageId: record.notionPageId!,
-      type: "deleted" as const,
-      lastEdited: new Date().toISOString(),
-      previousEdited: record.notionLastEdited,
-    }));
+    return deleted.map((record) => remoteDeletionChange(record));
   }
 
   /**
@@ -3673,9 +3703,18 @@ export class SyncOrchestrator {
     return this.stateDb.getByPath(notePath);
   }
 
-  private async pullDelete(pageId: string): Promise<string | null> {
-    const record = this.stateDb.getByNotionId(pageId);
-    if (!record) return null;
+  /**
+   * Notion 에서 사라진 페이지를 볼트에 반영한다. 올리지 않은 로컬 편집이 있으면 전략을 따른다
+   * ({@link applyRemoteDeletion}) — 지우지 않고 충돌로 남기거나(manual · duplicate) 파일을 둔다
+   * (local-first).
+   *
+   * @returns `path` 는 진행 표시용 — 추적하지 않던 페이지면 없다.
+   */
+  private async pullDelete(
+    change: RemoteChange,
+  ): Promise<(RemoteDeletionOutcome | { readonly action: "untracked" }) & { path?: string }> {
+    const record = this.stateDb.getByNotionId(change.pageId);
+    if (!record) return { action: "untracked" };
 
     // push 가 만든 폴더 페이지는 추적만 놓는다 — 볼트에서는 폴더다. 안의 노트는 각자의 레코드가
     // 지운다. 예전에는 폴더 경로를 파일처럼 지워, Obsidian 에서는 올리지 않은 노트까지 폴더째
@@ -3685,11 +3724,15 @@ export class SyncOrchestrator {
         this.stateDb.delete(record.id);
         this.stateDb.deleteWikilink(record.obsidianPath);
       });
-      return null;
+      return { action: "untracked", path: record.obsidianPath };
     }
 
-    await applyRemoteDeletion(this.stateDb, this.vaultFs, record, this.config.sync.deleteSync);
-    return record.obsidianPath;
+    const outcome = await applyRemoteDeletion(this.stateDb, this.vaultFs, record, {
+      deleteFile: this.config.sync.deleteSync,
+      strategy: this.config.sync.conflictStrategy,
+      remoteChange: change,
+    });
+    return { ...outcome, path: record.obsidianPath };
   }
 
   private async ensureFolderPage(folderPath: string): Promise<void> {
@@ -5036,6 +5079,22 @@ function refuseUnpulledBody(drift: RemoteDrift, path: string): void {
         `push 하세요: ${path}`,
     );
   }
+}
+
+/**
+ * 로컬에서 지운 노트의 원격을 지울 수 없으면 던진다 — pull 하지 않은 Notion 편집(본문 · 제목 ·
+ * 속성)을 휴지통으로 보내지 않는다(F-f). 본문만 보는 {@link refuseUnpulledBody} 와 달리 본문 밖의
+ * 편집도 지키고, 바뀌었는지 모르면 지우지 않는다.
+ */
+function refuseUnpulledDeletion(drift: RemoteDrift, path: string): void {
+  if (drift === "none") return;
+  const reason =
+    drift === "unknown"
+      ? "Notion 에서 바뀌었는지 확인하지 못한 페이지"
+      : "Notion 에서도 바뀐 페이지";
+  throw new Error(
+    `${reason}라 지우지 않음 — pull 이 되살려 받습니다. 받은 뒤에도 필요 없으면 다시 지우세요: ${path}`,
+  );
 }
 
 /**

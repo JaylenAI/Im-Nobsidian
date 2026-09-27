@@ -13,7 +13,9 @@ const { mockStatus, mockGetAll } = vi.hoisted(() => ({
   mockGetAll: vi.fn().mockReturnValue([]),
 }));
 
-vi.mock("@im-nobsidian/core", () => ({
+// 무거운 것만 갈아 끼우고 나머지 core export 는 원본을 그대로 편다(resolve.test.ts 와 같다).
+vi.mock("@im-nobsidian/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@im-nobsidian/core")>()),
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
@@ -28,7 +30,10 @@ vi.mock("@im-nobsidian/core", () => ({
     vi.fn().mockImplementation(() => ({})),
     { fromConfig: vi.fn().mockReturnValue({}) },
   ),
-  SyncOrchestrator: vi.fn().mockImplementation(() => ({ statusLocal: mockStatus })),
+  SyncOrchestrator: vi.fn().mockImplementation(() => ({
+    statusLocal: mockStatus,
+    status: mockStatus,
+  })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));
 
@@ -115,6 +120,27 @@ describe("status command", () => {
     await runStatus();
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("conflict"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("conflict.md"));
+    spy.mockRestore();
+  });
+
+  it("--full 은 Notion 에서 지운 노트의 충돌을 따로 적는다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      remoteChanges: [],
+      conflicts: [
+        { syncRecord: { obsidianPath: "gone.md" }, remoteChange: { type: "deleted" } },
+        { syncRecord: { obsidianPath: "both.md" }, remoteChange: { type: "modified" } },
+      ],
+      conflictRecords: [{ obsidianPath: "gone.md" }, { obsidianPath: "both.md" }],
+      pendingOperations: 2,
+      lastSyncAt: null,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus("--full");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringMatching(/gone\.md.*\(deleted in Notion, local edits not pushed\)/),
+    );
+    expect(spy).toHaveBeenCalledWith(expect.stringMatching(/both\.md.*\(both sides changed\)/));
     spy.mockRestore();
   });
 });

@@ -1,7 +1,8 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
+import { applicableChoices, isRemoteDeletion } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
-import { RESOLUTION_CHOICES } from "./conflict-choices.js";
+import { choiceText } from "./conflict-choices.js";
 
 export class ConflictModal extends Modal {
   private answered = false;
@@ -29,14 +30,21 @@ export class ConflictModal extends Modal {
       cls: "im-nobsidian-conflict-path",
     });
 
-    const diffContainer = contentEl.createDiv({ cls: "im-nobsidian-diff-container" });
-    this.renderDiff(diffContainer);
+    if (isRemoteDeletion(this.conflict)) {
+      // 견줄 원격 본문이 없다 — 줄 비교는 로컬 전부를 지운 것으로 보여 준다.
+      contentEl.createEl("p", {
+        text: "Notion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.",
+        cls: "im-nobsidian-conflict-remote-deleted",
+      });
+    } else {
+      const diffContainer = contentEl.createDiv({ cls: "im-nobsidian-diff-container" });
+      this.renderDiff(diffContainer);
+    }
 
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
 
-    for (const [choice, { label, description }] of Object.entries(RESOLUTION_CHOICES) as Array<
-      [ResolutionChoice, (typeof RESOLUTION_CHOICES)[ResolutionChoice]]
-    >) {
+    for (const choice of applicableChoices(this.conflict)) {
+      const { label, description } = choiceText(this.conflict, choice);
       new Setting(buttonContainer)
         .setName(label)
         .setDesc(description)

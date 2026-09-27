@@ -10,7 +10,7 @@ import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
-import { applyRemoteDeletion, remotePresence } from "./remote-deletion.js";
+import { applyRemoteDeletion, remoteDeletionChange, remotePresence } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
 import { noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
@@ -271,7 +271,9 @@ export class DatabaseSyncer {
       }
     }
 
-    const deleted = await this.pullDeletedRows(dbConfig, pages, opts?.paths);
+    const removal = await this.pullDeletedRows(dbConfig, pages, opts?.paths);
+    const deleted = removal.deleted;
+    conflicts.push(...removal.conflicts);
 
     getLogger().debug(
       `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${deleted} 삭제, ${restored} 복원, ${conflicts.length} 충돌`,
@@ -289,13 +291,17 @@ export class DatabaseSyncer {
    *
    * 조회 필터(`pullFilter`)가 있으면 가르지 않는다 — 조회에 없는 행이 필터 밖인지 지워진 것인지
    * 모르고, 필터 밖으로 나간 행을 매번 물으면 요청이 끝없이 는다.
+   *
+   * 올리지 않은 로컬 편집이 있는 행은 페이지와 같은 규칙을 따른다({@link applyRemoteDeletion}) —
+   * 지우지 않고 충돌로 남기거나 파일을 둔다.
    */
   private async pullDeletedRows(
     dbConfig: DatabaseSyncConfig,
     pages: readonly PageObjectResponse[],
     paths: readonly string[] | undefined,
-  ): Promise<number> {
-    if (!this.config.sync.deleteSync || dbConfig.pullFilter) return 0;
+  ): Promise<{ deleted: number; conflicts: Conflict[] }> {
+    const conflicts: Conflict[] = [];
+    if (!this.config.sync.deleteSync || dbConfig.pullFilter) return { deleted: 0, conflicts };
 
     const listed = new Set(pages.map((page) => normalizeNotionId(page.id)));
     const missing = this.stateDb
@@ -315,8 +321,13 @@ export class DatabaseSyncer {
       try {
         const presence = await remotePresence(this.notionClient, record.notionPageId!);
         if (presence.kind === "alive") continue;
-        await applyRemoteDeletion(this.stateDb, this.vaultFs, record, this.config.sync.deleteSync);
-        deleted++;
+        const outcome = await applyRemoteDeletion(this.stateDb, this.vaultFs, record, {
+          deleteFile: this.config.sync.deleteSync,
+          strategy: this.config.sync.conflictStrategy,
+          remoteChange: remoteDeletionChange(record),
+        });
+        if (outcome.action === "deleted") deleted++;
+        else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
       } catch (error) {
         getLogger().warn(
           `[DB Sync] 조회에 없는 행 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,
@@ -324,7 +335,7 @@ export class DatabaseSyncer {
         );
       }
     }
-    return deleted;
+    return { deleted, conflicts };
   }
 
   private async pullDatabaseViews(

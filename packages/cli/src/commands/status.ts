@@ -5,6 +5,7 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
+  isRemoteDeletion,
 } from "@im-nobsidian/core";
 import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
@@ -149,10 +150,15 @@ export const statusCommand = new Command("status")
       // Conflicts
       if (conflictCount > 0) {
         console.log(`\n  ${header(chalk.magenta("Conflicts:"))}`);
+        // 원격을 읽은 상태(--full)만 Notion 에서 지운 노트를 가른다.
+        const remoteDeleted = new Set(
+          status.conflicts.filter(isRemoteDeletion).map((c) => c.syncRecord.obsidianPath),
+        );
         for (const r of status.conflictRecords) {
-          console.log(
-            `    ${icons.conflict} ${r.obsidianPath.padEnd(30)} ${dimText("(both sides changed)")}`,
-          );
+          const reason = remoteDeleted.has(r.obsidianPath)
+            ? "(deleted in Notion, local edits not pushed)"
+            : "(both sides changed)";
+          console.log(`    ${icons.conflict} ${r.obsidianPath.padEnd(30)} ${dimText(reason)}`);
         }
       }
 

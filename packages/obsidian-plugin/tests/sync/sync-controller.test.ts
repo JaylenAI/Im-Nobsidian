@@ -68,9 +68,9 @@ function createMockOrchestrator(): MockOrchestrator {
   };
 }
 
-/** 충돌 하나 — 컨트롤러는 경로만 본다. */
-function conflictAt(path: string): Conflict {
-  return { syncRecord: { obsidianPath: path } } as Conflict;
+/** 충돌 하나 — 컨트롤러는 경로와 원격 변경 종류만 본다. */
+function conflictAt(path: string, remote: "modified" | "deleted" = "modified"): Conflict {
+  return { syncRecord: { obsidianPath: path }, remoteChange: { type: remote } } as Conflict;
 }
 
 function createHooks(): {
@@ -414,6 +414,36 @@ describe("SyncController", () => {
         "Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 0건 · 실패 1건",
       );
       expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+    });
+
+    it("Notion 에서 지운 노트는 고른 일을 그 말로 알린다 (D)", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("gone.md", "deleted")]);
+      const { hooks, onNotice } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => "remote");
+
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: gone.md → 삭제 따르기");
+    });
+
+    it("Notion 에서 지운 노트를 다시 만들지 못하면 오류가 말하는 대로 알린다 — 충돌로 남긴다고 하지 않는다 (D)", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("gone.md", "deleted")]);
+      mock.resolveConflict.mockRejectedValueOnce(
+        new Error(
+          "Notion 에 다시 만들지 못함 — 파일은 그대로이고 다음 push 가 다시 만든다 (gone.md): bad gateway",
+        ),
+      );
+      const { hooks, onNotice } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => "local");
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Notion 에 다시 만들지 못함 — 파일은 그대로이고 다음 push 가 다시 만든다 (gone.md): bad gateway",
+        8000,
+      );
+      expect(onNotice).not.toHaveBeenCalledWith(
+        expect.stringContaining("충돌로 남겨 두었습니다"),
+        expect.anything(),
+      );
     });
 
     it("자동 병합이 겹치는 줄을 남기면 그 파일에서 고치라고 알리고 남긴다", async () => {
