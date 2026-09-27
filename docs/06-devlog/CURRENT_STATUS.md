@@ -24,24 +24,24 @@
 원격 감지는 search 의 `last_edited_time`(분 단위 · 인덱스 지연)에 기대고, search 는
 휴지통 페이지를 돌려주지 않으므로 **원격 삭제는 전체 대조(reconcile)로만** 잡힌다.
 
-| 단계 | 브랜치                                       | 봉합 대상                                                                       | 상태 |
-| ---- | -------------------------------------------- | ------------------------------------------------------------------------------- | ---- |
-| 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 대기 |
-| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 대기 |
-| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시                                     | 대기 |
-| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 대기 |
-| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기 |
-| 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기 |
-| 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                               | 대기 |
-| 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                             | 대기 |
-| A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변) | 대기 |
-| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조 · S-08 · N-01                                | 대기 |
-| A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`           | 대기 |
-| A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                       | 대기 |
-| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-08 변환 왕복                                                           | 대기 |
-| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                     | 대기 |
-| 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                       | 대기 |
-| 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                       | 대기 |
+| 단계 | 브랜치                                       | 봉합 대상                                                                       | 상태           |
+| ---- | -------------------------------------------- | ------------------------------------------------------------------------------- | -------------- |
+| 0    | `fix/e2e-harness-safety`                     | Q-01 하니스가 기본값으로 볼트를 지움 · 백업 없음                                | 완료 `94f72d7` |
+| 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 진행 중        |
+| 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시                                     | 대기           |
+| 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 대기           |
+| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 대기           |
+| 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기           |
+| 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                               | 대기           |
+| 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                             | 대기           |
+| A    | `refactor/orchestrator-modules`              | 3,026줄 오케스트레이터를 감지 · pull · push · DB · 복구 모듈로 분리 (동작 불변) | 대기           |
+| A    | `feature/fast-change-detection`              | 바뀐 DB 만 pull · 주기적 전체 대조 · S-08 · N-01                                | 대기           |
+| A    | `feature/sync-status-api`                    | 경로 · 제목 붙은 변경 목록 · 항목별 push/pull/discard · CLI `discard`           | 대기           |
+| A    | `feature/plugin-changes-view`                | Obsidian Git 식 변경 패널                                                       | 대기           |
+| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-08 변환 왕복                                                           | 대기           |
+| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                     | 대기           |
+| 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                       | 대기           |
+| 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                       | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
 pushdry 0.1초 · 단위 1,662 통과 · 불변식 15/15 · 블록 ID 71/72 유지.

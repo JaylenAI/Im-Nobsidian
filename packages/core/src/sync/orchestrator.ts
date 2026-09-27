@@ -1535,6 +1535,21 @@ export class SyncOrchestrator {
     });
     // 인-런 재시도 시 같은 state 에 대한 op 중복 기록을 막는다(기존 미완료 op 재사용).
     const existingOp = this.stateDb.getIncompleteOpByState(placeholder.id, "create");
+
+    // 미완료 op 가 남아 있다 = 앞선 시도의 생성 요청이 적용됐는지 모른다(S-07 — 클라이언트는
+    // 모호한 실패에서 생성 요청을 다시 보내지 않는다). 다시 만들기 전에 부모에서 제목으로
+    // 찾아 입양한다. 목록을 읽지 못하면 던져서 이 항목만 실패로 남긴다 — 중복보다 낫다.
+    if (existingOp && effectiveParentType === "page") {
+      const orphan = await this.findChildPageByTitle(effectiveParentId, title);
+      if (orphan) {
+        this.adoptOrphanPage(path, orphan.id, parentId, placeholder);
+        this.stateDb.markPendingCompleted(existingOp.id);
+        getLogger().info(`[Im-Nobsidian] 앞선 생성 요청이 적용돼 있었음 — 페이지 입양: ${path}`);
+        await this.pushUpdate(path);
+        return;
+      }
+    }
+
     const walOpId =
       existingOp?.id ??
       this.stateDb.recordPendingOperation({
@@ -2544,11 +2559,17 @@ export class SyncOrchestrator {
       }
     }
 
-    const folderPage = await this.notionClient.createPage({
-      parentId,
-      parentType: "page",
-      title: folderName,
-    });
+    // 폴더 페이지 생성에는 WAL 이 없다. 생성 요청이 적용됐는데 응답을 못 받으면(S-07 —
+    // 클라이언트는 그런 생성 요청을 다시 보내지 않는다) 레코드 없이 페이지만 남고, 다음
+    // push 가 같은 폴더 페이지를 또 만든다. 그래서 만들기 전에 부모에서 먼저 찾는다 —
+    // 새 폴더에서만 드는 목록 조회 1회다.
+    const folderPage =
+      (await this.findChildPageByTitle(parentId, folderName)) ??
+      (await this.notionClient.createPage({
+        parentId,
+        parentType: "page",
+        title: folderName,
+      }));
 
     this.stateDb.upsert({
       obsidianPath: folderPath,
@@ -2857,10 +2878,12 @@ export class SyncOrchestrator {
    *    제목으로 child_page 를 검색해 고아 페이지를 입양(중복 생성 차단). 없으면 자리표시
    *    레코드를 제거(FK CASCADE 로 op 도 삭제)해 다음 push 가 새로 생성하게 한다.
    *
-   * 한계(문서화): Notion 은 idempotency key 가 없어 "생성 요청 적용 직후 같은 호출 내 재시도"
-   * 로 인한 중복은 완전히 차단하지 못한다. 429 는 적용 전 거절이라 안전하고, 프로세스 재시작
-   * 후 재개는 본 검색-입양으로 중복을 막는다. DB 모드(부모가 database)는 child_page 검색이
-   * 불가하므로 자리표시 제거 후 재생성으로 폴백한다.
+   * Notion 은 idempotency key 가 없다. 그래서 생성 요청은 적용됐는지 모르는 실패(타임아웃 ·
+   * 5xx)에서 클라이언트가 다시 보내지 않고(S-07), 같은 실행의 재시도(pushCreate)와 다음
+   * 실행의 재개(여기)가 모두 이 검색-입양을 거친다. 자식 목록을 **읽지 못하면** 자리표시를
+   * 지우지 않는다 — 읽지 못한 것을 "없다" 로 보면 다음 push 가 같은 페이지를 또 만든다.
+   * 한계: DB 모드(부모가 database)는 child_page 검색이 불가하므로 자리표시 제거 후
+   * 재생성으로 폴백한다.
    */
   private async recoverInterruptedPushOps(): Promise<void> {
     const ops = this.stateDb.getIncompletePendingOperations();
@@ -2895,24 +2918,24 @@ export class SyncOrchestrator {
 
       const parentId = payload.parentId ?? state?.notionParentId ?? undefined;
       const title = payload.title;
-      const adopted = parentId && title ? await this.findChildPageByTitle(parentId, title) : null;
+      let adopted: string | null = null;
+      if (parentId && title) {
+        try {
+          adopted = (await this.findChildPageByTitle(parentId, title))?.id ?? null;
+        } catch (error) {
+          // 읽지 못함 ≠ 없음. op 와 자리표시를 그대로 두면 이번 push 의 pushCreate 가 다시
+          // 확인하고, 그래도 못 읽으면 그 항목만 실패로 남는다 — 중복 생성은 없다.
+          getLogger().warn(
+            `[Im-Nobsidian] 중단된 create 재개 보류 — 부모 자식 목록을 읽지 못함 (${path}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          continue;
+        }
+      }
 
       if (adopted) {
-        // 고아 페이지 입양: 매핑만 채우고 pending 유지 → 다음 변경감지가 본문·이미지 마무리.
-        this.stateDb.upsert({
-          obsidianPath: path,
-          notionPageId: adopted,
-          notionParentId: parentId ?? null,
-          contentHash: "",
-          notionLastEdited: state?.notionLastEdited ?? null,
-          localLastModified: new Date().toISOString(),
-          syncDirection: state?.syncDirection ?? "both",
-          fileType: state?.fileType ?? (this.isFolderNote(path) ? "folder-note" : "file"),
-          status: "pending",
-          baseSnapshot: null,
-          localMtime: null,
-          localFileSize: null,
-        });
+        this.adoptOrphanPage(path, adopted, parentId ?? null, state);
         this.stateDb.markPendingCompleted(op.id);
         getLogger().info(`[Im-Nobsidian] 중단된 create 재개 — 고아 페이지 입양: ${path}`);
       } else if (state) {
@@ -2925,31 +2948,65 @@ export class SyncOrchestrator {
     }
   }
 
-  /** 부모 페이지의 직속 자식 중 제목이 일치하는(보관/휴지통 제외) child_page id 를 찾는다. */
-  private async findChildPageByTitle(parentId: string, title: string): Promise<string | null> {
-    try {
-      const children = await this.notionClient.fetchAllChildren(parentId);
-      for (const b of children) {
-        if (b.type !== "child_page") continue;
-        const childTitle = (b as { child_page?: { title?: string } }).child_page?.title;
-        if (childTitle !== title) continue;
-        try {
-          const page = await this.notionClient.getPage(b.id);
-          const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-          if (inTrash || page.archived) continue;
-        } catch {
-          continue;
-        }
-        return b.id;
+  /**
+   * 부모 페이지의 직속 자식 중 제목이 일치하고 아직 아무 레코드도 짝으로 삼지 않은
+   * (보관/휴지통 제외) child_page 를 찾는다 — 앞선 생성 요청이 남긴 고아 후보다.
+   *
+   * 이미 추적 중인 페이지는 제외한다. `A/x.md` 의 페이지와 폴더 `A/x/` 의 페이지는 제목이
+   * 같은 형제라서, 제목만 보면 남의 짝을 가로챈다.
+   *
+   * `null` 은 «끝까지 읽었고 없었다» 일 때만 돌려준다. 목록이나 후보 페이지를 읽지 못하면
+   * 던진다 — 호출측이 "없다" 로 오해하면 이미 만들어진 페이지를 두고 하나를 더 만든다.
+   * 후보가 404 면 그 사이 지워졌거나 접근이 끊긴 것이라 건너뛴다.
+   */
+  private async findChildPageByTitle(
+    parentId: string,
+    title: string,
+  ): Promise<PageObjectResponse | null> {
+    const children = await this.notionClient.fetchAllChildren(parentId);
+    for (const b of children) {
+      if (b.type !== "child_page") continue;
+      const childTitle = (b as { child_page?: { title?: string } }).child_page?.title;
+      if (childTitle !== title) continue;
+      if (this.stateDb.getByNotionId(b.id)) continue;
+      let page: PageObjectResponse;
+      try {
+        page = await this.notionClient.getPage(b.id);
+      } catch (error) {
+        if (isNotionObjectNotFound(error)) continue;
+        throw error;
       }
-    } catch (error) {
-      getLogger().warn(
-        `[Im-Nobsidian] 고아 페이지 검색 실패 (${parentId}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
+      const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+      if (inTrash || page.archived) continue;
+      return page;
     }
     return null;
+  }
+
+  /**
+   * 앞선 생성 요청이 서버에 적용돼 있던 페이지를 이 노트의 짝으로 삼는다 — 매핑만 채운다.
+   * contentHash 를 비우고 pending 으로 두어, 본문 · 이미지는 다음 갱신(pushUpdate)이 마무리한다.
+   */
+  private adoptOrphanPage(
+    path: string,
+    pageId: string,
+    parentId: string | null,
+    state: SyncRecord | null,
+  ): void {
+    this.stateDb.upsert({
+      obsidianPath: path,
+      notionPageId: pageId,
+      notionParentId: parentId,
+      contentHash: "",
+      notionLastEdited: state?.notionLastEdited ?? null,
+      localLastModified: new Date().toISOString(),
+      syncDirection: state?.syncDirection ?? "both",
+      fileType: state?.fileType ?? (this.isFolderNote(path) ? "folder-note" : "file"),
+      status: "pending",
+      baseSnapshot: null,
+      localMtime: null,
+      localFileSize: null,
+    });
   }
 
   /**
