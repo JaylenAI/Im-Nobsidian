@@ -19,11 +19,17 @@ import {
   completionHeader,
   failedItem,
 } from "../utils/format.js";
+import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
+  .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
+    const json = options.json === true;
+    if (json) enableJsonMode();
+    // 진행 로그는 사람용이다 — JSON 모드에서는 stdout 계약(JSON 한 줄)을 지키려고 끈다.
+    const log = json ? () => {} : (line: string) => console.log(line);
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -34,40 +40,54 @@ export const syncCommand = new Command("sync")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      console.log(`\n${header("  Bidirectional Sync")}`);
-      console.log(`  ${separator()}`);
-      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+      log(`\n${header("  Bidirectional Sync")}`);
+      log(`  ${separator()}`);
+      if (options.dryRun) log(dimText("  (dry-run mode)"));
 
       // Pull phase
-      console.log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
+      log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
 
       const pullResult = await orchestrator.pull({
         dryRun: options.dryRun,
         onProgress: (_current, _total, item) => {
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);
-          console.log(`    ${icon} ${item.path} ${label}`);
+          log(`    ${icon} ${item.path} ${label}`);
         },
       });
 
       if (pullResult.imageCount > 0) {
-        console.log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
+        log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
       }
       if (pullResult.linkCount > 0) {
-        console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
+        log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
       }
 
       // Push phase
-      console.log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
+      log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
 
       const pushResult = await orchestrator.push({
         dryRun: options.dryRun,
         onProgress: (_current, _total, item) => {
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);
-          console.log(`    ${icon} ${item.path} ${label}`);
+          log(`    ${icon} ${item.path} ${label}`);
         },
       });
+
+      if (json) {
+        const pull = pullJson(pullResult);
+        const push = pushJson(pushResult);
+        printJson({
+          pull,
+          push,
+          churn: pull.churn + push.churn,
+          conflicts: pull.conflicts,
+          durationMs: pullResult.duration + pushResult.duration,
+        });
+        if (pullResult.failed.length + pushResult.failed.length > 0) process.exitCode = 1;
+        return;
+      }
 
       // Summary
       // 예전엔 양쪽 failed 를 아예 찍지 않아, 전 건 실패한 sync 도 화면 끝은 초록 "complete"
