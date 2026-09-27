@@ -30,6 +30,7 @@ import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer } from "./database-syncer.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
+import { applyRemoteDeletion, remotePresence } from "./remote-deletion.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver } from "../conflict/resolver.js";
@@ -687,12 +688,14 @@ export class SyncOrchestrator {
       // 기록이 생겼다면 그 행들의 본문 링크·frontmatter relation 을 finalize 가 해소한다(M2).
       let dbCreated = 0;
       let dbUpdated = 0;
+      let dbDeleted = 0;
       let dbRestored = 0;
       if ((this.config.notion.databases?.length ?? 0) > 0) {
         try {
-          const dbResult = await this.databaseSyncer.pullAll();
+          const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
           dbCreated += dbResult.created;
           dbUpdated += dbResult.updated;
+          dbDeleted += dbResult.deleted;
           dbRestored += dbResult.restored;
           conflicts.push(...dbResult.conflicts);
           failed.push(...dbResult.failed);
@@ -706,11 +709,12 @@ export class SyncOrchestrator {
         failed,
         conflicts,
         options?.force === true,
+        options?.paths,
       );
       return finalize(
         dbCreated + dbDiscovery.created,
         dbUpdated + dbDiscovery.updated,
-        0,
+        dbDeleted + dbDiscovery.deleted,
         dbRestored + dbDiscovery.restored,
       );
     }
@@ -871,9 +875,10 @@ export class SyncOrchestrator {
 
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
-        const dbResult = await this.databaseSyncer.pullAll();
+        const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
         counts.created += dbResult.created;
         counts.updated += dbResult.updated;
+        counts.deleted += dbResult.deleted;
         counts.restored += dbResult.restored;
         conflicts.push(...dbResult.conflicts);
         failed.push(...dbResult.failed);
@@ -892,9 +897,11 @@ export class SyncOrchestrator {
         failed,
         conflicts,
         options?.force === true,
+        options?.paths,
       );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
+      counts.deleted += dbDiscovery.deleted;
       counts.restored += dbDiscovery.restored;
     }
 
@@ -1250,11 +1257,13 @@ export class SyncOrchestrator {
     failed: FailedOperation[],
     conflicts: Conflict[],
     forceRediscovery = false,
-  ): Promise<{ created: number; updated: number; restored: number }> {
-    if (this.isDatabaseMode) return { created: 0, updated: 0, restored: 0 };
+    paths?: readonly string[],
+  ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
+    if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
 
     let created = 0;
     let updated = 0;
+    let deleted = 0;
     let restored = 0;
 
     try {
@@ -1406,7 +1415,10 @@ export class SyncOrchestrator {
         for (const dbConfig of queue) {
           if (inaccessibleIds.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
           try {
-            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, { resolveDbFolder });
+            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, {
+              resolveDbFolder,
+              paths,
+            });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
             // 다음 pull 부터 이중 방문 자체를 없앤다. .base 재지향은 pullDatabase 가 마쳤다.
@@ -1424,6 +1436,7 @@ export class SyncOrchestrator {
             }
             created += dbResult.created;
             updated += dbResult.updated;
+            deleted += dbResult.deleted;
             restored += dbResult.restored;
             conflicts.push(...dbResult.conflicts);
             failed.push(...dbResult.failed);
@@ -1481,7 +1494,7 @@ export class SyncOrchestrator {
       getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
     }
 
-    return { created, updated, restored };
+    return { created, updated, deleted, restored };
   }
 
   /**
@@ -2896,20 +2909,113 @@ export class SyncOrchestrator {
     }
 
     if (this.config.sync.deleteSync && lastPull) {
-      for (const orphanId of trackedPageIds) {
-        const record = syncedRecords.find((r) => r.notionPageId === orphanId);
-        if (record) {
-          changes.push({
-            pageId: orphanId,
-            type: "deleted",
-            lastEdited: new Date().toISOString(),
-            previousEdited: record.notionLastEdited,
-          });
-        }
-      }
+      // 조회하는 DB 의 행은 여기서 가르지 않는다 — 페이지 순회는 행을 보지 못해 행은 늘 목록에 없다.
+      // 그 DB 를 조회하는 pull 이 조회 결과로 가른다(DatabaseSyncer). 예전에는 행이 매 pull 마다
+      // «사라진 페이지» 가 돼 파일이 지워졌다가 이어지는 DB pull 이 다시 만들었다 — 올리지 않은
+      // 로컬 편집이 그 사이에 사라졌다(S-12).
+      const queriedDatabases = this.rowQueriedDatabaseIds();
+      const orphans = syncedRecords.filter(
+        (r) =>
+          r.notionPageId !== null &&
+          trackedPageIds.has(r.notionPageId) &&
+          !(
+            r.fileType === "db-row" &&
+            r.notionParentId !== null &&
+            queriedDatabases.has(normalizeNotionId(r.notionParentId))
+          ),
+      );
+      changes.push(...(await this.confirmedDeletions(orphans, seenRemoteIds)));
     }
 
     return changes;
+  }
+
+  /**
+   * 행의 삭제를 DB 조회로 가르는 DB — 이번 pull 이 조회하는 DB 다. 설정된 DB 와, 페이지 모드면 자동
+   * 발견된 DB(접근 불가로 뺀 것 제외). {@link pullDiscoveredDatabases} 가 조회하는 목록과 같다.
+   */
+  private rowQueriedDatabaseIds(): Set<string> {
+    const ids = (this.config.notion.databases ?? []).map((d) => d.databaseId);
+    if (!this.isDatabaseMode) {
+      const inaccessible = this.loadInaccessibleDbIds();
+      for (const c of parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))) {
+        if (!inaccessible.has(c.databaseId.replace(/-/g, ""))) ids.push(c.databaseId);
+      }
+    }
+    return new Set(ids.map(normalizeNotionId));
+  }
+
+  /**
+   * 목록에 없던 추적 페이지 가운데 원격에서 정말 사라진 것만 삭제로 낸다(S-12) — {@link remotePresence}.
+   *
+   * - 휴지통 · 보관 · 없음(404) → 삭제.
+   * - 살아 있고 부모가 동기화 범위(루트 · 목록에 있던 페이지 · 이렇게 살아 있다고 확인된 페이지) →
+   *   목록이 빠뜨린 것이다. 둔다.
+   * - 살아 있지만 범위 밖(다른 곳 · 워크스페이스 맨 위)으로 옮겨졌다 → 삭제(예전과 같다).
+   * - 묻지 못했거나 부모를 알 수 없다 → 이번에는 둔다. 다음 전체 대조가 다시 묻는다.
+   *
+   * 부모가 목록에서 빠진 페이지면 그 부모가 살아 있다고 확인돼야 범위 안이다 — 범위가 더 늘지
+   * 않을 때까지 되풀이한다.
+   */
+  private async confirmedDeletions(
+    orphans: readonly SyncRecord[],
+    listed: ReadonlySet<string>,
+  ): Promise<RemoteChange[]> {
+    const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
+    if (this.isDatabaseMode) scope.add(normalizeNotionId(this.config.notion.databaseId!));
+
+    const deleted: SyncRecord[] = [];
+    const alive = new Map<SyncRecord, string>();
+    for (const record of orphans) {
+      const pageId = record.notionPageId!;
+      try {
+        const presence = await remotePresence(this.notionClient, pageId);
+        if (presence.kind === "gone") {
+          deleted.push(record);
+          continue;
+        }
+        const parent = presence.page.parent as { type?: string; database_id?: string };
+        if (parent.type === "workspace") {
+          deleted.push(record);
+          continue;
+        }
+        const parentId = parent.database_id ?? (await this.extractParentId(presence.page));
+        if (parentId) {
+          alive.set(record, normalizeNotionId(parentId));
+        } else {
+          getLogger().warn(
+            `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 부모를 알 수 없어 이번에는 지우지 않음`,
+          );
+        }
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,
+          error,
+        );
+      }
+    }
+
+    for (let grew = true; grew;) {
+      grew = false;
+      for (const [record, parentId] of alive) {
+        if (!scope.has(parentId)) continue;
+        scope.add(normalizeNotionId(record.notionPageId!));
+        alive.delete(record);
+        grew = true;
+        getLogger().info(
+          `[Im-Nobsidian] 목록에 없던 ${record.obsidianPath} 는 Notion 에 그대로 있음 — 지우지 않음`,
+        );
+      }
+    }
+    // 남은 것은 살아 있지만 범위 밖으로 옮겨졌다.
+    deleted.push(...alive.keys());
+
+    return deleted.map((record) => ({
+      pageId: record.notionPageId!,
+      type: "deleted" as const,
+      lastEdited: new Date().toISOString(),
+      previousEdited: record.notionLastEdited,
+    }));
   }
 
   /**
@@ -3549,18 +3655,7 @@ export class SyncOrchestrator {
       return null;
     }
 
-    if (this.config.sync.deleteSync) {
-      try {
-        await this.vaultFs.deleteFile(record.obsidianPath);
-      } catch {
-        // 이미 삭제된 경우 무시
-      }
-    }
-
-    this.stateDb.transaction(() => {
-      this.stateDb.delete(record.id);
-      this.stateDb.deleteWikilink(record.obsidianPath);
-    });
+    await applyRemoteDeletion(this.stateDb, this.vaultFs, record, this.config.sync.deleteSync);
     return record.obsidianPath;
   }
 

@@ -104,6 +104,14 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     stateDb.getByNotionId.mockImplementation((id: string) => (id === "gone-page" ? gone : null));
     // 원격에 더 이상 존재하지 않음(in_trash/archived → 서브트리 순회 결과에서 사라짐).
     notion.getChildPagesRecursive.mockResolvedValue([]);
+    // 지우기 전에 원격에 물어본다(S-12) — Notion 은 휴지통의 페이지를 in_trash 로 돌려준다.
+    notion.getPage.mockResolvedValue({
+      id: "gone-page",
+      last_edited_time: "2026-05-02T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root-page-id" },
+      in_trash: true,
+      properties: { title: { type: "title", title: [{ plain_text: "gone" }] } },
+    });
 
     const orch = makeOrchestrator(
       createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: true } }),

@@ -184,9 +184,15 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     icon: page.icon ?? null,
     cover: page.cover ?? null,
   });
+  // 없는 페이지는 SDK 처럼 404(`object_not_found`)로 던진다 — 받는 쪽이 «없음» 과 다른 오류를 가른다.
   const find = (id: string): MemoryPage => {
     const page = pages.get(id);
-    if (!page) throw new Error(`object_not_found: ${id}`);
+    if (!page) {
+      throw Object.assign(new Error(`object_not_found: ${id}`), {
+        code: "object_not_found",
+        status: 404,
+      });
+    }
     return page;
   };
   /** 이 통합(봇)이 고친 것으로 적는다 — 사람의 편집은 {@link edit}. */

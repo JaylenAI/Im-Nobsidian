@@ -10,13 +10,15 @@ import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
+import { applyRemoteDeletion, remotePresence } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
 import { noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath } from "../utils/db-row-path.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
-import { notionIdsEqual } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { inAnyPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
@@ -40,6 +42,11 @@ import {
 export interface DatabaseSyncResult {
   created: number;
   updated: number;
+  /**
+   * Notion 에서 지워져 볼트에서도 지운 행 수(deleteSync). 행은 DB 조회로만 보여, 행의 삭제는 전체
+   * 대조가 아니라 여기서 가른다(S-12).
+   */
+  deleted: number;
   /** Pull 시 로컬·리모트 동시 수정으로 발생한 충돌. */
   conflicts: Conflict[];
   failed: FailedOperation[];
@@ -102,14 +109,23 @@ export class DatabaseSyncer {
     });
   }
 
-  async pullAll(): Promise<DatabaseSyncResult> {
+  async pullAll(opts?: { readonly paths?: readonly string[] }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) {
-      return { created: 0, updated: 0, restored: 0, conflicts: [], failed: [], writtenPaths: [] };
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        restored: 0,
+        conflicts: [],
+        failed: [],
+        writtenPaths: [],
+      };
     }
 
     let created = 0;
     let updated = 0;
+    let deleted = 0;
     let restored = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
@@ -117,9 +133,10 @@ export class DatabaseSyncer {
 
     for (const dbConfig of databases) {
       try {
-        const result = await this.pullDatabase(dbConfig);
+        const result = await this.pullDatabase(dbConfig, { paths: opts?.paths });
         created += result.created;
         updated += result.updated;
+        deleted += result.deleted;
         restored += result.restored;
         conflicts.push(...result.conflicts);
         failed.push(...result.failed);
@@ -134,7 +151,7 @@ export class DatabaseSyncer {
       }
     }
 
-    return { created, updated, restored, conflicts, failed, writtenPaths };
+    return { created, updated, deleted, restored, conflicts, failed, writtenPaths };
   }
 
   async pullDatabase(
@@ -146,6 +163,8 @@ export class DatabaseSyncer {
        * 경우에만 행 소유를 양보한다 — 원본이 미발견이면 이 컨테이너가 유일한 접근 통로다.
        */
       resolveDbFolder?: (databaseId: string) => string | null;
+      /** 이 범위의 행만 지운다(`pull --path`). 없으면 모든 행. */
+      paths?: readonly string[];
     },
   ): Promise<DatabaseSyncResult> {
     const pages = await this.notionClient.queryAllDatabasePages(
@@ -169,6 +188,7 @@ export class DatabaseSyncer {
         return {
           created: 0,
           updated: 0,
+          deleted: 0,
           restored: 0,
           conflicts: [],
           failed: [],
@@ -251,10 +271,60 @@ export class DatabaseSyncer {
       }
     }
 
+    const deleted = await this.pullDeletedRows(dbConfig, pages, opts?.paths);
+
     getLogger().debug(
-      `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${restored} 복원, ${conflicts.length} 충돌`,
+      `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${deleted} 삭제, ${restored} 복원, ${conflicts.length} 충돌`,
     );
-    return { created, updated, restored, conflicts, failed, writtenPaths };
+    return { created, updated, deleted, restored, conflicts, failed, writtenPaths };
+  }
+
+  /**
+   * 조회에 없던 이 DB 의 추적 행 가운데 Notion 에서 정말 지워진 것만 볼트에서 지운다(deleteSync, S-12).
+   *
+   * 행은 DB 조회로만 보인다 — 전체 대조(페이지 순회)는 행을 보지 못해 행의 삭제는 여기서 가른다.
+   * 조회에 없다는 것만으로 지우지 않고 행마다 원격에 묻는다({@link remotePresence}): 살아 있는 행은
+   * 다른 DB 로 옮겨졌을 수 있다(그 DB 의 pull 이 옮겨 받는다). 묻지 못한 행은 이번에는 둔다 — 다음
+   * pull 이 다시 묻는다.
+   *
+   * 조회 필터(`pullFilter`)가 있으면 가르지 않는다 — 조회에 없는 행이 필터 밖인지 지워진 것인지
+   * 모르고, 필터 밖으로 나간 행을 매번 물으면 요청이 끝없이 는다.
+   */
+  private async pullDeletedRows(
+    dbConfig: DatabaseSyncConfig,
+    pages: readonly PageObjectResponse[],
+    paths: readonly string[] | undefined,
+  ): Promise<number> {
+    if (!this.config.sync.deleteSync || dbConfig.pullFilter) return 0;
+
+    const listed = new Set(pages.map((page) => normalizeNotionId(page.id)));
+    const missing = this.stateDb
+      .getAll()
+      .filter(
+        (record) =>
+          record.fileType === "db-row" &&
+          record.notionPageId !== null &&
+          record.notionParentId !== null &&
+          notionIdsEqual(record.notionParentId, dbConfig.databaseId) &&
+          !listed.has(normalizeNotionId(record.notionPageId)) &&
+          inAnyPathScope(record.obsidianPath, paths),
+      );
+
+    let deleted = 0;
+    for (const record of missing) {
+      try {
+        const presence = await remotePresence(this.notionClient, record.notionPageId!);
+        if (presence.kind === "alive") continue;
+        await applyRemoteDeletion(this.stateDb, this.vaultFs, record, this.config.sync.deleteSync);
+        deleted++;
+      } catch (error) {
+        getLogger().warn(
+          `[DB Sync] 조회에 없는 행 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,
+          error,
+        );
+      }
+    }
+    return deleted;
   }
 
   private async pullDatabaseViews(

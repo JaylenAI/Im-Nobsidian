@@ -37,6 +37,13 @@ export function isNotionObjectNotFound(error: unknown): boolean {
   return e.code === "object_not_found" || e.status === 404;
 }
 
+/** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
+export function isTrashedOrArchived(page: PageObjectResponse): boolean {
+  // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
+  const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+  return inTrash || page.archived === true;
+}
+
 /**
  * Notion SDK 의 400(`validation_error`) 판별 — 요청이 **적용되지 않고** 거절됐다는 신호다.
  * 본문 교체가 자식 페이지 · 자식 DB 를 지우게 될 때도 이 코드로 거절된다
@@ -907,14 +914,7 @@ export class NotionClient {
     // 휴지통/아카이브된 페이지 제외: 부모 블록에는 child_page 참조가 남아 있어도
     // 대상 페이지가 삭제(in_trash)·보관(archived)된 경우 블록 조회 시 object_not_found가
     // 발생하므로 동기화 대상에서 사전 제거한다. (재귀 스캔의 무한·실패 전파 차단)
-    return pages.filter((p) => !NotionClient.isTrashedOrArchived(p));
-  }
-
-  /** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
-  private static isTrashedOrArchived(page: PageObjectResponse): boolean {
-    // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
-    const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-    return inTrash || page.archived === true;
+    return pages.filter((p) => !isTrashedOrArchived(p));
   }
 
   async getChildDatabaseIds(parentId: string): Promise<string[]> {
@@ -1096,7 +1096,7 @@ export class NotionClient {
       if (pid === rootN) continue; // root 자신 제외
       const ptype = (p.parent as Parent).type;
       if (ptype === "data_source_id" || ptype === "database_id") continue; // DB 행 제외
-      if (NotionClient.isTrashedOrArchived(p)) continue;
+      if (isTrashedOrArchived(p)) continue;
       if (await isUnderRoot(p.id)) out.push(p);
     }
     return out;
