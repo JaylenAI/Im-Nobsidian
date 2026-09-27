@@ -8,7 +8,12 @@
 import { vi } from "vitest";
 import type { Config } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
+import type { RemoteObservation } from "../../src/types/sync.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
+import {
+  EDIT_TIME_RESOLUTION_MS,
+  CLOCK_SKEW_MARGIN_MS,
+} from "../../src/sync/remote-observation.js";
 
 export function createMockVaultFs(): VaultFS {
   return {
@@ -27,6 +32,57 @@ export function createMockVaultFs(): VaultFS {
   };
 }
 
+/**
+ * 원격을 그 수정 시각이 가라앉은 뒤에 본 레코드의 관측 칸(N-05). 원격이 이 시각 그대로면
+ * 지난번 그대로다 — push 가 원격을 다시 확인하지 않고 쓴다.
+ */
+export function settledObservation(lastEdited: string) {
+  return {
+    notionLastEdited: lastEdited,
+    notionLastEditedBy: null,
+    notionSeenAt: new Date(
+      Date.parse(lastEdited) + EDIT_TIME_RESOLUTION_MS + CLOCK_SKEW_MARGIN_MS,
+    ).toISOString(),
+    notionBodyFingerprint: null,
+  };
+}
+
+/** 아직 원격을 본 적 없는 레코드의 관측 칸 — 만들다 끊긴 페이지 · 자리표시. */
+export const UNOBSERVED = {
+  notionLastEdited: null,
+  notionLastEditedBy: null,
+  notionSeenAt: null,
+  notionBodyFingerprint: null,
+} as const;
+
+/**
+ * 상태 DB 목의 관측 기록(N-05)을 레코드 목록에 반영한다 — 기록한 뒤 레코드를 다시 읽는 시험이
+ * 실제 DB 처럼 보게.
+ */
+export function mirrorRemoteObservation(
+  stateDb: ReturnType<typeof createMockStateDb>,
+  records: () => Iterable<Record<string, unknown>>,
+): void {
+  stateDb.setRemoteObservation.mockImplementation((id: unknown, observation: RemoteObservation) => {
+    for (const record of records()) {
+      if (record.id !== id) continue;
+      Object.assign(record, {
+        notionLastEdited: observation.lastEdited,
+        notionLastEditedBy: observation.lastEditedBy,
+        notionSeenAt: observation.seenAt,
+        ...(observation.bodyFingerprint === undefined
+          ? {}
+          : { notionBodyFingerprint: observation.bodyFingerprint }),
+      });
+    }
+  });
+  stateDb.setNotionBodyFingerprint.mockImplementation((id: unknown, fingerprint: string | null) => {
+    for (const record of records()) {
+      if (record.id === id) record.notionBodyFingerprint = fingerprint;
+    }
+  });
+}
+
 export function createMockStateDb() {
   return {
     getByPath: vi.fn().mockReturnValue(null),
@@ -38,7 +94,8 @@ export function createMockStateDb() {
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
-    setNotionLastEdited: vi.fn(),
+    setRemoteObservation: vi.fn(),
+    setNotionBodyFingerprint: vi.fn(),
     setNotionParentId: vi.fn(),
     updatePath: vi.fn(),
     updateStatCache: vi.fn(),
@@ -64,15 +121,21 @@ export function createMockStateDb() {
   };
 }
 
+/** 목 Notion 클라이언트의 봇 id — 이 통합이 고친 페이지의 `last_edited_by`. */
+export const MOCK_BOT_USER_ID = "bot-user-id";
+
+/** 목 Notion 클라이언트가 돌려주는 페이지의 수정 시각. */
+export const MOCK_REMOTE_EDITED = "2026-01-01T00:00:00.000Z";
+
 export function createMockNotionClient() {
   return {
     createPage: vi.fn().mockResolvedValue({
       id: "page-id-123",
-      last_edited_time: "2026-01-01T00:00:00.000Z",
+      last_edited_time: MOCK_REMOTE_EDITED,
     }),
     getPage: vi.fn().mockResolvedValue({
       id: "page-id-123",
-      last_edited_time: "2026-01-01T00:00:00.000Z",
+      last_edited_time: MOCK_REMOTE_EDITED,
       parent: { type: "page_id", page_id: "root-page-id" },
       properties: {
         title: { type: "title", title: [{ plain_text: "Test Page" }] },
@@ -92,7 +155,7 @@ export function createMockNotionClient() {
       .mockResolvedValue({ markdown: "", truncated: false, unknown_block_ids: [] }),
     createPageWithMarkdown: vi.fn().mockResolvedValue({
       id: "page-id-123",
-      last_edited_time: "2026-01-01T00:00:00.000Z",
+      last_edited_time: MOCK_REMOTE_EDITED,
       parent: { type: "page_id", page_id: "root-page-id" },
       properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
     }),
@@ -127,6 +190,7 @@ export function createMockNotionClient() {
     movePage: vi.fn().mockResolvedValue({}),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
     searchRecentPages: vi.fn().mockResolvedValue([]),
+    getBotUserId: vi.fn().mockResolvedValue(MOCK_BOT_USER_ID),
   };
 }
 

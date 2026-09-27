@@ -5,6 +5,8 @@ import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { remoteBodyFingerprint } from "../../src/sync/remote-observation.js";
+import { settledObservation } from "../helpers/mock-orchestrator.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -18,6 +20,7 @@ function createMockVaultFs(): VaultFS {
     ensureFolder: vi.fn().mockResolvedValue(undefined),
     listMarkdownFiles: vi.fn().mockResolvedValue([]),
     listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
+    getFileStat: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -32,7 +35,8 @@ function createMockStateDb() {
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
-    setNotionLastEdited: vi.fn(),
+    setRemoteObservation: vi.fn(),
+    setNotionBodyFingerprint: vi.fn(),
     updatePath: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
@@ -238,18 +242,22 @@ describe("DatabaseSyncer", () => {
         id: "rec-1",
         obsidianPath: "databases/tasks/Existing.md",
         notionPageId: "page-1",
-        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        ...settledObservation("2026-05-16T00:00:00.000Z"),
         contentHash: "hash1",
       });
+      (mockVaultFs.exists as any).mockResolvedValue(true);
 
       const result = await syncer.pullAll();
 
       expect(result.created).toBe(0);
       expect(result.updated).toBe(0);
+      expect(result.failed).toEqual([]);
       const mdWriteCalls = (mockVaultFs.writeFile as any).mock.calls.filter(
         (c: any[]) => typeof c[0] === "string" && c[0].endsWith(".md"),
       );
       expect(mdWriteCalls).toHaveLength(0);
+      // 본문을 읽지 않는다 — 건너뛰는 행은 조회 1건 비용이다
+      expect(mockNotionClient.getPageMarkdown).not.toHaveBeenCalled();
     });
 
     it("lastEdited가 다르고 로컬 미수정이면 업데이트(덮어쓰기)", async () => {
@@ -475,9 +483,10 @@ describe("DatabaseSyncer", () => {
         id: "rec-1",
         obsidianPath: "databases/tasks/Existing.md",
         notionPageId: "page-1",
-        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        ...settledObservation("2026-05-16T00:00:00.000Z"),
         contentHash: "hash1",
       });
+      (mockVaultFs.exists as any).mockResolvedValue(true);
 
       const result = await syncer.pullAll();
 
@@ -589,6 +598,174 @@ describe("DatabaseSyncer", () => {
     });
   });
 
+  describe("같은 분 안의 원격 편집 (N-05)", () => {
+    // Notion 은 수정 시각을 분 단위로 자른다. 우리가 본 «뒤» 같은 분 안에서 고친 행은 시각이
+    // 그대로라, 시각만 보고 건너뛰면 영영 받지 못했다.
+    const T = "2026-05-16T00:00:00.000Z";
+    const PATH = "databases/tasks/Task One.md";
+    const BOT = "bot-user-id";
+    const HUMAN = "human-user-id";
+    /** 이번 실행이 시작한 때 — T 의 분이 아직 가라앉지 않았다. */
+    const SEEN_NOW = "2026-05-16T00:00:30.000Z";
+
+    const row = (editor: string) => ({
+      id: "page-1",
+      last_edited_time: T,
+      last_edited_by: { object: "user", id: editor },
+      properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+    });
+
+    const observing = (botUserId: string | null = BOT, config = createConfig([createDbConfig()])) =>
+      new DatabaseSyncer(
+        config,
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+        pipeline,
+        mockImageHandler as any,
+        () => ({ seenAt: SEEN_NOW, botUserId }),
+      );
+
+    /** 같은 분 안에 앞서 받아 둔 행 — 로컬 사본은 그때 받은 내용이다. */
+    const recordOf = (
+      content: string,
+      editor: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      id: "rec-1",
+      obsidianPath: PATH,
+      notionPageId: "page-1",
+      notionLastEdited: T,
+      notionLastEditedBy: editor,
+      notionSeenAt: "2026-05-16T00:00:10.000Z",
+      notionBodyFingerprint: null,
+      contentHash: computeHash(content),
+      baseSnapshot: Buffer.from(content, "utf-8"),
+      localLastModified: T,
+      syncDirection: "both",
+      fileType: "db-row",
+      status: "synced",
+      localMtime: null,
+      localFileSize: null,
+      ...overrides,
+    });
+
+    const mdWrites = () =>
+      (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) => String(c[0]).endsWith(".md"));
+
+    /** 행을 처음 받아 로컬 사본을 얻는다 — 그 뒤의 호출 기록은 비운다. */
+    async function firstPull(): Promise<string> {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([row(HUMAN)]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+      await observing().pullAll();
+      const content = String(mdWrites()[0]![1]);
+      vi.clearAllMocks();
+      (mockVaultFs.readFile as any).mockResolvedValue(content);
+      (mockVaultFs.exists as any).mockResolvedValue(true);
+      return content;
+    }
+
+    it("수정 시각이 같아도 가라앉기 전이면 받아서 견준다 — 로컬과 같으면 쓰지 않고 본 것만 적는다", async () => {
+      const content = await firstPull();
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(content, HUMAN));
+
+      const result = await observing().pullAll();
+
+      expect(result).toMatchObject({ created: 0, updated: 0, restored: 0, failed: [] });
+      expect(result.conflicts).toEqual([]);
+      expect(result.writtenPaths).toEqual([]);
+      expect(mockNotionClient.getPageMarkdown).toHaveBeenCalledTimes(1);
+      expect(mdWrites()).toHaveLength(0);
+      expect(mockStateDb.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          obsidianPath: PATH,
+          notionLastEdited: T,
+          notionLastEditedBy: HUMAN,
+          notionSeenAt: SEEN_NOW,
+          notionBodyFingerprint: remoteBodyFingerprint("# Hello\n\nWorld"),
+          status: "synced",
+        }),
+      );
+    });
+
+    it("같은 분 안에 Notion 에서 고친 행을 받는다", async () => {
+      const content = await firstPull();
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(content, HUMAN));
+      mockNotionClient.getPageMarkdown.mockResolvedValue({
+        markdown: "# Hello\n\nWorld — 같은 분에 고침",
+        truncated: false,
+        unknown_block_ids: [],
+      });
+
+      const result = await observing().pullAll();
+
+      expect(result).toMatchObject({ updated: 1, failed: [] });
+      expect(result.writtenPaths).toEqual([PATH]);
+      expect(String(mdWrites()[0]![1])).toContain("World — 같은 분에 고침");
+    });
+
+    it("봇이 마지막으로 쓴 행은 가라앉기 전이어도 본문을 읽지 않고 건너뛴다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([row(BOT)]);
+      mockStateDb.getByNotionId.mockReturnValue(recordOf("로컬 사본", BOT));
+      (mockVaultFs.exists as any).mockResolvedValue(true);
+
+      const result = await observing().pullAll();
+
+      expect(result).toMatchObject({ updated: 0, failed: [] });
+      expect(mockNotionClient.getPageMarkdown).not.toHaveBeenCalled();
+    });
+
+    it("봇 id 를 받지 못했으면 봇이 쓴 행도 받아서 견준다", async () => {
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([row(BOT)]);
+      mockStateDb.getByNotionId.mockReturnValue(recordOf("로컬 사본", BOT));
+      (mockVaultFs.exists as any).mockResolvedValue(true);
+
+      await observing(null).pullAll();
+
+      expect(mockNotionClient.getPageMarkdown).toHaveBeenCalledTimes(1);
+    });
+
+    it("편집자가 바뀌었으면 수정 시각이 같아도 받는다", async () => {
+      const content = await firstPull();
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([row(HUMAN)]);
+      mockStateDb.getByNotionId.mockReturnValue(
+        recordOf(content, BOT, { notionSeenAt: settledObservation(T).notionSeenAt }),
+      );
+      mockNotionClient.getPageMarkdown.mockResolvedValue({
+        markdown: "# Hello\n\n사람이 고침",
+        truncated: false,
+        unknown_block_ids: [],
+      });
+
+      const result = await observing().pullAll();
+
+      expect(result).toMatchObject({ updated: 1, failed: [] });
+      expect(String(mdWrites()[0]![1])).toContain("사람이 고침");
+    });
+
+    it("원격이 지난 사본 그대로면 remote-first 여도 로컬 편집을 덮지 않는다", async () => {
+      const content = await firstPull();
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(content, HUMAN));
+      (mockVaultFs.readFile as any).mockResolvedValue(`${content}\n로컬에서 더한 문단\n`);
+      const config: Config = {
+        ...createConfig([createDbConfig()]),
+        sync: { ...DEFAULT_CONFIG.sync, conflictStrategy: "remote-first" },
+      };
+
+      const result = await observing(BOT, config).pullAll();
+
+      expect(result).toMatchObject({ updated: 0, failed: [] });
+      expect(result.conflicts).toEqual([]);
+      expect(mdWrites()).toHaveLength(0);
+      expect(mockStateDb.setRemoteObservation).toHaveBeenCalledWith("rec-1", {
+        lastEdited: T,
+        lastEditedBy: HUMAN,
+        seenAt: SEEN_NOW,
+        bodyFingerprint: remoteBodyFingerprint("# Hello\n\nWorld"),
+      });
+    });
+  });
+
   describe("F24 — 동명 DB 폴더 분리 후 행 재배치", () => {
     it("레코드 경로가 현 DB 폴더 밖이면 원격 무변경이어도 현 폴더로 재배치한다", async () => {
       // 옛 공유 폴더의 id 접미사 파일 → 새 폴더의 자연 이름으로 이동 + 레코드/위키링크 이전
@@ -680,9 +857,10 @@ describe("DatabaseSyncer", () => {
         id: "rec-1",
         obsidianPath: "databases/tasks/Existing.md",
         notionPageId: "page-1",
-        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        ...settledObservation("2026-05-16T00:00:00.000Z"),
         contentHash: "hash1",
       });
+      (mockVaultFs.exists as any).mockResolvedValue(true);
 
       const result = await syncer.pullAll();
 

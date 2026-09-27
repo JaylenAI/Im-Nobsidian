@@ -18,6 +18,7 @@ import { NotionClient } from "../../src/notion/client.js";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 const OLD = "22222222222222222222222222222222";
@@ -65,6 +66,8 @@ describe("증분 pull — 새 하위 트리 (S-08)", () => {
 
   function offlineClient(recent: string[]): NotionClient {
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([PAGES.get(OLD)!]);
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
       recent.map((id) => ({ id, last_edited_time: EDITED })),

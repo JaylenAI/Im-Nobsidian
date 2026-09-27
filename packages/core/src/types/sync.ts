@@ -11,6 +11,12 @@ export interface SyncRecord {
   readonly notionParentId: string | null;
   readonly contentHash: string;
   readonly notionLastEdited: string | null;
+  /** {@link RemoteObservation.lastEditedBy} — 모르면 null. */
+  readonly notionLastEditedBy: string | null;
+  /** {@link RemoteObservation.seenAt} — 모르면 null. */
+  readonly notionSeenAt: string | null;
+  /** 지난 동기화 사본에 해당하는 원격 본문의 지문(`remoteBodyFingerprint`). 모르면 null. */
+  readonly notionBodyFingerprint: string | null;
   readonly localLastModified: string;
   readonly syncDirection: SyncDirection;
   readonly fileType: FileType;
@@ -21,6 +27,24 @@ export interface SyncRecord {
   readonly version: number;
   readonly createdAt: string;
   readonly updatedAt: string;
+}
+
+/**
+ * 원격 페이지를 본 기록(N-05). Notion 의 수정 시각은 분 단위로 잘려, 시각만으로는 우리가 본 뒤
+ * 같은 분 안에서 고친 것을 알 수 없다 — 누가 고쳤는지와 언제 봤는지를 함께 적는다.
+ */
+export interface RemoteObservation {
+  /** Notion `last_edited_time` — 분 단위로 잘린 값. */
+  readonly lastEdited: string;
+  /** Notion `last_edited_by.id`. 응답에 없으면 null. */
+  readonly lastEditedBy: string | null;
+  /**
+   * 이 기기 시계로 본 때 — 그 실행을 시작한 때(실제로 읽은 때보다 이르다). 이때까지의 원격
+   * 편집은 레코드에 들어 있다. 모르면 null — 다음에 내용으로 확인한다.
+   */
+  readonly seenAt: string | null;
+  /** 원격 본문 지문. 적지 않으면(undefined) 있던 값을 둔다 — 본문을 건드리지 않은 관측. */
+  readonly bodyFingerprint?: string | null;
 }
 
 export interface LocalChange {
@@ -48,6 +72,11 @@ export interface RemoteChange {
   readonly lastEdited: string;
   readonly previousEdited: string | null;
   readonly movedFromParent?: string;
+  /**
+   * 수정 시각 · 편집자로는 바뀌었는지 가를 수 없다 — 같은 분 안의 편집일 수 있다(N-05).
+   * 받는 쪽이 내용으로 확인한다. `modified` 에만 붙는다.
+   */
+  readonly unverified?: boolean;
 }
 
 export interface Conflict {

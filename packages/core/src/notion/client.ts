@@ -90,6 +90,13 @@ export class DiscoveryTooLargeError extends Error {
  */
 const NOT_IDEMPOTENT = { idempotent: false } as const;
 
+/** {@link NotionClient.searchRecentPages} 의 한 줄. */
+export interface RecentPage {
+  readonly id: string;
+  readonly last_edited_time: string;
+  readonly last_edited_by: { readonly id: string } | null;
+}
+
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
@@ -117,6 +124,8 @@ export class NotionClient {
   private readonly defaultPageSize: number;
   private readonly batchSize: number;
   private readonly markdownCompletionMaxBlocks: number;
+  /** {@link getBotUserId} 가 받은 값 — 받는 중이면 그 약속. */
+  private botUserId: Promise<string> | null = null;
 
   constructor(options: NotionClientOptions) {
     this.client = new Client({
@@ -161,6 +170,21 @@ export class NotionClient {
 
   getInternalClient(): Client {
     return this.client;
+  }
+
+  /**
+   * 이 토큰의 봇 사용자 id(`GET /v1/users/me`). 이 통합이 고친 페이지는 `last_edited_by` 가 이
+   * id 다 — 같은 분 안에서 우리 뒤에 누가 고쳤는지 가르는 데 쓴다(`sync/remote-observation.ts`).
+   * 받은 값은 기억한다. 받지 못하면 던지고 기억하지 않는다 — 다음 호출이 다시 묻는다.
+   */
+  async getBotUserId(): Promise<string> {
+    this.botUserId ??= this.withRateLimit(() => this.client.users.me({})).then((me) => me.id);
+    try {
+      return await this.botUserId;
+    } catch (error) {
+      this.botUserId = null;
+      throw error;
+    }
   }
 
   // ─── Page CRUD ───
@@ -836,8 +860,12 @@ export class NotionClient {
     };
   }
 
-  async searchRecentPages(since: string): Promise<Array<{ id: string; last_edited_time: string }>> {
-    const results: Array<{ id: string; last_edited_time: string }> = [];
+  /**
+   * `since` 뒤에 고친 페이지 — 최근 것부터. 누가 마지막으로 고쳤는지도 싣는다: 수정 시각은 분
+   * 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
+   */
+  async searchRecentPages(since: string): Promise<RecentPage[]> {
+    const results: RecentPage[] = [];
     let cursor: string | undefined;
     const sinceDate = new Date(since);
 
@@ -856,7 +884,11 @@ export class NotionClient {
         if (new Date(p.last_edited_time) <= sinceDate) {
           break outer;
         }
-        results.push({ id: p.id, last_edited_time: p.last_edited_time });
+        results.push({
+          id: p.id,
+          last_edited_time: p.last_edited_time,
+          last_edited_by: p.last_edited_by ? { id: p.last_edited_by.id } : null,
+        });
       }
 
       cursor = response.next_cursor ?? undefined;

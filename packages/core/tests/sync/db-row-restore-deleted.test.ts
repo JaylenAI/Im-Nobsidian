@@ -30,6 +30,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { settledObservation } from "../helpers/mock-orchestrator.js";
 
 const ROW_ID = "row-alive";
 const ROW_TITLE = "살아 있던 행";
@@ -68,7 +69,8 @@ function createMockStateDb() {
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
-    setNotionLastEdited: vi.fn(),
+    setRemoteObservation: vi.fn(),
+    setNotionBodyFingerprint: vi.fn(),
     updatePath: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
@@ -142,7 +144,7 @@ function createConfig(): Config {
   };
 }
 
-/** 마지막 동기화 시점의 레코드 — 원격은 그 뒤로 한 번도 바뀌지 않았다. */
+/** 마지막 동기화 시점의 레코드 — 원격은 그 뒤로 한 번도 바뀌지 않았다(가라앉은 뒤에 봤다). */
 function syncedRecord() {
   return {
     id: 1,
@@ -150,7 +152,7 @@ function syncedRecord() {
     notionPageId: ROW_ID,
     notionParentId: "db-123",
     contentHash: computeHash("동기화 당시 본문"),
-    notionLastEdited: LAST_EDITED,
+    ...settledObservation(LAST_EDITED),
     localLastModified: LAST_EDITED,
     syncDirection: "both",
     fileType: "db-row",

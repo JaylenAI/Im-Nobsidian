@@ -23,6 +23,7 @@ import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
 import type { PullOptions, RemoteChange } from "../../src/types/sync.js";
 import { incrementalSearchSince, nextPullWatermark } from "../../src/sync/pull-watermark.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 const OLD = "22222222222222222222222222222222";
@@ -74,6 +75,8 @@ describe("증분 pull 기준 시각 — 받지 못한 변경이 다음 조회에
 
   function offlineClient(): NotionClient {
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockImplementation(async () => [...remote.values()]);
     vi.spyOn(client, "searchRecentPages").mockImplementation(async (since: string) => {
       searchSince.push(since);

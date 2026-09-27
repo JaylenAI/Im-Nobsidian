@@ -216,7 +216,7 @@ describe("SqlJsStateDB", () => {
     });
   });
 
-  // --- updateStatus / updateHash / setNotionLastEdited ---
+  // --- updateStatus / updateHash / setRemoteObservation ---
 
   describe("updateStatus", () => {
     it("상태 변경", () => {
@@ -286,9 +286,9 @@ describe("SqlJsStateDB", () => {
     });
   });
 
-  describe("setNotionLastEdited", () => {
-    it("Notion 편집 시간 업데이트", () => {
-      const record = db.upsert({
+  describe("setRemoteObservation / setNotionBodyFingerprint", () => {
+    const insert = () =>
+      db.upsert({
         obsidianPath: "test.md",
         notionPageId: "page-1",
         notionParentId: null,
@@ -303,9 +303,63 @@ describe("SqlJsStateDB", () => {
         localFileSize: null,
       });
 
-      db.setNotionLastEdited(record.id, "2026-05-22T12:00:00Z");
-      const updated = db.getByPath("test.md");
-      expect(updated!.notionLastEdited).toBe("2026-05-22T12:00:00Z");
+    it("원격을 본 기록을 적는다 — 지문을 주지 않으면 있던 지문을 둔다", () => {
+      const record = insert();
+      db.setNotionBodyFingerprint(record.id, "fp-1");
+
+      db.setRemoteObservation(record.id, {
+        lastEdited: "2026-05-22T12:00:00.000Z",
+        lastEditedBy: "user-1",
+        seenAt: "2026-05-22T12:05:00.000Z",
+      });
+
+      expect(db.getByPath("test.md")).toMatchObject({
+        notionLastEdited: "2026-05-22T12:00:00.000Z",
+        notionLastEditedBy: "user-1",
+        notionSeenAt: "2026-05-22T12:05:00.000Z",
+        notionBodyFingerprint: "fp-1",
+      });
+    });
+
+    it("지문을 주면 함께 바꾸고, null 이면 지운다", () => {
+      const record = insert();
+      const seen = {
+        lastEdited: "2026-05-22T12:00:00.000Z",
+        lastEditedBy: null,
+        seenAt: null,
+      };
+
+      db.setRemoteObservation(record.id, { ...seen, bodyFingerprint: "fp-2" });
+      expect(db.getByPath("test.md")!.notionBodyFingerprint).toBe("fp-2");
+
+      db.setRemoteObservation(record.id, { ...seen, bodyFingerprint: null });
+      expect(db.getByPath("test.md")!.notionBodyFingerprint).toBeNull();
+    });
+
+    it("upsert 가 원격을 본 기록 세 칸을 적고 읽는다", () => {
+      db.upsert({
+        obsidianPath: "seen.md",
+        notionPageId: "page-2",
+        notionParentId: null,
+        contentHash: "h1",
+        notionLastEdited: "2026-05-22T12:00:00.000Z",
+        notionLastEditedBy: "bot-1",
+        notionSeenAt: "2026-05-22T12:03:00.000Z",
+        notionBodyFingerprint: "fp-3",
+        localLastModified: "2026-05-22T00:00:00Z",
+        syncDirection: "both",
+        fileType: "file",
+        status: "synced",
+        baseSnapshot: null,
+        localMtime: null,
+        localFileSize: null,
+      });
+
+      expect(db.getByPath("seen.md")).toMatchObject({
+        notionLastEditedBy: "bot-1",
+        notionSeenAt: "2026-05-22T12:03:00.000Z",
+        notionBodyFingerprint: "fp-3",
+      });
     });
   });
 

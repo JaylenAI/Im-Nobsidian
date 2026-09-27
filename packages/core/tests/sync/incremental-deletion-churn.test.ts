@@ -29,6 +29,7 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  settledObservation,
 } from "../helpers/mock-orchestrator.js";
 
 type MutableRecord = {
@@ -38,6 +39,9 @@ type MutableRecord = {
   notionParentId: string | null;
   contentHash: string;
   notionLastEdited: string;
+  notionLastEditedBy?: string | null;
+  notionSeenAt?: string | null;
+  notionBodyFingerprint?: string | null;
   localLastModified: string;
   syncDirection: string;
   fileType: string;
@@ -194,7 +198,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
       notionPageId: "page-id-123",
       notionParentId: "root-page-id",
       contentHash: computeHash("# Old\n"),
-      notionLastEdited: "2026-05-01T00:00:00.000Z",
+      ...settledObservation("2026-05-01T00:00:00.000Z"),
       localLastModified: "2026-05-01T00:00:00.000Z",
       syncDirection: "both",
       fileType: "page",
@@ -208,13 +212,17 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     ]);
     vaultFs.readFile.mockResolvedValue("# New body\n\nchanged content");
     vaultFs.getFileStat.mockResolvedValue({ mtime: "2026-05-09T00:00:00.000Z", size: 40 });
-    // 블록만 바뀌고 속성 갱신은 없음(페이지 모드) → getPage 권위값 경로를 탄다.
-    notion.getPage.mockResolvedValue({
+    // 블록만 바뀌고 속성 갱신은 없음(페이지 모드) → getPage 권위값 경로를 탄다. 쓰기 전에
+    // 원격이 지난번 그대로인지 한 번 보고(N-05), 쓴 뒤의 시각을 한 번 더 받는다.
+    const remotePage = (lastEdited: string) => ({
       id: "page-id-123",
-      last_edited_time: "2026-05-09T12:34:56.000Z",
+      last_edited_time: lastEdited,
       parent: { type: "page_id", page_id: "root-page-id" },
       properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
     });
+    notion.getPage
+      .mockResolvedValueOnce(remotePage("2026-05-01T00:00:00.000Z"))
+      .mockResolvedValue(remotePage("2026-05-09T12:34:56.000Z"));
 
     const orch = makeOrchestrator(
       createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: false } }),
@@ -223,6 +231,9 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
 
     // updatePageProperties(속성 갱신)는 호출되지 않고, 저장된 last_edited 는 getPage 권위값.
     expect(notion.updatePageProperties).not.toHaveBeenCalled();
-    expect(stateDb.setNotionLastEdited).toHaveBeenCalledWith(7, "2026-05-09T12:34:56.000Z");
+    expect(stateDb.setRemoteObservation).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ lastEdited: "2026-05-09T12:34:56.000Z" }),
+    );
   });
 });

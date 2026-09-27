@@ -1,9 +1,16 @@
 import Database from "better-sqlite3";
-import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
+import type {
+  SyncRecord,
+  SyncStatus,
+  WikilinkEntry,
+  PreserveMarker,
+  RemoteObservation,
+} from "../types/index.js";
 import { generateId } from "../utils/id.js";
 import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
 import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
 import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
+import { REMOTE_OBSERVATION_MIGRATION } from "./migrations/004-remote-observation.js";
 import type { IStateDB } from "./state-db-interface.js";
 
 export class StateDB implements IStateDB {
@@ -32,6 +39,9 @@ export class StateDB implements IStateDB {
     }
     if (version < 3) {
       this.db.exec(STAT_CACHE_MIGRATION);
+    }
+    if (version < 4) {
+      this.db.exec(REMOTE_OBSERVATION_MIGRATION);
     }
   }
 
@@ -84,7 +94,8 @@ export class StateDB implements IStateDB {
         .prepare(
           `UPDATE sync_state SET
             notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
-            notion_last_edited = ?, local_last_modified = ?,
+            notion_last_edited = ?, notion_last_edited_by = ?, notion_seen_at = ?,
+            notion_body_fingerprint = ?, local_last_modified = ?,
             sync_direction = ?, file_type = ?, status = ?,
             base_snapshot = ?, local_mtime = ?, local_file_size = ?,
             version = version + 1, updated_at = datetime('now')
@@ -95,6 +106,9 @@ export class StateDB implements IStateDB {
           record.notionParentId ?? null,
           record.contentHash,
           record.notionLastEdited ?? null,
+          record.notionLastEditedBy ?? null,
+          record.notionSeenAt ?? null,
+          record.notionBodyFingerprint ?? null,
           record.localLastModified,
           record.syncDirection,
           record.fileType,
@@ -112,9 +126,10 @@ export class StateDB implements IStateDB {
       .prepare(
         `INSERT INTO sync_state
           (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
-           notion_last_edited, local_last_modified, sync_direction, file_type,
+           notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
+           local_last_modified, sync_direction, file_type,
            status, base_snapshot, local_mtime, local_file_size, version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       )
       .run(
         id,
@@ -123,6 +138,9 @@ export class StateDB implements IStateDB {
         record.notionParentId ?? null,
         record.contentHash,
         record.notionLastEdited ?? null,
+        record.notionLastEditedBy ?? null,
+        record.notionSeenAt ?? null,
+        record.notionBodyFingerprint ?? null,
         record.localLastModified,
         record.syncDirection,
         record.fileType,
@@ -156,12 +174,32 @@ export class StateDB implements IStateDB {
     }
   }
 
-  setNotionLastEdited(id: string, lastEdited: string): void {
+  setRemoteObservation(id: string, observation: RemoteObservation): void {
+    const { lastEdited, lastEditedBy, seenAt, bodyFingerprint } = observation;
+    if (bodyFingerprint === undefined) {
+      this.db
+        .prepare(
+          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+            notion_seen_at = ?, updated_at = datetime('now') WHERE id = ?`,
+        )
+        .run(lastEdited, lastEditedBy, seenAt, id);
+    } else {
+      this.db
+        .prepare(
+          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+            notion_seen_at = ?, notion_body_fingerprint = ?, updated_at = datetime('now')
+          WHERE id = ?`,
+        )
+        .run(lastEdited, lastEditedBy, seenAt, bodyFingerprint, id);
+    }
+  }
+
+  setNotionBodyFingerprint(id: string, fingerprint: string | null): void {
     this.db
       .prepare(
-        "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
       )
-      .run(lastEdited, id);
+      .run(fingerprint, id);
   }
 
   updateStatCache(id: string, mtime: string, fileSize: number): void {
@@ -409,6 +447,9 @@ export class StateDB implements IStateDB {
       notionParentId: row.notion_parent_id,
       contentHash: row.content_hash,
       notionLastEdited: row.notion_last_edited,
+      notionLastEditedBy: row.notion_last_edited_by,
+      notionSeenAt: row.notion_seen_at,
+      notionBodyFingerprint: row.notion_body_fingerprint,
       localLastModified: row.local_last_modified,
       syncDirection: row.sync_direction as SyncRecord["syncDirection"],
       fileType: row.file_type as SyncRecord["fileType"],
@@ -438,6 +479,9 @@ export interface UpsertSyncRecord {
   readonly notionParentId?: string | null;
   readonly contentHash: string;
   readonly notionLastEdited?: string | null;
+  readonly notionLastEditedBy?: string | null;
+  readonly notionSeenAt?: string | null;
+  readonly notionBodyFingerprint?: string | null;
   readonly localLastModified: string;
   readonly syncDirection: SyncRecord["syncDirection"];
   readonly fileType: SyncRecord["fileType"];
@@ -454,6 +498,9 @@ interface RawSyncRow {
   notion_parent_id: string | null;
   content_hash: string;
   notion_last_edited: string | null;
+  notion_last_edited_by: string | null;
+  notion_seen_at: string | null;
+  notion_body_fingerprint: string | null;
   local_last_modified: string;
   sync_direction: string;
   file_type: string;

@@ -25,6 +25,7 @@ import { NotionClient } from "../../src/notion/client.js";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 // 셋 다 제목이 "노트". A/B/C 는 앞 8 글자가 같고, B 와 C 는 앞 16 글자까지 같다.
@@ -70,6 +71,8 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
 
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([...PAGES.values()]);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       const found = PAGES.get(id);
@@ -130,6 +133,8 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
       notion: { ...DEFAULT_CONFIG.notion, rootPageId: ROOT, token: "offline-test" },
     };
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([...PAGES.values()]);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => PAGES.get(id)!);
     vi.spyOn(client, "getPageMarkdown").mockImplementation(

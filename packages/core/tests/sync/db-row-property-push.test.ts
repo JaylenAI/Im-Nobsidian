@@ -16,6 +16,8 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  mirrorRemoteObservation,
+  settledObservation,
 } from "../helpers/mock-orchestrator.js";
 
 const ROW_PATH = "Projects/과제/과제 A.md";
@@ -77,7 +79,7 @@ function rowRecord(overrides: Record<string, unknown> = {}) {
     notionPageId: ROW_ID,
     notionParentId: DB_ID,
     contentHash: computeHash(BASE),
-    notionLastEdited: SYNCED_AT,
+    ...settledObservation(SYNCED_AT),
     localLastModified: "2026-09-26T13:58:00.000Z",
     syncDirection: "both",
     fileType: "db-row",
@@ -128,9 +130,7 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
         if (r.id === id) Object.assign(r, { contentHash: hash, baseSnapshot: snapshot });
       }
     });
-    stateDb.setNotionLastEdited.mockImplementation((id: string, at: string) => {
-      for (const r of records.values()) if (r.id === id) r.notionLastEdited = at;
-    });
+    mirrorRemoteObservation(stateDb, () => records.values());
 
     remote = new Map([
       [ROW_ID, { lastEdited: SYNCED_AT, title: "과제 A", properties: REMOTE_PROPS }],
@@ -169,7 +169,10 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     expect(notion.updatePageProperties).toHaveBeenCalledTimes(1);
     expect(notion.updatePageProperties).toHaveBeenCalledWith(ROW_ID, { 진척: { number: 0.5 } });
     expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
-    expect(stateDb.setNotionLastEdited).toHaveBeenCalledWith("rec-row", PROPS_AT);
+    expect(stateDb.setRemoteObservation).toHaveBeenCalledWith(
+      "rec-row",
+      expect.objectContaining({ lastEdited: PROPS_AT }),
+    );
     expect(stateDb.updateStatus).toHaveBeenCalledWith("rec-row", "synced");
   });
 
@@ -188,7 +191,10 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     expect(markdown).not.toContain("진척");
     expect(notion.updatePageProperties).not.toHaveBeenCalled();
     // 속성을 보내지 않았으니 서버 시각은 본문을 보낸 뒤 getPage 로 받는다.
-    expect(stateDb.setNotionLastEdited).toHaveBeenCalledWith("rec-row", BODY_AT);
+    expect(stateDb.setRemoteObservation).toHaveBeenCalledWith(
+      "rec-row",
+      expect.objectContaining({ lastEdited: BODY_AT }),
+    );
   });
 
   it("지운 속성은 그 타입의 빈 값으로 비운다 — status 와 files 는 비우지 않는다", async () => {
@@ -243,7 +249,7 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
       computeHash(files.get(ROW_PATH)!),
       expect.any(Buffer),
     );
-    expect(stateDb.setNotionLastEdited).not.toHaveBeenCalled();
+    expect(stateDb.setRemoteObservation).not.toHaveBeenCalled();
   });
 
   it("frontmatter 가 깨졌으면 보내지 않고 실패로 남긴다 — 모든 속성을 지우는 요청이 되지 않게", async () => {
@@ -324,7 +330,7 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
 
     expect(result.failed).toEqual([]);
     expect(notion.updatePageProperties).toHaveBeenCalledWith(ROW_ID, { 진척: { number: 0.5 } });
-    expect(stateDb.setNotionLastEdited).not.toHaveBeenCalled();
+    expect(stateDb.setRemoteObservation).not.toHaveBeenCalled();
     expect(records.get(ROW_PATH)!.notionLastEdited).toBe(SYNCED_AT);
   });
 

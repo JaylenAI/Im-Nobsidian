@@ -8,7 +8,13 @@ import type {
   PendingOperation,
   RecordPendingInput,
 } from "@im-nobsidian/core";
-import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "@im-nobsidian/core";
+import type {
+  SyncRecord,
+  SyncStatus,
+  WikilinkEntry,
+  PreserveMarker,
+  RemoteObservation,
+} from "@im-nobsidian/core";
 import { generateId } from "@im-nobsidian/core";
 
 const INITIAL_MIGRATION = `
@@ -109,6 +115,18 @@ ALTER TABLE sync_state ADD COLUMN local_file_size INTEGER;
 UPDATE sync_metadata SET value = '3' WHERE key = 'schema_version';
 `;
 
+// core 의 004-remote-observation 과 같다 — 앞선 버전이 적은 레코드는 지금 본 것으로 적는다(ADR-017).
+const REMOTE_OBSERVATION_MIGRATION = `
+ALTER TABLE sync_state ADD COLUMN notion_last_edited_by TEXT;
+ALTER TABLE sync_state ADD COLUMN notion_seen_at TEXT;
+ALTER TABLE sync_state ADD COLUMN notion_body_fingerprint TEXT;
+
+UPDATE sync_state SET notion_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+  WHERE notion_last_edited IS NOT NULL;
+
+UPDATE sync_metadata SET value = '4' WHERE key = 'schema_version';
+`;
+
 interface RawSyncRow {
   id: string;
   obsidian_path: string;
@@ -116,6 +134,9 @@ interface RawSyncRow {
   notion_parent_id: string | null;
   content_hash: string;
   notion_last_edited: string | null;
+  notion_last_edited_by: string | null;
+  notion_seen_at: string | null;
+  notion_body_fingerprint: string | null;
   local_last_modified: string;
   sync_direction: string;
   file_type: string;
@@ -194,6 +215,12 @@ export class SqlJsStateDB implements IStateDB {
     if (version < 2) this.db.run(FILE_REGISTRY_MIGRATION);
     if (version < 3) {
       for (const line of STAT_CACHE_MIGRATION.split(";")) {
+        const trimmed = line.trim();
+        if (trimmed) this.db.run(trimmed);
+      }
+    }
+    if (version < 4) {
+      for (const line of REMOTE_OBSERVATION_MIGRATION.split(";")) {
         const trimmed = line.trim();
         if (trimmed) this.db.run(trimmed);
       }
@@ -311,7 +338,8 @@ export class SqlJsStateDB implements IStateDB {
       this.run(
         `UPDATE sync_state SET
           notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
-          notion_last_edited = ?, local_last_modified = ?,
+          notion_last_edited = ?, notion_last_edited_by = ?, notion_seen_at = ?,
+          notion_body_fingerprint = ?, local_last_modified = ?,
           sync_direction = ?, file_type = ?, status = ?,
           base_snapshot = ?, local_mtime = ?, local_file_size = ?,
           version = version + 1, updated_at = datetime('now')
@@ -321,6 +349,9 @@ export class SqlJsStateDB implements IStateDB {
           record.notionParentId ?? null,
           record.contentHash,
           record.notionLastEdited ?? null,
+          record.notionLastEditedBy ?? null,
+          record.notionSeenAt ?? null,
+          record.notionBodyFingerprint ?? null,
           record.localLastModified,
           record.syncDirection,
           record.fileType,
@@ -338,9 +369,10 @@ export class SqlJsStateDB implements IStateDB {
     this.run(
       `INSERT INTO sync_state
         (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
-         notion_last_edited, local_last_modified, sync_direction, file_type,
+         notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
+         local_last_modified, sync_direction, file_type,
          status, base_snapshot, local_mtime, local_file_size, version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
         record.obsidianPath,
@@ -348,6 +380,9 @@ export class SqlJsStateDB implements IStateDB {
         record.notionParentId ?? null,
         record.contentHash,
         record.notionLastEdited ?? null,
+        record.notionLastEditedBy ?? null,
+        record.notionSeenAt ?? null,
+        record.notionBodyFingerprint ?? null,
         record.localLastModified,
         record.syncDirection,
         record.fileType,
@@ -381,10 +416,28 @@ export class SqlJsStateDB implements IStateDB {
     }
   }
 
-  setNotionLastEdited(id: string, lastEdited: string): void {
+  setRemoteObservation(id: string, observation: RemoteObservation): void {
+    const { lastEdited, lastEditedBy, seenAt, bodyFingerprint } = observation;
+    if (bodyFingerprint === undefined) {
+      this.run(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+          notion_seen_at = ?, updated_at = datetime('now') WHERE id = ?`,
+        [lastEdited, lastEditedBy, seenAt, id],
+      );
+    } else {
+      this.run(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+          notion_seen_at = ?, notion_body_fingerprint = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+        [lastEdited, lastEditedBy, seenAt, bodyFingerprint, id],
+      );
+    }
+  }
+
+  setNotionBodyFingerprint(id: string, fingerprint: string | null): void {
     this.run(
-      "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
-      [lastEdited, id],
+      "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
+      [fingerprint, id],
     );
   }
 
@@ -608,6 +661,9 @@ export class SqlJsStateDB implements IStateDB {
       notionParentId: row.notion_parent_id,
       contentHash: row.content_hash,
       notionLastEdited: row.notion_last_edited,
+      notionLastEditedBy: row.notion_last_edited_by,
+      notionSeenAt: row.notion_seen_at,
+      notionBodyFingerprint: row.notion_body_fingerprint,
       localLastModified: row.local_last_modified,
       syncDirection: row.sync_direction as SyncRecord["syncDirection"],
       fileType: row.file_type as SyncRecord["fileType"],

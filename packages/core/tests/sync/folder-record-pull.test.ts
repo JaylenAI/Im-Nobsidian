@@ -22,7 +22,7 @@ import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import { StateDB } from "../../src/state/state-db.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import { computeHash } from "../../src/utils/hash.js";
-import { createConfig } from "../helpers/mock-orchestrator.js";
+import { createConfig, settledObservation } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
 const DB_ID = "db000000-0000-4000-8000-000000000001";
@@ -217,7 +217,7 @@ describe("push 가 만든 폴더 페이지를 pull 이 폴더로 다룬다 (S-16
       notionPageId: note.id,
       notionParentId: folderPage,
       contentHash: computeHash(content),
-      notionLastEdited: note.lastEdited,
+      ...settledObservation(note.lastEdited),
       localLastModified: stat.mtime,
       syncDirection: "both",
       fileType: "folder-note",

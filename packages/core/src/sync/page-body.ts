@@ -1,3 +1,4 @@
+import type { PageMarkdownResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { baseEmbedPaths, extractChildTags, restoreChildTags } from "../converter/child-tags.js";
 import { isNotionValidationError, type NotionClient } from "../notion/client.js";
 import { getLogger } from "../utils/logger.js";
@@ -22,16 +23,17 @@ export interface ReplacePageBodyOptions {
  *
  * 예전에는 자식이 있는 페이지의 본문 push 를 통째로 건너뛰고도 동기화됨으로 기록해,
  * 폴더 노트에서 고친 내용이 Notion 에 영영 가지 않았다.
+ *
+ * @returns 본문을 바꾼 요청의 응답 — 바꾼 뒤의 본문을 싣는다.
  */
 export async function replacePageBody(
   client: PageBodyClient,
   pageId: string,
   markdown: string,
   options: ReplacePageBodyOptions = {},
-): Promise<void> {
+): Promise<PageMarkdownResponse> {
   try {
-    await client.replacePageMarkdown(pageId, markdown);
-    return;
+    return await client.replacePageMarkdown(pageId, markdown);
   } catch (error) {
     if (!isNotionValidationError(error)) throw error;
 
@@ -48,8 +50,9 @@ export async function replacePageBody(
     // 되돌릴 자식이 없으면 거절 사유가 자식이 아니다 — Notion 이 말한 그대로 올린다.
     if (restored.markdown === markdown) throw error;
 
+    let written: PageMarkdownResponse;
     try {
-      await client.replacePageMarkdown(pageId, restored.markdown);
+      written = await client.replacePageMarkdown(pageId, restored.markdown);
     } catch (retryError) {
       if (!isNotionValidationError(retryError)) throw retryError;
       throw new Error(
@@ -63,6 +66,7 @@ export async function replacePageBody(
           restored.appended.map((c) => c.title.replace(/\*\*/g, "").trim()).join(", "),
       );
     }
+    return written;
   }
 }
 

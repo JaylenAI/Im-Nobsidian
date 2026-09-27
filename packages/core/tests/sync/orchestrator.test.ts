@@ -8,6 +8,9 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  MOCK_REMOTE_EDITED,
+  settledObservation,
+  UNOBSERVED,
 } from "../helpers/mock-orchestrator.js";
 import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
 
@@ -119,6 +122,7 @@ describe("SyncOrchestrator", () => {
         obsidianPath: "existing.md",
         notionPageId: "page-123",
         contentHash: "old-hash",
+        ...settledObservation(MOCK_REMOTE_EDITED),
         localMtime: "2020-01-01T00:00:00.000Z",
         localFileSize: 50,
       });
@@ -298,6 +302,7 @@ describe("SyncOrchestrator", () => {
               obsidianPath: "idempotent.md",
               notionPageId: "page-id-123",
               contentHash: "",
+              ...UNOBSERVED,
             };
       });
 
@@ -1241,7 +1246,7 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       notionPageId: "hub-page",
       notionParentId: "root-page-id",
       contentHash: computeHash(before),
-      notionLastEdited: "2026-01-01T00:00:00.000Z",
+      ...settledObservation(MOCK_REMOTE_EDITED),
       localLastModified: "2026-01-01T00:00:00.000Z",
       syncDirection: "both",
       fileType: "file",

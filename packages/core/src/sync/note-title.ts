@@ -44,6 +44,18 @@ export function followsFileName(title: string, path: string): boolean {
 }
 
 /**
+ * Notion 제목이 지난 동기화 때의 제목 그대로인가 — frontmatter `title` 이 있었으면 그것,
+ * 없었으면 파일 이름을 따르는 제목이다(pull 이 붙인 id 접미사 포함).
+ *
+ * @param base 지난 동기화 시점의 frontmatter.
+ * @param path 지난 동기화 시점의 경로.
+ */
+export function titleUnchangedSince(base: Frontmatter, path: string, remoteTitle: string): boolean {
+  const title = explicitTitle(base);
+  return title !== null ? title === remoteTitle : followsFileName(remoteTitle, path);
+}
+
+/**
  * 옮기거나 이름을 바꾼 노트의 새 제목. 바꿀 것이 없으면 null.
  *
  * - frontmatter `title` 을 고쳤으면 그것이 새 제목이다.

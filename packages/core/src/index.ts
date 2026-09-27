@@ -4,6 +4,7 @@ export type {
   SyncRecord,
   LocalChange,
   RemoteChange,
+  RemoteObservation,
   Conflict,
   BaseSyncOptions,
   PushOptions,

@@ -179,6 +179,11 @@ export interface MaterializeResult {
   readonly uploaded: ImageUploadResult[];
   /** 실제 블록으로 바뀐 임베드 대상(원본 문자열 + 별칭 제거형 둘 다 담는다). */
   readonly handledTargets: Set<string>;
+  /**
+   * 자리표시자를 찾아 본문을 고치려 했다 — 도중에 실패했어도 페이지가 바뀌었을 수 있다. 호출측은
+   * 보낸 본문으로 만든 지문을 버리고 다시 받는다.
+   */
+  readonly touched: boolean;
 }
 
 /** 별칭(`경로|300`)을 떼고 실제 볼트 경로만 남긴다. */
@@ -562,7 +567,7 @@ export class ImageHandler {
     pushedMarkdown: string,
     notePath?: string,
   ): Promise<MaterializeResult> {
-    const empty: MaterializeResult = { uploaded: [], handledTargets: new Set() };
+    const empty: MaterializeResult = { uploaded: [], handledTargets: new Set(), touched: false };
     if (!this.notionClient) return empty;
     // 마커가 없는 페이지에서는 블록 조회조차 하지 않는다 — 대부분의 페이지가 여기서 끝난다.
     LOCAL_MARKER_RE.lastIndex = 0;
@@ -621,7 +626,7 @@ export class ImageHandler {
     }
 
     this.registerUploads(pageId, uploaded);
-    return { uploaded, handledTargets };
+    return { uploaded, handledTargets, touched: true };
   }
 
   /**
