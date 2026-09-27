@@ -17,6 +17,9 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  mirrorRemoteObservation,
+  settledObservation,
+  UNOBSERVED,
 } from "../helpers/mock-orchestrator.js";
 
 const SYNCED_AT = "2026-09-26T13:58:00.000Z";
@@ -114,7 +117,7 @@ describe("S-04 DB 폴더 push — DB 폴더는 페이지가 아니다", () => {
         notionPageId: null,
         notionParentId: "root-page-id",
         contentHash: computeHash(content),
-        notionLastEdited: SYNCED_AT,
+        ...settledObservation(SYNCED_AT),
         localLastModified: SYNCED_AT,
         syncDirection: "both",
         fileType: "file",
@@ -162,9 +165,7 @@ describe("S-04 DB 폴더 push — DB 폴더는 페이지가 아니다", () => {
     stateDb.updateStatus.mockImplementation((id: string, status: string) => {
       Object.assign(byId(id) ?? {}, { status });
     });
-    stateDb.setNotionLastEdited.mockImplementation((id: string, at: string) => {
-      Object.assign(byId(id) ?? {}, { notionLastEdited: at });
-    });
+    mirrorRemoteObservation(stateDb, () => records.values());
     stateDb.delete.mockImplementation((id: string) => {
       const rec = byId(id);
       if (rec) records.delete(rec.obsidianPath);
@@ -487,7 +488,7 @@ describe("S-04 DB 폴더 push — DB 폴더는 페이지가 아니다", () => {
         notionPageId: null,
         notionParentId: "db-tasks",
         contentHash: "",
-        notionLastEdited: null,
+        ...UNOBSERVED,
         localLastModified: SYNCED_AT,
         syncDirection: "both",
         fileType: "db-row",
