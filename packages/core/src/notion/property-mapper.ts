@@ -1,3 +1,7 @@
+import { RICH_TEXT_ARRAY_MAX, RICH_TEXT_CONTENT_MAX } from "../constants/notion-limits.js";
+import type { RowPropertyChanges } from "../types/sync.js";
+import { plainFrontmatterValue } from "../utils/frontmatter.js";
+import { isNotionId } from "../utils/id.js";
 import { isNotionHostedFileUrl } from "../utils/notion-file-url.js";
 
 type NotionPropertySchema = {
@@ -14,6 +18,22 @@ type NotionPropertyValue = Record<string, unknown>;
 const DATE_REGEX =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
+
+/**
+ * 값을 보낼 수 없는 속성 타입 — Notion 이 계산하거나(수식 · 롤업 · 생성일 · ID …) 값이 없다
+ * (버튼). 이런 속성을 요청에 넣으면 Notion 이 요청 전체를 거부한다.
+ */
+const READ_ONLY_TYPES: ReadonlySet<string> = new Set([
+  "created_time",
+  "last_edited_time",
+  "created_by",
+  "last_edited_by",
+  "formula",
+  "rollup",
+  "unique_id",
+  "verification",
+  "button",
+]);
 
 /**
  * Notion 은 비어 있는 배열형 속성값을 문서화된 `[]` 가 아니라 빈 객체 `{}` 로
@@ -46,6 +66,13 @@ export class PropertyMapper {
     }
   }
 
+  /**
+   * frontmatter 전체를 Notion 속성 값으로 바꾼다 — 비교할 기준이 없는 새 행을 만들 때 쓴다.
+   *
+   * 스키마를 읽었으면 스키마에 없는 키는 보내지 않는다. pull 이 적는 `cover` · `icon` 이나
+   * 사용자가 붙인 `aliases` 처럼 DB 속성이 아닌 키를 보내면 Notion 이 «그런 속성은 없다»
+   * 며 요청 전체를 거부한다 — 행의 다른 속성까지 하나도 반영되지 않는다.
+   */
   toNotionProperties(
     frontmatter: Record<string, unknown>,
     title: string,
@@ -54,21 +81,69 @@ export class PropertyMapper {
       title: { title: [{ text: { content: title } }] },
     };
 
-    for (const [key, value] of Object.entries(frontmatter)) {
+    for (const [key, raw] of Object.entries(frontmatter)) {
       if (key === "title") continue;
+      const value = plainFrontmatterValue(raw);
       if (value === null || value === undefined) continue;
 
       const schemaProp = this.schema.get(key);
       if (schemaProp) {
         const converted = this.convertBySchema(schemaProp.type, value);
         if (converted) result[key] = converted;
-      } else {
+      } else if (this.schema.size === 0) {
         const inferred = this.inferAndConvert(value);
         if (inferred) result[key] = inferred;
       }
     }
 
     return result;
+  }
+
+  /**
+   * 바뀐 속성만 Notion 속성 값으로 바꾼다(S-01).
+   *
+   * 비운 속성은 그 타입의 빈 값으로 보낸다. 되돌릴 수 없는 것은 비우지 않는다 — `files`
+   * 를 비우면 Notion 에 올라간 첨부가 지워지고 볼트에는 그 파일이 없다. `status` 는 빈 값이
+   * 없다. 스키마에 없는 키와 읽기 전용 속성(수식 · 롤업 · 생성일 …)도 보내지 않는다.
+   *
+   * @param title 제목이 바뀌었을 때만 새 제목, 아니면 null.
+   * @returns `skipped` — 바뀌었지만 보내지 않은 속성 이름. 호출측이 알린다.
+   */
+  toNotionPropertyChanges(
+    changes: RowPropertyChanges,
+    title: string | null,
+  ): { properties: Record<string, NotionPropertyValue>; skipped: string[] } {
+    const properties: Record<string, NotionPropertyValue> = {};
+    const skipped: string[] = [];
+    if (title !== null) properties.title = { title: [{ text: { content: title } }] };
+
+    for (const [key, value] of Object.entries(changes.changed)) {
+      const schemaProp = this.schema.get(key);
+      const converted = schemaProp ? this.convertBySchema(schemaProp.type, value) : null;
+      if (converted) properties[key] = converted;
+      else skipped.push(key);
+    }
+    for (const key of changes.cleared) {
+      const schemaProp = this.schema.get(key);
+      const empty = schemaProp ? emptyValueOf(schemaProp.type) : null;
+      if (empty) properties[key] = empty;
+      else skipped.push(key);
+    }
+
+    return { properties, skipped };
+  }
+
+  /**
+   * 값을 보낼 수 있는 속성만 고른다 — 스키마에 있고, 읽기 전용이 아니고, 제목이 아닌 키.
+   * 원격 값과 로컬 값을 견줄 때 쓴다. 수식 · 롤업 같은 값은 달라도 보낼 수 없으니 견주지 않는다.
+   */
+  pickWritable(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    const picked: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(values)) {
+      const type = this.schema.get(key)?.type;
+      if (type && type !== "title" && !READ_ONLY_TYPES.has(type)) picked[key] = value;
+    }
+    return picked;
   }
 
   fromNotionProperties(notionProps: Record<string, unknown>): Record<string, unknown> {
@@ -89,7 +164,7 @@ export class PropertyMapper {
   private convertBySchema(type: string, value: unknown): NotionPropertyValue | null {
     switch (type) {
       case "rich_text":
-        return { rich_text: [{ text: { content: String(value) } }] };
+        return richTextValue(String(value));
 
       case "number": {
         // 숫자로 변환 불가한 값(NaN/Infinity)은 전송하지 않는다. {number: NaN} 은
@@ -146,31 +221,31 @@ export class PropertyMapper {
       }
 
       case "relation": {
+        // 관계 · 사람은 보낸 목록으로 «통째로» 바뀐다. 하나라도 알아보지 못한 채 나머지만
+        // 보내면 알아보지 못한 연결이 Notion 에서 지워진다 — 그때는 아무것도 보내지 않는다.
         const items = Array.isArray(value) ? value : [value];
         const ids: Array<{ id: string }> = [];
         for (const item of items) {
           const str = String(item);
           const match = str.match(WIKILINK_REGEX);
-          if (match?.[1] && this.wikilinkResolver) {
-            const pageId = this.wikilinkResolver.resolve(match[1]);
-            if (pageId) ids.push({ id: pageId });
-          } else if (str.match(/^[0-9a-f-]{32,36}$/)) {
-            ids.push({ id: str });
-          }
+          const pageId =
+            match?.[1] && this.wikilinkResolver
+              ? this.wikilinkResolver.resolve(match[1])
+              : isNotionId(str)
+                ? str
+                : null;
+          if (!pageId) return null;
+          ids.push({ id: pageId });
         }
         return ids.length > 0 ? { relation: ids } : null;
       }
 
       case "people": {
-        const users = Array.isArray(value) ? value : [value];
-        const peopleArr = users
-          .map((u) => {
-            const s = String(u);
-            if (s.match(/^[0-9a-f-]{32,36}$/)) return { object: "user" as const, id: s };
-            return null;
-          })
-          .filter(Boolean);
-        return peopleArr.length > 0 ? { people: peopleArr } : null;
+        // pull 은 사람을 이름으로 적는다. 이름으로는 사용자를 찾을 수 없으므로 ID 로만 된
+        // 목록일 때만 보낸다(관계와 같은 이유).
+        const users = (Array.isArray(value) ? value : [value]).map(String);
+        if (users.length === 0 || !users.every(isNotionId)) return null;
+        return { people: users.map((id) => ({ object: "user" as const, id })) };
       }
 
       case "files": {
@@ -208,18 +283,10 @@ export class PropertyMapper {
         return { files: filesArr };
       }
 
-      case "created_time":
-      case "last_edited_time":
-      case "created_by":
-      case "last_edited_by":
-      case "formula":
-      case "rollup":
-      case "unique_id":
-      case "verification":
-        return null;
-
       default:
-        return { rich_text: [{ text: { content: String(value) } }] };
+        // 읽기 전용 · 제목(따로 보낸다) · 모르는 타입(장소 등)은 보내지 않는다. 글로 바꿔
+        // 보내면 타입이 맞지 않아 요청 전체가 거부된다.
+        return null;
     }
   }
 
@@ -242,7 +309,7 @@ export class PropertyMapper {
       if (value.startsWith("http://") || value.startsWith("https://")) {
         return { url: value };
       }
-      return { rich_text: [{ text: { content: value } }] };
+      return richTextValue(value);
     }
     return null;
   }
@@ -347,5 +414,57 @@ export class PropertyMapper {
       default:
         return null;
     }
+  }
+}
+
+/**
+ * 글 속성 값. rich text 객체 하나는 2,000자까지라 긴 글은 나눠 담는다 — 한 덩어리로 보내면
+ * Notion 이 행의 속성 갱신 전체를 거부한다. 나눠도 담을 수 없을 만큼 길면 null(보내지 않음).
+ * 서로게이트 쌍(이모지 등)은 가르지 않는다.
+ */
+function richTextValue(text: string): NotionPropertyValue | null {
+  const chunks: string[] = [];
+  let chunk = "";
+  for (const char of text) {
+    if (chunk.length + char.length > RICH_TEXT_CONTENT_MAX) {
+      chunks.push(chunk);
+      chunk = "";
+    }
+    chunk += char;
+  }
+  if (chunk) chunks.push(chunk);
+  if (chunks.length > RICH_TEXT_ARRAY_MAX) return null;
+  return { rich_text: chunks.map((content) => ({ text: { content } })) };
+}
+
+/** 비운 속성에 보낼 빈 값. 비울 수 없거나 비우면 안 되는 타입은 null. */
+function emptyValueOf(type: string): NotionPropertyValue | null {
+  switch (type) {
+    case "rich_text":
+      return { rich_text: [] };
+    case "number":
+      return { number: null };
+    case "select":
+      return { select: null };
+    case "multi_select":
+      return { multi_select: [] };
+    case "date":
+      return { date: null };
+    case "checkbox":
+      return { checkbox: false };
+    case "url":
+      return { url: null };
+    case "email":
+      return { email: null };
+    case "phone_number":
+      return { phone_number: null };
+    case "relation":
+      return { relation: [] };
+    case "people":
+      return { people: [] };
+    default:
+      // files — 올라간 첨부를 지운다(볼트에는 그 파일이 없다) · status — 빈 값이 없다 ·
+      // 수식 · 롤업 · 생성일 등 — 읽기 전용.
+      return null;
   }
 }

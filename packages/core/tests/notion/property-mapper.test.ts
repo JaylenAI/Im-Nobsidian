@@ -601,4 +601,131 @@ describe("PropertyMapper", () => {
       expect(readToWrite(read)).toEqual({ due: { date: { start: iso, end: null } } });
     });
   });
+
+  describe("toNotionProperties — 스키마를 읽었으면 DB 에 없는 키는 보내지 않는다", () => {
+    it("cover · icon · aliases 는 속성이 아니다 — 보내면 Notion 이 요청 전체를 거부한다", () => {
+      mapper.loadSchema({ 진척: { id: "a", type: "number" } });
+      const result = mapper.toNotionProperties(
+        { 진척: 0.5, cover: "[[c.png]]", icon: "📌", aliases: ["별칭"] },
+        "T",
+      );
+      expect(Object.keys(result).sort()).toEqual(["title", "진척"]);
+    });
+
+    it("스키마를 못 읽었으면(비어 있음) 예전처럼 타입을 추론한다", () => {
+      expect(mapper.toNotionProperties({ 진척: 0.5 }, "T").진척).toEqual({ number: 0.5 });
+    });
+
+    it("YAML 이 Date 로 읽은 날짜도 날짜 속성으로 보낸다", () => {
+      mapper.loadSchema({ 마감: { id: "a", type: "date" }, 시각: { id: "b", type: "date" } });
+      const result = mapper.toNotionProperties(
+        {
+          마감: new Date("2026-10-01T00:00:00.000Z"),
+          시각: new Date("2026-10-01T09:30:00.000Z"),
+        },
+        "T",
+      );
+      expect(result.마감).toEqual({ date: { start: "2026-10-01", end: null } });
+      expect(result.시각).toEqual({ date: { start: "2026-10-01T09:30:00.000Z", end: null } });
+    });
+  });
+
+  describe("rich_text — Notion 요청 한도(글 2,000자 · 조각 100개)", () => {
+    beforeEach(() => mapper.loadSchema({ note: { id: "a", type: "rich_text" } }));
+
+    it("2,000자를 넘는 글은 조각으로 나눠 담는다", () => {
+      const result = mapper.toNotionProperties({ note: "가".repeat(4500) }, "T");
+      const chunks = (result.note as { rich_text: Array<{ text: { content: string } }> }).rich_text;
+      expect(chunks.map((c) => c.text.content.length)).toEqual([2000, 2000, 500]);
+      expect(chunks.map((c) => c.text.content).join("")).toBe("가".repeat(4500));
+    });
+
+    it("이모지(서로게이트 쌍)를 조각 경계에서 가르지 않는다", () => {
+      const result = mapper.toNotionProperties({ note: "a".repeat(1999) + "😀b" }, "T");
+      const chunks = (result.note as { rich_text: Array<{ text: { content: string } }> }).rich_text;
+      expect(chunks.map((c) => c.text.content)).toEqual(["a".repeat(1999), "😀b"]);
+    });
+
+    it("조각 100개로도 못 담으면 보내지 않는다", () => {
+      expect(mapper.toNotionProperties({ note: "x".repeat(200_001) }, "T").note).toBeUndefined();
+    });
+  });
+
+  describe("relation · people — 목록이 통째로 바뀌므로 일부만 알아보면 보내지 않는다", () => {
+    const A = "35a13b18d38280cf9057e37e6e473e41";
+    const B = "35a13b18-d382-80cf-9057-e37e6e473e42";
+
+    beforeEach(() => {
+      mapper.loadSchema({ rel: { id: "a", type: "relation" }, who: { id: "b", type: "people" } });
+      mapper.setWikilinkResolver({
+        resolve: (title: string) => (title === "알려진 페이지" ? A : null),
+        resolvePageId: () => null,
+      });
+    });
+
+    it("모두 알아보면 보낸다 — 위키링크와 ID 가 섞여도", () => {
+      expect(mapper.toNotionProperties({ rel: ["[[알려진 페이지]]", B] }, "T").rel).toEqual({
+        relation: [{ id: A }, { id: B }],
+      });
+    });
+
+    it("하나라도 못 알아보면 보내지 않는다 — 못 알아본 연결이 지워지지 않게", () => {
+      expect(
+        mapper.toNotionProperties({ rel: ["[[알려진 페이지]]", "[[모르는 페이지]]"] }, "T").rel,
+      ).toBeUndefined();
+    });
+
+    it("사람은 ID 로만 된 목록일 때만 보낸다 — pull 이 적는 이름으로는 사용자를 못 찾는다", () => {
+      expect(mapper.toNotionProperties({ who: [A] }, "T").who).toEqual({
+        people: [{ object: "user", id: A }],
+      });
+      expect(mapper.toNotionProperties({ who: [A, "홍길동"] }, "T").who).toBeUndefined();
+      expect(mapper.toNotionProperties({ who: ["홍길동"] }, "T").who).toBeUndefined();
+    });
+  });
+
+  describe("toNotionPropertyChanges — 바뀐 속성만 (S-01)", () => {
+    beforeEach(() => {
+      mapper.loadSchema({
+        진척: { id: "a", type: "number" },
+        설명: { id: "b", type: "rich_text" },
+        상태: { id: "c", type: "status" },
+        첨부: { id: "d", type: "files" },
+        생성일: { id: "e", type: "created_time" },
+        완료: { id: "f", type: "checkbox" },
+        담당: { id: "g", type: "people" },
+      });
+    });
+
+    it("제목은 바뀌었을 때(null 아님)만 담는다", () => {
+      expect(mapper.toNotionPropertyChanges({ changed: {}, cleared: [] }, null)).toEqual({
+        properties: {},
+        skipped: [],
+      });
+      expect(
+        mapper.toNotionPropertyChanges({ changed: {}, cleared: [] }, "새 제목").properties,
+      ).toEqual({ title: { title: [{ text: { content: "새 제목" } }] } });
+    });
+
+    it("바뀐 속성은 스키마 타입으로, DB 에 없는 키와 읽기 전용은 skipped 로", () => {
+      expect(
+        mapper.toNotionPropertyChanges(
+          { changed: { 진척: 0.5, cover: "[[c.png]]", 생성일: "2026-09-27" }, cleared: [] },
+          null,
+        ),
+      ).toEqual({ properties: { 진척: { number: 0.5 } }, skipped: ["cover", "생성일"] });
+    });
+
+    it("비운 속성은 타입의 빈 값으로 — files · status · DB 에 없는 키는 비우지 않는다", () => {
+      expect(
+        mapper.toNotionPropertyChanges(
+          { changed: {}, cleared: ["설명", "완료", "담당", "첨부", "상태", "cover"] },
+          null,
+        ),
+      ).toEqual({
+        properties: { 설명: { rich_text: [] }, 완료: { checkbox: false }, 담당: { people: [] } },
+        skipped: ["첨부", "상태", "cover"],
+      });
+    });
+  });
 });
