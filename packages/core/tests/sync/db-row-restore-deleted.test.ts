@@ -119,6 +119,7 @@ function createMockNotionClient() {
 
 function createMockImageHandler() {
   return {
+    restoreUploadedMedia: vi.fn().mockImplementation(async (md: string) => md),
     downloadAllImages: vi.fn().mockImplementation(async (md: string) => ({
       content: md,
       downloads: [],

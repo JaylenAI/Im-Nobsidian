@@ -3316,19 +3316,22 @@ export class SyncOrchestrator {
       properties.title = title;
     }
 
-    let processedMarkdown = markdown;
+    let processedMarkdown = await this.imageHandler.restoreUploadedMedia(
+      markdown,
+      pageId,
+      filePath,
+    );
     if (this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(
-        markdown,
+        processedMarkdown,
         title,
         pageId,
-        filePath,
       );
       processedMarkdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
 
-    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title, filePath);
+    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
     processedMarkdown = fileResult.content;
     this._pullFileCount += fileResult.downloads.length;
 
@@ -3468,23 +3471,17 @@ export class SyncOrchestrator {
       properties.title = title;
     }
 
+    // 이 노트가 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 표시 전용 렌더도 같다.
+    markdown = await this.imageHandler.restoreUploadedMedia(markdown, pageId, record.obsidianPath);
+
     if (downloadMedia && this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(
-        markdown,
-        title,
-        pageId,
-        record.obsidianPath,
-      );
+      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
       markdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
 
     if (downloadMedia) {
-      const fileResult = await this.imageHandler.downloadAllFiles(
-        markdown,
-        title,
-        record.obsidianPath,
-      );
+      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
       markdown = fileResult.content;
       this._pullFileCount += fileResult.downloads.length;
     }

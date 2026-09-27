@@ -128,6 +128,7 @@ describe("DatabaseSyncer — files 속성 pull 로컬라이즈", () => {
       extractIcon: vi.fn().mockReturnValue(null),
     };
     const imageHandler = {
+      restoreUploadedMedia: vi.fn().mockImplementation(async (md: string) => md),
       downloadAllImages: vi
         .fn()
         .mockImplementation(async (md: string) => ({ content: md, downloads: [] })),
