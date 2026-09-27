@@ -696,8 +696,19 @@ describe("isNotionObjectNotFound — 404 권위 판별 (결함9)", () => {
 
 describe("NotionClient.getDatabaseSyncability — 접근성 선판별 (결함9)", () => {
   function stubRetrieve(client: NotionClient, value: unknown): void {
-    // 내부 SDK 클라이언트의 databases.retrieve 를 교체해 네트워크 없이 응답을 주입한다.
-    (client as any).client.databases.retrieve = vi.fn().mockResolvedValue(value);
+    // 내부 SDK 클라이언트의 retrieve 를 교체해 네트워크 없이 응답을 주입한다. data source 는 조회한
+    // DB 의 것(원본 DB)으로 답한다 — 막지 않으면 소유 판정이 실제 HTTPS 로 나가, 가짜 토큰으로
+    // 재시도하다 전량 실행에서 가끔 시간 초과가 났다(T-01).
+    const sdk = (client as any).client;
+    let databaseId = "";
+    sdk.databases.retrieve = vi.fn().mockImplementation(async ({ database_id }) => {
+      databaseId = database_id;
+      return value;
+    });
+    sdk.dataSources.retrieve = vi.fn().mockImplementation(async () => ({
+      object: "data_source",
+      parent: { type: "database_id", database_id: databaseId },
+    }));
   }
 
   it("data_sources 가 1개 이상이면 queryable=true + 제목 추출", async () => {
