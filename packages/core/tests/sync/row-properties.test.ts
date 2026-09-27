@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { diffRowProperties, rowTitle } from "../../src/sync/row-properties.js";
+import { diffRowProperties } from "../../src/sync/row-properties.js";
 
 describe("diffRowProperties — 지난 동기화 뒤 바뀐 속성만 (S-01)", () => {
   const base = {
@@ -64,7 +64,7 @@ describe("diffRowProperties — 지난 동기화 뒤 바뀐 속성만 (S-01)", (
     ).toEqual({ changed: {}, cleared: [] });
   });
 
-  it("title 은 속성 비교에서 뺀다 — 행 제목은 rowTitle 이 정한다", () => {
+  it("title 은 속성 비교에서 뺀다 — 행 제목은 noteTitle 이 정한다", () => {
     expect(diffRowProperties(base, { ...base, title: "새 제목" })).toEqual({
       changed: {},
       cleared: [],
@@ -76,22 +76,5 @@ describe("diffRowProperties — 지난 동기화 뒤 바뀐 속성만 (S-01)", (
       changed: { 진척: 0.5 },
       cleared: [],
     });
-  });
-});
-
-describe("rowTitle — frontmatter 제목, 없으면 파일 이름", () => {
-  it("frontmatter title 을 쓴다 — 파일명에 못 쓰는 글자가 있어도 원래 제목 그대로", () => {
-    expect(rowTitle({ title: "A/B 통합" }, "과제/A-B 통합.md")).toBe("A/B 통합");
-  });
-
-  it("title 이 없거나 비었으면 파일 이름", () => {
-    expect(rowTitle({}, "과제/과제 A.md")).toBe("과제 A");
-    expect(rowTitle({ title: "  " }, "과제/과제 A.md")).toBe("과제 A");
-    expect(rowTitle({ title: null }, "과제/과제 A.md")).toBe("과제 A");
-  });
-
-  it("YAML 이 숫자 · 날짜로 읽은 제목도 글로 되돌린다", () => {
-    expect(rowTitle({ title: 2026 }, "x.md")).toBe("2026");
-    expect(rowTitle({ title: new Date("2026-10-01T00:00:00.000Z") }, "x.md")).toBe("2026-10-01");
   });
 });

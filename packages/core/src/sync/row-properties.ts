@@ -1,6 +1,5 @@
 import type { RowPropertyChanges } from "../types/sync.js";
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
-import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 
 /**
  * S-01 — DB 행의 속성은 «지난 동기화 뒤 로컬에서 바뀐 것» 만 보낸다.
@@ -11,7 +10,7 @@ import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
  * 되돌아간다. 그래서 지난 동기화 시점의 파일(baseSnapshot)과 지금 파일의 frontmatter 를
  * 비교해 바뀐 키만 고른다.
  *
- * `title` 은 여기서 다루지 않는다 — 행 제목은 속성이 아니라 {@link rowTitle} 로 정한다.
+ * `title` 은 여기서 다루지 않는다 — 행 제목은 속성이 아니라 `note-title.ts` 의 규칙으로 정한다.
  */
 
 /**
@@ -41,19 +40,6 @@ export function diffRowProperties(
     else changed[key] = after;
   }
   return { changed, cleared };
-}
-
-/**
- * 행 제목 — frontmatter `title` 이 있으면 그것, 없으면 파일 이름.
- *
- * pull 은 행마다 Notion 제목을 `title` 에 적는다. 파일 이름은 Notion 제목에서 파일명에 못
- * 쓰는 글자를 바꾼 것이라(`A/B` → `A-B`), 파일 이름을 제목으로 되밀면 원래 제목이 깨진다.
- */
-export function rowTitle(frontmatter: Readonly<Record<string, unknown>>, path: string): string {
-  const title = frontmatter.title;
-  if (title === null || title === undefined) return wikilinkTitleFromPath(path);
-  const text = String(plainFrontmatterValue(title));
-  return text.trim() ? text : wikilinkTitleFromPath(path);
 }
 
 /**

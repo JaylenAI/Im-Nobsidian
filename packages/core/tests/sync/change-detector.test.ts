@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import type { FileInfo } from "../../src/sync/change-detector.js";
+import { EMPTY_RENAME_HINTS, movePayload, recordRenameHint } from "../../src/sync/local-moves.js";
 
 describe("ChangeDetector", () => {
   let db: StateDB;
@@ -170,5 +171,109 @@ describe("ChangeDetector", () => {
 
     expect(slow.map((c) => c.type)).toEqual(["created"]);
     expect(fast.map((c) => c.type)).toEqual(["created"]);
+  });
+
+  describe("옮긴 노트 (S-11)", () => {
+    const T0 = "2026-05-08T09:00:00Z";
+
+    function track(path: string, content: string, pageId: string) {
+      return db.upsert({
+        obsidianPath: path,
+        notionPageId: pageId,
+        contentHash: computeHash(content),
+        localLastModified: T0,
+        syncDirection: "both",
+        fileType: "file",
+        status: "synced",
+        localMtime: T0,
+        localFileSize: content.length,
+      });
+    }
+
+    it("힌트가 있으면 이름과 내용을 함께 바꿔도 moved — 입양할 레코드를 돌려준다", () => {
+      const record = track("a.md", "# 원래", "page-a");
+      const hints = recordRenameHint(EMPTY_RENAME_HINTS, "a.md", "b.md", "file");
+
+      const scan = detector.scanLocalChanges([{ path: "b.md", content: "# 고침", mtime: T0 }], {
+        hints,
+      });
+
+      expect(scan.changes).toEqual([
+        {
+          path: "b.md",
+          type: "moved",
+          currentHash: computeHash("# 고침"),
+          previousHash: computeHash("# 원래"),
+          movedFrom: "a.md",
+        },
+      ]);
+      expect(scan.adoptions).toEqual([{ record, to: "b.md", origin: "a.md" }]);
+    });
+
+    it("힌트가 없고 내용이 다르면 예전처럼 생성 + 삭제", () => {
+      track("a.md", "# 원래", "page-a");
+      const changes = detector.detectLocalChanges([{ path: "b.md", content: "# 고침", mtime: T0 }]);
+      expect(changes.map((c) => [c.type, c.path])).toEqual([
+        ["created", "b.md"],
+        ["deleted", "a.md"],
+      ]);
+    });
+
+    it("입양해 둔 이동은 파일 크기 · 수정 시각이 같아도 moved 로 남는다", async () => {
+      const record = track("a.md", "# 본문", "page-a");
+      db.updatePath(record.id, "b.md");
+      db.recordPendingOperation({
+        syncStateId: record.id,
+        operation: "move",
+        direction: "push",
+        payload: movePayload("a.md"),
+      });
+
+      const scan = await detector.scanLocalChangesFast(
+        [{ path: "b.md", mtime: T0, size: "# 본문".length }],
+        async () => "# 본문",
+      );
+
+      expect(scan.changes.map((c) => [c.type, c.path, c.movedFrom])).toEqual([
+        ["moved", "b.md", "a.md"],
+      ]);
+      expect(scan.adoptions).toEqual([]);
+    });
+
+    it("입양해 둔 이동을 원래 자리로 되돌리면 옮긴 것이 아니다 — 내용만 본다", async () => {
+      const record = track("a.md", "# 본문", "page-a");
+      db.updatePath(record.id, "b.md");
+      db.recordPendingOperation({
+        syncStateId: record.id,
+        operation: "move",
+        direction: "push",
+        payload: movePayload("a.md"),
+      });
+
+      const same = await detector.scanLocalChangesFast(
+        [{ path: "a.md", mtime: T0, size: 7 }],
+        async () => "# 본문",
+      );
+      expect(same.changes).toEqual([]);
+      expect(same.adoptions.map((a) => [a.record.obsidianPath, a.to, a.origin])).toEqual([
+        ["b.md", "a.md", "a.md"],
+      ]);
+
+      const edited = await detector.scanLocalChangesFast(
+        [{ path: "a.md", mtime: T0, size: 7 }],
+        async () => "# 고친 본문",
+      );
+      expect(edited.changes.map((c) => [c.type, c.path])).toEqual([["modified", "a.md"]]);
+    });
+
+    it("짝짓지 않을 경로(설정 DB 폴더)는 같은 내용이어도 생성 + 삭제", () => {
+      track("Tasks/행.md", "# 행", "row-1");
+      const scan = detector.scanLocalChanges(
+        [{ path: "Tasks/새 이름.md", content: "# 행", mtime: T0 }],
+        { excludeFromMoves: (path) => path.startsWith("Tasks/") },
+      );
+      expect(scan.changes.map((c) => c.type).sort()).toEqual(["created", "deleted"]);
+      expect(scan.adoptions).toEqual([]);
+    });
   });
 });

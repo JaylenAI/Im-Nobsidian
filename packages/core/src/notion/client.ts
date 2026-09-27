@@ -305,19 +305,19 @@ export class NotionClient {
 
   // ─── Page Move ───
 
-  async movePage(
-    pageId: string,
-    newParentId: string,
-    newParentType: "page" | "database",
-  ): Promise<PageObjectResponse> {
-    const parent =
-      newParentType === "database" ? { database_id: newParentId } : { page_id: newParentId };
-    return this.withRateLimit(
-      () =>
-        this.client.pages.update({
-          page_id: pageId,
-          parent,
-        } as never) as Promise<PageObjectResponse>,
+  /**
+   * 페이지를 다른 페이지 아래로 옮긴다 — `POST /v1/pages/{id}/move`.
+   *
+   * 페이지 갱신(pages.update)은 부모를 바꾸지 않는다 — `parent` 를 보내도 오류 없이 무시한다.
+   * 예전 movePage 가 그 길을 써서, 옮긴 노트의 Notion 부모가 한 번도 바뀌지 않았다(S-11).
+   * 같은 부모로 다시 옮겨도 결과가 같아 모호한 실패는 다시 보낸다.
+   */
+  async movePage(pageId: string, parentPageId: string): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.pages.move({
+        page_id: pageId,
+        parent: { type: "page_id", page_id: parentPageId },
+      }),
     );
   }
 

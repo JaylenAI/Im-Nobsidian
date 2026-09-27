@@ -92,6 +92,9 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
       k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
     );
     stateDb.getAll.mockReturnValue([record]);
+    stateDb.getByPath.mockImplementation((path: string) =>
+      path === record.obsidianPath ? record : null,
+    );
     stateDb.getByNotionId.mockImplementation((id: string) =>
       id === record.notionPageId ? record : null,
     );
@@ -165,6 +168,20 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
     expect(result.restored).toBe(0);
     expect(vaultFs.writeFile).not.toHaveBeenCalled();
     expect(notion.getPage).not.toHaveBeenCalled();
+  });
+
+  it("볼트를 읽지 못하면 이번 pull 은 되살리지 않는다 (옮긴 노트와 지운 노트를 가를 수 없음)", async () => {
+    const rec = makeRecord();
+    stageMissingFile(rec);
+    // 새 자리의 파일을 읽는 사이 사라졌다 — 옮긴 것인지 모른다.
+    vaultFs.listMarkdownFileStats.mockResolvedValue([
+      { path: "notes/moved.md", mtime: "2026-05-02T00:00:00.000Z", size: 13 },
+    ]);
+
+    const result = await makeOrchestrator().pull();
+
+    expect(result.restored).toBe(0);
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
   });
 
   it("--path 범위 밖의 사라진 파일은 건드리지 않는다", async () => {

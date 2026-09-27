@@ -85,6 +85,11 @@ export {
 export type {
   VaultFS,
   FileInfo,
+  LocalMoveAdoption,
+  LocalScan,
+  LocalScanOptions,
+  RenameHints,
+  RenameKind,
   FileStatInfo,
   NonMdFileInfo,
   ImageDownloadResult,

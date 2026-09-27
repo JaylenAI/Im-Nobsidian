@@ -1,4 +1,4 @@
-import { Plugin, Notice, MarkdownRenderChild, requestUrl, type TFile } from "obsidian";
+import { Plugin, Notice, MarkdownRenderChild, requestUrl, TFolder, type TFile } from "obsidian";
 import {
   NotionClient,
   SyncOrchestrator,
@@ -391,8 +391,22 @@ export default class ImNobsidianPlugin extends Plugin {
     };
     this.registerEvent(this.app.vault.on("modify", onVaultChange));
     this.registerEvent(this.app.vault.on("create", onVaultChange));
-    this.registerEvent(this.app.vault.on("delete", onVaultChange));
-    this.registerEvent(this.app.vault.on("rename", onVaultChange));
+    this.registerEvent(
+      this.app.vault.on("delete", (file) => {
+        this.syncController?.recordDelete(file.path);
+        onVaultChange(file);
+      }),
+    );
+    // 이름 변경은 옛 경로와 함께 적어 둔다 — 다음 동기화가 옮긴 노트를 짝지을 때 쓴다(S-11).
+    this.registerEvent(
+      this.app.vault.on("rename", (file, oldPath) => {
+        if (!this.syncController?.onVaultRename(oldPath, file.path, file instanceof TFolder)) {
+          return;
+        }
+        this.scheduleVaultSync();
+        this.scheduleSidebarRefresh();
+      }),
+    );
   }
 
   private sidebarRefreshTimer: ReturnType<typeof setTimeout> | null = null;

@@ -8,6 +8,8 @@ import {
   databaseFolderIndex,
   enclosingDatabaseFolder,
   folderContainer,
+  isFolderNotePath,
+  isFolderRecord,
   parentFolderOf,
   type FolderLookup,
 } from "../../src/sync/folder-container.js";
@@ -29,6 +31,23 @@ describe("parentFolderOf · ancestorFolders", () => {
   it("얕은 폴더부터 모든 조상을 돌려준다", () => {
     expect(parentFolderOf("A/B/c.md")).toBe("A/B");
     expect(ancestorFolders("A/B/c.md")).toEqual(["A", "A/B"]);
+  });
+});
+
+describe("isFolderNotePath · isFolderRecord", () => {
+  it("파일 이름이 든 폴더 이름과 같으면 폴더 노트다", () => {
+    expect(isFolderNotePath("A/B/B.md")).toBe(true);
+    expect(isFolderNotePath("A/B/c.md")).toBe(false);
+    // 볼트 루트의 파일은 든 폴더가 없다.
+    expect(isFolderNotePath("A.md")).toBe(false);
+  });
+
+  it("폴더를 추적하는 레코드는 경로가 .md 가 아닌 폴더 레코드뿐이다", () => {
+    expect(isFolderRecord({ fileType: "folder-note", obsidianPath: "Docs" })).toBe(true);
+    expect(isFolderRecord({ fileType: "folder-only", obsidianPath: "A/B" })).toBe(true);
+    // 폴더 노트 파일은 파일이다 — 사라지면 파일 목록으로 안다.
+    expect(isFolderRecord({ fileType: "folder-note", obsidianPath: "A/A.md" })).toBe(false);
+    expect(isFolderRecord({ fileType: "file", obsidianPath: "Docs" })).toBe(false);
   });
 });
 

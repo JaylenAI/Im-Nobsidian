@@ -165,6 +165,23 @@ describe("두 번 적용해도 같은 요청 — 모호한 실패도 다시 보�
     expect(update).toHaveBeenCalledTimes(2);
   });
 
+  it("페이지 옮기기: 504 → 다시 보낸다 (같은 부모로 두 번 옮겨도 결과가 같다)", async () => {
+    const client = newClient();
+    const move = failOnce(apiError(504), PAGE);
+    const update = vi.fn();
+    sdk(client).pages = { move, update };
+
+    await client.movePage("page", "parent");
+
+    expect(move).toHaveBeenCalledTimes(2);
+    expect(move).toHaveBeenLastCalledWith({
+      page_id: "page",
+      parent: { type: "page_id", page_id: "parent" },
+    });
+    // S-11 — pages.update 의 parent 는 Notion 이 조용히 무시한다. 부모는 move 로만 바뀐다.
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it("블록 삭제: 타임아웃 → 다시 보낸다", async () => {
     const client = newClient();
     const del = failOnce(codeError("notionhq_client_request_timeout"), {});
