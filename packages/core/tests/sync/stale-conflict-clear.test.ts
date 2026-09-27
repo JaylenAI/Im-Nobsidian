@@ -40,6 +40,9 @@ describe("SyncOrchestrator.clearStaleConflicts", () => {
       notionParentId: "root-page-id",
       contentHash: "old-hash",
       notionLastEdited: "2026-01-01T00:00:00.000Z",
+      notionLastEditedBy: null,
+      notionSeenAt: null,
+      notionBodyFingerprint: null,
       localLastModified: "2026-01-01T00:00:00.000Z",
       syncDirection: "both",
       fileType: "markdown",
@@ -95,10 +98,14 @@ describe("SyncOrchestrator.clearStaleConflicts", () => {
       makeConflict(content, content, { lastEdited: "2026-03-03T00:00:00.000Z" }),
     ]);
 
-    expect(mockStateDb.setNotionLastEdited).toHaveBeenCalledWith(
-      "rec-1",
-      "2026-03-03T00:00:00.000Z",
-    );
+    // 충돌의 원격 본문을 언제 받았는지 모른다 — 본 때 · 편집자 · 지문은 비워 다음 pull 이
+    // 내용으로 확인하게 한다(N-05).
+    expect(mockStateDb.setRemoteObservation).toHaveBeenCalledWith("rec-1", {
+      lastEdited: "2026-03-03T00:00:00.000Z",
+      lastEditedBy: null,
+      seenAt: null,
+      bodyFingerprint: null,
+    });
   });
 
   it("내용이 다르면 손대지 않는다 — 진짜 충돌을 삼키면 안 된다", () => {

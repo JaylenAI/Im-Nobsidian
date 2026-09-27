@@ -28,6 +28,7 @@ import { NotionClient } from "../../src/notion/client.js";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 const HUB = "22222222222222222222222222222222"; // 폴더노트(본문 + 자식)
@@ -77,6 +78,8 @@ describe("폴더노트 분류 — 컨테이너 중첩 자식 (본문분리 회�
     stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
 
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
 
     // 네트워크 메서드만 stub — extractTitle/extractParentId 등 순수 로직은 실제 사용.
     // 발견은 root 서브트리 순회 → 순회 결과의 각 페이지 부모를 해소하며 _childParentIds 구성

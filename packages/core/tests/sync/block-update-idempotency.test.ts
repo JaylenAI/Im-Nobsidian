@@ -77,6 +77,13 @@ function makeStatefulNotion() {
   base.updatePageProperties = vi.fn(async () => ({
     last_edited_time: "2026-05-30T00:00:00.000Z",
   })) as never;
+  // 만든 페이지의 지금 모습 — 갱신 전에 원격이 지난번 그대로인지 본다(N-05).
+  base.getPage = vi.fn(async (id: string) => ({
+    id,
+    last_edited_time: "2026-05-30T00:00:00.000Z",
+    parent: { type: "page_id", page_id: "root-page-id" },
+    properties: { title: { type: "title", title: [{ plain_text: "doc" }] } },
+  })) as never;
 
   return { client: base, pages };
 }
