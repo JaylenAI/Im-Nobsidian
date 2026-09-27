@@ -30,8 +30,9 @@
 | 1    | `fix/notion-client-retry`                    | S-07 쓰기 재전송 · SDK 이중 재시도                                              | 완료 `e241a06` |
 | 1    | `fix/markdown-truncated`                     | S-06 `truncated` · `unknown_block_ids` 무시 · S-10 DB 행 본문 못 읽으면 빈 본문 | 완료 `a5bc2af` |
 | 1    | `fix/db-row-property-push`                   | S-01 행 속성 push 무반영 · S-02 행 본문 YAML                                    | 완료 `11ed8c3` |
-| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 완료           |
-| 1    | `fix/incremental-new-subtree`                | S-08 새 하위 트리의 자식이 증분 pull 에서 영영 빠짐                             | 대기           |
+| 1    | `fix/child-page-body-push`                   | S-03 자식 페이지가 있으면 본문 미전송                                           | 완료 `6a573dd` |
+| 1    | `fix/incremental-new-subtree`                | S-08 새 하위 트리의 자식이 증분 pull 에서 영영 빠짐                             | 완료           |
+| 1    | `fix/pull-watermark`                         | 재시도까지 실패 · 중단으로 건너뛴 pull 항목이 다음 증분 조회 창 밖으로 빠짐     | 대기           |
 | 1    | `fix/db-folder-page`                         | S-04 DB 폴더 빈 페이지                                                          | 대기           |
 | 1    | `fix/local-rename-push`                      | S-11 로컬 이름 변경이 Notion 에 안 가고 push 마다 updated 로 셈                 | 대기           |
 | 1    | `fix/frontmatter-parse-cache`                | S-13 frontmatter 파싱 실패가 다음 호출에서 «없음» 으로 바뀜                     | 대기           |

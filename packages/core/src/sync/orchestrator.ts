@@ -2239,6 +2239,7 @@ export class SyncOrchestrator {
       ? new Date(sinceMs - INCREMENTAL_SAFETY_WINDOW_MS).toISOString()
       : since;
     const recentPages = await this.notionClient.searchRecentPages(safeSince);
+    const untracked: Array<{ page: (typeof recentPages)[number]; parentId: string }> = [];
 
     for (const page of recentPages) {
       const record = this.stateDb.getByNotionId(page.id);
@@ -2246,14 +2247,9 @@ export class SyncOrchestrator {
         try {
           const fullPage = await this.notionClient.getPage(page.id);
           const parentId = await this.extractParentId(fullPage);
-          if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
-          if (parentId && this.isTrackedParent(parentId)) {
-            changes.push({
-              pageId: page.id,
-              type: "created",
-              lastEdited: page.last_edited_time,
-              previousEdited: null,
-            });
+          if (parentId) {
+            this._childParentIds.add(normalizeNotionId(parentId));
+            untracked.push({ page, parentId });
           }
         } catch {
           // inaccessible page
@@ -2266,6 +2262,29 @@ export class SyncOrchestrator {
           type: "modified",
           lastEdited: page.last_edited_time,
           previousEdited: record.notionLastEdited,
+        });
+      }
+    }
+
+    // 새 페이지는 부모가 루트 · 추적 중이거나, 이번에 함께 받는 새 페이지일 때 받는다(S-08).
+    // 예전에는 앞의 둘만 봐서, 새 하위 트리는 맨 위 한 장만 오고 그 아래는 빠졌다 — 다음
+    // 실행의 조회 창(마지막 pull − 안전창)은 그 페이지의 수정 시각보다 뒤라 영영 다시 보이지
+    // 않았다. 부모가 받아질 때마다 한 바퀴 더 돌아 여러 층을 받고, 부모가 자식보다 먼저 줄에 선다.
+    const accepted = new Set<string>();
+    let grew = true;
+    while (grew) {
+      grew = false;
+      for (const { page, parentId } of untracked) {
+        const id = normalizeNotionId(page.id);
+        if (accepted.has(id)) continue;
+        if (!this.isTrackedParent(parentId) && !accepted.has(normalizeNotionId(parentId))) continue;
+        accepted.add(id);
+        grew = true;
+        changes.push({
+          pageId: page.id,
+          type: "created",
+          lastEdited: page.last_edited_time,
+          previousEdited: null,
         });
       }
     }
