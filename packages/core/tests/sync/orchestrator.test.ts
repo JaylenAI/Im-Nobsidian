@@ -1116,18 +1116,30 @@ describe("SyncOrchestrator.resolveNotionLinks 해시 동기화 (I5 fixpoint 잠�
   });
 });
 
-// 수정2 잠금: child page/database 를 보유한 페이지의 본문 push 는 자식을 삭제하지
-// 않도록 가드된다(실Notion probe 확인: replace_content[allow_deleting_content] 와
-// block 삭제-후-append 경로 모두 자식 child_page 를 in_trash 로 삭제). 가드는 본문
-// 갱신을 건너뛰고 destructive API 를 호출하지 않는다.
-describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실 방지)", () => {
-  it("자식 페이지 보유 시 replacePageMarkdown/deleteBlock 을 호출하지 않는다", async () => {
-    const notion = createMockNotionClient();
-    // 직속 자식에 child_page 1개 존재
-    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: "leaf-1", type: "child_page" },
-    ]);
+// S-03: 자식 페이지 · DB 를 가진 페이지도 본문을 보낸다 — 자식은 지우지 않는다.
+// 예전 가드는 본문 push 를 통째로 건너뛰고도 동기화됨으로 기록해 폴더 노트 편집이 영영
+// Notion 에 가지 않았다(QA 실측). 지금은 삭제 불허로 보내고, 거절되면 자식 태그를
+// 제자리에 되돌려 다시 보낸다(sync/page-body.ts).
+describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)", () => {
+  type PushPage = { pushUpdatePage(id: string, md: string): Promise<void> };
+  const CHILD_PAGE = "3e713b18d38281138edfe9ad1d430774";
+  const CHILD_DB = "7cd6bb576d0944d78b190709e034f895";
+  const PAGE_TAG = `<page url="https://app.notion.com/p/${CHILD_PAGE}">QA-A 하위 페이지</page>`;
+  const DB_TAG = `<database url="https://app.notion.com/p/${CHILD_DB}" inline="true">QA 과제 DB</database>`;
+  const BASE_PATH = "QA-A/QA-과제-DB/QA 과제 DB.base";
+  // pipeline 이 내보내는 모양 — 추적 중인 자식은 멘션, .base 임베드는 첨부 자리표시자.
+  const LOCAL =
+    "# Hub\n\n수정된 본문.\n\n" +
+    `<mention-page id="${CHILD_PAGE}">QA-A 하위 페이지</mention-page>\n\n` +
+    `> 📎 QA 과제 DB.base %% im-nobsidian:local-file:${encodeURIComponent(`${BASE_PATH}|다른 별칭`)} %%\n`;
+  const wouldDelete = () =>
+    Object.assign(new Error("This operation would delete 2 child page(s) …"), {
+      code: "validation_error",
+      status: 400,
+    });
 
+  it("Markdown API 경로는 자식 조회 없이 먼저 보낸다 — 자식이 없으면 한 번으로 끝", async () => {
+    const notion = createMockNotionClient();
     const orchestrator = new SyncOrchestrator(
       createConfig(),
       createMockStateDb() as any,
@@ -1135,36 +1147,135 @@ describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실
       createMockVaultFs(),
     );
 
-    await (
-      orchestrator as unknown as {
-        pushUpdatePage(id: string, md: string): Promise<void>;
-      }
-    ).pushUpdatePage("hub-page", "# Hub\n\n수정된 본문.\n");
-
-    // 파괴적 본문 갱신 경로(둘 다)를 절대 타지 않아야 한다
-    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
-    expect(notion.deleteBlock).not.toHaveBeenCalled();
-    expect(notion.appendChildren).not.toHaveBeenCalled();
-  });
-
-  it("자식이 없으면 정상적으로 replacePageMarkdown 으로 본문을 갱신한다", async () => {
-    const notion = createMockNotionClient();
-    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([]); // 자식 없음
-
-    const orchestrator = new SyncOrchestrator(
-      createConfig(),
-      createMockStateDb() as any,
-      notion as any,
-      createMockVaultFs(),
-    );
-
-    await (
-      orchestrator as unknown as {
-        pushUpdatePage(id: string, md: string): Promise<void>;
-      }
-    ).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
+    await (orchestrator as unknown as PushPage).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
 
     expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(1);
+    expect(notion.fetchAllChildren).not.toHaveBeenCalled();
+    expect(notion.getPageMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("거절되면 자식 태그를 제자리에 되돌려 다시 보낸다 — .base 는 사이드카의 DB id 로 맞춘다", async () => {
+    const notion = createMockNotionClient();
+    notion.replacePageMarkdown.mockRejectedValueOnce(wouldDelete());
+    notion.getPageMarkdown.mockResolvedValue({
+      markdown: `# Hub\n옛 본문.\n${PAGE_TAG}\n${DB_TAG}\n`,
+      truncated: false,
+      unknown_block_ids: [],
+    });
+    const vaultFs = createMockVaultFs();
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
+      if (path === "QA-A/QA-과제-DB/QA 과제 DB.notion.json") {
+        return JSON.stringify({ databaseId: "7cd6bb57-6d09-44d7-8b19-0709e034f895" });
+      }
+      throw new Error(`ENOENT ${path}`);
+    });
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      createMockStateDb() as any,
+      notion as any,
+      vaultFs,
+    );
+
+    await (orchestrator as unknown as PushPage).pushUpdatePage("hub-page", LOCAL);
+
+    expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(2);
+    const sent = notion.replacePageMarkdown.mock.calls[1]![1] as string;
+    expect(sent).toContain("수정된 본문.");
+    expect(sent.indexOf(PAGE_TAG)).toBeGreaterThan(sent.indexOf("수정된 본문."));
+    expect(sent.indexOf(DB_TAG)).toBeGreaterThan(sent.indexOf(PAGE_TAG));
+    expect(sent).not.toContain("📎");
+    expect(notion.deleteBlock).not.toHaveBeenCalled();
+  });
+
+  it("다시 보내도 거절되면 실패로 남기고 동기화됨으로 적지 않는다", async () => {
+    const path = "Hub/Hub.md";
+    const before = "# Hub\n\n옛 본문.\n";
+    const stateDb = createMockStateDb();
+    const record = {
+      id: "rec-hub",
+      obsidianPath: path,
+      notionPageId: "hub-page",
+      notionParentId: "root-page-id",
+      contentHash: computeHash(before),
+      notionLastEdited: "2026-01-01T00:00:00.000Z",
+      localLastModified: "2026-01-01T00:00:00.000Z",
+      syncDirection: "both",
+      fileType: "file",
+      status: "synced",
+      baseSnapshot: Buffer.from(before, "utf-8"),
+      localMtime: "2020-01-01T00:00:00.000Z",
+      localFileSize: 1,
+    };
+    stateDb.getByPath.mockImplementation((p: string) => (p === path ? record : null));
+    const vaultFs = createMockVaultFs();
+    (vaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path, mtime: new Date().toISOString(), size: 100 },
+    ]);
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Hub\n\n새 본문.\n");
+    const notion = createMockNotionClient();
+    notion.replacePageMarkdown.mockRejectedValue(wouldDelete());
+    notion.getPageMarkdown.mockResolvedValue({
+      markdown: `# Hub\n옛 본문.\n${PAGE_TAG}\n`,
+      truncated: false,
+      unknown_block_ids: [],
+    });
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, advanced: { ...config.advanced, retryWaitMs: 0 } },
+      stateDb as any,
+      notion as any,
+      vaultFs,
+    );
+
+    const result = await orchestrator.push();
+
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.path).toBe(path);
+    expect(result.failed[0]!.error).toContain("본문 교체를 거절");
+    expect(result.failed[0]!.error).toContain("would delete");
+    expect(stateDb.updateHash).not.toHaveBeenCalled();
+    expect(stateDb.updateStatus).not.toHaveBeenCalledWith("rec-hub", "synced");
+  });
+
+  it("블록 방식(preferMarkdownApi: false)은 자식이 있으면 지우지 않고 실패로 알린다", async () => {
+    const notion = createMockNotionClient();
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "para-1", type: "paragraph" },
+      { id: "leaf-1", type: "child_page" },
+    ]);
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, conversion: { ...config.conversion, preferMarkdownApi: false } },
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await expect(
+      (orchestrator as unknown as PushPage).pushUpdatePage("hub-page", "# Hub\n\n수정.\n"),
+    ).rejects.toThrow(/자식까지 지워져 보내지 않음/);
+    expect(notion.deleteBlock).not.toHaveBeenCalled();
+    expect(notion.appendChildren).not.toHaveBeenCalled();
+    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("블록 방식도 자식이 없으면 예전대로 새 블록을 붙이고 옛 블록을 지운다", async () => {
+    const notion = createMockNotionClient();
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "para-1", type: "paragraph" },
+    ]);
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, conversion: { ...config.conversion, preferMarkdownApi: false } },
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await (orchestrator as unknown as PushPage).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
+
+    expect(notion.appendChildren).toHaveBeenCalledTimes(1);
+    expect(notion.deleteBlock).toHaveBeenCalledWith("para-1");
   });
 });
 

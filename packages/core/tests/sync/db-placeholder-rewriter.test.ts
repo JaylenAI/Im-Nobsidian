@@ -12,6 +12,7 @@ import {
   rewriteDbPlaceholders,
   type DbEmbedTarget,
 } from "../../src/sync/db-placeholder-rewriter.js";
+import { encodeMarkerTarget } from "../../src/converter/marker-url.js";
 
 const ID_A = "23113b18d38280f984a5c9f9161ee659";
 const ID_B = "1ba13b18d38280d3af1cd851b96b04a0";
@@ -84,5 +85,49 @@ describe("rewriteDbPlaceholders (F22)", () => {
     const src = `**A|B[]** *(Notion DB)*${marker(ID_A, "A|B[]")}`;
     const { content } = rewriteDbPlaceholders(src, resolve);
     expect(content).toBe("![[세컨드 브레인/인박스/인박스.base|AB]]");
+  });
+});
+
+describe("rewriteDbPlaceholders — 되살린 .base 의 첨부 마커 줄 (S-03)", () => {
+  // pull 의 보존 마커 주입기가 push 때 저장한 `.base` 첨부 마커를 임베드 재작성보다 먼저
+  // 되살려 넣는다. 임베드가 돌아왔으면 그 줄은 노이즈다.
+  const fileMarker = (target: string) =>
+    `%% im-nobsidian:local-file:${encodeMarkerTarget(target)} %%`;
+
+  it("같은 .base 를 가리키는 마커 줄(경로 · 파일 이름만)은 걷고, 다른 첨부 마커는 둔다", () => {
+    const src = [
+      "본문",
+      "",
+      `**인박스** *(Notion DB)*${marker(ID_A, "인박스")}`,
+      fileMarker("세컨드 브레인/인박스/인박스.base|인박스"),
+      fileMarker("인박스.base"),
+      fileMarker("세컨드 브레인/사진.pdf"),
+      "",
+      "다음 문단",
+    ].join("\n");
+    const { content, rewrites } = rewriteDbPlaceholders(src, resolve);
+    expect(rewrites).toBe(1);
+    expect(content).toBe(
+      [
+        "본문",
+        "",
+        "![[세컨드 브레인/인박스/인박스.base|인박스]]",
+        fileMarker("세컨드 브레인/사진.pdf"),
+        "",
+        "다음 문단",
+      ].join("\n"),
+    );
+  });
+
+  it("다른 폴더의 같은 이름 .base 를 경로로 적은 마커는 두고, 되살리지 못한 DB 의 마커도 둔다", () => {
+    const other = fileMarker("다른 폴더/인박스.base");
+    const rewritten = rewriteDbPlaceholders(
+      `**인박스** *(Notion DB)*${marker(ID_A, "인박스")}\n${other}`,
+      resolve,
+    );
+    expect(rewritten.content).toBe(`![[세컨드 브레인/인박스/인박스.base|인박스]]\n${other}`);
+
+    const unresolved = `**미지** *(Notion DB)*${marker("f".repeat(32), "미지")}\n${fileMarker("미지.base")}`;
+    expect(rewriteDbPlaceholders(unresolved, () => null).content).toBe(unresolved);
   });
 });

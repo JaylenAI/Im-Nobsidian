@@ -20,6 +20,7 @@ import { withDeadline } from "../utils/deadline.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
+import { replacePageBody } from "./page-body.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import {
   notionEnhancedToObsidian,
@@ -773,7 +774,7 @@ export class DatabaseSyncer {
     if (record?.notionPageId) {
       try {
         await this.notionClient.updatePageProperties(record.notionPageId, notionProps);
-        await this.notionClient.replacePageMarkdown(record.notionPageId, enhanced);
+        await replacePageBody(this.notionClient, record.notionPageId, enhanced);
       } catch (error) {
         // push 실패: 본문/속성이 Notion 에 반영되지 않았으므로 해시를 전진시키거나
         // synced 로 표시하지 않는다. (과거: 본문 실패를 삼키고 synced 처리 → 거짓 동기화·
