@@ -1,9 +1,11 @@
+import { getLogger } from "@im-nobsidian/core";
 import type {
   SyncOrchestrator,
   ProgressCallback,
   LocalChange,
   RemoteChange,
   Conflict,
+  RenameKind,
 } from "@im-nobsidian/core";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
@@ -228,6 +230,51 @@ export class SyncController {
     });
   }
 
+  /**
+   * 볼트의 rename 이벤트(S-11). 노트 · 폴더의 이름 변경을 옛 경로와 함께 적어 둔다 — 다음
+   * 동기화가 옮긴 노트를 짝지을 때 쓴다. 이름과 내용을 함께 바꾼 노트도 새 페이지가 아니라
+   * 원래 페이지를 옮기는 것으로 올라간다. 노트를 노트가 아닌 파일로 바꾼 것은 지운 것과 같다.
+   *
+   * @returns 동기화할 변경인가 — 노트 · 폴더면 참.
+   */
+  onVaultRename(oldPath: string, newPath: string, isFolder: boolean): boolean {
+    if (isFolder) {
+      this.recordRename(oldPath, newPath, "folder");
+      return true;
+    }
+    if (newPath.endsWith(".md")) {
+      this.recordRename(oldPath, newPath, "file");
+      return true;
+    }
+    if (oldPath.endsWith(".md")) {
+      this.recordDelete(oldPath);
+      return true;
+    }
+    return false;
+  }
+
+  /** 볼트에서 노트 · 폴더를 지웠다 — 그 자리를 새 경로로 적은 이름 변경 기록을 버린다. */
+  recordDelete(path: string): void {
+    try {
+      this.orchestrator.recordLocalDelete(path);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 지운 경로의 이름 변경 기록을 지우지 못함 (${path}): ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  /** 기록하지 못해도 동기화는 계속된다 — 내용이 그대로인 노트는 기록 없이도 짝을 찾는다. */
+  private recordRename(oldPath: string, newPath: string, kind: RenameKind): void {
+    try {
+      this.orchestrator.recordLocalRename(oldPath, newPath, kind);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 이름 변경을 적지 못함 (${oldPath} → ${newPath}): ${errorMessage(error)}`,
+      );
+    }
+  }
+
   /** 상태 조회 패스스루(상태 표시 커맨드용 — 표시 포맷은 셸이 담당). */
   getStatus(): ReturnType<SyncOrchestrator["status"]> {
     return this.orchestrator.status();
@@ -237,4 +284,8 @@ export class SyncController {
   pullForResolve(): ReturnType<SyncOrchestrator["pull"]> {
     return this.orchestrator.pull();
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

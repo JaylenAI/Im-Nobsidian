@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import type { SyncOrchestrator } from "@im-nobsidian/core";
+import { getLogger, setLogger, type SyncOrchestrator } from "@im-nobsidian/core";
 import { SyncController } from "../../src/sync/sync-controller.js";
 import type { SyncControllerHooks } from "../../src/sync/sync-controller.js";
 
@@ -9,6 +9,8 @@ interface MockOrchestrator {
   sync: ReturnType<typeof vi.fn>;
   status: ReturnType<typeof vi.fn>;
   statusLocal: ReturnType<typeof vi.fn>;
+  recordLocalRename: ReturnType<typeof vi.fn>;
+  recordLocalDelete: ReturnType<typeof vi.fn>;
 }
 
 function createMockOrchestrator(): MockOrchestrator {
@@ -45,6 +47,8 @@ function createMockOrchestrator(): MockOrchestrator {
       conflicts: [],
       conflictRecords: [],
     }),
+    recordLocalRename: vi.fn(),
+    recordLocalDelete: vi.fn(),
   };
 }
 
@@ -315,6 +319,48 @@ describe("SyncController", () => {
       mock.statusLocal.mockRejectedValue(new Error("db locked"));
       const { hooks } = createHooks();
       await expect(makeController(mock, hooks).refreshStatus(false)).resolves.toBeUndefined();
+    });
+  });
+
+  describe("볼트 이름 변경 · 삭제 (S-11)", () => {
+    it("노트 · 폴더의 이름 변경을 옛 경로와 함께 적고 동기화를 알린다", () => {
+      const controller = makeController(mock, createHooks().hooks);
+
+      expect(controller.onVaultRename("a/old.md", "b/new.md", false)).toBe(true);
+      expect(controller.onVaultRename("Projects", "Work", true)).toBe(true);
+
+      expect(mock.recordLocalRename).toHaveBeenNthCalledWith(1, "a/old.md", "b/new.md", "file");
+      expect(mock.recordLocalRename).toHaveBeenNthCalledWith(2, "Projects", "Work", "folder");
+    });
+
+    it("노트를 노트가 아닌 파일로 바꾸면 지운 것과 같다 — 첨부는 동기화하지 않는다", () => {
+      const controller = makeController(mock, createHooks().hooks);
+
+      expect(controller.onVaultRename("a/note.md", "a/note.txt", false)).toBe(true);
+      expect(controller.onVaultRename("img/a.png", "img/b.png", false)).toBe(false);
+
+      expect(mock.recordLocalDelete).toHaveBeenCalledWith("a/note.md");
+      expect(mock.recordLocalRename).not.toHaveBeenCalled();
+    });
+
+    it("기록하지 못해도 던지지 않고 이유를 남긴다 — 동기화는 내용으로 짝을 찾는다", () => {
+      const warn = vi.fn();
+      const previous = getLogger();
+      setLogger({ warn, error: vi.fn(), info: vi.fn(), debug: vi.fn() });
+      mock.recordLocalRename.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+      mock.recordLocalDelete.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+      const controller = makeController(mock, createHooks().hooks);
+
+      expect(controller.onVaultRename("a.md", "b.md", false)).toBe(true);
+      expect(() => controller.recordDelete("b.md")).not.toThrow();
+
+      setLogger(previous);
+      expect(warn).toHaveBeenCalledTimes(2);
+      expect(warn.mock.calls[0]![0]).toContain("database is locked");
     });
   });
 });
