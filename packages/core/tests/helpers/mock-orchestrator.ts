@@ -39,6 +39,8 @@ export function createMockStateDb() {
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
     setNotionLastEdited: vi.fn(),
+    setNotionParentId: vi.fn(),
+    updatePath: vi.fn(),
     updateStatCache: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
