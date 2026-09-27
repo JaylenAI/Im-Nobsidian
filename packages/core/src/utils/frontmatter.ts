@@ -134,3 +134,16 @@ export function parseFrontmatter(content: string): {
   const { data, content: body } = splitFrontmatter(content);
   return { data, body: body.trim() };
 }
+
+/**
+ * 지난 동기화 사본(`baseSnapshot`)의 frontmatter. 사본이 없거나 YAML 이 깨져 읽지 못하면 null —
+ * 모름이다. 비어 있는 것({})과 가른다.
+ */
+export function snapshotFrontmatter(snapshot: Buffer | null): Record<string, unknown> | null {
+  if (!snapshot) return null;
+  try {
+    return parseFrontmatter(snapshot.toString("utf-8")).data;
+  } catch {
+    return null;
+  }
+}
