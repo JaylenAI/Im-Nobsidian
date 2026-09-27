@@ -3,9 +3,9 @@ import type { DatabaseViewsConfig, ViewConfig } from "../types/view.js";
 import type { DBEntry, PropertyValue, ViewRenderData, PropertySchema } from "./types.js";
 import { sortEntries, groupEntries, extractCalendarEntries } from "./filter-engine.js";
 import { getVisibleProperties } from "./filter-engine.js";
-import matter from "gray-matter";
 import { DB_VIEWS_PATH } from "../constants/paths.js";
 import { selectDbRowFiles } from "../utils/db-row-path.js";
+import { splitFrontmatter } from "../utils/frontmatter.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -125,8 +125,7 @@ export class ViewDataProvider {
 
 function parseEntry(path: string, content: string): DBEntry | null {
   try {
-    const parsed = matter(content);
-    const fm = parsed.data as Record<string, unknown>;
+    const fm = splitFrontmatter(content).data;
 
     const title = coerceString(fm.title) ?? extractTitleFromPath(path);
     const icon = coerceString(fm.icon);

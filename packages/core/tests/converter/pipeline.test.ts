@@ -8,6 +8,7 @@ import { MentionToWikilink } from "../../src/converter/post-processors/mention-t
 import { PropertiesTableRestorer } from "../../src/converter/post-processors/properties-table-restorer.js";
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import { BlockConverter } from "../../src/converter/block-converter.js";
+import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import type { ConversionContext } from "../../src/types/convert.js";
 
 const pushContext: ConversionContext = {
@@ -85,6 +86,38 @@ describe("FrontmatterExtractor", () => {
 
     expect(result.content).toBe("# No Frontmatter");
     expect(result.metadata.properties).toEqual({});
+  });
+
+  // Notion 의 구분선으로 시작하는 페이지를 pull 하면 이 모양으로 쓰인다. gray-matter 는 첫
+  // 구분선부터 다음 구분선(없으면 끝)까지를 YAML 로 읽어 본문에서 뺐다 — push 가 그 페이지의
+  // 본문을 속성 블록으로 바꿔 보냈다.
+  it.each([
+    ["구분선 · 목록 · 구분선", "---\n## 개요\n- 항목 하나\n- 항목 둘\n---\n\n끝 문단\n로컬 문단"],
+    ["닫는 구분선 없음", "---\n\n첫 문단\n\n둘째 문단\n\n로컬 문단"],
+    ["첫 줄이 ---js", '---js\n\nconsole.log("x")\n\n---\n\n본문 a\n로컬 문단'],
+  ])("본문이 구분선으로 시작하면 전부 본문으로 보낸다 — %s", (_label, note) => {
+    const result = new FrontmatterExtractor().process({
+      content: note,
+      metadata: {},
+      context: pushContext,
+    });
+
+    expect(result.content).toBe(note.trim());
+    expect(result.metadata.properties).toEqual({});
+  });
+});
+
+describe("기본 파이프라인 — 구분선으로 시작하는 노트의 push", () => {
+  it("본문을 빠짐없이 보내고 속성 블록을 만들지 않는다", () => {
+    const note = "---\n## 개요\n- 항목 하나\n- 항목 둘\n---\n\n끝 문단\n";
+
+    const result = createDefaultPipeline().convertToNotion(note, pushContext);
+
+    expect(result.properties).toEqual({});
+    expect(result.content).not.toContain("im-nobsidian:properties");
+    for (const part of ["## 개요", "- 항목 하나", "- 항목 둘", "끝 문단"]) {
+      expect(result.content).toContain(part);
+    }
   });
 });
 
@@ -325,6 +358,33 @@ describe("PropertiesTableInjector", () => {
 });
 
 describe("PropertiesTableRestorer", () => {
+  it("키-값이 아닌 속성 블록은 본문에 그대로 둔다 — 걷어 내면 사라진다", () => {
+    const input = "```yaml\n# im-nobsidian:properties\n- 하나\n- 둘\n```\n\n본문";
+
+    for (let i = 0; i < 2; i++) {
+      const result = new PropertiesTableRestorer().process({
+        content: input,
+        metadata: {},
+        context: pullContext,
+      });
+      expect(result.content).toBe(input);
+      expect(result.metadata.properties).toBeUndefined();
+    }
+  });
+
+  it("깨진 YAML 속성 블록도 몇 번이고 본문에 둔다(gray-matter 캐시가 두 번째에 걷어 내지 않게)", () => {
+    const input = "```yaml\n# im-nobsidian:properties\n진척: [0.7\n```\n\n본문";
+
+    for (let i = 0; i < 2; i++) {
+      const result = new PropertiesTableRestorer().process({
+        content: input,
+        metadata: {},
+        context: pullContext,
+      });
+      expect(result.content).toBe(input);
+    }
+  });
+
   it("Pull 시 YAML 코드블록을 메타데이터로 복원", () => {
     const processor = new PropertiesTableRestorer();
     const input = `\`\`\`yaml

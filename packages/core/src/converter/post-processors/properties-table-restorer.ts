@@ -1,7 +1,7 @@
-import matter from "gray-matter";
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE } from "../../constants/markers.js";
 import { getLogger } from "../../utils/logger.js";
+import { splitFrontmatter } from "../../utils/frontmatter.js";
 
 const YAML_PROPERTIES_REGEX = new RegExp(
   "```yaml\\n# " + MARKER_BRAND_RE + ":properties\\n([\\s\\S]*?)```\\n*(?:---\\n*)?",
@@ -59,9 +59,11 @@ export class PropertiesTableRestorer implements Processor {
     const yamlContent = match[1]!;
     const fakeDocument = `---\n${yamlContent}---\n`;
 
+    // 키-값으로 읽히지 않으면(깨진 YAML · 목록) 블록을 본문에 그대로 둔다 — 걷어 내면 사라진다.
     let parsed: Record<string, unknown>;
     try {
-      const result = matter(fakeDocument);
+      const result = splitFrontmatter(fakeDocument);
+      if (!result.hasFrontmatter) return { content: input.content, metadata: input.metadata };
       parsed = result.data;
     } catch {
       return { content: input.content, metadata: input.metadata };
