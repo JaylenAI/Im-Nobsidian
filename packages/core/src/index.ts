@@ -124,7 +124,13 @@ export {
 } from "./converter/index.js";
 
 // Conflict
-export { threeWayMerge, ConflictResolver } from "./conflict/index.js";
+export {
+  threeWayMerge,
+  ConflictResolver,
+  applicableChoices,
+  choiceForStrategy,
+  isRemoteDeletion,
+} from "./conflict/index.js";
 export type {
   MergeResult,
   MergeConflictRegion,
