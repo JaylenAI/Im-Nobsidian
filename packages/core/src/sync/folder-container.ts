@@ -26,6 +26,24 @@ export interface FolderLookup {
   pageIdAt(path: string): string | null;
 }
 
+/** 폴더 노트인가 — 파일 이름이 든 폴더 이름과 같다(`A/A.md`). 그 폴더의 페이지다. */
+export function isFolderNotePath(filePath: string): boolean {
+  const parts = filePath.split("/");
+  if (parts.length < 2) return false;
+  return parts[parts.length - 1]!.replace(/\.md$/, "") === parts[parts.length - 2];
+}
+
+/** 파일이 아니라 폴더를 추적하는 레코드인가 — push 가 만든 폴더 페이지 · 폴더로만 받은 페이지. */
+export function isFolderRecord(record: {
+  readonly fileType: string;
+  readonly obsidianPath: string;
+}): boolean {
+  return (
+    (record.fileType === "folder-note" || record.fileType === "folder-only") &&
+    !record.obsidianPath.endsWith(".md")
+  );
+}
+
 /** 파일 · 폴더의 부모 폴더. 볼트 루트면 빈 문자열. */
 export function parentFolderOf(path: string): string {
   const slash = path.lastIndexOf("/");
