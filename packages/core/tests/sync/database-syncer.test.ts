@@ -448,8 +448,12 @@ describe("DatabaseSyncer", () => {
 
       const result = await syncer.pullAll();
 
-      expect(result.created).toBe(2);
-      expect(result.failed).toHaveLength(0);
+      // 본문을 못 읽은 행은 빈 본문으로 만들지 않고 실패로 남긴다(S-10). 예전 기대값
+      // (created 2 · failed 0)은 제목과 반대로 그 유실을 잠그고 있었다.
+      expect(result.created).toBe(1);
+      expect(result.failed).toEqual([
+        expect.objectContaining({ path: "databases/tasks/page-1", error: "API error" }),
+      ]);
     });
   });
 

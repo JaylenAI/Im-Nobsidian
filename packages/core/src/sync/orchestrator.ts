@@ -2760,8 +2760,13 @@ export class SyncOrchestrator {
           // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
           compact: isCompactExport(result.markdown),
         };
-      } catch {
-        // Markdown API 실패 시 blocks API fallback
+      } catch (error) {
+        // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
+        getLogger().warn(
+          `[Im-Nobsidian] Markdown API 로 받지 못해 블록 API 로 받음 (${pageId}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
       }
     }
     // blocks-API 폴백 산출물은 이미 표준 간격 — 재간격 불필요.
