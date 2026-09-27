@@ -12,6 +12,9 @@ import { MARKER_TOKEN_RE } from "../constants/markers.js";
 /** 가드 콜백 — 조각과 입력 기준 절대 offset 을 받아 치환된 조각을 돌려준다. */
 export type SegmentMapper = (segment: string, offset: number) => string;
 
+/** 문단을 가르는 빈 줄 — 공백만 있는 줄도 빈 줄이다. */
+const BLANK_LINE_RE = /\n[ \t]*\n/;
+
 /**
  * 마커 재삽입용 앵커 — idx 직전의 같은 줄 접두(최대 32자)를, 줄 첫머리면 직전
  * 비어있지 않은 줄(최대 48자)을 돌려준다. push 시점 절대 offset 은 pull 산출물에서
@@ -78,6 +81,10 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
  * 백틱 개수가 같은 짝만 스팬으로 인정한다(CommonMark). 닫는 백틱이 없으면 코드가
  * 아니므로 평문으로 되돌린다 — 스팬으로 오인해 문서 나머지를 통째로 보호하면
  * 정작 필요한 치환이 조용히 누락된다.
+ *
+ * 같은 까닭으로 짝은 문단 안에서만 찾는다 — 인라인 코드는 빈 줄을 넘지 못한다(CommonMark).
+ * 예전에는 두 문단에 하나씩 있는 홑 백틱을 짝으로 보고 그 사이를 통째로 코드로 여겨, 사이에
+ * 있는 위키링크를 링크로 올리지 않았다.
  */
 export function mapOutsideInlineCode(content: string, fn: SegmentMapper): string {
   let out = "";
@@ -92,7 +99,7 @@ export function mapOutsideInlineCode(content: string, fn: SegmentMapper): string
     let run = 1;
     while (content[i + run] === "`") run += 1;
     const close = content.indexOf("`".repeat(run), i + run);
-    if (close === -1) {
+    if (close === -1 || BLANK_LINE_RE.test(content.slice(i + run, close))) {
       i += run;
       continue;
     }
