@@ -11,6 +11,21 @@ import {
 } from "../helpers/mock-orchestrator.js";
 import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
 
+/**
+ * upsert 한 레코드를 getByPath 가 돌려주게 한다. push 는 폴더 페이지를 먼저 만들고 그 기록으로
+ * 노트의 부모를 찾는다 — 기록이 사라지는 모의 DB 에서는 부모를 찾지 못한다.
+ */
+function rememberUpserts(stateDb: ReturnType<typeof createMockStateDb>) {
+  const records = new Map<string, Record<string, unknown>>();
+  stateDb.upsert.mockImplementation((input: { obsidianPath: string }) => {
+    const next = { id: records.size + 1, ...records.get(input.obsidianPath), ...input };
+    records.set(input.obsidianPath, next);
+    return next;
+  });
+  stateDb.getByPath.mockImplementation((path: string) => records.get(path) ?? null);
+  return records;
+}
+
 describe("SyncOrchestrator", () => {
   let orchestrator: SyncOrchestrator;
   let mockVaultFs: ReturnType<typeof createMockVaultFs>;
@@ -217,9 +232,14 @@ describe("SyncOrchestrator", () => {
         p === "notes/a.md" ? "# A" : "# B",
       );
 
+      const records = rememberUpserts(mockStateDb);
+
       const result = await orchestrator.push({ paths: ["notes/"] });
 
       expect(result.created).toBe(1);
+      expect(result.failed).toEqual([]);
+      expect(records.has("notes/a.md")).toBe(true);
+      expect(records.has("other/b.md")).toBe(false);
     });
 
     it("API 오류 시 failed에 기록", async () => {
@@ -889,11 +909,26 @@ describe("SyncOrchestrator", () => {
       (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Deep Note");
 
       mockNotionClient.listChildren.mockResolvedValue({ results: [] });
+      const records = rememberUpserts(mockStateDb);
+      let folders = 0;
+      mockNotionClient.createPage.mockImplementation(async () => ({
+        id: `folder-${++folders}`,
+        last_edited_time: now,
+      }));
 
       const result = await orchestrator.push();
 
       expect(result.created).toBe(1);
-      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalled();
+      expect(result.failed).toEqual([]);
+      // 폴더마다 폴더 페이지를 만들고, 노트는 가장 깊은 폴더 페이지 아래에 둔다.
+      expect(mockNotionClient.createPage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ parentId: "folder-1", title: "deep" }),
+      );
+      expect(records.get("projects/deep")?.notionPageId).toBe("folder-2");
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledWith(
+        expect.objectContaining({ parentId: "folder-2", parentType: "page" }),
+      );
     });
 
     it("다중 파일 동시 push", async () => {
