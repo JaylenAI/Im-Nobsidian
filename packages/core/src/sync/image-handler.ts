@@ -7,7 +7,7 @@ import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
-import { getMimeType } from "../utils/mime.js";
+import { getMimeType, isNotionUploadable } from "../utils/mime.js";
 import { isNotionHostedFileUrl, isNotionAttachmentUri } from "../utils/notion-file-url.js";
 import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 
@@ -220,6 +220,11 @@ function baseName(path: string): string {
 /** 노트 경로에서 그 노트가 사는 폴더만 뽑는다(루트 노트면 undefined). */
 function folderOf(notePath?: string): string | undefined {
   return notePath?.includes("/") ? notePath.slice(0, notePath.lastIndexOf("/")) : undefined;
+}
+
+/** 로그에 남길 실패 사유 — 오류 객체를 통째로 넘기면 응답 헤더까지 쏟아져 사유가 묻힌다. */
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 블록의 rich_text 를 평문으로 이어 붙인다. 자리표시자 탐지에만 쓰므로 타입별 분기 없이 훑는다. */
@@ -524,11 +529,11 @@ export class ImageHandler {
         });
       } catch (error) {
         // 경로 미해석(ENOENT)은 예상 가능한 상황(폴더 스캔 업로드가 후속 처리) —
-        // 스택트레이스 대신 한 줄 경고로 낮춘다(F23). 그 외 오류는 원본을 남긴다.
+        // 스택트레이스 대신 한 줄 경고로 낮춘다(F23). 그 외 오류는 사유를 남긴다.
         if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
           getLogger().warn(`이미지 업로드 건너뜀 — 볼트에서 파일을 찾지 못함: ${img.localPath}`);
         } else {
-          getLogger().warn(`이미지 업로드 실패 (${img.localPath}):`, error);
+          getLogger().warn(`이미지 업로드 실패 (${img.localPath}): ${messageOf(error)}`);
         }
       }
     }
@@ -577,7 +582,7 @@ export class ImageHandler {
     try {
       hits = await this.collectPlaceholders(pageId);
     } catch (error) {
-      getLogger().warn(`미디어 자리표시자 조회 실패 (${pageId}):`, error);
+      getLogger().warn(`미디어 자리표시자 조회 실패 (${pageId}): ${messageOf(error)}`);
       return empty;
     }
     if (hits.length === 0) return empty;
@@ -585,9 +590,19 @@ export class ImageHandler {
     const noteFolder = folderOf(notePath);
     const uploaded: ImageUploadResult[] = [];
     const handledTargets = new Set<string>();
+    const unsupported: string[] = [];
+    let attempted = false;
 
     for (const hit of hits) {
       const vaultTarget = stripAlias(hit.target);
+      // Notion 이 받지 않는 형식은 올리지 않는다(S-14). 업로드를 만들 때 400 으로 거절되는데,
+      // 자리표시자가 그대로 남으니 push 할 때마다 같은 요청이 같은 이유로 실패했다. 자리표시자는
+      // 두어야 pull 이 임베드를 되살린다.
+      if (!isNotionUploadable(vaultTarget)) {
+        unsupported.push(vaultTarget);
+        continue;
+      }
+      attempted = true;
       try {
         const result = await this.uploadLocalImage(vaultTarget, noteFolder);
         const fileName = baseName(vaultTarget);
@@ -620,13 +635,20 @@ export class ImageHandler {
         if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
           getLogger().warn(`미디어 제자리 삽입 건너뜀 — 볼트에서 파일을 찾지 못함: ${vaultTarget}`);
         } else {
-          getLogger().warn(`미디어 제자리 삽입 실패 (${vaultTarget}):`, error);
+          getLogger().warn(`미디어 제자리 삽입 실패 (${vaultTarget}): ${messageOf(error)}`);
         }
       }
     }
 
+    if (unsupported.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 임베드 (${notePath ?? pageId}): ` +
+          `${unsupported.join(", ")} — Notion 에는 파일 이름 자리표시자로 남는다`,
+      );
+    }
     this.registerUploads(pageId, uploaded);
-    return { uploaded, handledTargets, touched: true };
+    // 올리려 한 것이 없으면 페이지는 그대로다 — 보낸 본문의 지문이 아직 맞다.
+    return { uploaded, handledTargets, touched: attempted };
   }
 
   /**

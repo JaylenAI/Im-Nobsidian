@@ -1,5 +1,6 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { ImageHandler } from "../../src/sync/image-handler.js";
+import { setLogger } from "../../src/utils/logger.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import type { NotionClient } from "../../src/notion/client.js";
 
@@ -225,6 +226,67 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
     await handler.materializeLocalMedia("page-1", `> ${FILE_MARKER}\n`);
 
     expect(client.uploadFile).toHaveBeenCalledWith(expect.any(Blob), "t-doc.txt", "text/plain");
+  });
+
+  // S-14 — 표에 없는 확장자는 업로드를 만들 때 400 으로 거절된다(실측: `.base`). 거르지 않으면
+  // 자리표시자가 남아 push 할 때마다 같은 요청이 같은 이유로 실패한다(실볼트 `.ipynb` 임베드 42건).
+  describe("Notion 이 받지 않는 형식 (S-14)", () => {
+    const NOTEBOOK_MARKER = "📎 분석.ipynb %% im-nobsidian:local-file:nb/분석.ipynb %%";
+    let info: string[];
+
+    beforeEach(() => {
+      info = [];
+      setLogger({
+        warn: () => {},
+        error: () => {},
+        info: (msg) => info.push(msg),
+        debug: () => {},
+      });
+    });
+
+    afterEach(() => {
+      setLogger({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} });
+    });
+
+    it("올리지 않고 자리표시자를 남긴다 — 페이지를 고치지 않았다", async () => {
+      const { client, appendChildren, deleteBlock } = createTreeClient({
+        "page-1": [quote("blk-ph", NOTEBOOK_MARKER)],
+      });
+      const handler = new ImageHandler(mockFs, "attachments", client);
+
+      const result = await handler.materializeLocalMedia(
+        "page-1",
+        `> ${NOTEBOOK_MARKER}\n`,
+        "연구/노트.md",
+      );
+
+      expect(mockFs.readBinary).not.toHaveBeenCalled();
+      expect(client.uploadFile).not.toHaveBeenCalled();
+      expect(appendChildren).not.toHaveBeenCalled();
+      expect(deleteBlock).not.toHaveBeenCalled();
+      expect(result.touched).toBe(false);
+      expect(info).toEqual([
+        "[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 임베드 (연구/노트.md): " +
+          "nb/분석.ipynb — Notion 에는 파일 이름 자리표시자로 남는다",
+      ]);
+    });
+
+    it("받는 형식과 섞여 있으면 받는 것만 올린다", async () => {
+      const { client, deleteBlock } = createTreeClient({
+        "page-1": [quote("blk-nb", NOTEBOOK_MARKER), quote("blk-img", IMG_MARKER)],
+      });
+      const handler = new ImageHandler(mockFs, "attachments", client);
+
+      const result = await handler.materializeLocalMedia(
+        "page-1",
+        `> ${NOTEBOOK_MARKER}\n\n> ${IMG_MARKER}\n`,
+      );
+
+      expect(client.uploadFile).toHaveBeenCalledTimes(1);
+      expect(deleteBlock).toHaveBeenCalledWith("blk-img");
+      expect(deleteBlock).not.toHaveBeenCalledWith("blk-nb");
+      expect(result.touched).toBe(true);
+    });
   });
 
   it("NotionClient 가 없으면 아무 일도 하지 않는다", async () => {

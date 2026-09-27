@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { FileHandler } from "../../src/sync/file-handler.js";
 import { setLogger } from "../../src/utils/logger.js";
-import { getBlockType, getMimeType } from "../../src/utils/mime.js";
+import { getBlockType, getMimeType, isNotionUploadable } from "../../src/utils/mime.js";
 import type { NotionClient } from "../../src/notion/client.js";
 import type { IStateDB } from "../../src/state/state-db-interface.js";
 import {
@@ -104,6 +104,100 @@ describe("FileHandler", () => {
       expect(getMimeType("code.py")).toBe("text/x-python");
       expect(getMimeType("data.json")).toBe("application/json");
       expect(getMimeType("data.csv")).toBe("text/csv");
+    });
+  });
+
+  // S-14 — Notion File Upload API 는 표에 없는 확장자를 400 으로 거절한다(실측: `.base`).
+  describe("isNotionUploadable", () => {
+    it("Notion 이 받는 형식", () => {
+      expect(isNotionUploadable("photo.png")).toBe(true);
+      expect(isNotionUploadable("docs/report.PDF")).toBe(true);
+      expect(isNotionUploadable("code.py")).toBe(true);
+      expect(isNotionUploadable("backup.tar.gz")).toBe(true);
+      // MIME 표에 없어도 받는다 — API 가 파일 이름의 확장자로 판정한다.
+      expect(isNotionUploadable("config.yaml")).toBe(true);
+    });
+
+    it("Notion 이 받지 않는 형식", () => {
+      expect(isNotionUploadable("analysis.ipynb")).toBe(false);
+      expect(isNotionUploadable("para/인박스.base")).toBe(false);
+      expect(isNotionUploadable("doc.hwp")).toBe(false);
+      expect(isNotionUploadable("board.canvas")).toBe(false);
+    });
+
+    it("확장자가 없으면 받지 않는다 — 폴더 이름의 점은 확장자가 아니다", () => {
+      expect(isNotionUploadable("Makefile")).toBe(false);
+      expect(isNotionUploadable(".gitignore")).toBe(false);
+      expect(isNotionUploadable("v1.2/README")).toBe(false);
+    });
+  });
+
+  describe("Notion 이 받지 않는 형식의 첨부 (S-14)", () => {
+    function captureInfo(): string[] {
+      const messages: string[] = [];
+      setLogger({
+        warn: () => {},
+        error: () => {},
+        info: (msg) => messages.push(msg),
+        debug: () => {},
+      });
+      return messages;
+    }
+
+    afterEach(() => {
+      setLogger({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} });
+    });
+
+    it("pushAllFiles: 올리지 않고 push 마다 한 줄로만 알린다", async () => {
+      const info = captureInfo();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/사진.png", size: 10, mtime: "2026-09-28T00:00:00.000Z" },
+        { path: "para/분석.ipynb", size: 20, mtime: "2026-09-28T00:00:00.000Z" },
+        { path: "para/문서.hwp", size: 30, mtime: "2026-09-28T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      const notion = createMockNotionClient();
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+      );
+      const results = await handler.pushAllFiles();
+
+      expect(results.map((r) => r.localPath)).toEqual(["para/사진.png"]);
+      expect(notion.uploadFile).toHaveBeenCalledTimes(1);
+      expect(info.filter((m) => m.includes("받지 않는"))).toEqual([
+        "[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 첨부 2개: para/분석.ipynb, para/문서.hwp",
+      ]);
+    });
+
+    it("많으면 다섯 개만 적고 나머지는 개수로 말한다", async () => {
+      const info = captureInfo();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue(
+        Array.from({ length: 7 }, (_, i) => ({
+          path: `nb/${i + 1}.ipynb`,
+          size: 10,
+          mtime: "2026-09-28T00:00:00.000Z",
+        })),
+      );
+      const notion = createMockNotionClient();
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        createMockStateDb() as unknown as IStateDB,
+      );
+      await handler.pushAllFiles();
+
+      expect(notion.uploadFile).not.toHaveBeenCalled();
+      expect(info).toEqual([
+        "[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 첨부 7개: " +
+          "nb/1.ipynb, nb/2.ipynb, nb/3.ipynb, nb/4.ipynb, nb/5.ipynb 외 2개",
+      ]);
     });
   });
 
