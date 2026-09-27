@@ -523,16 +523,13 @@ export class DatabaseSyncer {
       properties.icon = icon.value;
     }
 
-    let markdown = "";
-    let exportCompact = false;
-    try {
-      const mdResult = await this.notionClient.getPageMarkdown(page.id);
-      // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
-      exportCompact = isCompactExport(mdResult.markdown);
-      markdown = notionEnhancedToObsidian(mdResult.markdown);
-    } catch {
-      // Markdown API 실패 시 빈 내용
-    }
+    // 본문을 읽지 못하면 던진다 — 행은 실패로 남고 레코드가 그대로라 다음 pull 이 다시
+    // 받는다. 예전에는 빈 본문으로 넘어가, 로컬이 그대로인 행은 본문이 지워진 채 «동기화
+    // 완료» 로 기록됐다(S-10). 읽지 못한 것은 비어 있는 것이 아니다.
+    const mdResult = await this.notionClient.getPageMarkdown(page.id);
+    // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
+    const exportCompact = isCompactExport(mdResult.markdown);
+    let markdown = notionEnhancedToObsidian(mdResult.markdown);
 
     if (this.config.conversion.imageDownload === "immediate" && markdown) {
       try {
