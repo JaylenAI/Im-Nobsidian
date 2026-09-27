@@ -44,7 +44,7 @@
 | 1    | `fix/pull-skip-not-written`                  | F-h local-first 가 지킨 노트를 pull 이 받은 것으로 세어, 플러그인 Sync · 자동 동기화 · `watch` 가 그 로컬 편집을 영영 올리지 않음                        | 완료 `002256d` |
 | 1    | `fix/delete-sync-db-rows`                    | S-12 deleteSync(플러그인 기본)에서 DB 행을 매 pull 원격 삭제로 판정 — 행 파일을 지웠다 다시 만들며 올리지 않은 로컬 행 편집이 사라짐                     | 완료 `ec4fae7` |
 | 1    | `fix/plugin-conflict-resolve`                | N-06 플러그인의 충돌 해결이 Notion 에 올리지 않아 다음 sync 가 고른 로컬 · 병합을 원격으로 덮음 · 올리기 실패 · 원격 못 읽음도 같음                      | 완료           |
-| 1    | `fix/offline-client-test`                    | T-01 `client-utils` 시험이 `dataSources.retrieve` 를 막지 않아 실제 HTTPS 를 불러 전량에서 가끔 시간 초과                                                | 대기           |
+| 1    | `fix/offline-client-test`                    | T-01 `client-utils` 시험이 `dataSources.retrieve` 를 막지 않아 실제 HTTPS 를 불러 전량에서 가끔 시간 초과                                                | 완료           |
 | 1    | `fix/pull-delete-local-edit`                 | 원격에서 지운 노트에 올리지 않은 로컬 편집이 있어도 pull 이 지움(F-f 의 거울)                                                                            | 대기           |
 | 1    | `fix/embedded-media-dup`                     | S-05 이미지 중복 · 캡션 로컬 경로                                                                                                                        | 대기           |
 | 1    | `fix/auto-sync-overlap`                      | S-09 자동 sync 겹침                                                                                                                                      | 대기           |

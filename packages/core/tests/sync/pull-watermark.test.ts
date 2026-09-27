@@ -98,6 +98,11 @@ describe("증분 pull 기준 시각 — 받지 못한 변경이 다음 조회에
     });
     vi.spyOn(client, "fetchAllChildrenDeep").mockResolvedValue([]);
     vi.spyOn(client, "getChildDatabaseIds").mockResolvedValue([]);
+    // Markdown API 가 실패하면 블록 API 로 다시 받는다 — notion-to-md 가 SDK 로 직접 부르는 길이다.
+    // 재시도까지 실패한 페이지는 그 길도 실패한다(막지 않으면 실제 HTTPS 로 나갔다 — T-01).
+    vi.spyOn((client as any).client.blocks.children, "list").mockRejectedValue(
+      new Error("일시 장애"),
+    );
     return client;
   }
 
