@@ -6,12 +6,35 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
+  applicableChoices,
+  isRemoteDeletion,
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
 type Strategy = (typeof STRATEGIES)[number];
+
+const CHOICE_NAMES: Record<ResolutionChoice, string> = {
+  local: "로컬 유지 (Obsidian 버전 유지)",
+  remote: "원격 유지 (Notion 버전으로 덮어쓰기)",
+  merge: "자동 병합 (3-way merge)",
+  duplicate: "복제 (원본 유지 + .conflict 파일 생성)",
+};
+
+/** Notion 에서 지운 노트는 같은 선택이 다른 일을 한다 — 로컬 유지는 다시 만들고, 원격 유지는 지운다. */
+const REMOTE_DELETION_CHOICE_NAMES: Partial<Record<ResolutionChoice, string>> = {
+  local: "로컬 유지 (Notion 에 새 페이지로 다시 만들기)",
+  remote: "삭제 따르기 (Obsidian 파일도 지우기)",
+};
+
+function choiceName(conflict: Conflict, choice: ResolutionChoice): string {
+  return (
+    (isRemoteDeletion(conflict) ? REMOTE_DELETION_CHOICE_NAMES[choice] : undefined) ??
+    CHOICE_NAMES[choice] ??
+    choice
+  );
+}
 
 /**
  * 대화형 프롬프트를 띄울 수 있는 환경인지.
@@ -71,6 +94,17 @@ export const resolveCommand = new Command("resolve")
 
       if (options.strategy) {
         const strategy = options.strategy as Strategy;
+        // 원격에서 지운 노트는 전략이 파일을 지우거나 페이지를 새로 만든다 — 묻기 전에 알린다.
+        const deletions = pending.filter(isRemoteDeletion).length;
+        if (deletions > 0) {
+          console.log(
+            `  Notion 에서 삭제된 노트 ${deletions}건 — ${
+              strategy === "remote-first"
+                ? "Obsidian 파일도 지웁니다"
+                : "Notion 에 새 페이지로 다시 만듭니다"
+            }`,
+          );
+        }
 
         if (!options.yes) {
           if (!isInteractive()) {
@@ -88,10 +122,10 @@ export const resolveCommand = new Command("resolve")
 
         const results = await orchestrator.resolveAllConflicts(pending, strategy);
         let failed = 0;
-        for (const result of results) {
+        for (const [index, result] of results.entries()) {
           if (!result.success) failed++;
           const icon = result.success ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
-          console.log(`  ${icon} ${result.path} → ${result.choice}`);
+          console.log(`  ${icon} ${result.path} → ${choiceName(pending[index]!, result.choice)}`);
         }
         report(results.length - failed, failed);
         return;
@@ -142,34 +176,39 @@ async function resolveInteractive(
   console.log(`파일: \x1b[1m${path}\x1b[0m`);
   console.log(`${"─".repeat(60)}`);
 
-  const diff = orchestrator.generateConflictDiff(conflict);
-  const diffLines = diff.split("\n");
-  for (const line of diffLines) {
-    if (line.startsWith("- ")) {
-      console.log(`\x1b[31m${line}\x1b[0m`);
-    } else if (line.startsWith("+ ")) {
-      console.log(`\x1b[32m${line}\x1b[0m`);
-    } else if (line.startsWith("---") || line.startsWith("+++")) {
-      console.log(`\x1b[1m${line}\x1b[0m`);
-    } else {
-      console.log(line);
+  if (isRemoteDeletion(conflict)) {
+    // 견줄 원격 본문이 없다 — 줄 비교는 로컬 전부를 지운 것으로 보여 준다.
+    console.log(
+      "\x1b[33mNotion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.\x1b[0m",
+    );
+  } else {
+    const diff = orchestrator.generateConflictDiff(conflict);
+    const diffLines = diff.split("\n");
+    for (const line of diffLines) {
+      if (line.startsWith("- ")) {
+        console.log(`\x1b[31m${line}\x1b[0m`);
+      } else if (line.startsWith("+ ")) {
+        console.log(`\x1b[32m${line}\x1b[0m`);
+      } else if (line.startsWith("---") || line.startsWith("+++")) {
+        console.log(`\x1b[1m${line}\x1b[0m`);
+      } else {
+        console.log(line);
+      }
     }
   }
 
   const choice = await select<ResolutionChoice>({
     message: "어떻게 해결할까요?",
-    choices: [
-      { name: "로컬 유지 (Obsidian 버전 유지)", value: "local" },
-      { name: "원격 유지 (Notion 버전으로 덮어쓰기)", value: "remote" },
-      { name: "자동 병합 (3-way merge)", value: "merge" },
-      { name: "복제 (원본 유지 + .conflict 파일 생성)", value: "duplicate" },
-    ],
+    choices: applicableChoices(conflict).map((value) => ({
+      name: choiceName(conflict, value),
+      value,
+    })),
   });
 
   const result = await orchestrator.resolveConflict(conflict, choice);
 
   if (result.success) {
-    console.log(`\x1b[32m✓ ${path} → ${choice}로 해결\x1b[0m`);
+    console.log(`\x1b[32m✓ ${path} → ${choiceName(conflict, choice)}\x1b[0m`);
     return true;
   }
   if (result.mergeHadConflicts) {

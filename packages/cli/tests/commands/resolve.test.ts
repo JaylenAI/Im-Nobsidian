@@ -56,11 +56,23 @@ vi.mock("@inquirer/prompts", () => ({
   confirm: vi.fn().mockResolvedValue(true),
 }));
 
+import { select } from "@inquirer/prompts";
 import { resolveCommand } from "../../src/commands/resolve.js";
 
-/** 충돌 픽스처 — 명령이 읽는 필드(syncRecord.obsidianPath)만 채운다. */
-function conflict(path: string) {
-  return { syncRecord: { obsidianPath: path } };
+/** 충돌 픽스처 — 명령이 읽는 필드(경로 · 원격 변경 종류)만 채운다. */
+function conflict(path: string, remote: "modified" | "deleted" = "modified") {
+  return { syncRecord: { obsidianPath: path }, remoteChange: { type: remote } };
+}
+
+/** 대화형 해결은 TTY 에서만 뜬다 — 이 시험 동안만 TTY 로 보이게 한다. */
+function asTerminal(): () => void {
+  const saved = [process.stdin.isTTY, process.stdout.isTTY];
+  Object.defineProperty(process.stdin, "isTTY", { value: true, configurable: true });
+  Object.defineProperty(process.stdout, "isTTY", { value: true, configurable: true });
+  return () => {
+    Object.defineProperty(process.stdin, "isTTY", { value: saved[0], configurable: true });
+    Object.defineProperty(process.stdout, "isTTY", { value: saved[1], configurable: true });
+  };
 }
 
 function runResolve(...args: string[]) {
@@ -159,6 +171,67 @@ describe("resolve command", () => {
     await runResolve("--strategy", "local-first", "--yes");
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("1건 해결 · 1건 미해결"));
     expect(process.exitCode).toBe(1);
+    spy.mockRestore();
+  });
+
+  // ── D: Notion 에서 지운 노트 — 합칠 원격이 없어 고를 수 있는 것이 다르다 ──
+
+  it("원격 삭제 충돌은 로컬 유지(다시 만들기) · 삭제 따르기 둘만 묻고 줄 비교를 보이지 않는다", async () => {
+    const restore = asTerminal();
+    mockListConflicts.mockResolvedValueOnce([conflict("gone.md", "deleted")]);
+    mockResolveConflict.mockResolvedValueOnce({ path: "gone.md", choice: "local", success: true });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runResolve();
+    } finally {
+      restore();
+    }
+    const { choices } = vi.mocked(select).mock.calls[0]![0] as {
+      choices: Array<{ name: string; value: string }>;
+    };
+    expect(choices).toEqual([
+      { name: "로컬 유지 (Notion 에 새 페이지로 다시 만들기)", value: "local" },
+      { name: "삭제 따르기 (Obsidian 파일도 지우기)", value: "remote" },
+    ]);
+    expect(mockGenerateDiff).not.toHaveBeenCalled();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("Notion 에서 삭제된 노트입니다"));
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("gone.md → 로컬 유지 (Notion 에 새 페이지로 다시 만들기)"),
+    );
+    spy.mockRestore();
+  });
+
+  it("양쪽을 고친 충돌은 네 가지를 묻는다", async () => {
+    const restore = asTerminal();
+    mockListConflicts.mockResolvedValueOnce([conflict("both.md")]);
+    mockResolveConflict.mockResolvedValueOnce({ path: "both.md", choice: "local", success: true });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runResolve();
+    } finally {
+      restore();
+    }
+    const { choices } = vi.mocked(select).mock.calls[0]![0] as {
+      choices: Array<{ value: string }>;
+    };
+    expect(choices.map((c) => c.value)).toEqual(["local", "remote", "merge", "duplicate"]);
+    expect(mockGenerateDiff).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("일괄 remote-first 는 원격 삭제 노트의 파일을 지운다고 먼저 알린다", async () => {
+    mockListConflicts.mockResolvedValueOnce([conflict("gone.md", "deleted"), conflict("b.md")]);
+    mockResolveAll.mockResolvedValueOnce([
+      { path: "gone.md", choice: "remote", success: true },
+      { path: "b.md", choice: "remote", success: true },
+    ]);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runResolve("--strategy", "remote-first", "--yes");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("Notion 에서 삭제된 노트 1건 — Obsidian 파일도 지웁니다"),
+    );
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("gone.md → 삭제 따르기"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("b.md → 원격 유지"));
     spy.mockRestore();
   });
 });
