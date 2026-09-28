@@ -239,4 +239,30 @@ describe("삭제된 DB 행 복원 (R13)", () => {
     expect(result.updated).toBe(0);
     expect(result.restored).toBe(1);
   });
+
+  /**
+   * deleteSync 가 켜져 있으면 볼트에서 지운 것은 Notion 에서도 지우라는 뜻이다 — 되살리면 뒤이은
+   * push 가 지울 것을 잃는다. 페이지 경로(`detectMissingLocalFiles`)와 같은 규칙이다.
+   */
+  it("deleteSync 가 켜져 있으면 되살리지 않는다 — push 가 Notion 에서 지운다", async () => {
+    const config = createConfig();
+    syncer = new DatabaseSyncer(
+      { ...config, sync: { ...config.sync, deleteSync: true } },
+      stateDb as never,
+      notionClient as never,
+      vaultFs,
+      createDefaultPipeline({ wikilinkResolver: () => null }),
+      createMockImageHandler() as never,
+    );
+    vaultFs.exists = vi.fn().mockResolvedValue(false);
+    vaultFs.readFile = vi.fn().mockRejectedValue(new Error("ENOENT"));
+
+    const result = await syncer.pullDatabase(dbConfig);
+    const planned = await syncer.planDatabase(dbConfig);
+
+    expect(rowWrites(vaultFs)).toEqual([]);
+    expect(result).toMatchObject({ created: 0, updated: 0, restored: 0 });
+    expect(planned).toEqual([]);
+    expect(notionClient.getPageMarkdown).not.toHaveBeenCalled();
+  });
 });

@@ -137,6 +137,45 @@ describe("S-12 deleteSync 는 목록에 없는 것을 원격에 물어보고 지
       expect(notion.pages.get(row.id)!.body).toContain("로컬에서 더함");
     });
 
+    /**
+     * 볼트에서 지운 것은 Notion 에서도 지우라는 뜻이다. sync 는 pull 을 먼저 돌린다 — pull 이 DB 를
+     * 조회하며 지운 행을 되살리면 이어지는 push 가 지울 것을 잃는다. 페이지는 이미 그렇게 한다
+     * (`detectMissingLocalFiles`).
+     */
+    it("볼트에서 지운 행은 pull 이 되살리지 않고 sync 가 Notion 에서도 지운다", async () => {
+      const orchestrator = build();
+      const row = await pulledRow(orchestrator);
+
+      at("10:05:00");
+      vault.files.delete(row.path);
+      at("10:05:10");
+      const result = await orchestrator.sync();
+
+      expect(result.pull).toMatchObject({ restored: 0, failed: [] });
+      expect(result.push).toMatchObject({ deleted: 1, failed: [] });
+      expect(vault.files.has(row.path)).toBe(false);
+      expect(notion.pages.get(row.id)!.archived).toBe(true);
+      expect(db.getByNotionId(row.id)).toBeNull();
+    });
+
+    it("볼트에서 지운 행이 Notion 에서도 바뀌었으면 받는다 — 올리지 않은 원격 편집을 지우지 않는다", async () => {
+      const orchestrator = build();
+      const row = await pulledRow(orchestrator);
+
+      at("10:05:00");
+      vault.files.delete(row.path);
+      notion.edit(row.id, (page) => {
+        page.body = "원격 편집";
+      });
+      at("10:05:10");
+      const result = await orchestrator.sync();
+
+      expect(result.pull).toMatchObject({ failed: [] });
+      expect(vault.read(row.path)).toContain("원격 편집");
+      expect(result.push).toMatchObject({ deleted: 0, failed: [] });
+      expect(notion.pages.get(row.id)!.archived).toBe(false);
+    });
+
     it("Notion 에서 휴지통으로 간 행은 지운다", async () => {
       const orchestrator = build();
       const row = await pulledRow(orchestrator);
