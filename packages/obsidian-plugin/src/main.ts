@@ -22,6 +22,7 @@ import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
 import { ChangeDiffModal } from "./change-diff-modal.js";
+import { DiscardConfirmModal } from "./discard-confirm-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
@@ -162,7 +163,7 @@ export default class ImNobsidianPlugin extends Plugin {
           if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
         },
         onPushPath: async (path: string) => this.syncController?.push([path]),
-        onDiscardPath: async (path: string) => this.syncController?.discard(path),
+        onDiscard: (change: LocalChange) => this.discardLocal(change),
         onPullPath: async (path: string) => this.syncController?.pull([path]),
         onShowLocalDiff: (change: LocalChange) => this.showLocalDiff(change),
         onShowRemoteDiff: (change: RemoteChange) => this.showRemoteDiff(change),
@@ -536,6 +537,17 @@ export default class ImNobsidianPlugin extends Plugin {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`상태 확인 실패: ${msg}`);
     }
+  }
+
+  /**
+   * 변경 패널에서 누른 로컬 변경 하나를 되돌린다 — 지난 동기화 뒤의 로컬 편집이 사라지므로 먼저 확인 창으로
+   * 묻는다. 되돌리기를 누르지 않고 닫으면 아무것도 하지 않는다.
+   */
+  private async discardLocal(change: LocalChange): Promise<void> {
+    const confirmed = await new Promise<boolean>((resolve) =>
+      new DiscardConfirmModal(this.app, change, resolve).open(),
+    );
+    if (confirmed) await this.syncController?.discard(change.path);
   }
 
   /** 변경 패널에서 누른 로컬 변경의 줄 비교 창 — 보기만 하므로 도는 작업이 있어도 연다. */

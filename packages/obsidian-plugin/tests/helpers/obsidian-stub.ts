@@ -135,6 +135,33 @@ export class Setting {
   }
 }
 
+export class ButtonComponent {
+  constructor(_containerEl: unknown) {}
+  setButtonText() {
+    return this;
+  }
+  setCta() {
+    return this;
+  }
+  setWarning() {
+    return this;
+  }
+  onClick() {
+    return this;
+  }
+}
+
+/**
+ * Obsidian(1.13.7) 처럼 첫 자식을 떼고 그 아이콘의 svg 를 붙인다 — Lucide 아이콘은 `svg-icon lucide-<id>` 다.
+ * 시험은 어느 아이콘인지를 이 class 로 본다. 앱에 없는 id 를 가려내지는 않는다 — 실제 앱에서 본다.
+ */
+export function setIcon(parent: HTMLElement, iconId: string): void {
+  const svg = parent.ownerDocument.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", `svg-icon lucide-${iconId}`);
+  if (parent.firstChild) parent.removeChild(parent.firstChild);
+  parent.appendChild(svg);
+}
+
 export class TFile {
   path = "";
   name = "";
