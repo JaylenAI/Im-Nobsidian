@@ -53,7 +53,7 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     onCancel: vi.fn(),
     onOpenFile: vi.fn(),
     onPushPath: vi.fn(),
-    onDiscardPath: vi.fn(),
+    onDiscard: vi.fn(),
     onPullPath: vi.fn(),
     onShowLocalDiff: vi.fn(),
     onShowRemoteDiff: vi.fn(),
@@ -193,7 +193,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(m.target.innerHTML).not.toContain("3e813b18");
   });
 
-  it("↓ 는 볼트에 있는 노트에만 있고 그 노트만 받는다 — 지운 노트는 지운다고 말한다", () => {
+  it("받기는 볼트에 있는 노트에만 있고 그 노트만 받는다 — 지운 노트는 지운다고 말한다", () => {
     const props = baseProps({ remoteChanges });
     m = renderComponent(SyncDashboard, props);
 
@@ -219,7 +219,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(rows[1]!.classList.contains("im-sync-file-item-static")).toBe(true);
   });
 
-  it("↗ 는 볼트의 그 노트를 연다 — 원격 항목도 볼트에 있는 노트만", () => {
+  it("열기는 볼트의 그 노트를 연다 — 원격 항목도 볼트에 있는 노트만", () => {
     const props = baseProps({ remoteChanges });
     m = renderComponent(SyncDashboard, props);
 
@@ -230,7 +230,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onShowRemoteDiff).not.toHaveBeenCalled();
   });
 
-  it("로컬 항목을 누르면 줄 비교를 연다 — 지운 노트도 무엇을 지웠는지 보이고, ↗ 는 볼트에 있는 노트에만 있다", () => {
+  it("로컬 항목을 누르면 줄 비교를 연다 — 지운 노트도 무엇을 지웠는지 보이고, 열기는 볼트에 있는 노트에만 있다", () => {
     const localChanges = [
       { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" },
       { path: "지운.md", type: "deleted", currentHash: "", previousHash: "h3" },
@@ -272,7 +272,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onShowLocalDiff).toHaveBeenCalledTimes(1);
   });
 
-  it("↑ 는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 ↺ 가 없다", () => {
+  it("올리기는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 되돌리기가 없다", () => {
     const localChanges = [
       { path: "a/고친.md", type: "modified" },
       { path: "새.md", type: "created" },
@@ -286,7 +286,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onPushPath).toHaveBeenCalledWith("새.md");
   });
 
-  it("옮긴 폴더는 폴더 행으로, 옮긴 노트는 어디서 왔는지와 함께 보인다 — ↑ 는 그 폴더를 올린다", () => {
+  it("옮긴 폴더는 폴더 행으로, 옮긴 노트는 어디서 왔는지와 함께 보인다 — 올리기는 그 폴더를 올린다", () => {
     const localChanges = [{ path: "B/x.md", type: "moved", movedFrom: "A/x.md" }];
     const folderMoves = [{ from: "A", to: "B" }];
     const props = baseProps({ localChanges, folderMoves });
@@ -297,7 +297,7 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(names).toEqual(["B/", "x"]);
     expect(where).toEqual(["← A", "← A/x"]);
     expect(normText(m.target.querySelector(".im-sync-badge"))).toBe("2");
-    // 옮긴 노트는 되돌릴 수 없다(고침 · 지움만) — ↑ 만 있다.
+    // 옮긴 노트는 되돌릴 수 없다(고침 · 지움만) — 올리기만 있다.
     expect(m.target.querySelectorAll(DISCARD)).toHaveLength(0);
     m.target
       .querySelector<HTMLElement>('button[aria-label="이 폴더의 이동을 Notion 에 올리기"]')!
@@ -305,29 +305,107 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onPushPath).toHaveBeenCalledWith("B");
   });
 
-  it("↺ 는 두 번 눌러야 되돌리고, 3초 안에 다시 누르지 않으면 풀린다", () => {
-    vi.useFakeTimers();
-    try {
-      const props = baseProps({ localChanges: [{ path: "a/고친.md", type: "modified" }] });
-      m = renderComponent(SyncDashboard, props);
-      const discard = () => m!.target.querySelector<HTMLElement>(DISCARD)!;
+  it("되돌리기는 한 번 누르면 그 변경을 넘긴다 — 되돌릴지는 받는 쪽의 확인 창이 묻는다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" },
+      { path: "지운.md", type: "deleted", currentHash: "", previousHash: "h3" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+    const discards = m.target.querySelectorAll<HTMLElement>(DISCARD);
 
-      discard().click();
-      m.flush();
-      expect(props.onDiscardPath).not.toHaveBeenCalled();
-      expect(normText(discard())).toBe("되돌리기?");
+    discards[0]!.click();
+    discards[1]!.click();
+    m.flush();
 
-      vi.advanceTimersByTime(3000);
-      m.flush();
-      expect(normText(discard())).toBe("↺");
+    // 확인 창이 고친 노트인지 지운 노트인지를 말하도록 변경을 통째로 넘긴다.
+    expect(props.onDiscard.mock.calls).toEqual([[localChanges[0]], [localChanges[1]]]);
+    expect(() => structuredClone(props.onDiscard.mock.calls[0]![0])).not.toThrow();
+    // 예전에는 처음 누르면 단추 글이 「되돌리기?」 로 바뀌고 한 번 더 눌러야 했다.
+    expect([...m.target.querySelectorAll(DISCARD)].map(normText)).toEqual(["", ""]);
+  });
 
-      discard().click();
-      m.flush();
-      discard().click();
-      m.flush();
-      expect(props.onDiscardPath.mock.calls).toEqual([["a/고친.md"]]);
-    } finally {
-      vi.useRealTimers();
+  it("항목 동작은 글 없이 아이콘만 둔다 — 설명은 마우스를 올리면 뜨는 aria-label 이고 title 은 없다", () => {
+    const props = baseProps({
+      localChanges: [
+        { path: "a/고친.md", type: "modified" },
+        { path: "지운.md", type: "deleted" },
+      ],
+      folderMoves: [{ from: "A", to: "B" }],
+      remoteChanges,
+      conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      syncState: "conflict",
+    });
+    m = renderComponent(SyncDashboard, props);
+    const buttons = [...m.target.querySelectorAll<HTMLElement>(".im-sync-file-action")];
+    const iconOf = (button: Element) => button.querySelector("svg")?.getAttribute("class");
+
+    expect(buttons.map((button) => [button.getAttribute("aria-label"), iconOf(button)])).toEqual([
+      ["이 폴더의 이동을 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["이 노트만 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["지난 동기화 때의 글로 되돌리기", "svg-icon lucide-undo"],
+      ["이 노트만 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["지난 동기화 때의 글로 되돌리기", "svg-icon lucide-undo"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["이 노트만 Notion 에서 받기", "svg-icon lucide-download"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["Notion 에서 지운 대로 이 노트도 지우기", "svg-icon lucide-download"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+    ]);
+    for (const button of buttons) {
+      expect(normText(button)).toBe("");
+      expect(button.hasAttribute("title")).toBe(false);
+      expect(button.classList.contains("clickable-icon")).toBe(true);
     }
+    const refresh = m.target.querySelector(".im-sync-refresh-btn")!;
+    expect([normText(refresh), iconOf(refresh), refresh.hasAttribute("title")]).toEqual([
+      "",
+      "svg-icon lucide-refresh-cw",
+      false,
+    ]);
+  });
+
+  it("충돌 중인 노트는 변경 · 원격 목록에 없고 충돌 칸에만 있다 — 거기서 노트를 열 수 있다", () => {
+    const props = baseProps({
+      syncState: "conflict",
+      localChanges: [
+        { path: "배추.md", type: "modified" },
+        { path: "a/고친.md", type: "modified" },
+      ],
+      remoteChanges: [
+        { pageId: "p1", type: "modified", path: "배추.md" },
+        { pageId: "p2", type: "modified", path: "채소/감자.md" },
+      ],
+      conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+    });
+    m = renderComponent(SyncDashboard, props);
+    const [changes, remote, conflicts] = [...m.target.querySelectorAll(".im-sync-section")];
+    const names = (section: Element | undefined) =>
+      [...section!.querySelectorAll(".im-sync-file-name")].map(normText);
+
+    // 올리기는 충돌 노트를 건너뛰고 되돌리기는 거절한다 — 변경 목록에 두면 눌러도 소용이 없다.
+    expect(names(changes)).toEqual(["고친"]);
+    expect(names(remote)).toEqual(["감자"]);
+    expect(names(conflicts)).toEqual(["배추"]);
+    expect([...m.target.querySelectorAll(".im-sync-badge")].map(normText)).toEqual(["1", "1", "1"]);
+
+    conflicts!.querySelector<HTMLElement>(OPEN)!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["배추.md"]]);
+  });
+
+  it("충돌만 남았으면 「변경 사항 없음」 을 띄우지 않는다 — 충돌 칸이 할 일을 말한다", () => {
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "conflict",
+        localChanges: [{ path: "배추.md", type: "modified" }],
+        conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      }),
+    );
+
+    expect(m.target.querySelector(".im-sync-empty")).toBeNull();
+    expect(m.target.querySelectorAll(".im-sync-section")).toHaveLength(1);
+    expect(m.target.querySelector(".im-sync-section-conflict")).not.toBeNull();
   });
 });

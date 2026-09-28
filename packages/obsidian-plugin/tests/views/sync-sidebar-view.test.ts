@@ -106,7 +106,7 @@ describe("SyncSidebarView", () => {
     expect(mount).toHaveBeenCalledTimes(1);
   });
 
-  it("변경 패널의 항목별 올리기 · 되돌리기 · 받기를 그 노트 경로로 넘긴다", () => {
+  it("변경 패널의 항목별 올리기 · 받기는 그 노트 경로로, 되돌리기는 그 변경으로 넘긴다", () => {
     const actions = {
       onPull: vi.fn(),
       onPush: vi.fn(),
@@ -116,18 +116,20 @@ describe("SyncSidebarView", () => {
       onCancel: vi.fn(),
       onOpenFile: vi.fn(),
       onPushPath: vi.fn().mockResolvedValue(undefined),
-      onDiscardPath: vi.fn().mockResolvedValue(undefined),
+      onDiscard: vi.fn().mockResolvedValue(undefined),
       onPullPath: vi.fn().mockResolvedValue(undefined),
     };
     view.setActions(actions);
     view.updateState({ lastSyncAt: null });
 
-    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (p: string) => void>;
+    // 되돌리기는 확인 창이 고친 노트인지 지운 노트인지를 말하므로 변경을 통째로 넘긴다.
+    const change = { path: "b.md", type: "deleted", currentHash: "", previousHash: "h1" };
+    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (p: unknown) => void>;
     props.onPushPath!("a.md");
-    props.onDiscardPath!("b.md");
+    props.onDiscard!(change);
     props.onPullPath!("c.md");
     expect(actions.onPushPath).toHaveBeenCalledWith("a.md");
-    expect(actions.onDiscardPath).toHaveBeenCalledWith("b.md");
+    expect(actions.onDiscard).toHaveBeenCalledWith(change);
     expect(actions.onPullPath).toHaveBeenCalledWith("c.md");
   });
 
@@ -141,7 +143,7 @@ describe("SyncSidebarView", () => {
       onCancel: vi.fn(),
       onOpenFile: vi.fn(),
       onPushPath: vi.fn(),
-      onDiscardPath: vi.fn(),
+      onDiscard: vi.fn(),
       onPullPath: vi.fn(),
       onShowLocalDiff: vi.fn(),
       onShowRemoteDiff: vi.fn(),

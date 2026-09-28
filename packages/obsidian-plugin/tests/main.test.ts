@@ -6,6 +6,22 @@ vi.mock("svelte", () => ({
 }));
 
 vi.mock("../src/views/SyncDashboard.svelte", () => ({ default: {} }));
+
+/** 되돌리기 확인 창 — 열면 바로 이 답을 준다. */
+const discardAnswer = vi.hoisted(() => ({ confirmed: false, asked: [] as string[] }));
+vi.mock("../src/discard-confirm-modal.js", () => ({
+  DiscardConfirmModal: class {
+    constructor(
+      _app: unknown,
+      private readonly change: { path: string },
+      private readonly onAnswer: (confirmed: boolean) => void,
+    ) {}
+    open() {
+      discardAnswer.asked.push(this.change.path);
+      this.onAnswer(discardAnswer.confirmed);
+    }
+  },
+}));
 vi.mock("../src/views/ViewContainer.svelte", () => ({ default: {} }));
 
 vi.mock("../src/state/sqljs-state-db.js", () => ({
@@ -140,6 +156,27 @@ describe("ImNobsidianPlugin", () => {
     abort.abort();
 
     await expect(asking).resolves.toBeNull();
+  });
+
+  it("변경 패널의 되돌리기는 확인 창에서 되돌리기를 눌렀을 때만 되돌린다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const controller = { discard: vi.fn(async () => {}) };
+    const internals = plugin as unknown as {
+      syncController: unknown;
+      discardLocal: (change: unknown) => Promise<void>;
+    };
+    internals.syncController = controller;
+    const change = { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" };
+    discardAnswer.asked = [];
+
+    discardAnswer.confirmed = false;
+    await internals.discardLocal(change);
+    expect(controller.discard).not.toHaveBeenCalled();
+
+    discardAnswer.confirmed = true;
+    await internals.discardLocal(change);
+    expect(controller.discard.mock.calls).toEqual([["a/고친.md"]]);
+    expect(discardAnswer.asked).toEqual(["a/고친.md", "a/고친.md"]);
   });
 
   it("초기화는 차례로 돈다 — 설정을 칠 때마다 불러도 앞 초기화가 끝난 뒤에 다음이 DB 를 닫고 연다", async () => {

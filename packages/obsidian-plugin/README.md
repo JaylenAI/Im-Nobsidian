@@ -6,7 +6,7 @@ Sync your vault with Notion without leaving Obsidian. Runs entirely on a sql.js 
 
 ## Features
 
-- **Sync sidebar dashboard** — Push / Pull / Sync buttons, % progress bar, cancel button, and a Git-style change list: click a file to see its line diff against the last sync, then push (↑), revert (↺) or pull (↓) just that file.
+- **Sync sidebar dashboard** — Push / Pull / Sync buttons, % progress bar, cancel button, and a Git-style change list: click a file to see its line diff against the last sync, then push, revert or pull just that file with its icon buttons (hover an icon for what it does; revert asks first). Conflicted notes are listed only under Conflicts.
 - **6 database view types** — Gallery, Board, Table, Calendar, List, Timeline (Svelte 5).
 - **Notion DB → Obsidian Bases** — `.base` files generated automatically, with gallery cover images.
 - **Inline table editing**, conflict-resolution modal, and ribbon icons for one-click sync.

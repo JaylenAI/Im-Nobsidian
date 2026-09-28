@@ -15,7 +15,8 @@ interface SyncActions {
   onCancel: () => void;
   onOpenFile: (path: string) => void;
   onPushPath: (path: string) => Promise<void>;
-  onDiscardPath: (path: string) => Promise<void>;
+  /** 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — 되돌리기 전에 확인 창이 묻는다. */
+  onDiscard: (change: LocalChange) => Promise<void>;
   onPullPath: (path: string) => Promise<void>;
   /** 변경 하나의 줄 비교 창을 연다 — 보기만 한다. */
   onShowLocalDiff: (change: LocalChange) => void;
@@ -91,7 +92,7 @@ export class SyncSidebarView extends ItemView {
         onCancel: () => this.actions!.onCancel(),
         onOpenFile: (path: string) => this.actions!.onOpenFile(path),
         onPushPath: (path: string) => void this.actions!.onPushPath(path),
-        onDiscardPath: (path: string) => void this.actions!.onDiscardPath(path),
+        onDiscard: (change: LocalChange) => void this.actions!.onDiscard(change),
         onPullPath: (path: string) => void this.actions!.onPullPath(path),
         onShowLocalDiff: (change: LocalChange) => this.actions!.onShowLocalDiff(change),
         onShowRemoteDiff: (change: RemoteChange) => this.actions!.onShowRemoteDiff(change),
