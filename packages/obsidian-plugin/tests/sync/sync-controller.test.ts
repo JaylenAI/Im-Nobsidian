@@ -27,7 +27,7 @@ function createMockOrchestrator(): MockOrchestrator {
   return {
     push: vi
       .fn()
-      .mockResolvedValue({ created: 0, updated: 0, deleted: 0, failed: [], duration: 0 }),
+      .mockResolvedValue({ created: 0, updated: 0, deleted: 0, moved: 0, failed: [], duration: 0 }),
     pull: vi.fn().mockResolvedValue({
       created: 0,
       updated: 0,
@@ -39,13 +39,14 @@ function createMockOrchestrator(): MockOrchestrator {
     }),
     sync: vi.fn().mockResolvedValue({
       pull: { created: 0, updated: 0, deleted: 0 },
-      push: { created: 0, updated: 0, deleted: 0 },
+      push: { created: 0, updated: 0, deleted: 0, moved: 0 },
       conflicts: [],
       duration: 0,
     }),
     status: vi.fn().mockResolvedValue({
       lastSyncAt: null,
       localChanges: [],
+      folderMoves: [],
       remoteChanges: [],
       conflicts: [],
       conflictRecords: [],
@@ -55,6 +56,7 @@ function createMockOrchestrator(): MockOrchestrator {
     statusLocal: vi.fn().mockResolvedValue({
       lastSyncAt: null,
       localChanges: [],
+      folderMoves: [],
       conflicts: [],
       conflictRecords: [],
     }),
@@ -147,6 +149,34 @@ describe("SyncController", () => {
 
       expect(onNotice).toHaveBeenCalledWith(
         "Im-Nobsidian: Push 완료 — 생성 0 / 수정 0 / 삭제 0 / 실패 2 (0.0s)",
+      );
+    });
+
+    it("옮긴 노트 · 폴더는 수정과 따로 「이동」 으로 요약한다", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        deleted: 0,
+        moved: 3,
+        failed: [],
+        duration: 0,
+      });
+      mock.sync.mockResolvedValue({
+        pull: { created: 0, updated: 0, deleted: 0 },
+        push: { created: 0, updated: 0, deleted: 0, moved: 2 },
+        conflicts: [],
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.push();
+      await controller.sync();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Push 완료 — 생성 0 / 수정 1 / 삭제 0 / 이동 3 (0.0s)",
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Sync 완료 — Pull(+0 ~0 -0) Push(+0 ~0 -0 →2) (0.0s)",
       );
     });
 
@@ -476,6 +506,7 @@ describe("SyncController", () => {
       mock.status.mockResolvedValue({
         lastSyncAt: "2026-05-29T00:00:00Z",
         localChanges: [{ path: "a.md" }],
+        folderMoves: [{ from: "A", to: "B" }],
         remoteChanges: [{ path: "b.md" }],
         conflicts: [],
         conflictRecords: [],
@@ -489,18 +520,29 @@ describe("SyncController", () => {
       expect(onState).toHaveBeenLastCalledWith(
         expect.objectContaining({
           lastSyncAt: "2026-05-29T00:00:00Z",
+          folderMoves: [{ from: "A", to: "B" }],
           remoteChanges: [{ path: "b.md" }],
           syncState: "ready",
         }),
       );
     });
 
-    it("fullCheck=false 면 로컬만 조회한다", async () => {
+    it("fullCheck=false 면 로컬만 조회한다 — 옮긴 폴더도 싣는다", async () => {
+      mock.statusLocal.mockResolvedValue({
+        lastSyncAt: null,
+        localChanges: [{ path: "B/x.md", type: "moved", movedFrom: "A/x.md" }],
+        folderMoves: [{ from: "A", to: "B" }],
+        conflicts: [],
+        conflictRecords: [],
+      });
       const { hooks, onState } = createHooks();
       await makeController(mock, hooks).refreshStatus(false);
 
       expect(mock.statusLocal).toHaveBeenCalledTimes(1);
       expect(mock.status).not.toHaveBeenCalled();
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ folderMoves: [{ from: "A", to: "B" }] }),
+      );
       // 로컬 새로고침 패치엔 remoteChanges 키가 없다
       const lastPatch = onState.mock.calls.at(-1)![0] as Record<string, unknown>;
       expect("remoteChanges" in lastPatch).toBe(false);
@@ -510,6 +552,7 @@ describe("SyncController", () => {
       mock.statusLocal.mockResolvedValue({
         lastSyncAt: null,
         localChanges: [],
+        folderMoves: [],
         conflicts: [{ path: "c.md" }],
         conflictRecords: [{ id: "1" }],
       });

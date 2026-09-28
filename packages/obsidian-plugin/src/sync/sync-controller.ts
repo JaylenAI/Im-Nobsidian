@@ -10,6 +10,7 @@ import type {
   GatedOperation,
   ProgressCallback,
   LocalChange,
+  FolderMoveChange,
   RemoteChange,
   Conflict,
   PullResult,
@@ -26,6 +27,8 @@ export type SyncOperation = "pull" | "push" | "sync";
 export interface SyncDashboardState {
   lastSyncAt: string | null;
   localChanges: LocalChange[];
+  /** 옮긴 폴더 — 그 안의 노트는 `localChanges` 에 옮김으로 따로 있다. */
+  folderMoves: FolderMoveChange[];
   remoteChanges: RemoteChange[];
   conflicts: Conflict[];
   syncState: SyncPhase;
@@ -223,7 +226,7 @@ export class SyncController {
       "Push",
       (options) => this.orchestrator.push(paths ? { ...options, paths } : options),
       (result) => ({
-        summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
       }),
     );
@@ -249,7 +252,7 @@ export class SyncController {
       "Sync",
       (options) => this.orchestrator.sync(options),
       (result) => ({
-        summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
+        summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
       }),
       (result) => this.dropPulled(result.pull),
@@ -358,6 +361,7 @@ export class SyncController {
         this.hooks.onState?.({
           lastSyncAt: status.lastSyncAt,
           localChanges: status.localChanges,
+          folderMoves: [...status.folderMoves],
           remoteChanges: status.remoteChanges,
           conflicts: status.conflicts,
           syncState,
@@ -379,6 +383,7 @@ export class SyncController {
       this.hooks.onState?.({
         lastSyncAt: status.lastSyncAt,
         localChanges: status.localChanges,
+        folderMoves: [...status.folderMoves],
         conflicts: status.conflicts,
         syncState,
         progress: null,
