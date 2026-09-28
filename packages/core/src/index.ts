@@ -56,7 +56,12 @@ export type {
 export { ConfigManager } from "./config/index.js";
 
 // State
-export { StateDB } from "./state/index.js";
+export {
+  StateDB,
+  SavedStateDbError,
+  SAVED_STATE_TABLES_QUERY,
+  damagedStateDbGuidance,
+} from "./state/index.js";
 export type { IStateDB } from "./state/index.js";
 export type {
   UpsertSyncRecord,

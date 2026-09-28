@@ -1,3 +1,4 @@
+import { existsSync, statSync } from "node:fs";
 import Database from "better-sqlite3";
 import type {
   SyncRecord,
@@ -12,6 +13,7 @@ import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
 import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
 import { REMOTE_OBSERVATION_MIGRATION } from "./migrations/004-remote-observation.js";
 import type { IStateDB } from "./state-db-interface.js";
+import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
 
 export class StateDB implements IStateDB {
   private readonly db: Database.Database;
@@ -22,11 +24,28 @@ export class StateDB implements IStateDB {
     this.db.pragma("foreign_keys = ON");
   }
 
+  /**
+   * 상태 DB 파일을 연다 — 없으면 새로 만든다. 저장된 파일이 비었거나 잘렸으면 빈 DB 로 열지 않고
+   * {@link SavedStateDbError} 를 던진다. 예전에는 0 · 1바이트 파일을 빈 DB 로 열고 닫을 때 빈 DB 로 덮었다.
+   */
   static open(dbPath: string): StateDB {
+    const savedBytes = existsSync(dbPath) ? statSync(dbPath).size : null;
+    // 비었으면 열지도 않는다 — SQLite 는 0바이트 파일을 읽을 때 옆 WAL 파일을 지운다.
+    if (savedBytes === 0) throw SavedStateDbError.noTables(0);
     const db = new Database(dbPath);
-    const stateDb = new StateDB(db);
-    stateDb.migrate();
-    return stateDb;
+    try {
+      // WAL 로 바꾸기 · 마이그레이션이 파일을 쓰기 전에 본다 — 깨진 파일을 빈 DB 로 덮지 않는다.
+      if (savedBytes !== null && db.prepare(SAVED_STATE_TABLES_QUERY).get() === undefined) {
+        throw SavedStateDbError.noTables(savedBytes);
+      }
+      const stateDb = new StateDB(db);
+      stateDb.migrate();
+      return stateDb;
+    } catch (error) {
+      db.close();
+      if (savedBytes === null || error instanceof SavedStateDbError) throw error;
+      throw SavedStateDbError.unreadable(error);
+    }
   }
 
   private migrate(): void {

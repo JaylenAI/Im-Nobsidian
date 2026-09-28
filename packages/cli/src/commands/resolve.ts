@@ -11,6 +11,7 @@ import {
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { printUnifiedDiff } from "../utils/diff-output.js";
+import { describeFailure } from "../utils/state-db-failure.js";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
@@ -151,7 +152,7 @@ export const resolveCommand = new Command("resolve")
       }
       report(resolved, failed);
     } catch (error) {
-      console.error("오류:", error instanceof Error ? error.message : String(error));
+      console.error("오류:", describeFailure(error));
       process.exitCode = 1;
     } finally {
       // 예전엔 분기마다 close 를 흩뿌려 두고 catch 경로에선 아예 닫지 않았다 — 잠금이 남는다.
