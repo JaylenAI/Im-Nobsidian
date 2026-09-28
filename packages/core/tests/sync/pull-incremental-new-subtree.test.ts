@@ -72,6 +72,8 @@ describe("증분 pull — 새 하위 트리 (S-08)", () => {
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
       recent.map((id) => ({ id, last_edited_time: EDITED })),
     );
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       const found = PAGES.get(id.replace(/-/g, ""));
       if (!found) throw new Error(`unexpected getPage ${id}`);

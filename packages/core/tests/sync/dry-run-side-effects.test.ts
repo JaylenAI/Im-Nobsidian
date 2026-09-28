@@ -53,6 +53,12 @@ describe("dry-run 은 세기만 한다", () => {
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
 
+  /**
+   * 원격에서 지운 것을 가르는 시험 — deleteSync 를 켜고 전체 대조를 pull 마다 한다. 원격 삭제는 전체
+   * 대조로만 보이고, 전체 대조는 이제 주기마다다(ADR-027).
+   */
+  const FULL_EVERY_PULL: Partial<Config["sync"]> = { deleteSync: true, fullReconcileInterval: 0 };
+
   const build = (
     sync: Partial<Config["sync"]> = {},
     databases: DatabaseSyncConfig[] = [ROW_DB],
@@ -161,7 +167,7 @@ describe("dry-run 은 세기만 한다", () => {
     });
 
     it("지운 행 · 사라진 행 파일은 실제 pull 처럼 가른다 — 올리지 않은 편집이 있는 행은 지운 것으로 세지 않는다", async () => {
-      const orchestrator = build({ deleteSync: true, conflictStrategy: "manual" });
+      const orchestrator = build({ ...FULL_EVERY_PULL, conflictStrategy: "manual" });
       const { a, b, c } = await seedRows(orchestrator);
       vault.write(a.path, "A 로컬 편집\n");
       notion.edit(a.id, (page) => {
@@ -185,7 +191,7 @@ describe("dry-run 은 세기만 한다", () => {
     });
 
     it("다른 DB 로 옮긴 행은 조회에 없어도 지운 것으로 세지 않는다", async () => {
-      const orchestrator = build({ deleteSync: true });
+      const orchestrator = build(FULL_EVERY_PULL);
       const { b } = await seedRows(orchestrator);
       notion.edit(b.id, (page) => {
         page.parent = "db000000-0000-4000-8000-0000000000c3";
@@ -323,7 +329,7 @@ describe("dry-run 은 세기만 한다", () => {
 
   describe("pull — 원격에서 지운 페이지", () => {
     it("폴더 레코드와 올리지 않은 편집이 있는 노트는 지운 것으로 세지 않는다", async () => {
-      const orchestrator = build({ deleteSync: true, conflictStrategy: "manual" }, []);
+      const orchestrator = build({ ...FULL_EVERY_PULL, conflictStrategy: "manual" }, []);
       vault.write("A/B/x.md", "x\n");
       vault.write("y.md", "y\n");
       vault.write("z.md", "z\n");
@@ -352,7 +358,7 @@ describe("dry-run 은 세기만 한다", () => {
     });
 
     it("볼트에서도 폴더를 지웠으면 안의 노트만 지운 것으로 센다 — 폴더 레코드는 추적만 놓는다", async () => {
-      const orchestrator = build({ deleteSync: true }, []);
+      const orchestrator = build(FULL_EVERY_PULL, []);
       vault.write("A/B/x.md", "x\n");
       expect(await orchestrator.push()).toMatchObject({ failed: [] });
       at("10:00:20");

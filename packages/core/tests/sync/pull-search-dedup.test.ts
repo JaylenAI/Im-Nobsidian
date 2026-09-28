@@ -104,6 +104,8 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     vi.spyOn(client, "getChildDatabaseIds").mockResolvedValue([]);
     // 2회차 pull 은 증분 경로(searchRecentPages)를 탄다 — 변경 없음으로 차단(실 API 방지).
     vi.spyOn(client, "searchRecentPages").mockResolvedValue([]);
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
 
     const config: Config = {
       ...DEFAULT_CONFIG,

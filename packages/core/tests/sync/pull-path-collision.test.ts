@@ -147,6 +147,8 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
       [...PAGES.keys()].map((id) => ({ id, last_edited_time: "2026-05-01T00:00:00.000Z" })),
     );
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
 
     await new SyncOrchestrator(config, db, client, new NodeVaultFS(tmpDir!)).pull();
 
