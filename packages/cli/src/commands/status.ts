@@ -220,6 +220,12 @@ export const statusCommand = new Command("status")
         console.log(
           `  ${dimText("Run")} ${chalk.cyan("nobsi sync")} ${dimText("to push/pull changes")}`,
         );
+        // 되돌릴 수 있는 것(고친 · 지운 노트)이 있을 때만 — git status 의 `git restore` 안내와 같다.
+        if (modifiedChanges.length + deletedChanges.length > 0) {
+          console.log(
+            `  ${dimText("Run")} ${chalk.cyan("nobsi discard <path>")} ${dimText("to discard local edits")}`,
+          );
+        }
       } else {
         console.log(`\n  ${chalk.green("Everything up to date")} ✓`);
       }

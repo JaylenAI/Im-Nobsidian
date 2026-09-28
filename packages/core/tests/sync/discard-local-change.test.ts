@@ -66,6 +66,33 @@ describe("SyncOrchestrator.discardLocalChange", () => {
     expect(vault.read("New.md")).toBe("새 노트");
   });
 
+  it("옮긴 노트의 새 자리는 새 노트라 하지 않고 옛 자리를 알린다 — 파일은 그대로다", async () => {
+    vault.rename("Note.md", "Moved/Note.md");
+    expect(await changedPaths()).toEqual(["moved Moved/Note.md"]);
+
+    await expect(orchestrator.discardLocalChange("Moved/Note.md")).rejects.toThrow(
+      "옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 Note.md 로 다시 옮기세요 (Moved/Note.md)",
+    );
+    expect(vault.read("Moved/Note.md")).toBe("# 노트\n\n처음 본문\n");
+    expect(vault.files.has("Note.md")).toBe(false);
+
+    // 옮긴 노트가 있어도 다른 새 노트는 새 노트라고 한다.
+    vault.write("New.md", "새 노트");
+    await expect(orchestrator.discardLocalChange("New.md")).rejects.toThrow(
+      /추적하지 않는 새 노트/,
+    );
+  });
+
+  it("지운 노트는 지난 동기화 때의 글로 되살린다", async () => {
+    vault.files.delete("Note.md");
+    expect(await changedPaths()).toEqual(["deleted Note.md"]);
+
+    await orchestrator.discardLocalChange("Note.md");
+
+    expect(vault.read("Note.md")).toBe("# 노트\n\n처음 본문\n");
+    expect(await changedPaths()).toEqual([]);
+  });
+
   it("도는 작업과 겹치지 않는다 — 되돌리기도 한 줄에 선다", async () => {
     vault.write("Note.md", "고침");
     const pushing = orchestrator.push();

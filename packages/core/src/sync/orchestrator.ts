@@ -2686,13 +2686,13 @@ export class SyncOrchestrator {
    * 지난 동기화 사본(`baseSnapshot`)으로 다시 쓴다. Notion 은 건드리지 않는다.
    *
    * 되돌릴 원본이 없는 것은 이유와 함께 거절한다 — 추적하지 않는 새 노트(지우는 것은 사용자가 휴지통으로),
-   * 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
+   * 옮긴 노트의 새 자리(파일을 옛 자리로 옮기면 된다), 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", async () => {
       const record = this.stateDb.getByPath(path);
       if (!record) {
-        throw new Error(`추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`);
+        throw new Error(await this.untrackedDiscardReason(path));
       }
       if (record.status === "conflict") {
         throw new Error(`충돌 중인 노트는 충돌 해결에서 고르세요 — ${path}`);
@@ -2702,6 +2702,18 @@ export class SyncOrchestrator {
       }
       await this.vaultFs.writeFile(path, record.baseSnapshot.toString("utf-8"));
     });
+  }
+
+  /**
+   * 추적하지 않는 경로를 되돌리려 한 이유. 옮긴 노트의 새 자리도 추적 레코드가 없다 — 「새 노트」 라고
+   * 하면 변경 목록에서 «옮김» 으로 본 사용자가 무엇을 해야 할지 모른다. 옛 자리를 알린다.
+   */
+  private async untrackedDiscardReason(path: string): Promise<string> {
+    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const moved = plan.scan.changes.find((c) => c.type === "moved" && c.path === path);
+    return moved?.movedFrom
+      ? `옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 ${moved.movedFrom} 로 다시 옮기세요 (${path})`
+      : `추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`;
   }
 
   /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */

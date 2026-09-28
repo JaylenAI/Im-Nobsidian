@@ -157,6 +157,7 @@ describe("status command", () => {
     expect(lines).toContainEqual(expect.stringContaining("Deleted files:"));
     expect(lines).toContainEqual(expect.stringMatching(/- gone\.md$/));
     expect(lines).not.toContainEqual(expect.stringContaining("Everything up to date"));
+    expect(lines).toContainEqual(expect.stringContaining("nobsi discard <path>"));
   });
 
   it("폴더 이동만 있어도 변경으로 본다", async () => {
@@ -176,6 +177,8 @@ describe("status command", () => {
 
     expect(lines).toContainEqual(expect.stringContaining("Tasks/ → Work/Tasks/ (folder)"));
     expect(lines).not.toContainEqual(expect.stringContaining("Everything up to date"));
+    // 옮김은 discard 로 되돌리지 않는다 — 안내하지 않는다.
+    expect(lines).not.toContainEqual(expect.stringContaining("nobsi discard"));
   });
 
   it("--full 의 원격 변경은 노트 경로나 Notion 제목으로 보이고, 옮김은 따로 센다", async () => {
