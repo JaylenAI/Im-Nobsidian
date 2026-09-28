@@ -234,6 +234,8 @@ export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
+export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
+export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 

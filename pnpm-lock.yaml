@@ -98,6 +98,9 @@ importers:
       chokidar:
         specifier: ^5.0.0
         version: 5.0.0
+      diff:
+        specifier: ^9.0.0
+        version: 9.0.0
       gray-matter:
         specifier: ^4.0.0
         version: 4.0.3
