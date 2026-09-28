@@ -18,7 +18,7 @@ import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath } from "../utils/db-row-path.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
-import { inAnyPathScope } from "../utils/path-scope.js";
+import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
@@ -71,6 +71,18 @@ export interface DatabaseSyncResult {
   linkedOriginalDbId?: string;
 }
 
+function emptyDatabaseSyncResult(): DatabaseSyncResult {
+  return {
+    created: 0,
+    updated: 0,
+    deleted: 0,
+    restored: 0,
+    conflicts: [],
+    failed: [],
+    writtenPaths: [],
+  };
+}
+
 export class DatabaseSyncer {
   private readonly propertyMapper = new PropertyMapper();
   private readonly baseFileGenerator = new BaseFileGenerator();
@@ -111,17 +123,7 @@ export class DatabaseSyncer {
 
   async pullAll(opts?: { readonly paths?: readonly string[] }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
-    if (!databases || databases.length === 0) {
-      return {
-        created: 0,
-        updated: 0,
-        deleted: 0,
-        restored: 0,
-        conflicts: [],
-        failed: [],
-        writtenPaths: [],
-      };
-    }
+    if (!databases || databases.length === 0) return emptyDatabaseSyncResult();
 
     let created = 0;
     let updated = 0;
@@ -163,10 +165,21 @@ export class DatabaseSyncer {
        * 경우에만 행 소유를 양보한다 — 원본이 미발견이면 이 컨테이너가 유일한 접근 통로다.
        */
       resolveDbFolder?: (databaseId: string) => string | null;
-      /** 이 범위의 행만 지운다(`pull --path`). 없으면 모든 행. */
+      /**
+       * 이 범위의 행만 받고 지운다(`pull --path` · 변경 패널의 항목별 받기). 없으면 모든 행.
+       * 새 행은 DB 폴더 전체가 범위일 때만 만든다 — 받기 전에는 어느 경로에 쓸지 모른다.
+       */
       paths?: readonly string[];
     },
   ): Promise<DatabaseSyncResult> {
+    const scope = opts?.paths;
+    // 이 DB 폴더 전체가 범위인가 · 범위가 이 폴더 안의 행만 가리키는가. 둘 다 아니면 이 DB 는
+    // 범위 밖이다 — 조회도 하지 않는다. 예전에는 범위와 상관없이 모든 행을 만들고 고쳤다.
+    const wholeDbInScope = inAnyPathScope(dbConfig.localFolder, scope);
+    if (!wholeDbInScope && !scope!.some((path) => matchesPathScope(path, dbConfig.localFolder))) {
+      return emptyDatabaseSyncResult();
+    }
+
     const pages = await this.notionClient.queryAllDatabasePages(
       dbConfig.databaseId,
       dbConfig.pullFilter,
@@ -183,18 +196,11 @@ export class DatabaseSyncer {
     if (ownerDbId && !notionIdsEqual(ownerDbId, dbConfig.databaseId)) {
       const ownerFolder = opts?.resolveDbFolder?.(ownerDbId) ?? null;
       if (ownerFolder !== null) {
-        const viewsConfig = await this.pullDatabaseViews(dbConfig);
-        await this.generateBaseFile(dbConfig, viewsConfig, ownerFolder);
-        return {
-          created: 0,
-          updated: 0,
-          deleted: 0,
-          restored: 0,
-          conflicts: [],
-          failed: [],
-          writtenPaths: [],
-          linkedOriginalDbId: ownerDbId,
-        };
+        if (wholeDbInScope) {
+          const viewsConfig = await this.pullDatabaseViews(dbConfig);
+          await this.generateBaseFile(dbConfig, viewsConfig, ownerFolder);
+        }
+        return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: ownerDbId };
       }
     }
 
@@ -203,8 +209,11 @@ export class DatabaseSyncer {
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
 
-    const viewsConfig = await this.pullDatabaseViews(dbConfig);
-    await this.generateBaseFile(dbConfig, viewsConfig);
+    // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
+    if (wholeDbInScope) {
+      const viewsConfig = await this.pullDatabaseViews(dbConfig);
+      await this.generateBaseFile(dbConfig, viewsConfig);
+    }
 
     let created = 0;
     let updated = 0;
@@ -218,6 +227,7 @@ export class DatabaseSyncer {
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
+        if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) continue;
         // 원격 무변경인데도 되살리려고 내려온 행인가 — 아래 집계에서 updated 와 가른다.
         let restoring = false;
 

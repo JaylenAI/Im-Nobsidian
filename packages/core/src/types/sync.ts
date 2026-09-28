@@ -73,6 +73,13 @@ export interface RemoteChange {
   readonly previousEdited: string | null;
   readonly movedFromParent?: string;
   /**
+   * 추적 중인 노트의 볼트 경로. 화면이 내부 id 대신 노트 이름을 보이고, 그 노트만 받을 때 쓴다.
+   * 아직 볼트에 없는 새 페이지는 없다.
+   */
+  readonly path?: string;
+  /** Notion 제목 — 볼트 경로가 아직 없는 새 페이지를 화면이 이름으로 보일 때 쓴다. */
+  readonly title?: string;
+  /**
    * 수정 시각 · 편집자로는 바뀌었는지 가를 수 없다 — 같은 분 안의 편집일 수 있다(N-05).
    * 받는 쪽이 내용으로 확인한다. `modified` 에만 붙는다.
    */

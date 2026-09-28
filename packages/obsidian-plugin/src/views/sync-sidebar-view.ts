@@ -15,6 +15,7 @@ interface SyncActions {
   onOpenFile: (path: string) => void;
   onPushPath: (path: string) => Promise<void>;
   onDiscardPath: (path: string) => Promise<void>;
+  onPullPath: (path: string) => Promise<void>;
 }
 
 // 동기화 상태 형태는 SyncController(SSOT)에서 가져온다. 사이드바는 상태를 표시·전달만 한다.
@@ -86,6 +87,7 @@ export class SyncSidebarView extends ItemView {
         onOpenFile: (path: string) => this.actions!.onOpenFile(path),
         onPushPath: (path: string) => void this.actions!.onPushPath(path),
         onDiscardPath: (path: string) => void this.actions!.onDiscardPath(path),
+        onPullPath: (path: string) => void this.actions!.onPullPath(path),
         onResolveConflict: () => this.actions!.onResolveConflict(),
       },
     });

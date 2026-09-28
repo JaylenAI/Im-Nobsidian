@@ -1,4 +1,10 @@
-import { getLogger, isRemoteDeletion, SyncBusyError } from "@im-nobsidian/core";
+import {
+  getLogger,
+  inAnyPathScope,
+  isRemoteDeletion,
+  notionIdsEqual,
+  SyncBusyError,
+} from "@im-nobsidian/core";
 import type {
   SyncOrchestrator,
   GatedOperation,
@@ -6,6 +12,7 @@ import type {
   LocalChange,
   RemoteChange,
   Conflict,
+  PullResult,
   RenameKind,
   ResolutionChoice,
 } from "@im-nobsidian/core";
@@ -79,6 +86,8 @@ export class SyncController {
   private vaultSyncPending = false;
   /** {@link shutdown} 뒤 — 어떤 작업도 받지 않는다. */
   private closed = false;
+  /** 마지막 원격 확인이 본 원격 변경 — 받은 것을 목록에서 빼려고 둔다({@link dropPulled}). */
+  private remoteChanges: RemoteChange[] = [];
 
   constructor(
     private readonly orchestrator: SyncOrchestrator,
@@ -173,12 +182,16 @@ export class SyncController {
     });
   }
 
-  /** 사용자가 부른 push · pull · sync — 시작 · 완료 · 취소 · 실패를 알린다. */
+  /**
+   * 사용자가 부른 push · pull · sync — 시작 · 완료 · 취소 · 실패를 알린다. `completed` 는 끝까지
+   * 돈 작업에만 부른다 — 취소 · 실패한 작업은 무엇을 처리했는지 모른다.
+   */
   private async runUserOperation<R extends { readonly duration: number }>(
     operation: SyncOperation,
     label: string,
     call: (options: { onProgress: ProgressCallback; signal: AbortSignal }) => Promise<R>,
     report: (result: R) => { summary: string; phase: SyncPhase },
+    completed?: (result: R) => void,
   ): Promise<void> {
     if (!this.admit(operation)) return;
     await this.exclusive(operation, async (signal) => {
@@ -194,6 +207,7 @@ export class SyncController {
           );
           this.hooks.onStatusBar?.(phase);
           this.hooks.onState?.({ completionSummary: summary, operationType: null });
+          completed?.(result);
         }
         await this.refreshLocal();
       } catch (error) {
@@ -215,15 +229,17 @@ export class SyncController {
     );
   }
 
-  async pull(): Promise<void> {
+  /** Pull. `paths` 를 주면 그 노트만 받는다 — 변경 패널의 항목별 받기. */
+  async pull(paths?: string[]): Promise<void> {
     await this.runUserOperation(
       "pull",
       "Pull",
-      (options) => this.orchestrator.pull(options),
+      (options) => this.orchestrator.pull(paths ? { ...options, paths } : options),
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
       }),
+      (result) => this.dropPulled(result, paths),
     );
   }
 
@@ -236,7 +252,30 @@ export class SyncController {
         summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
       }),
+      (result) => this.dropPulled(result.pull),
     );
+  }
+
+  /**
+   * 받은 원격 변경을 목록에서 뺀다. 예전에는 받은 뒤에도 다시 확인할 때까지 「받을 것」 으로
+   * 남았다. 원격을 다시 훑지 않는다 — 실볼트 전체 대조는 분 단위다.
+   *
+   * 실패 · 충돌한 것은 남긴다. 볼트 경로가 없는 새 페이지는 실패가 하나라도 있으면 어느 것이
+   * 실패했는지 가를 수 없어 남긴다.
+   */
+  private dropPulled(result: PullResult, paths?: readonly string[]): void {
+    if (this.remoteChanges.length === 0) return;
+    const failedPaths = new Set(result.failed.map((failure) => failure.path));
+    const pending = (change: RemoteChange): boolean =>
+      result.conflicts.some((conflict) =>
+        notionIdsEqual(conflict.remoteChange.pageId, change.pageId),
+      ) || (change.path ? failedPaths.has(change.path) : result.failed.length > 0);
+    const pulled = (change: RemoteChange): boolean =>
+      change.path ? inAnyPathScope(change.path, paths) : !paths || paths.length === 0;
+    const kept = this.remoteChanges.filter((change) => !pulled(change) || pending(change));
+    if (kept.length === this.remoteChanges.length) return;
+    this.remoteChanges = kept;
+    this.hooks.onState?.({ remoteChanges: kept });
   }
 
   /**
@@ -280,6 +319,7 @@ export class SyncController {
       try {
         const result = await this.orchestrator.sync({ signal });
         this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
+        if (!signal.aborted) this.dropPulled(result.pull);
       } catch (error) {
         // 알림은 띄우지 않는다(자동이다). 대신 이유를 사이드바에 남긴다 — 예전에는 상태바만 「오류」
         // 로 바꾸고 이유를 버려, 무엇을 고쳐야 하는지 알 수 없었다.
@@ -313,6 +353,7 @@ export class SyncController {
           errorMessage: null,
         });
         const status = await this.orchestrator.status();
+        this.remoteChanges = status.remoteChanges;
         const syncState: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
         this.hooks.onState?.({
           lastSyncAt: status.lastSyncAt,
