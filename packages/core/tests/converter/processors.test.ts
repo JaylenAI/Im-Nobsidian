@@ -50,6 +50,107 @@ describe("MathNormalizer", () => {
     });
     expect(result.content).toBe("Price is $100 and $$200");
   });
+
+  const push = (content: string): string =>
+    processor.process({ content, metadata: {}, context: pushContext }).content;
+
+  it("한 줄로 쓴 블록 수식도 제 줄에 세운다 — Notion 은 한 줄 $$ x $$ 를 빈 수식 둘로 읽는다", () => {
+    expect(push("앞\n\n$$ x^2 $$\n\n뒤")).toBe("앞\n\n$$\nx^2\n$$\n\n뒤");
+  });
+
+  it("블록 수식이 여럿이면 저마다 세운다", () => {
+    expect(push("$$a$$\n\n문단\n\n$$b$$")).toBe("$$\na\n$$\n\n문단\n\n$$\nb\n$$");
+  });
+
+  // S-21 — 코드 안의 $ 는 코드다. 셸 예제가 수식으로 바뀌어 Notion 의 코드가 달라졌다.
+  it("코드 펜스 안의 $ 는 그대로다 — 셸의 $HOME · $$(PID) · 산술 확장", () => {
+    const code = "```bash\n$ echo $HOME\necho $$\nx=$(( $a + $b ))\n```";
+    expect(push(code)).toBe(code);
+  });
+
+  it("인라인 코드 안의 $ 는 그대로다", () => {
+    const text = "실행: `$ echo $HOME` 과 `echo $$`";
+    expect(push(text)).toBe(text);
+  });
+
+  it("인라인 코드 둘의 $$ 가 짝지어지지 않는다", () => {
+    const text = "PID 는 `echo $$` 로, 끝내기는 `kill $$`";
+    expect(push(text)).toBe(text);
+  });
+
+  // 줄 가운데의 $$ 는 줄머리 규칙이 이미 두므로, 코드 가드만 막는 것은 제 줄로 선 $$ … $$ 다.
+  it("빈 줄이 든 코드 펜스 속 제 줄의 $$ … $$ 도 코드다 — 인라인 코드로는 막지 못하는 모양", () => {
+    const code = "```latex\n$$ E = mc^2 $$\n\n$$ a^2 + b^2 = c^2 $$\n```";
+    expect(push(code)).toBe(code);
+  });
+
+  it("여러 줄 인라인 코드 속 제 줄의 $$ … $$ 도 코드다", () => {
+    const text = "`예시:\n$$ x^2 $$\n끝`";
+    expect(push(text)).toBe(text);
+  });
+
+  it("코드 속 $$ 가 코드 밖 블록 수식의 $$ 와 짝지어지지 않는다", () => {
+    const md = "```sh\necho $$\n```\n\n$$ x $$";
+    expect(push(md)).toBe("```sh\necho $$\n```\n\n$$\nx\n$$");
+  });
+
+  it("식이 $$ 줄에 붙은 여러 줄 블록 수식을 편다 — Notion 은 빈 수식과 글로 읽는다", () => {
+    expect(push("$$ a^2\nb^2 $$")).toBe("$$\na^2\nb^2\n$$");
+  });
+
+  // 콜아웃 · 목록 안의 수식은 새 줄에도 줄머리를 단다. 닫는 $$ 가 콜아웃 밖으로 나가면 Notion 이
+  // 뒤 문단을 수식으로 삼켰다(실측, 실볼트 4파일).
+  it.each([
+    ["콜아웃 제목 줄에서 여는 수식(실볼트 모양)", "> [!note] $$\n> \\textbf{A}\n> $$\n\n뒤 문단"],
+    ["콜아웃 본문의 수식", "> [!note] 제목\n> $$\n> x^2\n> $$\n\n뒤 문단"],
+    ["빈 인용 줄이 든 수식", "> $$\n> a\n>\n> b\n> $$"],
+    ["목록 자식 수식", "- 항목\n    $$\n    x^2\n    $$"],
+  ])("제 줄에 선 수식은 줄머리째 그대로다 — %s", (_name, md) => {
+    expect(push(md)).toBe(md);
+  });
+
+  it("콜아웃 안 한 줄 블록 수식은 줄머리를 달고 세운다", () => {
+    expect(push("> [!note] 제목\n> $$ x^2 $$")).toBe("> [!note] 제목\n> $$\n> x^2\n> $$");
+  });
+
+  it("빈 인용 줄이 든 수식도 줄머리를 달고 편다", () => {
+    expect(push("> $$ a\n>\n> b $$")).toBe("> $$\n> a\n>\n> b\n> $$");
+  });
+
+  it("목록 자식 한 줄 블록 수식은 들여쓰기를 달고 세운다", () => {
+    expect(push("- 항목\n    $$ x^2 $$")).toBe("- 항목\n    $$\n    x^2\n    $$");
+  });
+
+  it("짝이 인용 밖으로 넘어가면 그대로 둔다", () => {
+    const md = "> $$\n> x\n\n$$\ny\n$$";
+    expect(push(md)).toBe(md);
+  });
+
+  it("식이 빈 $$ $$ 는 그대로 둔다", () => {
+    expect(push("$$ $$")).toBe("$$ $$");
+  });
+
+  // 글과 한 줄에 있는 $$…$$ 는 Notion 이 인라인 수식으로 읽는다 — 줄을 가르면 빈 수식과 글이 된다(실측).
+  it.each([
+    ["글 사이", "앞 $$x^2$$ 뒤"],
+    ["줄 끝", "앞 $$x^2$$"],
+    ["줄 머리", "$$x^2$$ 뒤"],
+    ["목록 줄", "- $$x^2$$"],
+  ])("글과 한 줄에 있는 $$…$$ 는 그대로다 — %s", (_name, text) => {
+    expect(push(text)).toBe(text);
+  });
+
+  // 인라인 수식은 노트 그대로 보낸다 — Obsidian 과 Notion 이 같은 규칙으로 수식을 가린다.
+  it.each([
+    ["여는 쪽 · 닫는 쪽 공백", "공백 $ x $ 달러"],
+    ["여는 쪽 공백", "여는 쪽 $ x$ 끝"],
+    ["닫는 쪽 공백", "닫는 쪽 $x $ 끝"],
+    ["통화 둘", "가격 $5 and $10 이다"],
+    ["통화 범위", "금액 $1,000 ~ $2,000"],
+    ["닫는 $ 뒤 숫자", "뒤에 숫자 $x$1 끝"],
+  ])("수식이 아닌 달러는 글자 그대로다 — %s", (_name, text) => {
+    expect(push(text)).toBe(text);
+  });
 });
 
 describe("EmbedResolver", () => {
