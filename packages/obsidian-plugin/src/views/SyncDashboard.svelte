@@ -37,6 +37,8 @@
     onRefresh: () => void;
     onCancel: () => void;
     onOpenFile: (path: string) => void;
+    onPushPath: (path: string) => void;
+    onDiscardPath: (path: string) => void;
     onResolveConflict: () => void;
   }
 
@@ -57,12 +59,27 @@
     onRefresh,
     onCancel,
     onOpenFile,
+    onPushPath,
+    onDiscardPath,
     onResolveConflict,
   }: Props = $props();
 
   let lastSyncAt: string | null = $state(initialLastSyncAt);
   let localChanges: LocalChange[] = $state(initialLocalChanges);
   let remoteChanges: RemoteChange[] = $state(initialRemoteChanges);
+  /** 되돌리기는 두 번 눌러야 한다 — 로컬 편집을 지우므로 한 번의 실수로 잃지 않게 한다. */
+  let armedDiscard: string | null = $state(null);
+  function discardClick(path: string): void {
+    if (armedDiscard === path) {
+      armedDiscard = null;
+      onDiscardPath(path);
+      return;
+    }
+    armedDiscard = path;
+    setTimeout(() => {
+      if (armedDiscard === path) armedDiscard = null;
+    }, 3000);
+  }
   let conflicts: Conflict[] = $state(initialConflicts);
   let syncState: "ready" | "syncing" | "error" | "conflict" = $state(initialSyncState);
   let operationType: "pull" | "push" | "sync" | null = $state(initialOperationType);
@@ -301,18 +318,41 @@
       {#if changesExpanded}
         <div class="im-sync-file-list">
           {#each localChanges as change (change.path)}
-            <button
-              class="im-sync-file-item"
-              onclick={() => change.type !== "deleted" && onOpenFile(change.path)}
-              type="button"
-            >
-              <span class="im-sync-file-type {typeClass(change.type)}">{typeIcon(change.type)}</span
+            <div class="im-sync-file-row">
+              <button
+                class="im-sync-file-item"
+                onclick={() => change.type !== "deleted" && onOpenFile(change.path)}
+                type="button"
               >
-              <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
-              <span class="im-sync-file-path" title={change.path}
-                >{change.path.substring(0, change.path.lastIndexOf("/"))}</span
-              >
-            </button>
+                <span class="im-sync-file-type {typeClass(change.type)}"
+                  >{typeIcon(change.type)}</span
+                >
+                <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
+                <span class="im-sync-file-path" title={change.path}
+                  >{change.path.substring(0, change.path.lastIndexOf("/"))}</span
+                >
+              </button>
+              <span class="im-sync-file-actions">
+                <button
+                  class="im-sync-file-action"
+                  aria-label="이 노트만 Notion 에 올리기"
+                  title="이 노트만 Notion 에 올리기"
+                  disabled={isSyncing}
+                  onclick={() => onPushPath(change.path)}
+                  type="button">↑</button
+                >
+                {#if change.type === "modified" || change.type === "deleted"}
+                  <button
+                    class="im-sync-file-action"
+                    aria-label="지난 동기화 때의 글로 되돌리기"
+                    title="지난 동기화 때의 글로 되돌리기"
+                    disabled={isSyncing}
+                    onclick={() => discardClick(change.path)}
+                    type="button">{armedDiscard === change.path ? "되돌리기?" : "↺"}</button
+                  >
+                {/if}
+              </span>
+            </div>
           {/each}
         </div>
       {/if}
@@ -711,5 +751,28 @@
   }
   .im-sync-resolve-btn:hover {
     background: var(--background-modifier-hover);
+  }
+  .im-sync-file-row {
+    display: flex;
+    align-items: center;
+  }
+  .im-sync-file-row > .im-sync-file-item {
+    flex: 1;
+    min-width: 0;
+  }
+  .im-sync-file-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+  }
+  .im-sync-file-row:hover .im-sync-file-actions,
+  .im-sync-file-row:focus-within .im-sync-file-actions {
+    opacity: 1;
+  }
+  .im-sync-file-action {
+    padding: 0 6px;
+    font-size: var(--font-ui-smaller);
+    background: transparent;
+    box-shadow: none;
   }
 </style>

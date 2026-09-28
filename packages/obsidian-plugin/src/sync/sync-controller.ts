@@ -202,11 +202,12 @@ export class SyncController {
     });
   }
 
-  async push(): Promise<void> {
+  /** Push. `paths` 를 주면 그 노트만 올린다 — 변경 패널의 항목별 올리기. */
+  async push(paths?: string[]): Promise<void> {
     await this.runUserOperation(
       "push",
       "Push",
-      (options) => this.orchestrator.push(options),
+      (options) => this.orchestrator.push(paths ? { ...options, paths } : options),
       (result) => ({
         summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
@@ -245,6 +246,22 @@ export class SyncController {
   async autoSync(): Promise<void> {
     if (this.closed || this.active) return;
     await this.sync();
+  }
+
+  /**
+   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다(Git `restore`). 되돌릴 수 없으면 이유를 알린다.
+   */
+  async discard(path: string): Promise<void> {
+    if (!this.admit("discard")) return;
+    await this.exclusive("discard", async () => {
+      try {
+        await this.orchestrator.discardLocalChange(path);
+        this.hooks.onNotice?.(`Im-Nobsidian: 되돌림 — ${path}`);
+        await this.refreshLocal();
+      } catch (error) {
+        this.fail("되돌리기", error);
+      }
+    });
   }
 
   /**
