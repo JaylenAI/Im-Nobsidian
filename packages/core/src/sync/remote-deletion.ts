@@ -141,6 +141,7 @@ export function remoteDeletionChange(record: SyncRecord): RemoteChange {
   return {
     pageId: record.notionPageId!,
     type: "deleted",
+    path: record.obsidianPath,
     lastEdited: new Date().toISOString(),
     previousEdited: record.notionLastEdited,
   };

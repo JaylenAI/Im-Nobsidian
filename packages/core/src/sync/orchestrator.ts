@@ -2971,6 +2971,8 @@ export class SyncOrchestrator {
     );
 
     let remotePages: Array<RemotePageStamp & { readonly id: string }>;
+    // 새 페이지의 제목 — 볼트 경로가 아직 없어 화면이 이름으로 보인다.
+    const titles = new Map<string, string>();
     if (this.isDatabaseMode) {
       // R11-A: 전 data source 를 순회하는 SSOT(queryAllDatabasePages)로 열거한다. 1차 data
       // source 만 페이지네이션하면 2번째+ 소스의 행이 **원격에 없는 것으로 보여**, 미발견에
@@ -2980,6 +2982,8 @@ export class SyncOrchestrator {
       const allPages = await this.notionClient.queryAllDatabasePages(
         this.config.notion.databaseId!,
       );
+      for (const page of allPages)
+        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
       remotePages = allPages.map(remoteStampOf);
     } else {
       // 디스커버리 이중 전략(비용 상한 하이브리드):
@@ -3031,6 +3035,8 @@ export class SyncOrchestrator {
         const parentId = await this.extractParentId(page);
         if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
       }
+      for (const page of underRoot)
+        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
       remotePages = underRoot.map(remoteStampOf);
     }
 
@@ -3050,6 +3056,7 @@ export class SyncOrchestrator {
         changes.push({
           pageId: page.id,
           type: "created",
+          title: titles.get(key),
           lastEdited: page.last_edited_time,
           previousEdited: null,
         });
@@ -3196,7 +3203,11 @@ export class SyncOrchestrator {
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
     const recentPages = await this.notionClient.searchRecentPages(incrementalSearchSince(since));
-    const untracked: Array<{ page: (typeof recentPages)[number]; parentId: string }> = [];
+    const untracked: Array<{
+      page: (typeof recentPages)[number];
+      parentId: string;
+      title: string;
+    }> = [];
 
     for (const page of recentPages) {
       const record = this.stateDb.getByNotionId(page.id);
@@ -3206,7 +3217,7 @@ export class SyncOrchestrator {
           const parentId = await this.extractParentId(fullPage);
           if (parentId) {
             this._childParentIds.add(normalizeNotionId(parentId));
-            untracked.push({ page, parentId });
+            untracked.push({ page, parentId, title: this.notionClient.extractTitle(fullPage) });
           }
         } catch {
           // inaccessible page
@@ -3227,7 +3238,7 @@ export class SyncOrchestrator {
     let grew = true;
     while (grew) {
       grew = false;
-      for (const { page, parentId } of untracked) {
+      for (const { page, parentId, title } of untracked) {
         const id = normalizeNotionId(page.id);
         if (accepted.has(id)) continue;
         if (!this.isTrackedParent(parentId) && !accepted.has(normalizeNotionId(parentId))) continue;
@@ -3236,6 +3247,7 @@ export class SyncOrchestrator {
         changes.push({
           pageId: page.id,
           type: "created",
+          title,
           lastEdited: page.last_edited_time,
           previousEdited: null,
         });
