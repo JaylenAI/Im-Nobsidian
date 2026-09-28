@@ -16,7 +16,8 @@ import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../uti
  * 들여쓰기 정규화(D4): export 는 리스트 중첩에 탭을 쓴다. Obsidian/작성 관행의
  * 4-space 로 통일한다(펜스 내부 제외). 리스트 자식 코드블록은 변환기가 코드 줄까지 펜스
  * 깊이로 맞춰 둔 구조 탭(`alignNestedCodeBodies`)만 같은 폭으로 편다 — 리스트 줄은 4칸, 펜스는
- * 탭이면 Notion 이 코드를 다른 항목에 붙인다(실측). 코드 속 탭은 코드라 그대로 둔다.
+ * 탭이면 Notion 이 코드를 다른 항목에 붙인다(실측). 코드 속 탭은 코드라 그대로 둔다. 리스트 자식
+ * 수식(`$$`)도 같다 — Notion 은 `$$` · 식 줄 모두 탭으로 내보낸다(실측).
  *
  * 압축형 감지: 1차 신호는 `metadata.notionExportCompact` — orchestrator 가 **원시**
  * export(enhanced 변환 전)에서 `isCompactExport` 로 판정해 전달한다. 원시 export 는
@@ -132,14 +133,18 @@ export function respace(content: string, sourceCompact?: boolean): string {
       // 리스트 항목의 자식 코드블록은 항목에 붙인다(S-24) — 들여쓴 자식 문단과 같다. 따로 떼면
       // 앞뒤에 빈 줄이 들어가 목록 전체가 느슨한 목록(항목마다 문단 간격)이 된다.
       const inList = last()?.kind === "list" && INDENTED_RE.test(raw);
-      fenceLead = inList ? alignedLead(lines, i, opening) : "";
+      fenceLead = inList ? alignedLead(lines, i, (line) => closesCodeFence(line, opening)) : "";
       if (inList) appendToLast(expandLead(raw, fenceLead));
       else push("fence", raw);
       fence = opening;
       continue;
     }
     if (MATH_FENCE_RE.test(raw)) {
-      push("math", raw);
+      // 리스트 항목의 자식 수식도 항목에 붙인다 — 자식 코드블록과 같다.
+      const inList = last()?.kind === "list" && INDENTED_RE.test(raw);
+      fenceLead = inList ? alignedLead(lines, i, (line) => MATH_FENCE_RE.test(line)) : "";
+      if (inList) appendToLast(expandLead(raw, fenceLead));
+      else push("math", raw);
       fence = "math";
       continue;
     }
@@ -208,16 +213,20 @@ export function respace(content: string, sourceCompact?: boolean): string {
 }
 
 /**
- * 리스트 자식 코드블록의 구조 탭 — 여는 펜스의 선행 탭이 닫는 펜스와 모든 코드 줄 머리에도
- * 있으면(`alignNestedCodeBodies` 가 맞춘 블록) 그 탭, 아니면 "" 다. 맞춰지지 않은 블록의 탭은
- * 코드의 것일 수 있어 펴지 않는다. 닫히지 않은 블록도 펴지 않는다.
+ * 리스트 자식 코드블록 · 수식의 구조 탭 — 여는 줄의 선행 탭이 닫는 줄(`closes`)과 모든 안쪽 줄
+ * 머리에도 있으면(`alignNestedCodeBodies` 가 맞춘 블록 · Notion 이 내보낸 수식) 그 탭, 아니면 ""
+ * 다. 맞춰지지 않은 블록의 탭은 코드의 것일 수 있어 펴지 않는다. 닫히지 않은 블록도 펴지 않는다.
  */
-function alignedLead(lines: readonly string[], open: number, opening: CodeFenceOpening): string {
+function alignedLead(
+  lines: readonly string[],
+  open: number,
+  closes: (line: string) => boolean,
+): string {
   const lead = /^\t+/.exec(lines[open]!)?.[0] ?? "";
   if (lead === "") return "";
   for (let j = open + 1; j < lines.length; j++) {
     const line = lines[j]!;
-    if (closesCodeFence(line, opening)) return line.startsWith(lead) ? lead : "";
+    if (closes(line)) return line.startsWith(lead) ? lead : "";
     if (line !== "" && !line.startsWith(lead)) return "";
   }
   return "";
