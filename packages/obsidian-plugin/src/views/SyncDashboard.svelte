@@ -598,12 +598,16 @@
     font-size: var(--font-ui-smaller);
   }
 
-  /* Error */
+  /*
+   * Error — 옅은 빨강 바탕(main.css 의 `--im-nobsidian-tint`)에 보통 글색. 오류 바탕 변수는 테마에서 오류
+   * 글색과 같은 색일 수 있어, 예전처럼 함께 쓰면 실패 이유가 바탕에 묻혀 읽히지 않았다(1.13 기본 테마).
+   */
   .im-sync-error {
     margin: 4px 12px;
     padding: 6px 10px;
-    background: var(--background-modifier-error);
-    color: var(--text-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
+    border-left: 3px solid var(--text-error);
+    color: var(--text-normal);
     border-radius: 4px;
     font-size: var(--font-ui-smaller);
   }
@@ -668,7 +672,7 @@
     margin-left: 8px;
   }
   .im-sync-cancel-btn:hover {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
   }
 
   /* Completion Summary */
@@ -773,7 +777,7 @@
     font-weight: 500;
   }
   .im-sync-badge-warn {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
     color: var(--text-error);
   }
   .im-sync-badge-remote {

@@ -1,5 +1,15 @@
 /* Im-Nobsidian Plugin Styles */
 
+/*
+ * 오류 · 성공 색을 바탕에 깔 때의 짙기 — 플러그인의 모든 화면(변경 패널 · 줄 비교)이 이 값 하나를 쓴다.
+ * 테마의 오류 · 성공 · 경고 «바탕» 변수는 글색과 같은 진한 색일 수 있다(Obsidian 1.13 기본 테마:
+ * `--background-modifier-error` 와 `--text-error` 가 둘 다 #fb464c). 그래서 바탕에는 그 변수 대신
+ * `rgba(var(--color-red-rgb), var(--im-nobsidian-tint))` 처럼 옅게 깐다.
+ */
+body {
+  --im-nobsidian-tint: 0.15;
+}
+
 .im-nobsidian-conflict-banner {
   padding: 8px 12px;
   margin: 4px 0;
@@ -41,8 +51,6 @@
 }
 
 .im-nobsidian-diff-container {
-  /* 바뀐 줄 바탕의 짙기 — 지운 줄 · 더한 줄이 같이 쓴다 */
-  --im-nobsidian-diff-tint: 0.15;
   margin: 12px 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
@@ -125,16 +133,15 @@
 }
 
 /*
- * 바뀐 줄은 옅은 바탕에 보통 글색으로, 부호만 오류 · 성공 색으로 칠한다. 테마의 오류 · 성공 «바탕» 색은
- * 글색과 같은 진한 색일 수 있다(Obsidian 1.13 어두운 테마: `--background-modifier-error` 와
- * `--text-error` 가 둘 다 #fb464c) — 예전처럼 둘을 함께 쓰면 바뀐 줄의 글이 바탕에 묻혀 보이지 않았다.
+ * 바뀐 줄은 옅은 바탕(`--im-nobsidian-tint`)에 보통 글색으로, 부호만 오류 · 성공 색으로 칠한다 — 예전처럼
+ * 오류 바탕 변수와 오류 글색을 함께 쓰면 바뀐 줄의 글이 바탕에 묻혀 보이지 않았다.
  */
 .im-nobsidian-diff-removed {
-  background-color: rgba(var(--color-red-rgb), var(--im-nobsidian-diff-tint));
+  background-color: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
 }
 
 .im-nobsidian-diff-added {
-  background-color: rgba(var(--color-green-rgb), var(--im-nobsidian-diff-tint));
+  background-color: rgba(var(--color-green-rgb), var(--im-nobsidian-tint));
 }
 
 .im-nobsidian-diff-removed .im-nobsidian-diff-sign {
