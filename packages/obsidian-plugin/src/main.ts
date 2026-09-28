@@ -106,6 +106,11 @@ export default class ImNobsidianPlugin extends Plugin {
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
+  /**
+   * 마지막 초기화가 왜 실패했나 — 명령과 변경 패널이 이 이유를 보인다. 예전에는 설정을 다 채웠어도
+   * 「설정을 먼저 완료해주세요」 라고 했고, 패널은 「준비됨 · 변경 사항 없음」 이었다.
+   */
+  private initFailure: string | null = null;
 
   async onload(): Promise<void> {
     await this.loadSettings();
@@ -194,7 +199,7 @@ export default class ImNobsidianPlugin extends Plugin {
     this.statusBarEl = this.addStatusBarItem();
     this.updateStatusBar("ready");
 
-    if (this.settings.token && this.settings.rootPageId) {
+    if (this.hasConnectionSettings()) {
       await this.initOrchestrator();
     }
 
@@ -255,8 +260,14 @@ export default class ImNobsidianPlugin extends Plugin {
     return this.initializing;
   }
 
+  /** Notion 에 닿을 설정(토큰 · 루트 페이지)을 다 채웠나. */
+  private hasConnectionSettings(): boolean {
+    return Boolean(this.settings.token && this.settings.rootPageId);
+  }
+
   private async createOrchestrator(): Promise<void> {
-    if (!this.settings.token || !this.settings.rootPageId) return;
+    this.initFailure = null;
+    if (!this.hasConnectionSettings()) return;
 
     try {
       await this.closeStateDb();
@@ -325,26 +336,31 @@ export default class ImNobsidianPlugin extends Plugin {
       await this.refreshSidebarStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      new Notice(`Im-Nobsidian 초기화 실패: ${message}`);
+      this.initFailure = `초기화 실패: ${message}`;
+      new Notice(`Im-Nobsidian ${this.initFailure}`);
       this.updateStatusBar("error");
+      this.updateSidebar({ syncState: "error", errorMessage: this.initFailure });
     }
   }
 
   /**
-   * 상태 DB 파일을 읽는다 — 처음이면 null. 플러그인을 다시 불러왔으면 옛 인스턴스가 DB 를 다 닫은 뒤에
-   * 읽는다 — 먼저 읽으면 옛 인스턴스의 마지막 기록이 빠진 DB 를 연다.
+   * 상태 DB 파일을 읽는다 — 파일이 없으면(처음) null. 읽지 못하면 이유를 던진다 — 예전에는 «처음» 으로 보고 빈
+   * DB 를 열어, 다음 쓰기가 파일의 동기화 기록 전체를 덮었다. 기록이 없으면 다음 push 가 모든 노트의 페이지를
+   * 또 만든다.
+   *
+   * 플러그인을 다시 불러왔으면 옛 인스턴스가 DB 를 다 닫은 뒤에 읽는다 — 먼저 읽으면 옛 인스턴스의 마지막 기록이
+   * 빠진 DB 를 연다.
    */
   private async readStateDbFile(): Promise<Uint8Array | null> {
     await previousStateDbClosed();
+    const adapter = this.app.vault.adapter;
     try {
-      const adapter = this.app.vault.adapter;
-      if (await adapter.exists(STATE_DB_PATH)) {
-        return new Uint8Array(await adapter.readBinary(STATE_DB_PATH));
-      }
-    } catch {
-      // first run — no DB yet
+      if (!(await adapter.exists(STATE_DB_PATH))) return null;
+      return new Uint8Array(await adapter.readBinary(STATE_DB_PATH));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`상태 DB 를 읽지 못함 (${STATE_DB_PATH}): ${message}`);
     }
-    return null;
   }
 
   private getSidebarView(): SyncSidebarView | null {
@@ -357,8 +373,17 @@ export default class ImNobsidianPlugin extends Plugin {
     this.getSidebarView()?.updateState(partial);
   }
 
+  /**
+   * 변경 패널을 새로고친다. 초기화가 실패했으면 그 이유를 다시 보이고, 사용자가 새로고침을 눌렀으면(fullCheck)
+   * 초기화를 다시 해 본다 — 파일을 쥔 다른 프로그램이 놓은 뒤에 다시 불러오지 않아도 된다.
+   */
   private async refreshSidebarStatus(fullCheck = false): Promise<void> {
-    await this.syncController?.refreshStatus(fullCheck);
+    if (this.syncController) {
+      await this.syncController.refreshStatus(fullCheck);
+    } else if (this.initFailure !== null) {
+      if (fullCheck) await this.initOrchestrator();
+      else this.updateSidebar({ syncState: "error", errorMessage: this.initFailure });
+    }
   }
 
   private async toggleSidebar(): Promise<void> {
@@ -490,13 +515,20 @@ export default class ImNobsidianPlugin extends Plugin {
     }
   }
 
+  /** 동기화할 수 없는 까닭 — 설정이 비었나, 초기화가 실패했나, 아직 초기화 중인가. */
+  private notReadyReason(): string {
+    if (!this.hasConnectionSettings()) return "Im-Nobsidian: 설정을 먼저 완료해주세요.";
+    if (this.initFailure !== null) return `Im-Nobsidian ${this.initFailure}`;
+    return "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.";
+  }
+
   private cancelSync(): void {
     this.syncController?.cancel();
   }
 
   private async executePush(): Promise<void> {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     await this.syncController.push();
@@ -504,7 +536,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private async executePull(): Promise<void> {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     await this.syncController.pull();
@@ -512,7 +544,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private async executeSync(): Promise<void> {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     await this.syncController.sync();
@@ -520,7 +552,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private async showStatus(): Promise<void> {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
 
@@ -563,7 +595,7 @@ export default class ImNobsidianPlugin extends Plugin {
   /** 변경 패널에서 누른 로컬 변경의 줄 비교 창 — 보기만 하므로 도는 작업이 있어도 연다. */
   private showLocalDiff(change: LocalChange): void {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     new ChangeDiffModal(this.app, localDiffSource(change, this.syncController)).open();
@@ -572,7 +604,7 @@ export default class ImNobsidianPlugin extends Plugin {
   /** 변경 패널에서 누른 원격 변경의 줄 비교 창 — Notion 의 지금 글을 읽어 지난 동기화 때와 견준다. */
   private showRemoteDiff(change: RemoteChange): void {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     const source = remoteDiffSource(change, this.syncController);
@@ -585,7 +617,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private async resolveConflicts(): Promise<void> {
     if (!this.syncController) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
     await this.syncController.resolveConflicts((conflict, signal) =>
@@ -623,7 +655,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private async openDatabaseView(): Promise<void> {
     if (!this.viewProvider) {
-      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      new Notice(this.notReadyReason());
       return;
     }
 
@@ -656,7 +688,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private async renderInlineView(source: string, container: HTMLElement): Promise<void> {
     if (!this.viewProvider) {
       container.createEl("p", {
-        text: "Im-Nobsidian: 설정을 먼저 완료해주세요.",
+        text: this.notReadyReason(),
         cls: "im-view-error",
       });
       return;

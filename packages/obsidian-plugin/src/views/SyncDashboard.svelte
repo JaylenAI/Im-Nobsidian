@@ -326,11 +326,13 @@
     ></button>
   </div>
 
-  <!-- Last Sync Time -->
-  <div class="im-sync-meta">
-    <span class="im-sync-meta-label">마지막 동기화</span>
-    <span class="im-sync-meta-value">{formatTime(lastSyncAt)}</span>
-  </div>
+  <!-- Last Sync Time — 오류 중에 마지막 동기화를 모르면 줄을 뺀다. 초기화가 실패하면 기록을 못 읽었으므로 「아직 동기화 안됨」 이 거짓일 수 있다. -->
+  {#if lastSyncAt || syncState !== "error"}
+    <div class="im-sync-meta">
+      <span class="im-sync-meta-label">마지막 동기화</span>
+      <span class="im-sync-meta-value">{formatTime(lastSyncAt)}</span>
+    </div>
+  {/if}
 
   <!-- Error Message -->
   {#if errorMessage}
@@ -457,7 +459,8 @@
         </div>
       {/if}
     </div>
-  {:else if syncState !== "syncing" && conflictRecords.length === 0}
+  {:else if syncState === "ready" && conflictRecords.length === 0}
+    <!-- 오류가 났으면 목록을 다 읽었다고 말할 수 없다 — 읽지 못한 것을 「변경 사항 없음」 이라 하지 않는다. -->
     <div class="im-sync-empty">변경 사항 없음</div>
   {/if}
 

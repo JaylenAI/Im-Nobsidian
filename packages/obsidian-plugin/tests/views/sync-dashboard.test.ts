@@ -394,6 +394,37 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onOpenFile.mock.calls).toEqual([["배추.md"]]);
   });
 
+  it("오류를 보이는 동안에는 모르는 것을 없다고 하지 않는다 — 「변경 사항 없음」 · 「아직 동기화 안됨」", () => {
+    const meta = () => normText(m!.target.querySelector(".im-sync-meta-value"));
+    m = renderComponent(SyncDashboard, baseProps());
+    expect(normText(m.target.querySelector(".im-sync-empty"))).toBe("변경 사항 없음");
+    expect(meta()).toBe("아직 동기화 안됨");
+    m.destroy();
+
+    // 초기화가 실패하면 상태 DB 를 못 읽어 목록도 마지막 동기화도 모른다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({ syncState: "error", errorMessage: "초기화 실패: 상태 DB 를 읽지 못함" }),
+    );
+    expect(m.target.querySelector(".im-sync-empty")).toBeNull();
+    expect(m.target.querySelector(".im-sync-meta")).toBeNull();
+    expect(normText(m.target.querySelector(".im-sync-error"))).toBe(
+      "초기화 실패: 상태 DB 를 읽지 못함",
+    );
+    m.destroy();
+
+    // 읽은 적이 있으면 오류 중에도 마지막 동기화를 보인다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "error",
+        errorMessage: "Pull 실패: 토큰 만료",
+        lastSyncAt: new Date().toISOString(),
+      }),
+    );
+    expect(meta()).toBe("방금 전");
+  });
+
   it("충돌만 남았으면 「변경 사항 없음」 을 띄우지 않는다 — 충돌 칸이 할 일을 말한다", () => {
     m = renderComponent(
       SyncDashboard,
