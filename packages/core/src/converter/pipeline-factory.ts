@@ -11,10 +11,12 @@ import { InlineAnnotationPreserver } from "./pre-processors/html-annotation.js";
 import { CommentStripper } from "./pre-processors/comment-stripper.js";
 import { FootnoteGuard } from "./pre-processors/footnote-guard.js";
 import { TableAlignmentGuard } from "./pre-processors/table-alignment.js";
+import { CodeLanguageGuard } from "./pre-processors/code-language-guard.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { EscapeNormalizer } from "./post-processors/escape-normalizer.js";
 import { HighlightRestorer } from "./post-processors/highlight-restorer.js";
 import { TableAlignmentRestorer } from "./post-processors/table-alignment-restorer.js";
+import { CodeLanguageRestorer } from "./post-processors/code-language-restorer.js";
 import { PreserveMarkerInjector } from "./post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "./post-processors/callout-restorer.js";
 import { ColorAnnotator } from "./post-processors/color-annotator.js";
@@ -39,6 +41,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPreProcessor(new WikilinkResolver(options?.wikilinkResolver));
   pipeline.registerPreProcessor(new CalloutTransformer());
   pipeline.registerPreProcessor(new TableAlignmentGuard());
+  pipeline.registerPreProcessor(new CodeLanguageGuard());
   pipeline.registerPreProcessor(new MathNormalizer());
   pipeline.registerPreProcessor(new EmbedResolver());
   pipeline.registerPreProcessor(new PreserveMarkerCollector());
@@ -48,6 +51,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPostProcessor(new LocalImageRestorer());
   pipeline.registerPostProcessor(new HighlightRestorer());
   pipeline.registerPostProcessor(new TableAlignmentRestorer());
+  pipeline.registerPostProcessor(new CodeLanguageRestorer());
   pipeline.registerPostProcessor(new PreserveMarkerInjector());
   pipeline.registerPostProcessor(new MentionToWikilink());
   pipeline.registerPostProcessor(new CalloutRestorer());

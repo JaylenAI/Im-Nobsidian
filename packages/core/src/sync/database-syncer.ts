@@ -1,7 +1,7 @@
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
-import type { VaultFS } from "./vault-fs.js";
+import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { Conflict, FailedOperation, SyncRecord } from "../types/sync.js";
 import type { DatabaseViewsConfig } from "../types/view.js";
@@ -551,11 +551,13 @@ export class DatabaseSyncer {
    *
    * @param options.downloadMedia false 면 첨부를 내려받지 않는다(표시 전용). 비교를 보려다
    *   볼트에 파일이 생기면 안 된다 — 그 대가로 아직 내려받지 않은 첨부는 원격 URL 로 남는다.
+   * @param options.localPath 로컬 노트가 지금 있는 자리 — 코드 펜스 표기를 되살리는 근거(S-20).
+   *   다른 폴더로 옮기기 전이면 옛 경로다. 기본은 `filePath`.
    */
   async renderRow(
     page: PageObjectResponse,
     filePath: string,
-    options?: { downloadMedia?: boolean },
+    options?: { downloadMedia?: boolean; localPath?: string },
   ): Promise<{
     content: string;
     title: string;
@@ -634,7 +636,11 @@ export class DatabaseSyncer {
         filePath,
         parentMode: "database",
       },
-      { properties, notionExportCompact: exportCompact },
+      {
+        properties,
+        notionExportCompact: exportCompact,
+        localContent: await readLocalNote(this.vaultFs, options?.localPath ?? filePath),
+      },
     );
     return { content, title, properties, bodyFingerprint };
   }
@@ -724,7 +730,7 @@ export class DatabaseSyncer {
       title,
       properties,
       bodyFingerprint,
-    } = await this.renderRow(page, filePath);
+    } = await this.renderRow(page, filePath, { localPath: recordPath ?? filePath });
     const seenAt = this.observation().seenAt;
 
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.

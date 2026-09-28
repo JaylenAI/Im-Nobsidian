@@ -51,7 +51,7 @@ import { runPool } from "../utils/pool.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
-import type { FileStatInfo, VaultFS } from "./vault-fs.js";
+import { readLocalNote, type FileStatInfo, type VaultFS } from "./vault-fs.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -3499,6 +3499,7 @@ export class SyncOrchestrator {
         properties,
         preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined,
         notionExportCompact: fetched.compact,
+        localContent: await readLocalNote(this.vaultFs, record.obsidianPath),
       },
     );
     return { content, title, properties, bodyFingerprint: fetched.fingerprint };

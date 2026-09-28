@@ -843,6 +843,40 @@ describe("DatabaseSyncer", () => {
       );
     });
 
+    it("재배치하며 받은 행도 옛 자리의 노트에서 코드 펜스 표기를 되살린다(S-20)", async () => {
+      const oldPath = "databases/tasks-shared/Task One (0db13b18).md";
+      const local = "```dataview\nLIST\n```\n";
+      (mockVaultFs.readFile as any).mockResolvedValue(local);
+      (mockVaultFs.exists as any).mockImplementation(async (path: string) => path === oldPath);
+      mockNotionClient.getPageMarkdown.mockResolvedValue({
+        markdown: "```plain text\nLIST\n```",
+        truncated: false,
+        unknown_block_ids: [],
+      });
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T00:00:00.000Z",
+          properties: { Name: { type: "title", title: [{ plain_text: "Task One" }] } },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: oldPath,
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: computeHash(local),
+      });
+
+      await syncer.pullAll();
+
+      const written = (mockVaultFs.writeFile as any).mock.calls.find(
+        (c: any[]) => c[0] === "databases/tasks/Task One.md",
+      );
+      expect(written?.[1]).toContain("```dataview\nLIST\n```");
+    });
+
     it("재배치 대상이라도 로컬이 수정됐으면(local-first) 원위치를 보존한다", async () => {
       (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED");
       const config: Config = {
