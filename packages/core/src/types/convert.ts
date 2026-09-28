@@ -22,6 +22,11 @@ export interface ProcessorMetadata {
    * true: 무조건 재간격 / false: 무동작 / 미지정: 내용 기반 휴리스틱 폴백.
    */
   readonly notionExportCompact?: boolean;
+  /**
+   * pull 직전 로컬 노트 원문 — 있을 때만. Notion 에 남길 자리가 없는 표기(코드 펜스의 원래 언어 ·
+   * 펜스 기호, S-20)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
+   */
+  readonly localContent?: string;
   readonly [key: string]: unknown;
 }
 
