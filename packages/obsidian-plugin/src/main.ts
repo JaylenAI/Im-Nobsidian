@@ -152,6 +152,8 @@ export default class ImNobsidianPlugin extends Plugin {
           const file = this.app.vault.getAbstractFileByPath(path);
           if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
         },
+        onPushPath: async (path: string) => this.syncController?.push([path]),
+        onDiscardPath: async (path: string) => this.syncController?.discard(path),
       });
       return view;
     });

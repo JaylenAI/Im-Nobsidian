@@ -51,6 +51,7 @@ function createMockOrchestrator(): MockOrchestrator {
       conflictRecords: [],
       pendingOperations: 0,
     }),
+    discardLocalChange: vi.fn().mockResolvedValue(undefined),
     statusLocal: vi.fn().mockResolvedValue({
       lastSyncAt: null,
       localChanges: [],
@@ -217,6 +218,32 @@ describe("SyncController", () => {
       expect(onNotice).toHaveBeenCalledWith(
         "Im-Nobsidian: Sync 완료 — Pull(+2 ~1 -0) Push(+3 ~0 -1) (3.0s)",
       );
+    });
+  });
+
+  describe("변경 패널 항목별 동작", () => {
+    it("항목 올리기는 그 노트만 push 한다", async () => {
+      const { hooks } = createHooks();
+      await makeController(mock, hooks).push(["a/노트.md"]);
+      expect(mock.push).toHaveBeenCalledWith(expect.objectContaining({ paths: ["a/노트.md"] }));
+    });
+
+    it("되돌리기는 그 노트를 되돌리고 로컬 변경을 새로고친다", async () => {
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).discard("노트.md");
+      expect(mock.discardLocalChange).toHaveBeenCalledWith("노트.md");
+      expect(mock.statusLocal).toHaveBeenCalled();
+      expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("노트.md"));
+    });
+
+    it("되돌리지 못하면 이유를 알린다", async () => {
+      mock.discardLocalChange.mockRejectedValueOnce(
+        new Error("추적하지 않는 새 노트라 되돌릴 원본이 없습니다"),
+      );
+      const { hooks, onState, onNotice } = createHooks();
+      await makeController(mock, hooks).discard("새.md");
+      expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("추적하지 않는 새 노트"));
+      expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "error" }));
     });
   });
 
