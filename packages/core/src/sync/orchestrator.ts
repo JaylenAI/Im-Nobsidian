@@ -6,7 +6,6 @@ import type {
   SyncOptions,
   SyncResult,
   StatusResult,
-  SyncRecord,
   LocalChange,
   RemoteChange,
   Conflict,
@@ -26,10 +25,9 @@ import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
-import { remoteDeletionChange, remoteDeletionConflict, remotePresence } from "./remote-deletion.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
-import { ConflictResolver, choiceForStrategy, isRemoteDeletion } from "../conflict/resolver.js";
+import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
 import { computeHash } from "../utils/hash.js";
@@ -63,6 +61,8 @@ import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
 import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
+import { ChangeInspector } from "./change-inspector.js";
+import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
 import { PagePuller } from "./page-puller.js";
 import { PullPlanner } from "./pull-planner.js";
@@ -71,7 +71,6 @@ import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
-import { isFolderRecord } from "./folder-container.js";
 import {
   forgetRenameHint,
   isEmptyRenameHints,
@@ -88,7 +87,6 @@ export class SyncOrchestrator {
   private readonly databaseSyncer: DatabaseSyncer;
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
-  private readonly conflictResolver: ConflictResolver;
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
@@ -117,6 +115,12 @@ export class SyncOrchestrator {
 
   // 로컬 변경을 Notion 에 올린다 — 새 노트 · 고친 노트 · 옮긴 노트와 폴더 · 지운 노트, 충돌 해소 결과.
   private readonly pusher: PagePusher;
+
+  // 충돌 해소 — 목록 · 해소 · Notion 전파(I8 · N-06).
+  private readonly conflictWorkflow: ConflictWorkflow;
+
+  // 변경 하나를 들여다보고 되돌린다 — 두 글 견주기 · 로컬 변경 되돌리기.
+  private readonly inspector: ChangeInspector;
 
   // 중단된 실행의 정리 · 앞선 생성이 남긴 고아 페이지의 입양(I12 · S-07).
   private readonly recovery: InterruptedSyncRecovery;
@@ -256,9 +260,20 @@ export class SyncOrchestrator {
       this.placement,
       this.recovery,
     );
+    this.conflictWorkflow = new ConflictWorkflow(
+      stateDb,
+      vaultFs,
+      notionClient,
+      this.changeDetector,
+      new ConflictResolver(stateDb, vaultFs),
+      this.observation,
+      this.planner,
+      this.puller,
+      this.pusher,
+    );
+    this.inspector = new ChangeInspector(stateDb, vaultFs, notionClient, this.planner, this.puller);
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
-    this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
   }
 
   /** 도는 작업 — 없으면 null(S-09). 부른 쪽이 겹칠 요청을 미리 거를 때 쓴다. */
@@ -915,7 +930,7 @@ export class SyncOrchestrator {
     const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes);
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
-    const conflicts: Conflict[] = await this.buildConflictsFromRecords(
+    const conflicts: Conflict[] = await this.conflictWorkflow.buildConflictsFromRecords(
       conflictRecords,
       localChanges,
       remoteChanges,
@@ -1040,101 +1055,6 @@ export class SyncOrchestrator {
     };
   }
 
-  /**
-   * @param options.fullRender 원격 본문을 pull 과 동일한 파이프라인으로 렌더할지.
-   *   기본(false)은 화면 미리보기용 경량 렌더 — 첨부를 내려받지 않으므로 `status` 처럼
-   *   읽기만 하는 경로가 쓴다. 볼트에 덮어쓸 본문이 필요한 해소 경로는 반드시 켠다.
-   */
-  private async buildConflictsFromRecords(
-    records: SyncRecord[],
-    localChanges: LocalChange[],
-    remoteChanges: RemoteChange[],
-    options?: { fullRender?: boolean },
-  ): Promise<Conflict[]> {
-    const conflicts: Conflict[] = [];
-
-    for (const record of records) {
-      const localChange = localChanges.find((c) => c.path === record.obsidianPath) ?? {
-        path: record.obsidianPath,
-        type: "modified" as const,
-        currentHash: record.contentHash,
-        previousHash: record.contentHash,
-      };
-
-      let localContent = "";
-      try {
-        localContent = await this.vaultFs.readFile(record.obsidianPath);
-      } catch {
-        // 파일이 삭제된 경우
-      }
-
-      let remoteContent = "";
-      let remoteLastEdited: string | null = null;
-      let remoteGone = false;
-      if (record.notionPageId) {
-        try {
-          // 휴지통 · 보관 · 없음이면 원격에서 지운 노트의 충돌이다 — 렌더할 본문이 없다.
-          const presence = await remotePresence(this.notionClient, record.notionPageId);
-          if (presence.kind === "gone") {
-            remoteGone = true;
-          } else if (options?.fullRender) {
-            remoteLastEdited = presence.page.last_edited_time;
-            remoteContent = (
-              await this.puller.renderRemotePage(record, record.notionPageId, presence.page)
-            ).content;
-          } else {
-            remoteContent = (await this.puller.fetchPageMarkdown(record.notionPageId)).content;
-          }
-        } catch (error) {
-          // 해소할 목록은 원격을 읽지 못하면 이유와 함께 실패한다(N-06). 빈 원격으로 충돌을 만들면
-          // 병합은 원격이 모든 줄을 지운 것으로 보고, 원격 유지는 로컬을 빈 파일로 덮는다.
-          if (options?.fullRender) {
-            throw new Error(
-              `충돌 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-              { cause: error },
-            );
-          }
-          // 상태 표시용 미리보기 — 읽지 못하면 원격을 비워 둔 채 충돌이 있다는 것만 보인다.
-        }
-      }
-
-      if (remoteGone) {
-        conflicts.push(
-          remoteDeletionConflict(
-            record,
-            localContent,
-            remoteChanges.find((c) => c.pageId === record.notionPageId && c.type === "deleted") ??
-              remoteDeletionChange(record),
-          ),
-        );
-        continue;
-      }
-
-      const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
-        pageId: record.notionPageId ?? "",
-        type: "modified" as const,
-        // 현재 원격 시각을 실제로 읽어왔다면 그 값을 쓴다. 해소 후 재조정(propagateResolution)
-        // 이 이 값을 그대로 기준점으로 삼는데, 낡은 저장값을 실으면 다음 pull 이 같은 변경을
-        // 다시 충돌로 보고 무한 재충돌한다.
-        lastEdited: remoteLastEdited ?? record.notionLastEdited ?? "",
-        previousEdited: null,
-      };
-
-      conflicts.push({
-        syncRecord: record,
-        localChange,
-        remoteChange,
-        baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
-        localContent,
-        remoteContent,
-      });
-    }
-
-    return conflicts;
-  }
-
   private async resolveNotionLinks(paths: string[]): Promise<number> {
     let totalResolved = 0;
     let totalDegraded = 0;
@@ -1245,171 +1165,41 @@ export class SyncOrchestrator {
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // 충돌 해소 (I8) — 해소 결과를 로컬에만 쓰지 않고 Notion 으로 재push + notionLastEdited
-  // 재조정까지 한 트랜잭션으로 묶는다. ConflictResolver 단독은 로컬 write + updateHash 만
-  // 수행하므로(merge 결과가 Notion 에 반영되지 않음) 다음 pull 이 원격으로 덮어써 영구
-  // 유실·충돌 루프가 발생한다. 해소 → 전파(propagate)를 오케스트레이터에서 봉합해 무손실
-  // 보장. 변환 파이프라인이 필요한 push 는 기존 엔터프라이즈 경로(pushUpdate)를 재사용한다.
+  // 충돌 해소 · 변경 살펴보기 — 규칙은 ConflictWorkflow · ChangeInspector 가 갖는다. 여기는 공개
+  // API 로 이어 주고, 해소 · 되돌리기는 다른 작업과 겹치지 않게 돌린다(S-09).
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * 해소 대상 충돌 목록 — 원격 본문을 pull 과 **같은 파이프라인**으로 렌더해 담는다.
-   *
-   * 해소는 실제로 볼트 파일을 덮어쓰므로 `status()` 의 경량 미리보기 렌더를 쓰면 안 된다
-   * (프론트매터·첨부가 빠진 반쪽 본문이 덮인다). 반대로 전체 pull 을 먼저 돌려 목록을
-   * 얻는 것도 안 된다 — 해소하겠다고 볼트를 먼저 원격으로 덮어쓰는 셈이라 순서가 거꾸로다.
-   * 그래서 충돌 레코드만 좁혀 그 페이지들만 읽어 온다.
-   */
+  /** 해소 대상 충돌 목록 — 원격 본문을 pull 과 같은 파이프라인으로 렌더해 담는다. */
   async listConflicts(): Promise<Conflict[]> {
-    const records = this.stateDb.getByStatus("conflict");
-    if (records.length === 0) return [];
-    const files = await this.vaultFs.listMarkdownFiles();
-    const localChanges = this.changeDetector.detectLocalChanges(
-      files,
-      this.planner.localScanOptions(),
-    );
-    return this.buildConflictsFromRecords(records, localChanges, [], { fullRender: true });
+    return this.conflictWorkflow.listConflicts();
   }
 
   /**
-   * 추적 파일의 **현재 원격 본문**을 pull 과 같은 변환으로 렌더한다 — 표시 전용.
-   *
-   * 첨부는 내려받지 않는다: 비교를 보려다 볼트에 파일이 생기면 안 된다. 그 대가로 아직
-   * 내려받지 않은 미디어는 원격 URL 로 남아 비교 화면에만 차이로 보인다.
-   *
-   * @returns 추적되지 않았거나 원격 페이지가 없으면 null.
+   * 추적 파일의 현재 원격 본문을 pull 과 같은 변환으로 렌더한다 — 표시 전용이라 첨부를 내려받지
+   * 않는다. 추적되지 않았거나 원격 페이지가 없으면 null.
    */
   async renderRemoteSnapshot(path: string): Promise<string | null> {
-    const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return null;
-    return this.renderRemoteRecord(record, record.notionPageId);
+    return this.inspector.renderRemoteSnapshot(path);
   }
 
-  private async renderRemoteRecord(record: SyncRecord, pageId: string): Promise<string> {
-    const page = await this.notionClient.getPage(pageId);
-    const rendered = await this.puller.renderRemotePage(record, pageId, page, {
-      downloadMedia: false,
-    });
-    return rendered.content;
-  }
-
-  /**
-   * 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글. 표시 전용이라 잠그지 않는다.
-   *
-   * 변경 목록(`statusLocal`)이 준 변경을 그대로 받고 볼트를 다시 훑지 않는다. 대신 짚은 추적 레코드가 그
-   * 변경이 본 것과 같은지(글 지문) 확인한다 — 그 사이 올리거나 받아 레코드가 바뀌었으면 엉뚱한 옛 글과
-   * 견주지 않게 거절한다.
-   */
+  /** 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글. 표시 전용이라 잠그지 않는다. */
   async localChangeDiff(change: LocalChange): Promise<ChangeDiff> {
-    const before =
-      change.type === "created"
-        ? null
-        : this.syncedText(this.recordOfLocalChange(change), change.path);
-    const after = change.type === "deleted" ? null : await this.vaultFs.readFile(change.path);
-    return {
-      path: change.path,
-      type: change.type,
-      ...(change.movedFrom ? { movedFrom: change.movedFrom } : {}),
-      before,
-      after,
-    };
+    return this.inspector.localChangeDiff(change);
   }
 
-  /**
-   * 원격 변경 하나의 두 글 — 지난 동기화 때의 글과 Notion 의 지금 글(pull 과 같은 변환, 첨부는 내려받지
-   * 않는다). 표시 전용이라 잠그지 않는다.
-   *
-   * 지금 볼트 글이 아니라 지난 동기화 사본과 견준다 — Notion 에서 바뀐 것만 보인다. 로컬 편집은 로컬
-   * 변경이 따로 보인다(Git 이 받을 커밋을 합칠 기준과 견주는 것과 같다). 아직 받지 않은 새 페이지는 견줄
-   * 글이 없어 거절한다.
-   */
+  /** 원격 변경 하나의 두 글 — 지난 동기화 때의 글과 Notion 의 지금 글. 표시 전용이라 잠그지 않는다. */
   async remoteChangeDiff(change: RemoteChange): Promise<ChangeDiff> {
-    const record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) {
-      throw new Error(
-        `아직 받지 않은 새 페이지라 견줄 글이 없습니다 — ${change.title ?? change.pageId}`,
-      );
-    }
-    if (isFolderRecord(record)) {
-      throw new Error(`폴더라 견줄 글이 없습니다 — ${record.obsidianPath}`);
-    }
-    const before = this.syncedText(record, record.obsidianPath);
-    const after =
-      change.type === "deleted" ? null : await this.renderRemoteRecord(record, change.pageId);
-    return { path: record.obsidianPath, type: change.type, before, after };
+    return this.inspector.remoteChangeDiff(change);
   }
 
-  /**
-   * 로컬 변경이 짚는 추적 레코드. 옮긴 노트는 Notion 에 반영하기 전까지 레코드가 옛 자리에 있다 — 다만
-   * 반영하다 멈춘 이동은 이미 새 자리에 있어 새 자리부터 본다.
-   */
-  private recordOfLocalChange(change: LocalChange): SyncRecord {
-    for (const path of [change.path, change.movedFrom]) {
-      if (!path) continue;
-      const record = this.stateDb.getByPath(path);
-      if (record && record.contentHash === change.previousHash) return record;
-    }
-    throw new Error(
-      `지난 동기화 기록이 변경 목록과 맞지 않습니다 — 새로고침한 뒤 다시 보세요 (${change.path})`,
-    );
-  }
-
-  /** 지난 동기화 때의 글 — 사본이 없으면 옛 글을 모르니 거절한다(없는 글로 보이면 모든 줄이 새 줄이다). */
-  private syncedText(record: SyncRecord, path: string): string {
-    if (!record.baseSnapshot) {
-      throw new Error(`지난 동기화 사본이 없어 비교할 수 없습니다 — ${path}`);
-    }
-    return record.baseSnapshot.toString("utf-8");
-  }
-
-  /**
-   * 해소할 게 남지 않은 충돌 레코드를 `synced` 로 되돌리고, 되돌린 경로를 반환한다.
-   *
-   * 충돌로 표시된 파일은 push 대상에서 통째로 빠진다(양쪽 덮어쓰기 방지). 그래서 사용자가
-   * 손으로 양쪽을 맞춰 둬 이미 같은 내용이 됐는데도 레코드만 남으면, 그 파일의 이후 편집이
-   * **영원히 Notion 에 올라가지 않는다** — 아무 경고 없이 정체된다. 내용이 이미 동일한
-   * 건만 골라 상태를 되돌린다(진짜 충돌은 손대지 않는다).
-   */
+  /** 해소할 게 남지 않은 충돌 레코드를 `synced` 로 되돌리고, 되돌린 경로를 반환한다. */
   clearStaleConflicts(conflicts: readonly Conflict[]): string[] {
-    return this.gate.runSync("resolve", () => this.executeClearStaleConflicts(conflicts));
-  }
-
-  private executeClearStaleConflicts(conflicts: readonly Conflict[]): string[] {
-    const cleared: string[] = [];
-    for (const conflict of conflicts) {
-      // 양쪽 다 비었으면 "같다"가 아니라 양쪽 다 사라진 것이다 — 삭제 전파의 몫으로 남긴다.
-      if (conflict.localContent === "" && conflict.remoteContent === "") continue;
-      if (conflict.localContent !== conflict.remoteContent) continue;
-
-      const record = conflict.syncRecord;
-      this.stateDb.transaction(() => {
-        this.stateDb.updateHash(
-          record.id,
-          computeHash(conflict.localContent),
-          Buffer.from(conflict.localContent, "utf-8"),
-        );
-        this.stateDb.updateStatus(record.id, "synced");
-        if (conflict.remoteChange.lastEdited) {
-          this.observation.recordUnverified(record.id, conflict.remoteChange.lastEdited);
-        }
-      });
-      cleared.push(record.obsidianPath);
-    }
-    return cleared;
+    return this.gate.runSync("resolve", () => this.conflictWorkflow.clearStaleConflicts(conflicts));
   }
 
   /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
   async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
-    return this.gate.run("resolve", () => this.executeResolveConflict(conflict, choice));
-  }
-
-  private async executeResolveConflict(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-  ): Promise<ResolutionResult> {
-    const result = await this.conflictResolver.resolve(conflict, choice);
-    await this.propagateOrReopen(conflict, choice, result);
-    return result;
+    return this.gate.run("resolve", () => this.conflictWorkflow.resolveConflict(conflict, choice));
   }
 
   /** 단일 충돌을 전략(manual/local-first/remote-first/duplicate)으로 해소 + Notion 전파. */
@@ -1420,144 +1210,27 @@ export class SyncOrchestrator {
     return this.resolveConflict(conflict, choiceForStrategy(conflict, strategy));
   }
 
-  /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. */
+  /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. 하나를 올리지 못해도 나머지를 푼다. */
   async resolveAllConflicts(
     conflicts: Conflict[],
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult[]> {
-    return this.gate.run("resolve", async () => {
-      const results: ResolutionResult[] = [];
-      // 하나를 올리지 못해도 나머지를 푼다 — 올리지 못한 것은 충돌로 되돌려져 있다(N-06).
-      // 예전에는 첫 실패에서 던져, 뒤의 충돌은 손대지 않은 채 무엇이 풀렸는지도 알리지 못했다.
-      for (const conflict of conflicts) {
-        const choice = choiceForStrategy(conflict, strategy);
-        try {
-          results.push(await this.executeResolveConflict(conflict, choice));
-        } catch (error) {
-          results.push({
-            path: conflict.syncRecord.obsidianPath,
-            choice,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      return results;
-    });
+    return this.gate.run("resolve", () =>
+      this.conflictWorkflow.resolveAllConflicts(conflicts, strategy),
+    );
   }
 
   /**
-   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다. 고친 노트 · 지운 노트는
-   * 지난 동기화 사본(`baseSnapshot`)으로 다시 쓴다. Notion 은 건드리지 않는다.
-   *
-   * 되돌릴 원본이 없는 것은 이유와 함께 거절한다 — 추적하지 않는 새 노트(지우는 것은 사용자가 휴지통으로),
-   * 옮긴 노트의 새 자리(파일을 옛 자리로 옮기면 된다), 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
+   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다. Notion 은 건드리지
+   * 않는다. 되돌릴 원본이 없는 것은 이유와 함께 거절한다.
    */
   async discardLocalChange(path: string): Promise<void> {
-    return this.gate.run("discard", async () => {
-      const record = this.stateDb.getByPath(path);
-      if (!record) {
-        throw new Error(await this.untrackedDiscardReason(path));
-      }
-      if (record.status === "conflict") {
-        throw new Error(`충돌 중인 노트는 충돌 해결에서 고르세요 — ${path}`);
-      }
-      if (!record.baseSnapshot) {
-        throw new Error(`지난 동기화 사본이 없어 되돌릴 수 없습니다 — ${path}`);
-      }
-      await this.vaultFs.writeFile(path, record.baseSnapshot.toString("utf-8"));
-    });
-  }
-
-  /**
-   * 추적하지 않는 경로를 되돌리려 한 이유. 옮긴 노트의 새 자리도 추적 레코드가 없다 — 「새 노트」 라고
-   * 하면 변경 목록에서 «옮김» 으로 본 사용자가 무엇을 해야 할지 모른다. 옛 자리를 알린다.
-   */
-  private async untrackedDiscardReason(path: string): Promise<string> {
-    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
-    const moved = plan.scan.changes.find((c) => c.type === "moved" && c.path === path);
-    return moved?.movedFrom
-      ? `옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 ${moved.movedFrom} 로 다시 옮기세요 (${path})`
-      : `추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`;
+    return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
   }
 
   /** 충돌 미리보기용 줄 비교(로컬 vs 원격). 해소 없이 표시 전용. */
   generateConflictDiff(conflict: Conflict): string {
-    return this.conflictResolver.generateDiff(conflict);
-  }
-
-  /**
-   * 해소 결과를 Notion 에 올린다. 올리지 못하면 충돌로 되돌리고 오류를 그대로 던진다(N-06).
-   *
-   * 해소는 지난 동기화 사본을 해소 결과로 바꿔 둔다. 그 결과가 Notion 에 없는데 «해결됨» 으로
-   * 남으면, 다음 pull 은 로컬을 바뀌지 않은 것으로 보고 바뀐 원격으로 덮는다 — 고른 로컬 · 병합
-   * 결과가 사라진다. 해소 전의 사본으로 되돌리면 다음 pull 이 다시 충돌로 본다. 볼트 파일(병합
-   * 결과 · `.conflict` 사본)은 그대로 둔다 — 사용자가 고른 것이다.
-   */
-  private async propagateOrReopen(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-    result: ResolutionResult,
-  ): Promise<void> {
-    try {
-      await this.propagateResolution(conflict, choice, result);
-    } catch (error) {
-      // 원격에서 지운 노트를 «로컬 유지» 로 풀면 추적을 놓은 뒤 새 페이지를 만든다 — 만들지 못해도
-      // 파일은 추적하지 않는 새 노트로 남아 다음 push 가 만든다. 되돌릴 충돌이 없다.
-      if (isRemoteDeletion(conflict)) {
-        throw new Error(
-          `Notion 에 다시 만들지 못함 — 파일은 그대로이고 다음 push 가 다시 만든다 (${
-            conflict.syncRecord.obsidianPath
-          }): ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-      const record = conflict.syncRecord;
-      this.stateDb.transaction(() => {
-        this.stateDb.updateHash(record.id, record.contentHash, record.baseSnapshot);
-        this.stateDb.updateStatus(record.id, "conflict");
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * 해소 결과를 Notion 으로 전파해 로컬↔원격 일관성을 봉합한다.
-   * - remote 선택: 로컬이 원격으로 갱신됐을 뿐이므로 push 불필요. notionLastEdited 만
-   *   원격 변경의 lastEdited 로 재조정 → 다음 pull 이 같은 변경을 재충돌로 보지 않음.
-   * - merge 실패(충돌 마커 잔존): 사용자가 직접 풀어야 하므로 conflict 상태 유지·push 안 함.
-   * - local / merge(성공) / duplicate: 해소된 로컬 내용을 Notion 에 재push(pushUpdate 가
-   *   변환·이미지·속성·해시·notionLastEdited 를 한 트랜잭션으로 재조정) → 무손실 수렴.
-   * - 원격에서 지운 노트: local 은 새 페이지로 만들고(pushCreate), remote 는 볼트에서 지운 것으로
-   *   끝난다.
-   */
-  private async propagateResolution(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-    result: ResolutionResult,
-  ): Promise<void> {
-    const record = conflict.syncRecord;
-    if (!record.notionPageId) return;
-
-    // 원격에서 지운 노트 — «원격 유지» 는 볼트에서 지운 것으로 끝났다. «로컬 유지» 는 추적을 놓은
-    // 파일을 새 페이지로 만든다(지운 페이지는 휴지통에 그대로 둔다).
-    if (isRemoteDeletion(conflict)) {
-      if (choice === "local") await this.pusher.pushCreate(record.obsidianPath);
-      return;
-    }
-
-    if (choice === "remote") {
-      this.observation.recordUnverified(record.id, conflict.remoteChange.lastEdited);
-      return;
-    }
-
-    // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
-    if (!result.success) return;
-
-    // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push. 해소가 지난
-    // 동기화 사본을 해소 결과로 바꿔 두었으므로 «사본과 달라진 것» 은 없다 — 원격에 맞춰
-    // 보내도록 알린다(DB 행).
-    await this.pusher.pushUpdate(record.obsidianPath, { overwriteRemote: true });
+    return this.conflictWorkflow.generateConflictDiff(conflict);
   }
 }
 
