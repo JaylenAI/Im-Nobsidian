@@ -232,6 +232,21 @@ describe("SyncController", () => {
       expect(onNotice).not.toHaveBeenCalled();
     });
 
+    it("실패하면 알림 없이 상태바를 오류로 두고 이유를 사이드바에 남긴다", async () => {
+      mock.sync.mockRejectedValueOnce(new Error("Notion 502 bad gateway"));
+      const { hooks, onState, onNotice, onStatusBar } = createHooks();
+      await makeController(mock, hooks).vaultSync();
+
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "error",
+          errorMessage: expect.stringContaining("Notion 502 bad gateway"),
+        }),
+      );
+      expect(onNotice).not.toHaveBeenCalled();
+    });
+
     it("진행 중에 온 호출은 겹치지 않고 끝난 뒤 한 번 돈다 — 여러 번 와도 한 번 (S-09)", async () => {
       let resolveSync: (() => void) | null = null;
       mock.sync.mockImplementationOnce(
@@ -358,6 +373,17 @@ describe("SyncController", () => {
       await makeController(mock, hooks).refreshStatus(false);
 
       expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "conflict" }));
+    });
+
+    it("원격 조회가 실패하면 「동기화 중」 에 남지 않고 이유와 함께 오류로 둔다", async () => {
+      mock.status.mockRejectedValueOnce(new Error("Notion 502 bad gateway"));
+      const { hooks, onState, onNotice } = createHooks();
+      await makeController(mock, hooks).refreshStatus(true);
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "error", errorMessage: "Notion 502 bad gateway" }),
+      );
+      expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("Notion 502 bad gateway"));
     });
 
     it("조회 실패는 무시한다(best-effort)", async () => {

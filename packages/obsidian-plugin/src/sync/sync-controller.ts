@@ -263,8 +263,16 @@ export class SyncController {
       try {
         const result = await this.orchestrator.sync({ signal });
         this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
-      } catch {
+      } catch (error) {
+        // 알림은 띄우지 않는다(자동이다). 대신 이유를 사이드바에 남긴다 — 예전에는 상태바만 「오류」
+        // 로 바꾸고 이유를 버려, 무엇을 고쳐야 하는지 알 수 없었다.
         this.hooks.onStatusBar?.("error");
+        this.hooks.onState?.({
+          syncState: "error",
+          operationType: null,
+          progress: null,
+          errorMessage: `자동 동기화 실패: ${error instanceof Error ? error.message : String(error)}`,
+        });
       }
     });
   }
@@ -298,8 +306,9 @@ export class SyncController {
           progress: null,
           errorMessage: null,
         });
-      } catch {
-        // 사이드바 새로고침은 best-effort — 실패해도 무시.
+      } catch (error) {
+        // 사용자가 누른 새로고침이다. 예전에는 무시해 사이드바가 「동기화 중」 에 남았다.
+        this.fail("상태 확인", error);
       }
     });
   }
