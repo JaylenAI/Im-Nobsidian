@@ -176,7 +176,10 @@ describe("WatchSyncService", () => {
       vi.advanceTimersByTime(200);
       await vi.runAllTimersAsync();
 
-      expect(onSyncError).toHaveBeenCalledWith(expect.objectContaining({ message: "network" }));
+      expect(onSyncError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "network" }),
+        "changes",
+      );
     });
   });
 
@@ -265,8 +268,14 @@ describe("WatchSyncService", () => {
       await vi.runAllTimersAsync();
 
       expect(mockOrchestrator.sync).toHaveBeenCalledTimes(2);
-      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(1, { paths: ["a.md"] });
-      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(2, { paths: ["a.md"] });
+      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(1, {
+        paths: ["a.md"],
+        signal: expect.any(AbortSignal),
+      });
+      expect(mockOrchestrator.sync).toHaveBeenNthCalledWith(2, {
+        paths: ["a.md"],
+        signal: expect.any(AbortSignal),
+      });
       expect(service.getPendingCount()).toBe(0);
     });
 
@@ -316,6 +325,188 @@ describe("WatchSyncService", () => {
         const paths = (call[0] as { paths?: string[] } | undefined)?.paths;
         expect(paths && paths.length > 0).toBe(true);
       }
+    });
+  });
+
+  describe("주기 sync 와 겹치지 않는다 (S-09)", () => {
+    /** 다음 sync 호출을 멈춘다 — 끝낼 때 받은 signal 이 취소됐는지도 본다. */
+    function holdNextSync(): { release: () => void; signal: () => AbortSignal | undefined } {
+      let release!: () => void;
+      let received: AbortSignal | undefined;
+      (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (options?: { signal?: AbortSignal }) => {
+          received = options?.signal;
+          return new Promise<SyncResult>((resolve) => {
+            release = () =>
+              resolve({
+                pull: {
+                  created: 0,
+                  updated: 0,
+                  deleted: 0,
+                  conflicts: [],
+                  writtenPaths: [],
+                  failed: [],
+                  duration: 0,
+                },
+                push: { created: 0, updated: 0, deleted: 0, failed: [], duration: 0 },
+                conflicts: [],
+                duration: 0,
+              });
+          });
+        },
+      );
+      return { release: () => release(), signal: () => received };
+    }
+
+    function syncCalls(): Array<{ paths?: string[] } | undefined> {
+      return (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mock.calls.map(
+        (call) => call[0] as { paths?: string[] } | undefined,
+      );
+    }
+
+    it("주기 sync 는 볼트 전체를 본다 — 경로 없이 부른다", async () => {
+      const onSyncStart = vi.fn();
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100, onSyncStart });
+      service.start();
+
+      service.requestFullSync();
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(1);
+      expect(syncCalls()[0]?.paths).toBeUndefined();
+      expect(onSyncStart).toHaveBeenCalledWith("full");
+    });
+
+    it("파일 변경 sync 가 도는 중에 온 주기 sync 는 끝난 뒤 한 번 돈다", async () => {
+      const held = holdNextSync();
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      triggerFileChange("change", "a.md");
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+      expect(service.isSyncing()).toBe(true);
+
+      // 긴 sync 동안 주기가 두 번 지나도 겹쳐 부르지 않는다
+      service.requestFullSync();
+      service.requestFullSync();
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(1);
+
+      held.release();
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(2);
+      expect(syncCalls()[0]?.paths).toEqual(["a.md"]);
+      expect(syncCalls()[1]?.paths).toBeUndefined();
+    });
+
+    it("주기 sync 가 도는 중의 파일 변경은 끝난 뒤 그 경로만 돈다", async () => {
+      const held = holdNextSync();
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      service.requestFullSync();
+      await Promise.resolve();
+      expect(service.isSyncing()).toBe(true);
+
+      triggerFileChange("change", "b.md");
+      vi.advanceTimersByTime(100);
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(1);
+
+      held.release();
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(2);
+      expect(syncCalls()[0]?.paths).toBeUndefined();
+      expect(syncCalls()[1]?.paths).toEqual(["b.md"]);
+    });
+
+    it("stop 은 도는 sync 를 취소하고 끝나기를 기다린다 — 그 뒤 다시 돌리지 않는다", async () => {
+      const held = holdNextSync();
+      const onSyncComplete = vi.fn();
+      const onSyncCancelled = vi.fn();
+      service = new WatchSyncService("/vault", mockOrchestrator, {
+        debounceMs: 100,
+        onSyncComplete,
+        onSyncCancelled,
+      });
+      service.start();
+
+      service.requestFullSync();
+      await Promise.resolve();
+      triggerFileChange("change", "b.md");
+      service.requestFullSync();
+
+      let stopped = 0;
+      const stopping = service.stop().then(() => stopped++);
+      // 멈추는 중에 다시 부른 stop 도 sync 가 끝나기 전에는 돌아오지 않는다
+      const stoppingAgain = service.stop().then(() => stopped++);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(held.signal()?.aborted).toBe(true);
+      expect(stopped).toBe(0);
+
+      held.release();
+      await Promise.all([stopping, stoppingAgain]);
+      await vi.runAllTimersAsync();
+
+      expect(stopped).toBe(2);
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(1);
+      expect(service.isSyncing()).toBe(false);
+      expect(onSyncCancelled).toHaveBeenCalledWith(expect.anything(), "full");
+      expect(onSyncComplete).not.toHaveBeenCalled();
+    });
+
+    it("멈추는 동안 · 멈춘 뒤에 온 파일 이벤트로 sync 하지 않는다", async () => {
+      let closeWatcher!: () => void;
+      mockWatcherStop.mockImplementationOnce(
+        () => new Promise<void>((resolve) => (closeWatcher = resolve)),
+      );
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      const stopping = service.stop();
+      // 파일 감시를 닫는 사이에 이벤트가 온다
+      triggerFileChange("change", "late.md");
+      closeWatcher();
+      await stopping;
+      triggerFileChange("change", "after.md");
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).not.toHaveBeenCalled();
+      expect(service.getPendingCount()).toBe(0);
+    });
+
+    it("멈추는 중에 실패한 sync 는 경로를 되살려 다시 돌리지 않는다", async () => {
+      let fail!: () => void;
+      (mockOrchestrator.sync as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        () =>
+          new Promise<SyncResult>((_resolve, reject) => (fail = () => reject(new Error("중단")))),
+      );
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+
+      triggerFileChange("change", "a.md");
+      vi.advanceTimersByTime(100);
+      await Promise.resolve();
+      const stopping = service.stop();
+      await vi.advanceTimersByTimeAsync(0);
+      fail();
+      await stopping;
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).toHaveBeenCalledTimes(1);
+      expect(service.getPendingCount()).toBe(0);
+    });
+
+    it("멈춘 뒤의 주기 sync 요청은 무시한다", async () => {
+      service = new WatchSyncService("/vault", mockOrchestrator, { debounceMs: 100 });
+      service.start();
+      await service.stop();
+
+      service.requestFullSync();
+      await vi.runAllTimersAsync();
+
+      expect(mockOrchestrator.sync).not.toHaveBeenCalled();
     });
   });
 });
