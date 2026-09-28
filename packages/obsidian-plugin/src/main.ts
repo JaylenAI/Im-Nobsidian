@@ -14,10 +14,11 @@ import type {
   RemoteChange,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
+import { STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
+import { writeFileAtomically } from "./state/atomic-write.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
@@ -280,15 +281,11 @@ export default class ImNobsidianPlugin extends Plugin {
       const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
+      const stateDbFile = nodePath.join(basePath, STATE_DB_PATH);
       this.stateDb = await SqlJsStateDB.open(
         await this.readStateDbFile(),
-        async (data: Uint8Array) => {
-          const adapter = this.app.vault.adapter;
-          if (!(await adapter.exists(INTERNAL_DIR))) {
-            await adapter.mkdir(INTERNAL_DIR);
-          }
-          await adapter.writeBinary(STATE_DB_PATH, data.buffer as ArrayBuffer);
-        },
+        // 한 번에 갈아 끼운다 — 쓰는 도중에 Obsidian 이 죽어도 파일이 잘리지 않는다.
+        (data: Uint8Array) => writeFileAtomically(stateDbFile, data),
         wasmBinary,
       );
 

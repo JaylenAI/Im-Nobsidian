@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, onTestFinished } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Notice } from "obsidian";
@@ -83,8 +83,8 @@ vi.mock("@im-nobsidian/core", () => ({
   EntryEditor: class {
     constructor() {}
   },
-  /** 상태 DB 파일 자리 — 시험은 읽으려 했는지만 본다. */
-  STATE_DB_PATH: "<state-db>",
+  /** 상태 DB 파일 자리 — 볼트 폴더 안의 상대 경로. 시험은 읽기 · 쓰기가 이 자리를 쓰는지 본다. */
+  STATE_DB_PATH: ".state/sync.db",
   DEFAULT_CONFIG: {
     notion: { token: "", rootPageId: "", parentMode: "page", databases: [] },
     sync: { direction: "both", conflictStrategy: "manual", deleteSync: true },
@@ -132,7 +132,7 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
       getLeavesOfType: () => [{ view: { updateState: (patch: unknown) => patches.push(patch) } }],
     },
   };
-  return { plugin, internals, patches, reads: () => reads };
+  return { plugin, internals, patches, vaultPath, reads: () => reads };
 }
 
 /** 상태 DB 파일을 쥔 다른 프로그램(백신 · 클라우드 동기화)이 있을 때 읽기가 내는 오류. */
@@ -141,7 +141,7 @@ function busy(): Promise<ArrayBuffer> {
 }
 
 const READ_FAILURE =
-  "초기화 실패: 상태 DB 를 읽지 못함 (<state-db>): EBUSY: resource busy or locked";
+  "초기화 실패: 상태 DB 를 읽지 못함 (.state/sync.db): EBUSY: resource busy or locked";
 
 describe("ImNobsidianPlugin", () => {
   it("인스턴스 생성", () => {
@@ -330,6 +330,18 @@ describe("ImNobsidianPlugin", () => {
     expect(vi.mocked(SqlJsStateDB.open).mock.calls.map((call) => call[0])).toEqual([saved]);
     expect(internals.syncController).not.toBeNull();
     expect(internals.initFailure).toBeNull();
+  });
+
+  it("상태 DB 는 볼트 폴더의 제자리에 한 번에 갈아 끼워 쓴다 — 옆 임시 파일을 남기지 않는다", async () => {
+    const { plugin, vaultPath } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    vi.mocked(SqlJsStateDB.open).mockClear();
+    await plugin.initOrchestrator();
+    const write = vi.mocked(SqlJsStateDB.open).mock.calls[0]![1]!;
+
+    await write(new Uint8Array([1, 2, 3]));
+
+    expect([...readFileSync(join(vaultPath, ".state", "sync.db"))]).toEqual([1, 2, 3]);
+    expect(readdirSync(join(vaultPath, ".state"))).toEqual(["sync.db"]);
   });
 
   it("동기화할 수 없는 까닭을 가린다 — 설정이 비었으면 설정, 초기화 중이면 준비 중", async () => {
