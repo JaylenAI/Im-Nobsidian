@@ -1,0 +1,25 @@
+/**
+ * 저장된 상태 DB 파일이 깨졌을 때의 CLI 출력 — 이유 뒤에 치우는 법을 붙인다.
+ *
+ * 명령은 처음에 상태 DB 를 연다(`StateDB.open`). 파일이 비었거나 잘렸으면 `SavedStateDbError` 를 던지는데, 명령
+ * 밖으로 나오면 Node 가 코드 위치(스택)와 함께 이유만 보였다 — 사용자가 할 일(파일을 치우기)은 어디에도 없었다.
+ */
+import { SavedStateDbError, damagedStateDbGuidance } from "@im-nobsidian/core";
+import type { ExitableProcess } from "./exit.js";
+
+/** 실패를 보일 말 — 저장된 상태 DB 파일 탓이면 치우는 법을 붙이고, 다른 실패는 그 말 그대로다. */
+export function describeFailure(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (!(error instanceof SavedStateDbError)) return message;
+  return `${message} — ${damagedStateDbGuidance("명령을 다시 실행하세요")}`;
+}
+
+/**
+ * 명령 밖으로 나온 실패를 알린다. 저장된 상태 DB 파일이 깨진 것은 사용자가 고칠 일이라 이유와 치우는 법만 보이고
+ * 실패(1)로 끝낸다. 다른 실패는 그대로 다시 던진다 — 지금까지처럼 Node 가 스택과 함께 보이고 1 로 끝난다.
+ */
+export function reportStateDbFailure(error: unknown, proc: ExitableProcess): void {
+  if (!(error instanceof SavedStateDbError)) throw error;
+  console.error(`오류: ${describeFailure(error)}`);
+  proc.exitCode = 1;
+}

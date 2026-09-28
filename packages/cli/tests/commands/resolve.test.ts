@@ -57,6 +57,7 @@ vi.mock("@inquirer/prompts", () => ({
 }));
 
 import { select } from "@inquirer/prompts";
+import { SavedStateDbError, StateDB } from "@im-nobsidian/core";
 import { resolveCommand } from "../../src/commands/resolve.js";
 
 /** 충돌 픽스처 — 명령이 읽는 필드(경로 · 원격 변경 종류)만 채운다. */
@@ -95,6 +96,24 @@ describe("resolve command", () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runResolve();
     expect(spy).toHaveBeenCalledWith("충돌이 없습니다.");
+    spy.mockRestore();
+  });
+
+  it("상태 DB 파일이 깨져 열지 못하면 이유와 치우는 법을 보이고 exitCode 1", async () => {
+    vi.mocked(StateDB.open).mockImplementationOnce(() => {
+      throw SavedStateDbError.noTables(0);
+    });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await runResolve();
+
+    expect(spy).toHaveBeenCalledWith(
+      "오류:",
+      "저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .im-nobsidian/sync.db 를 사본으로 " +
+        "바꾸거나 다른 곳으로 옮긴 뒤 명령을 다시 실행하세요. 옮기면 처음부터 시작합니다 — 노트와 Notion " +
+        "페이지의 짝을 잃어 다음 push 가 페이지를 새로 만듭니다.",
+    );
+    expect(process.exitCode).toBe(1);
     spy.mockRestore();
   });
 
