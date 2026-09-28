@@ -103,6 +103,8 @@ import { diffRowProperties } from "./row-properties.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
 import { InterruptedSyncRecovery } from "./interrupted-sync.js";
+import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
+import { extractParentId } from "./notion-parent.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   explicitTitle,
@@ -1109,7 +1111,7 @@ export class SyncOrchestrator {
    */
   async verifyCompleteness(): Promise<VaultCompletenessReport> {
     const ids: string[] = [];
-    if (this.isDatabaseMode) ids.push(this.config.notion.databaseId!);
+    if (isDatabaseMode(this.config)) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);
 
     // 캐시가 깨졌으면 설정·볼트 추적분만으로 대조한다(검증 자체는 계속).
@@ -1122,7 +1124,7 @@ export class SyncOrchestrator {
     });
 
     // 페이지 대조는 페이지 모드에서만 의미가 있다 — DB 모드에는 root 서브트리가 없다.
-    const pages = this.isDatabaseMode
+    const pages = isDatabaseMode(this.config)
       ? null
       : await verifyPageCompleteness(
           this.notionClient,
@@ -1252,10 +1254,6 @@ export class SyncOrchestrator {
     }
 
     return conflicts;
-  }
-
-  private get isDatabaseMode(): boolean {
-    return this.config.notion.parentMode === "database" && !!this.config.notion.databaseId;
   }
 
   private async discoverChildDatabases(pageIds: readonly string[]): Promise<{
@@ -1415,7 +1413,7 @@ export class SyncOrchestrator {
       readonly signal?: AbortLike;
     } = {},
   ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
-    if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
+    if (isDatabaseMode(this.config)) return { created: 0, updated: 0, deleted: 0, restored: 0 };
     const { paths, progress, ledger, signal } = options;
     const forceRediscovery = options.forceRediscovery === true;
 
@@ -1937,7 +1935,7 @@ export class SyncOrchestrator {
   }
 
   private async ensureDbSchema(): Promise<void> {
-    if (this.dbSchemaLoaded || !this.isDatabaseMode) return;
+    if (this.dbSchemaLoaded || !isDatabaseMode(this.config)) return;
     const schema = await this.notionClient.getDatabaseSchema(this.config.notion.databaseId!);
     this.propertyMapper.loadSchema(schema);
     this.dbSchemaLoaded = true;
@@ -2312,7 +2310,7 @@ export class SyncOrchestrator {
   ): Promise<boolean> {
     const base = snapshotFrontmatter(record.baseSnapshot);
     if (base === null) return false;
-    const databaseId = this.rowDatabaseOf(record);
+    const databaseId = rowDatabaseOf(this.config, record);
     if (databaseId === null) {
       return titleUnchangedSince(base, record.obsidianPath, this.notionClient.extractTitle(remote));
     }
@@ -2359,7 +2357,7 @@ export class SyncOrchestrator {
     const record = this.stateDb.getByPath(path);
     if (!record?.notionPageId) return;
 
-    const rowDatabaseId = this.rowDatabaseOf(record);
+    const rowDatabaseId = rowDatabaseOf(this.config, record);
     if (rowDatabaseId) {
       await this.pushRowUpdate(path, record, rowDatabaseId, content, {
         overwriteRemote: options?.overwriteRemote === true,
@@ -2464,30 +2462,11 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 이 레코드가 DB 행이면 그 DB id, 페이지면 null.
-   *
-   * 행인지는 전역 모드가 아니라 **레코드** 가 정한다. 페이지 모드 볼트에도 자동 발견된 DB 의
-   * 행(`db-row`)이 있다 — 전역 모드로 가르면 그 행이 페이지로 밀려 속성은 제목만 가고
-   * 나머지는 본문 첫머리에 YAML 로 끼워진다(S-01 · S-02).
-   */
-  private rowDatabaseOf(record: SyncRecord): string | null {
-    if (record.fileType === "db-row") {
-      if (!record.notionParentId) {
-        // 행을 페이지처럼 밀면 속성이 본문으로 새므로, 어느 DB 의 행인지 모르면 멈춘다.
-        throw new Error(`DB 행인데 소속 DB 를 알 수 없음: ${record.obsidianPath}`);
-      }
-      return record.notionParentId;
-    }
-    if (this.isDatabaseMode) return this.config.notion.databaseId!;
-    return null;
-  }
-
-  /**
    * 새 행의 레코드 종류. DB 모드의 노트는 행이어도 페이지 레코드로 적는다 — DB 모드의 pull · 복원 ·
    * 렌더는 그 볼트의 노트를 모두 페이지 레코드로 다루고, 행인지는 전역 모드로 가른다(rowDatabaseOf).
    */
   private newRowFileType(path: string): FileType {
-    if (!this.isDatabaseMode) return "db-row";
+    if (!isDatabaseMode(this.config)) return "db-row";
     return isFolderNotePath(path) ? "folder-note" : "file";
   }
 
@@ -3020,7 +2999,7 @@ export class SyncOrchestrator {
     const op = this.stateDb.getIncompleteOpByState(record.id, "move");
     const from = (op ? moveOrigin(op.payload) : null) ?? change.movedFrom ?? path;
 
-    const rowDatabaseId = this.rowDatabaseOf(record);
+    const rowDatabaseId = rowDatabaseOf(this.config, record);
     const base = snapshotFrontmatter(record.baseSnapshot);
     let current: Record<string, unknown>;
     try {
@@ -3187,7 +3166,7 @@ export class SyncOrchestrator {
     let remotePages: Array<RemotePageStamp & { readonly id: string }>;
     // 새 페이지의 제목 — 볼트 경로가 아직 없어 화면이 이름으로 보인다.
     const titles = new Map<string, string>();
-    if (this.isDatabaseMode) {
+    if (isDatabaseMode(this.config)) {
       // R11-A: 전 data source 를 순회하는 SSOT(queryAllDatabasePages)로 열거한다. 1차 data
       // source 만 페이지네이션하면 2번째+ 소스의 행이 **원격에 없는 것으로 보여**, 미발견에
       // 그치지 않고 deleteSync 시 로컬 파일이 고아로 판정돼 지워진다(pullDatabase 는 이미
@@ -3249,7 +3228,7 @@ export class SyncOrchestrator {
       this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
       for (const page of underRoot) {
         throwIfAborted(signal);
-        const parentId = await this.extractParentId(page);
+        const parentId = await extractParentId(this.notionClient, page);
         if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
       }
       for (const page of underRoot)
@@ -3313,7 +3292,7 @@ export class SyncOrchestrator {
    */
   private rowQueriedDatabaseIds(): Set<string> {
     const ids = (this.config.notion.databases ?? []).map((d) => d.databaseId);
-    if (!this.isDatabaseMode) {
+    if (!isDatabaseMode(this.config)) {
       const inaccessible = this.loadInaccessibleDbIds();
       for (const c of parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))) {
         if (!inaccessible.has(c.databaseId.replace(/-/g, ""))) ids.push(c.databaseId);
@@ -3340,7 +3319,7 @@ export class SyncOrchestrator {
     signal?: AbortLike,
   ): Promise<RemoteChange[]> {
     const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
-    if (this.isDatabaseMode) scope.add(normalizeNotionId(this.config.notion.databaseId!));
+    if (isDatabaseMode(this.config)) scope.add(normalizeNotionId(this.config.notion.databaseId!));
 
     const deleted: SyncRecord[] = [];
     const alive = new Map<SyncRecord, string>();
@@ -3358,7 +3337,8 @@ export class SyncOrchestrator {
           deleted.push(record);
           continue;
         }
-        const parentId = parent.database_id ?? (await this.extractParentId(presence.page));
+        const parentId =
+          parent.database_id ?? (await extractParentId(this.notionClient, presence.page));
         if (parentId) {
           alive.set(record, normalizeNotionId(parentId));
         } else {
@@ -3406,7 +3386,7 @@ export class SyncOrchestrator {
         lastPullAt: this.stateDb.getMeta("last_pull_at"),
         lastFullPullAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
         trackedRecords: this.stateDb.getAll().length,
-        databaseMode: this.isDatabaseMode,
+        databaseMode: isDatabaseMode(this.config),
         fullReconcileIntervalSec: this.config.sync.fullReconcileInterval,
       },
       { force: options.force, now: Date.now(), deferDue: options.deferDue },
@@ -3506,7 +3486,7 @@ export class SyncOrchestrator {
         throwIfAborted(options.signal);
         try {
           const fullPage = await this.notionClient.getPage(page.id);
-          const parentId = await this.extractParentId(fullPage);
+          const parentId = await extractParentId(this.notionClient, fullPage);
           if (parentId) {
             this._childParentIds.add(normalizeNotionId(parentId));
             untracked.push({ page, parentId, title: this.notionClient.extractTitle(fullPage) });
@@ -3709,7 +3689,7 @@ export class SyncOrchestrator {
     }
 
     let properties: Record<string, unknown>;
-    if (this.isDatabaseMode) {
+    if (isDatabaseMode(this.config)) {
       await this.ensureDbSchema();
       properties = this.propertyMapper.fromNotionProperties(
         (page as unknown as { properties: Record<string, unknown> }).properties,
@@ -3720,7 +3700,7 @@ export class SyncOrchestrator {
     // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 —
     // 원본에 없던 `title:` 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize·`(1)` 접미사로
     // 파일명이 제목과 달라진 경우만 보존한다(DB 모드 title 은 Name 컬럼 데이터라 항상 유지).
-    if (this.isDatabaseMode || extractTitle(filePath) !== title) {
+    if (isDatabaseMode(this.config) || extractTitle(filePath) !== title) {
       properties.title = title;
     }
 
@@ -3758,7 +3738,7 @@ export class SyncOrchestrator {
     // API 를 호출(429 가능)하는데, 이를 writeFile 뒤에 두면 기록만 되고 sync_state 등록 전에
     // throw → 재시도 시 같은 페이지가 `(1)` 로 재생성되며 첫 파일이 고아가 된다. 기록↔등록
     // 사이에는 throw 가능한 원격 호출을 두지 않는다(원자적 등록 보장).
-    const resolvedParentId = await this.extractParentId(page);
+    const resolvedParentId = await extractParentId(this.notionClient, page);
 
     await this.vaultFs.writeFile(filePath, finalContent);
 
@@ -3866,7 +3846,7 @@ export class SyncOrchestrator {
     const title = this.notionClient.extractTitle(page);
 
     let properties: Record<string, unknown>;
-    if (this.isDatabaseMode) {
+    if (isDatabaseMode(this.config)) {
       await this.ensureDbSchema();
       properties = this.propertyMapper.fromNotionProperties(
         (page as unknown as { properties: Record<string, unknown> }).properties,
@@ -3875,7 +3855,7 @@ export class SyncOrchestrator {
       properties = this.notionClient.extractProperties(page);
     }
     // D2: pullCreate 와 동일 — 파일명으로 복원 가능한 제목은 주입하지 않는다.
-    if (this.isDatabaseMode || !this.titleFollowsName(record, title)) {
+    if (isDatabaseMode(this.config) || !this.titleFollowsName(record, title)) {
       properties.title = title;
     }
 
@@ -4071,7 +4051,7 @@ export class SyncOrchestrator {
       this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
-    const noPlace = this.isDatabaseMode
+    const noPlace = isDatabaseMode(this.config)
       ? "DB 모드는 폴더 노트를 받지 않음"
       : this.folderLookup().databaseAt(folder)
         ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
@@ -4246,7 +4226,7 @@ export class SyncOrchestrator {
     };
 
     for (const dbConfig of configured) await plan(dbConfig);
-    if (this.isDatabaseMode) return rows;
+    if (isDatabaseMode(this.config)) return rows;
 
     // 폴더 충돌은 실제 pull 처럼 가른다(F24) — 읽어 온 사본만 고치고 상태에는 쓰지 않는다.
     const discovered = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
@@ -4316,7 +4296,7 @@ export class SyncOrchestrator {
     const notePath = folderNoteOf(folderPath);
     const note = this.stateDb.getByPath(notePath);
     if (
-      !this.isDatabaseMode &&
+      !isDatabaseMode(this.config) &&
       note &&
       !note.notionPageId &&
       this.stateDb.getIncompleteOpByState(note.id, "create")
@@ -4837,7 +4817,7 @@ export class SyncOrchestrator {
    */
   private refusedMoves(changes: readonly LocalChange[], view: LocalView): Map<string, string> {
     const refused = new Map<string, string>();
-    if (this.isDatabaseMode) return refused;
+    if (isDatabaseMode(this.config)) return refused;
     for (const change of changes) {
       if (change.type !== "moved") continue;
       const record = view.recordAt(change.path);
@@ -5022,7 +5002,7 @@ export class SyncOrchestrator {
     path: string,
     lookup: FolderLookup = this.folderLookup(),
   ): string | null {
-    if (this.isDatabaseMode) return this.config.notion.databaseId!;
+    if (isDatabaseMode(this.config)) return this.config.notion.databaseId!;
     return lookup.databaseAt(parentFolderOf(path));
   }
 
@@ -5052,7 +5032,7 @@ export class SyncOrchestrator {
   }
 
   private async resolveParentPath(page: PageObjectResponse): Promise<string> {
-    const parentId = await this.extractParentId(page);
+    const parentId = await extractParentId(this.notionClient, page);
     if (!parentId || notionIdsEqual(parentId, this.config.notion.rootPageId)) return "";
 
     const parentRecord = this.stateDb.getByNotionId(parentId);
@@ -5338,41 +5318,6 @@ export class SyncOrchestrator {
       markdown,
       (id) => this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null,
     ).markdown;
-  }
-
-  private async extractParentId(page: PageObjectResponse): Promise<string | null> {
-    const parent = page.parent as {
-      type: string;
-      page_id?: string;
-      database_id?: string;
-      block_id?: string;
-    };
-    if (parent.type === "page_id") return parent.page_id ?? null;
-    if (parent.type === "database_id") return parent.database_id ?? null;
-    if (parent.type === "block_id" && parent.block_id) {
-      return this.resolveBlockToPageId(parent.block_id);
-    }
-    return null;
-  }
-
-  private async resolveBlockToPageId(blockId: string): Promise<string | null> {
-    for (let i = 0; i < 10; i++) {
-      try {
-        const block = await this.notionClient.getBlock(blockId);
-        const bp = (
-          block as unknown as { parent: { type: string; page_id?: string; block_id?: string } }
-        ).parent;
-        if (bp.type === "page_id") return bp.page_id ?? null;
-        if (bp.type === "block_id" && bp.block_id) {
-          blockId = bp.block_id;
-          continue;
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
   }
 
   /**
