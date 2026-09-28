@@ -15,6 +15,7 @@ export type {
   SyncResult,
   StatusResult,
   FolderMoveChange,
+  ChangeDiff,
   FailedOperation,
   SyncDirection,
   FileType,
