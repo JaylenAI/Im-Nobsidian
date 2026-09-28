@@ -1,11 +1,14 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
-import { applicableChoices, isRemoteDeletion } from "@im-nobsidian/core";
+import { mount, unmount } from "svelte";
+import { applicableChoices, isRemoteDeletion, lineDiff } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { choiceText } from "./conflict-choices.js";
+import DiffLines from "./views/DiffLines.svelte";
 
 export class ConflictModal extends Modal {
   private answered = false;
+  private diffView: ReturnType<typeof mount> | null = null;
 
   /**
    * @param onResolve 고른 것을 한 번 알린다. 고르지 않고 닫으면(Esc · 바깥 클릭) null — 예전에는
@@ -37,8 +40,16 @@ export class ConflictModal extends Modal {
         cls: "im-nobsidian-conflict-remote-deleted",
       });
     } else {
-      const diffContainer = contentEl.createDiv({ cls: "im-nobsidian-diff-container" });
-      this.renderDiff(diffContainer);
+      // 줄마다 같은 자리끼리 견주면 한 줄을 끼운 것만으로 그 아래가 모두 바뀐 것으로 보였다 — 실제 줄 비교로 보인다.
+      this.diffView = mount(DiffLines, {
+        target: contentEl.createDiv(),
+        props: {
+          hunks: lineDiff(this.conflict.localContent, this.conflict.remoteContent),
+          oldLabel: "로컬 (Obsidian)",
+          newLabel: "원격 (Notion)",
+          emptyText: "로컬과 원격의 내용이 같습니다",
+        },
+      });
     }
 
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
@@ -56,6 +67,10 @@ export class ConflictModal extends Modal {
   }
 
   onClose(): void {
+    if (this.diffView) {
+      void unmount(this.diffView);
+      this.diffView = null;
+    }
     this.contentEl.empty();
     this.answer(null);
   }
@@ -69,41 +84,5 @@ export class ConflictModal extends Modal {
     if (this.answered) return;
     this.answered = true;
     this.onResolve(choice);
-  }
-
-  private renderDiff(container: HTMLElement): void {
-    const localLines = this.conflict.localContent.split("\n");
-    const remoteLines = this.conflict.remoteContent.split("\n");
-
-    const header = container.createDiv({ cls: "im-nobsidian-diff-header" });
-    header.createSpan({ text: "로컬 (Obsidian)", cls: "im-nobsidian-diff-label-local" });
-    header.createSpan({ text: " vs " });
-    header.createSpan({ text: "원격 (Notion)", cls: "im-nobsidian-diff-label-remote" });
-
-    const diffBody = container.createDiv({ cls: "im-nobsidian-diff-body" });
-
-    const maxLen = Math.max(localLines.length, remoteLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const localLine = localLines[i];
-      const remoteLine = remoteLines[i];
-
-      if (localLine === remoteLine) {
-        const line = diffBody.createDiv({ cls: "im-nobsidian-diff-line im-nobsidian-diff-same" });
-        line.createSpan({ text: `  ${localLine ?? ""}` });
-      } else {
-        if (localLine !== undefined) {
-          const line = diffBody.createDiv({
-            cls: "im-nobsidian-diff-line im-nobsidian-diff-removed",
-          });
-          line.createSpan({ text: `- ${localLine}` });
-        }
-        if (remoteLine !== undefined) {
-          const line = diffBody.createDiv({
-            cls: "im-nobsidian-diff-line im-nobsidian-diff-added",
-          });
-          line.createSpan({ text: `+ ${remoteLine}` });
-        }
-      }
-    }
   }
 }

@@ -41,6 +41,8 @@
 }
 
 .im-nobsidian-diff-container {
+  /* 바뀐 줄 바탕의 짙기 — 지운 줄 · 더한 줄이 같이 쓴다 */
+  --im-nobsidian-diff-tint: 0.15;
   margin: 12px 0;
   border: 1px solid var(--background-modifier-border);
   border-radius: 6px;
@@ -48,6 +50,8 @@
 }
 
 .im-nobsidian-diff-header {
+  display: flex;
+  gap: 16px;
   padding: 8px 12px;
   background-color: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
@@ -55,11 +59,11 @@
   font-weight: 600;
 }
 
-.im-nobsidian-diff-label-local {
+.im-nobsidian-diff-label-old {
   color: var(--text-error);
 }
 
-.im-nobsidian-diff-label-remote {
+.im-nobsidian-diff-label-new {
   color: var(--text-success);
 }
 
@@ -71,19 +75,73 @@
   line-height: 1.5;
 }
 
+/* 옛 줄 번호 · 새 줄 번호 · 부호 · 글 · 줄바꿈 없음 표시 */
 .im-nobsidian-diff-line {
-  padding: 1px 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  display: grid;
+  grid-template-columns: 3em 3em 1.2em minmax(0, 1fr) auto;
+  column-gap: 4px;
+  padding: 0 8px;
 }
 
-.im-nobsidian-diff-removed {
-  background-color: var(--background-modifier-error);
+.im-nobsidian-diff-num {
+  color: var(--text-faint);
+  text-align: right;
+  user-select: none;
+}
+
+.im-nobsidian-diff-sign {
+  text-align: center;
+  user-select: none;
+}
+
+.im-nobsidian-diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.im-nobsidian-diff-eol {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  user-select: none;
+}
+
+/* 바뀌지 않아 접은 줄 */
+.im-nobsidian-diff-gap {
+  padding: 0 8px;
+  text-align: center;
+  color: var(--text-faint);
+  background-color: var(--background-secondary);
+  user-select: none;
+}
+
+.im-nobsidian-diff-status {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.im-nobsidian-diff-error {
   color: var(--text-error);
 }
 
+/*
+ * 바뀐 줄은 옅은 바탕에 보통 글색으로, 부호만 오류 · 성공 색으로 칠한다. 테마의 오류 · 성공 «바탕» 색은
+ * 글색과 같은 진한 색일 수 있다(Obsidian 1.13 어두운 테마: `--background-modifier-error` 와
+ * `--text-error` 가 둘 다 #fb464c) — 예전처럼 둘을 함께 쓰면 바뀐 줄의 글이 바탕에 묻혀 보이지 않았다.
+ */
+.im-nobsidian-diff-removed {
+  background-color: rgba(var(--color-red-rgb), var(--im-nobsidian-diff-tint));
+}
+
 .im-nobsidian-diff-added {
-  background-color: var(--background-modifier-success);
+  background-color: rgba(var(--color-green-rgb), var(--im-nobsidian-diff-tint));
+}
+
+.im-nobsidian-diff-removed .im-nobsidian-diff-sign {
+  color: var(--text-error);
+}
+
+.im-nobsidian-diff-added .im-nobsidian-diff-sign {
   color: var(--text-success);
 }
 
@@ -94,6 +152,16 @@
 .im-nobsidian-conflict-buttons .setting-item {
   border-top: none;
   padding: 6px 0;
+}
+
+/* Change Diff Modal — 변경 패널에서 연 줄 비교. 긴 노트를 보므로 충돌 창보다 넓고 길다. */
+
+.modal.im-nobsidian-change-diff-modal {
+  width: min(960px, 92vw);
+}
+
+.im-nobsidian-change-diff-modal .im-nobsidian-diff-body {
+  max-height: 65vh;
 }
 
 /* Sync Sidebar */
