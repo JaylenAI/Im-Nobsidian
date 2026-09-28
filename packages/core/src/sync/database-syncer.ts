@@ -32,6 +32,8 @@ import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles } from "./db-base-files.js";
+import type { DatabasePullLedger } from "./remote-scan.js";
+import type { AbortLike } from "../utils/pool.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
@@ -146,6 +148,10 @@ export class DatabaseSyncer {
   async pullAll(opts?: {
     readonly paths?: readonly string[];
     readonly progress?: RowProgress;
+    /** 조회할 DB 와 DB 마다의 결과(ADR-027). 없으면 모든 DB 를 조회한다. */
+    readonly ledger?: DatabasePullLedger;
+    /** 취소하면 다음 DB 를 조회하지 않는다 — 닿지 못한 DB 는 다음 pull 이 조회한다. */
+    readonly signal?: AbortLike;
   }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) return emptyDatabaseSyncResult();
@@ -157,8 +163,17 @@ export class DatabaseSyncer {
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
     const writtenPaths: string[] = [];
+    const ledger = opts?.ledger;
 
     for (const dbConfig of databases) {
+      if (ledger && !ledger.selects(dbConfig.databaseId)) {
+        ledger.skip();
+        continue;
+      }
+      if (opts?.signal?.aborted) {
+        ledger?.retry(dbConfig.databaseId);
+        continue;
+      }
       try {
         const result = await this.pullDatabase(dbConfig, {
           paths: opts?.paths,
@@ -171,7 +186,11 @@ export class DatabaseSyncer {
         conflicts.push(...result.conflicts);
         failed.push(...result.failed);
         writtenPaths.push(...result.writtenPaths);
+        // 받지 못한 행이 있으면 다음 pull 이 다시 조회한다 — 그 행의 수정 시각은 다음 조회 창 밖이다.
+        if (result.failed.length > 0) ledger?.retry(dbConfig.databaseId);
+        else ledger?.settle(dbConfig.databaseId);
       } catch (error) {
+        ledger?.retry(dbConfig.databaseId);
         getLogger().warn(`[DB Sync] DB ${dbConfig.databaseId} pull 실패:`, error);
         failed.push({
           path: dbConfig.localFolder,

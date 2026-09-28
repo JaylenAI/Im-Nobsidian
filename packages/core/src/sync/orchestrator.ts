@@ -91,6 +91,20 @@ import {
   type RemoteVerdict,
 } from "./remote-observation.js";
 import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
+import {
+  ALL_DATABASES,
+  chooseRemoteScan,
+  DatabasePullLedger,
+  LAST_FULL_PULL_META_KEY,
+  parsePendingDatabases,
+  PENDING_DATABASES_META_KEY,
+  remoteScanInfo,
+  serializePendingDatabases,
+  type DatabaseSelection,
+  type RemoteScan,
+} from "./remote-scan.js";
+import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
+import type { AbortLike } from "../utils/pool.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties } from "./row-properties.js";
 import { OperationGate } from "./operation-gate.js";
@@ -168,6 +182,15 @@ interface LocalPlan {
   readonly settledMoveOps: readonly string[];
 }
 
+/**
+ * 원격에서 찾은 변경. 증분이면 바뀐 것이 보인 DB 도 함께 — 행을 고쳤거나 · 새 행이 생겼거나 · 스키마를
+ * 고친 DB(id 는 {@link compactNotionId}). 전체 대조면 null 이다 — 모든 DB 를 조회한다(ADR-027).
+ */
+interface RemoteDetection {
+  readonly changes: RemoteChange[];
+  readonly databaseIds: ReadonlySet<string> | null;
+}
+
 /** 옮겨 적은 뒤의 볼트 — 경로의 레코드와 폴더 판정. */
 interface LocalView {
   recordAt(path: string): SyncRecord | null;
@@ -217,6 +240,14 @@ const LINKED_DBS_META_KEY = "linked_dbs";
  * DB 행 조회 실패는 여기 두지 않는다 — 그 DB 는 캐시에 남아 다음 pull 이 다시 받는다.
  */
 const DISCOVERY_RETRY_META_KEY = "discovery_retry";
+
+/**
+ * 하위 DB 블록 스캔을 마친 시각을 두는 상태 메타 키. 스캔은 추적 페이지마다 요청 1회라 처음 한 번만
+ * 한다 — 그 뒤에 생긴 DB 는 받은 페이지의 본문(`<database>` 태그)으로 찾는다. 예전에는 «발견한 DB
+ * 캐시가 비었는가» 로 가려, DB 가 하나도 없는 볼트는 원격이 그대로여도 pull 마다 모든 페이지를 다시
+ * 훑었다.
+ */
+const DISCOVERY_SCANNED_META_KEY = "discovery_scanned_at";
 
 interface DiscoveryRetry {
   /** 자식 DB 를 확인하지 못한 페이지. */
@@ -666,6 +697,30 @@ export class SyncOrchestrator {
     let detected: readonly RemoteChange[] = [];
     const applied = new Set<RemoteChange>();
 
+    await this.resolveBotUserId();
+    // 원격을 얼마나 훑을지(ADR-027). 경로를 좁힌 pull 은 볼트 전체를 받지 않으므로 주기가 됐어도
+    // 전체 대조하지 않는다 — 전체 대조를 마친 것으로 적을 수 없다.
+    const scan = this.remoteScan({ force: options?.force === true, deferDue: !!options?.paths });
+    let detection: RemoteDetection;
+    try {
+      detection = await this.detectRemote(scan, { signal: options?.signal, databases: true });
+    } catch (error) {
+      // 취소 — 받은 것이 없다. 기준 시각 · 전체 대조 시각을 옮기지 않고 끝낸다.
+      if (error instanceof OperationAbortedError) {
+        return { ...emptyResult, duration: Date.now() - startTime };
+      }
+      throw error;
+    }
+    const remoteChanges = detection.changes;
+    detected = remoteChanges;
+    const pendingDatabases = parsePendingDatabases(
+      this.stateDb.getMeta(PENDING_DATABASES_META_KEY),
+    );
+    const ledger = new DatabasePullLedger(
+      this.databaseSelection(detection, localPlan, pendingDatabases, options?.paths),
+      pendingDatabases,
+    );
+
     // M2: pull 의 모든 종료 경로가 동일하게 마감되도록 단일 헬퍼로 모은다 —
     // 기록된 파일(writtenPaths)의 본문 링크·frontmatter relation 후처리(resolveNotionLinks)와
     // 메타 마킹을 빠짐없이 거친다. 과거엔 디스커버리 DB 전용 조기 반환 경로가 이 후처리를
@@ -681,13 +736,20 @@ export class SyncOrchestrator {
       // 있으면 그 수정 시각 앞으로 묶는다. 경로를 좁힌 pull 은 범위 밖을 받지 않았으므로
       // 옮기지 않는다 — 옮기면 범위 밖 변경이 다음 조회 창 밖으로 밀린다.
       if (!options?.paths) {
+        const startedAt = new Date(startTime).toISOString();
         this.stateDb.setMeta(
           "last_pull_at",
           nextPullWatermark(
-            new Date(startTime).toISOString(),
+            startedAt,
             detected.filter((change) => !applied.has(change)),
           ),
         );
+        // 전체 대조를 마쳤다 — 취소로 끊겼으면 다 훑지 못했으니 적지 않는다. 받지 못한 DB 는
+        // 대기로 남아 다음 pull 이 조회한다.
+        if (scan.kind === "full" && !options?.signal?.aborted) {
+          this.stateDb.setMeta(LAST_FULL_PULL_META_KEY, startedAt);
+        }
+        this.savePendingDatabases(ledger);
       }
       this.stateDb.setMeta("last_sync_at", new Date().toISOString());
       this.stateDb.setMeta("pull_in_progress", "");
@@ -703,15 +765,16 @@ export class SyncOrchestrator {
         imageCount: this._pullImageCount,
         fileCount: this._pullFileCount,
         linkCount,
+        remoteScan: {
+          ...remoteScanInfo(
+            scan,
+            this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
+            this.config.sync.deleteSync,
+          ),
+          skippedDatabases: ledger.skipped,
+        },
       };
     };
-
-    await this.resolveBotUserId();
-    const watermark = this.incrementalWatermark(options?.force === true);
-    const remoteChanges = watermark
-      ? await this.detectRemoteChangesIncremental(watermark)
-      : await this.detectRemoteChanges();
-    detected = remoteChanges;
 
     const filtered = options?.paths
       ? remoteChanges.filter((c) => {
@@ -742,7 +805,7 @@ export class SyncOrchestrator {
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
     // 예전에는 페이지 변경이 없으면 dry-run 도 아래 DB 경로로 가 행을 실제로 썼다(N-01).
     if (options?.dryRun) {
-      return this.planPull(filtered, restoreChanges, localPlan, options, startTime);
+      return this.planPull(filtered, restoreChanges, localPlan, options, startTime, scan, ledger);
     }
 
     let pullTotal = workItems.length;
@@ -757,6 +820,51 @@ export class SyncOrchestrator {
       done: (item) => onProgress(++pullCompleted, pullTotal, item),
     };
 
+    // 설정한 DB(pullAll)와 발견한 DB 를 받는다. 조회는 `ledger` 가 고른 DB 만 — 바뀐 것이 보이지
+    // 않은 DB 는 요청 없이 건너뛴다(ADR-027). 예전에는 pull 마다 모든 DB 를 다시 조회했다(실볼트
+    // 발견 DB 166개 — 원격이 그대로여도 재pull 523.5초).
+    const pullDatabases = async (): Promise<void> => {
+      if ((this.config.notion.databases?.length ?? 0) > 0) {
+        try {
+          const dbResult = await this.databaseSyncer.pullAll({
+            paths: options?.paths,
+            progress: rowProgress,
+            ledger,
+            signal: options?.signal,
+          });
+          counts.created += dbResult.created;
+          counts.updated += dbResult.updated;
+          counts.deleted += dbResult.deleted;
+          counts.restored += dbResult.restored;
+          conflicts.push(...dbResult.conflicts);
+          failed.push(...dbResult.failed);
+          // M3: 후처리 대상은 실제 기록된 행 경로를 그대로 받는다. 과거엔 "synced 상태의
+          // db-row 중 마지막 N개" 라는 슬라이스 추정을 썼는데, 정렬·기존행 혼입 때문에
+          // 엉뚱한 파일을 후처리하거나 갓 쓴 행을 놓쳐 링크가 미해소로 남았다.
+          writtenPaths.push(...dbResult.writtenPaths);
+        } catch (error) {
+          // 경고로만 남기면 pull 이 성공으로 끝나, 사용자는 설정한 DB 를 받지 못한 줄 모른다.
+          getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
+          failed.push({
+            path: "",
+            operation: "update",
+            error: `설정한 DB 를 받지 못함: ${error instanceof Error ? error.message : String(error)}`,
+          });
+        }
+      }
+      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts, {
+        forceRediscovery: options?.force === true,
+        paths: options?.paths,
+        progress: rowProgress,
+        ledger,
+        signal: options?.signal,
+      });
+      counts.created += dbDiscovery.created;
+      counts.updated += dbDiscovery.updated;
+      counts.deleted += dbDiscovery.deleted;
+      counts.restored += dbDiscovery.restored;
+    };
+
     if (workItems.length === 0) {
       // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
       // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
@@ -766,41 +874,8 @@ export class SyncOrchestrator {
       // 거치므로, 이 조기 반환만 어휘가 달랐던 셈이다.
       // 기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감된다(emptyResult 와 동일).
       // 기록이 생겼다면 그 행들의 본문 링크·frontmatter relation 을 finalize 가 해소한다(M2).
-      let dbCreated = 0;
-      let dbUpdated = 0;
-      let dbDeleted = 0;
-      let dbRestored = 0;
-      if ((this.config.notion.databases?.length ?? 0) > 0) {
-        try {
-          const dbResult = await this.databaseSyncer.pullAll({
-            paths: options?.paths,
-            progress: rowProgress,
-          });
-          dbCreated += dbResult.created;
-          dbUpdated += dbResult.updated;
-          dbDeleted += dbResult.deleted;
-          dbRestored += dbResult.restored;
-          conflicts.push(...dbResult.conflicts);
-          failed.push(...dbResult.failed);
-          writtenPaths.push(...dbResult.writtenPaths);
-        } catch (error) {
-          getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
-        }
-      }
-      const dbDiscovery = await this.pullDiscoveredDatabases(
-        writtenPaths,
-        failed,
-        conflicts,
-        options?.force === true,
-        options?.paths,
-        rowProgress,
-      );
-      return finalize(
-        dbCreated + dbDiscovery.created,
-        dbUpdated + dbDiscovery.updated,
-        dbDeleted + dbDiscovery.deleted,
-        dbRestored + dbDiscovery.restored,
-      );
+      await pullDatabases();
+      return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
     }
 
     this.stateDb.setMeta("pull_in_progress", "true");
@@ -911,42 +986,7 @@ export class SyncOrchestrator {
       );
     }
 
-    if ((this.config.notion.databases?.length ?? 0) > 0) {
-      try {
-        const dbResult = await this.databaseSyncer.pullAll({
-          paths: options?.paths,
-          progress: rowProgress,
-        });
-        counts.created += dbResult.created;
-        counts.updated += dbResult.updated;
-        counts.deleted += dbResult.deleted;
-        counts.restored += dbResult.restored;
-        conflicts.push(...dbResult.conflicts);
-        failed.push(...dbResult.failed);
-        // M3: 후처리 대상은 실제 기록된 행 경로를 그대로 받는다. 과거엔 "synced 상태의
-        // db-row 중 마지막 N개" 라는 슬라이스 추정을 썼는데, 정렬·기존행 혼입 때문에
-        // 엉뚱한 파일을 후처리하거나 갓 쓴 행을 놓쳐 링크가 미해소로 남았다.
-        writtenPaths.push(...dbResult.writtenPaths);
-      } catch (error) {
-        getLogger().warn("[Im-Nobsidian] DB Pull 중 오류:", error);
-      }
-    }
-
-    {
-      const dbDiscovery = await this.pullDiscoveredDatabases(
-        writtenPaths,
-        failed,
-        conflicts,
-        options?.force === true,
-        options?.paths,
-        rowProgress,
-      );
-      counts.created += dbDiscovery.created;
-      counts.updated += dbDiscovery.updated;
-      counts.deleted += dbDiscovery.deleted;
-      counts.restored += dbDiscovery.restored;
-    }
-
+    await pullDatabases();
     return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
   }
 
@@ -987,12 +1027,11 @@ export class SyncOrchestrator {
     const localChanges = plan.scan.changes;
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
     await this.resolveBotUserId();
-    const watermark = this.incrementalWatermark();
-    const remoteChanges = await this.withoutUnchangedRemotes(
-      watermark
-        ? await this.detectRemoteChangesIncremental(watermark)
-        : await this.detectRemoteChanges(),
-    );
+    // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
+    // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
+    const scan = this.remoteScan({ force: false, deferDue: true });
+    const detection = await this.detectRemote(scan, { databases: false });
+    const remoteChanges = await this.withoutUnchangedRemotes(detection.changes);
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
     const conflicts: Conflict[] = await this.buildConflictsFromRecords(
@@ -1000,6 +1039,7 @@ export class SyncOrchestrator {
       localChanges,
       remoteChanges,
     );
+    const lastFullScanAt = this.stateDb.getMeta(LAST_FULL_PULL_META_KEY);
 
     return {
       localChanges,
@@ -1009,6 +1049,8 @@ export class SyncOrchestrator {
       conflictRecords,
       pendingOperations: conflictRecords.length,
       lastSyncAt,
+      lastFullScanAt,
+      remoteScan: remoteScanInfo(scan, lastFullScanAt, this.config.sync.deleteSync),
     };
   }
 
@@ -1029,6 +1071,7 @@ export class SyncOrchestrator {
       conflictRecords,
       pendingOperations: conflictRecords.length,
       lastSyncAt,
+      lastFullScanAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
     };
   }
 
@@ -1352,15 +1395,29 @@ export class SyncOrchestrator {
     }
   }
 
+  /**
+   * 자동 발견한 DB 를 받는다 — 새로 발견한 DB 를 등록하고, 등록된 DB 가운데 `ledger` 가 고른 것과
+   * 이번에 새로 등록한 것만 조회한다(ADR-027). 조회하지 않은 DB 는 목록에 그대로 남는다.
+   *
+   * @param options.forceRediscovery `--force` — 블록을 다시 훑고 접근 불가 DB 를 다시 확인한다.
+   * @param options.ledger 조회할 DB 와 DB 마다의 결과. 없으면 모든 DB 를 조회한다.
+   * @param options.signal 취소하면 다음 DB 를 조회하지 않는다 — 닿지 못한 DB 는 대기로 남는다.
+   */
   private async pullDiscoveredDatabases(
     writtenPaths: string[],
     failed: FailedOperation[],
     conflicts: Conflict[],
-    forceRediscovery = false,
-    paths?: readonly string[],
-    progress?: RowProgress,
+    options: {
+      readonly forceRediscovery?: boolean;
+      readonly paths?: readonly string[];
+      readonly progress?: RowProgress;
+      readonly ledger?: DatabasePullLedger;
+      readonly signal?: AbortLike;
+    } = {},
   ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
+    const { paths, progress, ledger, signal } = options;
+    const forceRediscovery = options.forceRediscovery === true;
 
     let created = 0;
     let updated = 0;
@@ -1378,6 +1435,8 @@ export class SyncOrchestrator {
         ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
       ]);
       let changed = false;
+      // 이번 pull 이 새로 등록한 DB — 받은 적이 없어 바뀐 것이 보이지 않아도 조회한다.
+      const registeredNow = new Set<string>();
 
       // F24: 동명 형제 DB(같은 부모 아래 같은 제목 인라인 DB — 실측 22쌍)는 제목 기반
       // 폴더 유도가 충돌해 .base/사이드카를 서로 덮어쓰고 행이 한 폴더에 섞인다.
@@ -1472,6 +1531,7 @@ export class SyncOrchestrator {
           if (outcome.kind === "ok") {
             claimFolder(outcome.config);
             dbConfigs.push(outcome.config);
+            registeredNow.add(origNohyph);
             changed = true;
           } else if (outcome.kind === "error") {
             retryLater(origId, parentPageId, outcome.error);
@@ -1492,6 +1552,7 @@ export class SyncOrchestrator {
         if (outcome.kind === "ok") {
           claimFolder(outcome.config);
           dbConfigs.push(outcome.config);
+          registeredNow.add(nohyph);
           changed = true;
         } else if (outcome.kind === "linked") {
           const origNohyph = outcome.originalDbId.replace(/-/g, "");
@@ -1506,33 +1567,47 @@ export class SyncOrchestrator {
       };
 
       // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
-      //     캐시가 비었을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
+      //     한 번도 훑지 않았을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
       //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
-      //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다.
-      const scanAll = dbConfigs.length === 0 || forceRediscovery;
-      const scanIds = scanAll
-        ? [
-            this.config.notion.rootPageId,
-            ...this.stateDb
-              .getAll()
-              .filter((r) => r.notionPageId)
-              .map((r) => r.notionPageId!),
-          ]
-        : retry.parents;
-      if (scanIds.length > 0) {
-        const { found, unread } = await this.discoverChildDatabases(scanIds);
-        for (const { dbId, parentPageId } of found) {
+      //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다. 캐시가 찬 볼트는 이 표시가
+      //     생기기 전에 훑었다 — 다시 훑지 않는다.
+      const scanAll =
+        forceRediscovery ||
+        (dbConfigs.length === 0 && !this.stateDb.getMeta(DISCOVERY_SCANNED_META_KEY));
+      if (signal?.aborted) {
+        // 취소했으면 훑지 않는다 — 페이지마다 요청 1회라 첫 pull 에서는 분 단위다. 다시 볼 것은
+        // 그대로 남긴다(캐시가 비어 있으면 다음 pull 이 처음부터 훑는다).
+        nextRetry.parents.push(...retry.parents);
+        nextRetry.dbs.push(...retry.dbs);
+      } else {
+        const scanIds = scanAll
+          ? [
+              this.config.notion.rootPageId,
+              ...this.stateDb
+                .getAll()
+                .filter((r) => r.notionPageId)
+                .map((r) => r.notionPageId!),
+            ]
+          : retry.parents;
+        if (scanIds.length > 0) {
+          const { found, unread } = await this.discoverChildDatabases(scanIds);
+          for (const { dbId, parentPageId } of found) {
+            await register(dbId, parentPageId);
+          }
+          for (const { pageId, error } of unread) unreadParent(pageId, error);
+        }
+        for (const { dbId, parentPageId } of retry.dbs) {
           await register(dbId, parentPageId);
         }
-        for (const { pageId, error } of unread) unreadParent(pageId, error);
-      }
-      for (const { dbId, parentPageId } of retry.dbs) {
-        await register(dbId, parentPageId);
+        // 다 훑었다 — 읽지 못한 페이지는 위에서 다시 볼 것으로 적었다.
+        if (scanAll) this.stateDb.setMeta(DISCOVERY_SCANNED_META_KEY, new Date().toISOString());
       }
 
       // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
       //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
       //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
+      //     취소했어도 등록한다 — 받은 페이지는 다시 받지 않으니 여기서 놓치면 그 DB 는 페이지를
+      //     다시 고치거나 `--force` 할 때까지 발견되지 않는다. 조회는 아래에서 취소를 따른다.
       for (const [nohyph, parentPageId] of this._inlineDbRefs) {
         await register(normalizeNotionId(nohyph), parentPageId);
       }
@@ -1558,7 +1633,19 @@ export class SyncOrchestrator {
       for (let round = 1; queue.length > 0; round++) {
         const roundRowPaths: string[] = [];
         for (const dbConfig of queue) {
-          if (inaccessibleIds.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
+          const nohyph = dbConfig.databaseId.replace(/-/g, "");
+          if (inaccessibleIds.has(nohyph)) continue;
+          // 바뀐 것이 보이지 않은 DB 는 조회하지 않는다(ADR-027) — 목록에는 그대로 둔다.
+          if (ledger && !registeredNow.has(nohyph) && !ledger.selects(dbConfig.databaseId)) {
+            ledger.skip();
+            stillSyncable.push(dbConfig);
+            continue;
+          }
+          if (signal?.aborted) {
+            ledger?.retry(dbConfig.databaseId);
+            stillSyncable.push(dbConfig);
+            continue;
+          }
           try {
             const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, {
               resolveDbFolder,
@@ -1575,6 +1662,7 @@ export class SyncOrchestrator {
               );
               linkedChanged = true;
               changed = true;
+              ledger?.settle(dbConfig.databaseId);
               getLogger().info(
                 `[Im-Nobsidian] DB ${dbConfig.databaseId}: linked view 컨테이너 감지 → 행은 원본 ${dbResult.linkedOriginalDbId} 폴더가 단일 소유(F25)`,
               );
@@ -1590,12 +1678,17 @@ export class SyncOrchestrator {
             writtenPaths.push(...dbResult.writtenPaths);
             roundRowPaths.push(...dbResult.writtenPaths);
             stillSyncable.push(dbConfig);
+            // 받지 못한 행이 있으면 다음 pull 이 다시 조회한다 — 그 행의 수정 시각은 다음 조회 창 밖이다.
+            if (dbResult.failed.length > 0) ledger?.retry(dbConfig.databaseId);
+            else ledger?.settle(dbConfig.databaseId);
           } catch (error) {
             if (isNotionObjectNotFound(error)) {
               // 캐시에 있었지만 이제 행 조회가 404 — 링크드/미공유/삭제로 강등(스택트레이스 억제).
               degrade(dbConfig.databaseId);
+              ledger?.settle(dbConfig.databaseId);
             } else {
               // 일시적/실제 오류 — 캐시에 유지해 다음 pull 에 재시도한다. 이유는 실패로 싣는다.
+              ledger?.retry(dbConfig.databaseId);
               getLogger().warn(`[Im-Nobsidian] DB ${dbConfig.databaseId} 동기화 실패:`, error);
               failed.push({
                 path: dbConfig.localFolder,
@@ -1614,9 +1707,11 @@ export class SyncOrchestrator {
         queue = dbConfigs.slice(before);
         if (queue.length > 0 && round >= MAX_DISCOVERY_ROUNDS) {
           // 등록은 이미 캐시(dbConfigs)에 반영됐으므로 다음 pull 의 캐시 루프가 이어받는다.
+          // 대기로 적는다 — 다음 pull 은 바뀐 DB 만 조회하므로 적지 않으면 받지 못한 채로 남는다.
           getLogger().warn(
             `[Im-Nobsidian] 중첩 DB 발견 라운드 한도(${MAX_DISCOVERY_ROUNDS}) 도달 — ${queue.length}개는 다음 pull 에서 동기화`,
           );
+          for (const dbConfig of queue) ledger?.retry(dbConfig.databaseId);
           stillSyncable.push(...queue);
           break;
         }
@@ -1626,6 +1721,9 @@ export class SyncOrchestrator {
           );
         }
       }
+
+      // 대기는 이제 동기화하는 DB 만 — 설정에서 뺐거나 · 접근 불가로 뺀 DB 를 영영 들고 있지 않는다.
+      ledger?.keepOnly([...configuredIds, ...stillSyncable.map((c) => c.databaseId)]);
 
       // 발견·강등·정리 결과를 캐시에 1회 반영(접근 불가 DB 는 stillSyncable 에서 빠져 제거됨).
       if (changed || inaccessibleChanged || stillSyncable.length !== dbConfigs.length) {
@@ -3156,7 +3254,12 @@ export class SyncOrchestrator {
     });
   }
 
-  private async detectRemoteChanges(): Promise<RemoteChange[]> {
+  /**
+   * 전체 대조 — 루트 아래 페이지를 모두 훑고 추적 중인데 목록에 없는 페이지를 원격에 물어 삭제를
+   * 가른다. 취소하면 {@link OperationAbortedError} 를 던진다 — 다 훑지 못한 목록으로 삭제를 가르지
+   * 않는다.
+   */
+  private async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
     const lastPull = this.stateDb.getMeta("last_pull_at");
@@ -3201,6 +3304,7 @@ export class SyncOrchestrator {
       try {
         underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
           deadlineMs: Date.now() + SyncOrchestrator.DISCOVERY_RECURSIVE_BUDGET_MS,
+          signal,
         });
       } catch (error) {
         if (!(error instanceof DiscoveryTooLargeError)) throw error;
@@ -3210,6 +3314,7 @@ export class SyncOrchestrator {
         );
         const viaSearch = await this.notionClient.getPagesUnderRootViaSearch(
           this.config.notion.rootPageId,
+          signal,
         );
         // id 로 디듀프한다 — 아래 remotePages 차단점도 디듀프하지만, 그 전에 도는
         // _childParentIds 루프의 extractParentId 가 block 부모마다 API 를 부를 수 있어
@@ -3227,6 +3332,7 @@ export class SyncOrchestrator {
       // 부모가 page_id 면 추가 API 호출 없이 즉시 해석(공통 경로), block 중첩만 1회 조회.
       this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
       for (const page of underRoot) {
+        throwIfAborted(signal);
         const parentId = await this.extractParentId(page);
         if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
       }
@@ -3279,7 +3385,7 @@ export class SyncOrchestrator {
             queriedDatabases.has(normalizeNotionId(r.notionParentId))
           ),
       );
-      changes.push(...(await this.confirmedDeletions(orphans, seenRemoteIds)));
+      changes.push(...(await this.confirmedDeletions(orphans, seenRemoteIds, signal)));
     }
 
     return changes;
@@ -3315,6 +3421,7 @@ export class SyncOrchestrator {
   private async confirmedDeletions(
     orphans: readonly SyncRecord[],
     listed: ReadonlySet<string>,
+    signal?: AbortLike,
   ): Promise<RemoteChange[]> {
     const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
     if (this.isDatabaseMode) scope.add(normalizeNotionId(this.config.notion.databaseId!));
@@ -3322,6 +3429,7 @@ export class SyncOrchestrator {
     const deleted: SyncRecord[] = [];
     const alive = new Map<SyncRecord, string>();
     for (const record of orphans) {
+      throwIfAborted(signal);
       const pageId = record.notionPageId!;
       try {
         const presence = await remotePresence(this.notionClient, pageId);
@@ -3369,35 +3477,103 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 증분 감지의 기준 시각 — 쓸 수 없으면 null(전체 대조). pull 과 status 가 같은 규칙을 읽는다:
-   * 둘이 갈리면 status 가 「원격 변경 없음」 이라고 한 것을 pull 이 받는다.
+   * 이번 실행이 원격을 얼마나 훑을지(ADR-027) — pull 과 status 가 같은 규칙을 읽는다: 둘이 갈리면
+   * status 가 「원격 변경 없음」 이라고 한 것을 pull 이 받는다.
    *
-   * - 기준 시각은 `last_pull_at` 뿐이다. push 도 올리는 `last_sync_at` 은 «그 앞의 원격 변경을
-   *   받았다» 는 뜻이 아니다 — push 만 한 볼트가 그 시각부터 증분으로 조회하면 그 전에 원격에만
-   *   있던 페이지를 영영 받지 못한다.
-   * - 증분(searchRecentPages)은 in_trash 페이지를 못 보므로 삭제를 감지하지 못한다(I10).
-   *   deleteSync 가 켜진 경우엔 삭제 전파가 필요하니 반드시 전체 대조로 사라진 추적 페이지를
-   *   잡는다. 꺼진 경우엔 어차피 삭제를 전파하지 않으므로 빠른 증분 경로가 안전하다.
+   * 증분의 기준 시각은 `last_pull_at` 뿐이다. push 도 올리는 `last_sync_at` 은 «그 앞의 원격 변경을
+   * 받았다» 는 뜻이 아니다 — push 만 한 볼트가 그 시각부터 증분으로 조회하면 그 전에 원격에만 있던
+   * 페이지를 영영 받지 못한다.
    */
-  private incrementalWatermark(force = false): string | null {
-    const lastPull = this.stateDb.getMeta("last_pull_at");
-    if (!lastPull || force || this.isDatabaseMode || this.config.sync.deleteSync) return null;
-    return this.stateDb.getAll().length > 0 ? lastPull : null;
+  private remoteScan(options: { readonly force: boolean; readonly deferDue: boolean }): RemoteScan {
+    return chooseRemoteScan(
+      {
+        lastPullAt: this.stateDb.getMeta("last_pull_at"),
+        lastFullPullAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
+        trackedRecords: this.stateDb.getAll().length,
+        databaseMode: this.isDatabaseMode,
+        fullReconcileIntervalSec: this.config.sync.fullReconcileInterval,
+      },
+      { force: options.force, now: Date.now(), deferDue: options.deferDue },
+    );
+  }
+
+  /**
+   * 원격 변경을 찾는다 — 전체 대조면 모두 훑고({@link detectRemoteChanges}), 아니면 바뀐 것만
+   * ({@link detectRemoteChangesIncremental}). 취소하면 {@link OperationAbortedError} 를 던진다.
+   *
+   * @param options.databases 바뀐 DB 도 찾는다(pull · dry-run). 상태 확인은 DB 를 조회하지 않아 찾지 않는다.
+   */
+  private async detectRemote(
+    scan: RemoteScan,
+    options: { readonly signal?: AbortLike; readonly databases: boolean },
+  ): Promise<RemoteDetection> {
+    if (scan.kind === "full") {
+      return { changes: await this.detectRemoteChanges(options.signal), databaseIds: null };
+    }
+    return this.detectRemoteChangesIncremental(scan.since, options);
+  }
+
+  /**
+   * 이번 pull 이 조회할 DB(ADR-027).
+   *
+   * - 전체 대조 · 경로를 좁힌 pull → 모두. 경로를 좁혔으면 범위에 닿는 DB 만 조회된다 — 사용자가 고른
+   *   것이고, 범위가 비용을 묶는다.
+   * - 증분 → 바뀐 것이 보인 DB · 지난번에 받지 못한 DB(대기) · 볼트에서 행이 사라진 DB. 행을 되살리는
+   *   것은 DB 조회다 — deleteSync 가 꺼져 있을 때만: 켜져 있으면 지운 것은 원격에도 지우라는 뜻이라
+   *   되살리지 않는다({@link detectMissingLocalFiles} 와 같다).
+   */
+  private databaseSelection(
+    detection: RemoteDetection,
+    localPlan: LocalPlan | null,
+    pending: ReadonlySet<string>,
+    paths: readonly string[] | undefined,
+  ): DatabaseSelection {
+    if (!detection.databaseIds || paths) return ALL_DATABASES;
+    const ids = new Set([...detection.databaseIds, ...pending]);
+    if (!this.config.sync.deleteSync && localPlan) {
+      for (const change of localPlan.scan.changes) {
+        if (change.type !== "deleted") continue;
+        const record = this.stateDb.getByPath(change.path);
+        if (record?.fileType === "db-row" && record.notionParentId) {
+          ids.add(compactNotionId(record.notionParentId));
+        }
+      }
+    }
+    return { kind: "changed", ids };
+  }
+
+  /** 다음 pull 이 바뀐 것이 없어도 조회할 DB 를 적는다 — 바뀐 때만. */
+  private savePendingDatabases(ledger: DatabasePullLedger): void {
+    const serialized = serializePendingDatabases(ledger.nextPending());
+    const saved = this.stateDb.getMeta(PENDING_DATABASES_META_KEY);
+    if ((saved ?? serializePendingDatabases(new Set())) !== serialized) {
+      this.stateDb.setMeta(PENDING_DATABASES_META_KEY, serialized);
+    }
   }
 
   /**
    * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
-   * 만든다. **삭제는 의도적으로 감지하지 않는다**: search API 는 in_trash/archived 페이지를
-   * 반환하지 않아(=사라진 것을 증분만으로는 구분 불가) 삭제 판정에는 전체 enumeration 이
-   * 필수다. 따라서 호출부는 `deleteSync` 가 켜진 경우 이 fast-path 를 쓰지 않고
-   * `detectRemoteChanges`(전체 스캔, 삭제 diff 포함)로 우회한다. (I10)
+   * 만든다. **삭제는 감지하지 않는다**: search API 는 in_trash/archived 페이지를 반환하지 않아
+   * (=사라진 것을 증분만으로는 구분 불가) 삭제는 전체 대조(`detectRemoteChanges`)가 가른다.
+   * 전체 대조는 주기마다 돈다(ADR-027 — 예전에는 deleteSync 가 켜져 있으면 매번 돌았다. I10).
+   *
+   * 바뀐 행 · 새 행 · 스키마를 고친 DB 도 모은다 — pull 은 그 DB 만 조회한다. 새 행은 페이지로 받지
+   * 않는다: DB 조회가 행 속성과 함께 받는다. 그래서 부모를 묻지 않는다(행마다 요청 1회 이상 아낀다).
+   *
+   * @param options.databases pull · dry-run — 바뀐 DB 를 모으고, 추적 중인 행은 DB 조회에 맡긴다.
+   *   false(상태 확인)면 DB 를 찾지 않고 고친 행도 원격 변경으로 싣는다.
    */
-  private async detectRemoteChangesIncremental(since: string): Promise<RemoteChange[]> {
+  private async detectRemoteChangesIncremental(
+    since: string,
+    options: { readonly signal?: AbortLike; readonly databases: boolean },
+  ): Promise<RemoteDetection> {
     const changes: RemoteChange[] = [];
+    const databaseIds = new Set<string>();
     this._childParentIds.clear();
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
-    const recentPages = await this.notionClient.searchRecentPages(incrementalSearchSince(since));
+    const searchSince = incrementalSearchSince(since);
+    const recentPages = await this.notionClient.searchRecentPages(searchSince, options.signal);
     const untracked: Array<{
       page: (typeof recentPages)[number];
       parentId: string;
@@ -3407,6 +3583,11 @@ export class SyncOrchestrator {
     for (const page of recentPages) {
       const record = this.stateDb.getByNotionId(page.id);
       if (!record) {
+        if (page.parentDatabaseId) {
+          databaseIds.add(compactNotionId(page.parentDatabaseId));
+          continue;
+        }
+        throwIfAborted(options.signal);
         try {
           const fullPage = await this.notionClient.getPage(page.id);
           const parentId = await this.extractParentId(fullPage);
@@ -3422,6 +3603,14 @@ export class SyncOrchestrator {
       // 조회 창(기준 시각 − 안전창 15분)은 가라앉지 않은 레코드의 수정 시각을 늘 담는다 — 가라앉지
       // 않았다는 것은 그 시각이 마지막으로 본 때(기준 시각 뒤)보다 2분 안쪽이라는 뜻이다.
       const modified = this.remoteModification(record, page);
+      // 바뀐 행의 DB 만 조회한다 — 창에 다시 든 그대로인 행으로 조회하면 안전창 동안 pull 마다 같은
+      // DB 를 다시 조회한다.
+      const rowDatabase =
+        page.parentDatabaseId ?? (record.fileType === "db-row" ? record.notionParentId : null);
+      if (modified && rowDatabase) databaseIds.add(compactNotionId(rowDatabase));
+      // pull 은 추적 중인 행도 그 DB 를 조회해 받는다 — 페이지로도 받으면 같은 행을 두 번 받는다(같은
+      // 분 안의 편집은 DB 조회가 한 번 더 받아 견준다). 상태 확인은 DB 를 조회하지 않으니 원격 변경으로 둔다.
+      if (options.databases && record.fileType === "db-row") continue;
       if (modified) changes.push(modified);
     }
 
@@ -3449,7 +3638,18 @@ export class SyncOrchestrator {
       }
     }
 
-    return changes;
+    // 스키마를 고친 DB — 행이 그대로여도 `.base` 와 행의 속성을 다시 받아야 한다. 행을 고쳐도 DB 의
+    // 수정 시각은 그대로고, 스키마를 고치면 data source 의 수정 시각이 바뀐다(실측 2026-09-28).
+    if (options.databases) {
+      for (const source of await this.notionClient.searchRecentDataSources(
+        searchSince,
+        options.signal,
+      )) {
+        if (source.databaseId) databaseIds.add(compactNotionId(source.databaseId));
+      }
+    }
+
+    return { changes, databaseIds };
   }
 
   private isTrackedParent(parentId: string): boolean {
@@ -3995,8 +4195,9 @@ export class SyncOrchestrator {
 
   /**
    * pull 할 것을 세기만 한다(dry-run) — 볼트 · 상태 DB · Notion 을 바꾸지 않는다. 페이지와 DB 행을
-   * 같이 센다. DB 는 설정한 DB 와 이미 발견해 둔 DB 만 센다 — 이번 pull 이 새로 발견할 DB 는 받아
-   * 봐야 안다. 세지 못한 DB 는 이유와 함께 `failed` 에 싣는다(세지 못한 것을 없다고 하지 않는다).
+   * 같이 센다. DB 는 설정한 DB 와 이미 발견해 둔 DB 가운데 실제 pull 이 조회할 것(`ledger`)만 센다 —
+   * 이번 pull 이 새로 발견할 DB 는 받아 봐야 안다. 세지 못한 DB 는 이유와 함께 `failed` 에 싣는다
+   * (세지 못한 것을 없다고 하지 않는다).
    */
   private async planPull(
     filtered: RemoteChange[],
@@ -4004,6 +4205,8 @@ export class SyncOrchestrator {
     localPlan: LocalPlan | null,
     options: PullOptions,
     startTime: number,
+    scan: RemoteScan,
+    ledger: DatabasePullLedger,
   ): Promise<PullResult> {
     // 받지 않으니 «확인 안 됨» 은 내용으로 가른다 — 같은 분 안에 바뀐 것이 없으면 세지 않는다.
     const unchangedDropped = await this.withoutUnchangedRemotes(filtered);
@@ -4016,12 +4219,12 @@ export class SyncOrchestrator {
       }
     }
     const failed: FailedOperation[] = [];
-    // 증분 감지는 바뀐 행도 페이지 변경으로 잡는다. 실제 pull 은 그 행을 페이지 경로에서 먼저 받고,
-    // 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다 — 행은 페이지 변경 쪽에서 한 번만 센다.
+    // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
+    // pull 은 그 행을 페이지 경로에서 먼저 받고, 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다.
     const queued = new Set(
       [...filtered, ...restoreChanges].map((change) => compactNotionId(change.pageId)),
     );
-    const rows = (await this.planDatabaseRows(options.paths, failed)).filter(
+    const rows = (await this.planDatabaseRows(options.paths, failed, ledger)).filter(
       (row) => !queued.has(compactNotionId(row.pageId)),
     );
 
@@ -4063,6 +4266,14 @@ export class SyncOrchestrator {
       imageCount: 0,
       fileCount: 0,
       linkCount: 0,
+      remoteScan: {
+        ...remoteScanInfo(
+          scan,
+          this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
+          this.config.sync.deleteSync,
+        ),
+        skippedDatabases: ledger.skipped,
+      },
     };
   }
 
@@ -4090,6 +4301,7 @@ export class SyncOrchestrator {
   private async planDatabaseRows(
     paths: readonly string[] | undefined,
     failed: FailedOperation[],
+    ledger: DatabasePullLedger,
   ): Promise<PlannedRow[]> {
     const configured = this.config.notion.databases ?? [];
     const rows: PlannedRow[] = [];
@@ -4097,6 +4309,11 @@ export class SyncOrchestrator {
       dbConfig: DiscoveredDbConfig,
       resolveDbFolder?: (dbId: string) => string | null,
     ): Promise<void> => {
+      // 실제 pull 이 조회하지 않을 DB 는 세지 않는다 — 조회하지 않으면 받을 것도 없다.
+      if (!ledger.selects(dbConfig.databaseId)) {
+        ledger.skip();
+        return;
+      }
       try {
         rows.push(
           ...(await this.databaseSyncer.planDatabase(dbConfig, { paths, resolveDbFolder })),

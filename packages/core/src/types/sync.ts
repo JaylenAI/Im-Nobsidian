@@ -228,6 +228,11 @@ export interface StatusResult {
   readonly conflictRecords: SyncRecord[];
   readonly pendingOperations: number;
   readonly lastSyncAt: string | null;
+  /**
+   * 마지막으로 원격을 전체 대조한 pull 이 시작한 때. 한 번도 없으면 null. Notion 에서 지운 노트는 전체
+   * 대조 때 볼트에 반영된다 — 화면은 이것으로 그때를 알린다 (ADR-027).
+   */
+  readonly lastFullScanAt: string | null;
   /** 원격을 얼마나 훑었나. 로컬만 본 확인(`statusLocal`)에는 없다. */
   readonly remoteScan?: RemoteScanInfo;
 }
