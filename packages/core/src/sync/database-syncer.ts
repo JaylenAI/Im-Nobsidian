@@ -3,7 +3,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
-import type { Conflict, FailedOperation, SyncRecord } from "../types/sync.js";
+import type { Conflict, FailedOperation, ProgressItem, SyncRecord } from "../types/sync.js";
 import type { DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
@@ -84,6 +84,16 @@ export interface PlannedRow {
   readonly restore?: boolean;
 }
 
+/**
+ * 행을 받는 진행 — 진행 표시가 페이지와 행을 한 목록 · 한 수로 보이게 한다. 행은 DB 를 조회해야 몇
+ * 개인지 알아, 받기 전에 이 DB 에서 받을 행 수를 `planned` 로 알리고 행 하나를 마칠 때마다 `done` 을
+ * 부른다. 지운 행은 조회에 없어 미리 셀 수 없다 — 지울 때 `planned(1)` 뒤에 `done` 을 부른다.
+ */
+export interface RowProgress {
+  planned(count: number): void;
+  done(item: ProgressItem): void;
+}
+
 function emptyDatabaseSyncResult(): DatabaseSyncResult {
   return {
     created: 0,
@@ -134,7 +144,10 @@ export class DatabaseSyncer {
     });
   }
 
-  async pullAll(opts?: { readonly paths?: readonly string[] }): Promise<DatabaseSyncResult> {
+  async pullAll(opts?: {
+    readonly paths?: readonly string[];
+    readonly progress?: RowProgress;
+  }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) return emptyDatabaseSyncResult();
 
@@ -148,7 +161,10 @@ export class DatabaseSyncer {
 
     for (const dbConfig of databases) {
       try {
-        const result = await this.pullDatabase(dbConfig, { paths: opts?.paths });
+        const result = await this.pullDatabase(dbConfig, {
+          paths: opts?.paths,
+          progress: opts?.progress,
+        });
         created += result.created;
         updated += result.updated;
         deleted += result.deleted;
@@ -183,6 +199,8 @@ export class DatabaseSyncer {
        * 새 행은 DB 폴더 전체가 범위일 때만 만든다 — 받기 전에는 어느 경로에 쓸지 모른다.
        */
       paths?: readonly string[];
+      /** 받은 행 · 지운 행을 하나씩 알린다. 예전에는 pull 진행 표시에 행이 하나도 보이지 않았다. */
+      progress?: RowProgress;
     },
   ): Promise<DatabaseSyncResult> {
     const scope = opts?.paths;
@@ -217,13 +235,29 @@ export class DatabaseSyncer {
     // 정확히 이 파일들만 재방문하도록 슬라이스 추정 대신 실측 수집한다.
     const writtenPaths: string[] = [];
 
+    const rowFailure = (page: PageObjectResponse, error: unknown): FailedOperation => ({
+      path: `${dbConfig.localFolder}/${page.id}`,
+      operation: "create",
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    // 받을 행을 먼저 가른다 — 진행 표시가 이 DB 에서 받을 행 수를 받기 전에 안다.
+    const pending: { page: PageObjectResponse; restoring: boolean }[] = [];
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
         const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
-        if (action === "skip") continue;
         // 원격 무변경인데도 되살리려고 내려온 행인가 — 아래 집계에서 updated 와 가른다.
-        const restoring = action === "restore";
+        if (action !== "skip") pending.push({ page, restoring: action === "restore" });
+      } catch (error) {
+        failed.push(rowFailure(page, error));
+      }
+    }
+    opts?.progress?.planned(pending.length);
+
+    for (const { page, restoring } of pending) {
+      try {
+        const record = this.stateDb.getByNotionId(page.id);
 
         // R9e: 행 1건 처리도 합성 경로다 — 블록 조회·첨부 다운로드·변환·파일 IO 가 얽혀
         // 있어 호출 단위 상한만으로는 덮이지 않는다. R9b 가 오케스트레이터의 페이지 루프
@@ -247,16 +281,16 @@ export class DatabaseSyncer {
           conflicts.push(outcome.conflict);
         }
         // skipped(local-first) · unchanged(받아 보니 그대로): 카운트하지 않음
-      } catch (error) {
-        failed.push({
-          path: `${dbConfig.localFolder}/${page.id}`,
-          operation: "create",
-          error: error instanceof Error ? error.message : String(error),
+        opts?.progress?.done({
+          path: outcome.path ?? record?.obsidianPath ?? `${dbConfig.localFolder}/${page.id}`,
+          operation: record ? "update" : "create",
         });
+      } catch (error) {
+        failed.push(rowFailure(page, error));
       }
     }
 
-    const removal = await this.pullDeletedRows(dbConfig, pages, opts?.paths);
+    const removal = await this.pullDeletedRows(dbConfig, pages, opts?.paths, opts?.progress);
     const deleted = removal.deleted;
     conflicts.push(...removal.conflicts);
 
@@ -456,6 +490,7 @@ export class DatabaseSyncer {
     dbConfig: DatabaseSyncConfig,
     pages: readonly PageObjectResponse[],
     paths: readonly string[] | undefined,
+    progress: RowProgress | undefined,
   ): Promise<{ deleted: number; conflicts: Conflict[] }> {
     const conflicts: Conflict[] = [];
     if (!this.config.sync.deleteSync || dbConfig.pullFilter) return { deleted: 0, conflicts };
@@ -472,6 +507,8 @@ export class DatabaseSyncer {
         });
         if (outcome.action === "deleted") deleted++;
         else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
+        progress?.planned(1);
+        progress?.done({ path: record.obsidianPath, operation: "delete" });
       } catch (error) {
         getLogger().warn(
           `[DB Sync] 조회에 없는 행 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,

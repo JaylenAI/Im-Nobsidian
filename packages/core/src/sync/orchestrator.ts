@@ -34,7 +34,7 @@ import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
-import { DatabaseSyncer, type PlannedRow } from "./database-syncer.js";
+import { DatabaseSyncer, type PlannedRow, type RowProgress } from "./database-syncer.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
 import {
@@ -744,6 +744,18 @@ export class SyncOrchestrator {
       return this.planPull(filtered, restoreChanges, localPlan, options, startTime);
     }
 
+    let pullTotal = workItems.length;
+    let pullCompleted = 0;
+    // 행은 DB 를 조회해야 몇 개인지 안다 — 받을 행 수만큼 전체를 늘려 페이지와 한 수 · 한 목록으로
+    // 보인다. 예전에는 행을 알리지 않아, 행이 대부분인 볼트는 pull 내내 진행 표시가 멈춰 보였다.
+    const onProgress = options?.onProgress;
+    const rowProgress: RowProgress | undefined = onProgress && {
+      planned: (count) => {
+        pullTotal += count;
+      },
+      done: (item) => onProgress(++pullCompleted, pullTotal, item),
+    };
+
     if (workItems.length === 0) {
       // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
       // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
@@ -759,7 +771,10 @@ export class SyncOrchestrator {
       let dbRestored = 0;
       if ((this.config.notion.databases?.length ?? 0) > 0) {
         try {
-          const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
+          const dbResult = await this.databaseSyncer.pullAll({
+            paths: options?.paths,
+            progress: rowProgress,
+          });
           dbCreated += dbResult.created;
           dbUpdated += dbResult.updated;
           dbDeleted += dbResult.deleted;
@@ -777,6 +792,7 @@ export class SyncOrchestrator {
         conflicts,
         options?.force === true,
         options?.paths,
+        rowProgress,
       );
       return finalize(
         dbCreated + dbDiscovery.created,
@@ -787,9 +803,6 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("pull_in_progress", "true");
-
-    const pullTotal = workItems.length;
-    let pullCompleted = 0;
 
     // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
     const toFailure = (change: RemoteChange, error: unknown): FailedOperation => {
@@ -899,7 +912,10 @@ export class SyncOrchestrator {
 
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
-        const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
+        const dbResult = await this.databaseSyncer.pullAll({
+          paths: options?.paths,
+          progress: rowProgress,
+        });
         counts.created += dbResult.created;
         counts.updated += dbResult.updated;
         counts.deleted += dbResult.deleted;
@@ -922,6 +938,7 @@ export class SyncOrchestrator {
         conflicts,
         options?.force === true,
         options?.paths,
+        rowProgress,
       );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
@@ -1340,6 +1357,7 @@ export class SyncOrchestrator {
     conflicts: Conflict[],
     forceRediscovery = false,
     paths?: readonly string[],
+    progress?: RowProgress,
   ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
 
@@ -1544,6 +1562,7 @@ export class SyncOrchestrator {
             const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, {
               resolveDbFolder,
               paths,
+              progress,
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
@@ -3924,11 +3943,17 @@ export class SyncOrchestrator {
 
     const items: ProgressItem[] = [];
     // 옮겨 적지 않았으니 레코드는 옛 경로다 — 실제 pull 이 쓸 새 경로로 보인다(S-11).
+    // 새 페이지는 받기 전에는 자리를 모른다(부모 · 자식 페이지가 정한다) — Notion 제목으로 보인다.
+    // 예전에는 내부 id 를 보였다.
     const plannedPath = this.plannedPaths(localPlan);
     for (const change of [...planned, ...restoreChanges]) {
       const record = this.stateDb.getByNotionId(change.pageId);
       items.push({
-        path: (record && plannedPath.get(record.id)) ?? record?.obsidianPath ?? change.pageId,
+        path:
+          (record && plannedPath.get(record.id)) ??
+          record?.obsidianPath ??
+          change.title ??
+          change.pageId,
         operation:
           change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
       });

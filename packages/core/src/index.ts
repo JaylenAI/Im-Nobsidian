@@ -102,6 +102,7 @@ export type {
   FileDownloadResult,
   DatabaseSyncResult,
   PlannedRow,
+  RowProgress,
   GatedOperation,
 } from "./sync/index.js";
 
