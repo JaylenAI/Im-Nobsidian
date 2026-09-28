@@ -14,12 +14,7 @@ import type {
   RemoteChange,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import {
-  STATE_DB_PATH,
-  MARKER_BRAND,
-  SavedStateDbError,
-  damagedStateDbGuidance,
-} from "@im-nobsidian/core";
+import { STATE_DB_PATH, MARKER_BRAND, StateDbUnavailableError } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
@@ -338,10 +333,11 @@ export default class ImNobsidianPlugin extends Plugin {
       await this.refreshSidebarStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      // 파일이 깨졌을 때만 치우는 법을 알린다 — 엔진을 띄우지 못한 것 같은 다른 실패에 붙이면 멀쩡한 기록을 치우게 된다.
+      // 사용자가 풀 수 있는 실패(파일이 깨짐)에만 할 일을 붙인다 — 엔진을 띄우지 못한 것 같은 다른 실패에 파일을
+      // 치우라고 하면 멀쩡한 기록을 치우게 된다.
       const guidance =
-        error instanceof SavedStateDbError
-          ? ` — ${damagedStateDbGuidance("동기화 사이드바에서 새로고침을 누르세요")}`
+        error instanceof StateDbUnavailableError
+          ? ` — ${error.guidance("동기화 사이드바에서 새로고침을 누르세요")}`
           : "";
       this.initFailure = `초기화 실패: ${message}${guidance}`;
       new Notice(`Im-Nobsidian ${this.initFailure}`);

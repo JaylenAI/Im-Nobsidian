@@ -39,7 +39,7 @@ program.addCommand(watchCommand);
 program.addCommand(verifyCommand);
 
 // 강제 종료하되 명령이 정한 종료 코드를 보존한다 — 근거는 utils/exit.ts 참조(R11-C).
-// 상태 DB 파일이 깨져 명령이 던졌으면 이유와 치우는 법을 보이고 1 로 끝낸다 — utils/state-db-failure.ts.
+// 상태 DB 를 쓸 수 없어 명령이 던졌으면 이유와 할 일을 보이고 1 로 끝낸다 — utils/state-db-failure.ts.
 program.parseAsync().then(
   () => {
     scheduleForcedExit(process);

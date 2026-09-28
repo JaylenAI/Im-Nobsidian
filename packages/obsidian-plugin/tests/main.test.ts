@@ -44,9 +44,9 @@ vi.mock("@im-nobsidian/core", async () => ({
   // 저장된 상태 DB 오류와 안내 문구는 진짜를 쓴다 — 사용자가 보는 문구를 그대로 본다
   ...(await vi
     .importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
-    .then(({ SavedStateDbError, damagedStateDbGuidance }) => ({
+    .then(({ StateDbUnavailableError, SavedStateDbError }) => ({
+      StateDbUnavailableError,
       SavedStateDbError,
-      damagedStateDbGuidance,
     }))),
   NotionClient: class {
     constructor() {}
