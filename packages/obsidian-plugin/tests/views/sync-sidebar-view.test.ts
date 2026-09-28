@@ -106,6 +106,31 @@ describe("SyncSidebarView", () => {
     expect(mount).toHaveBeenCalledTimes(1);
   });
 
+  it("변경 패널의 항목별 올리기 · 되돌리기 · 받기를 그 노트 경로로 넘긴다", () => {
+    const actions = {
+      onPull: vi.fn(),
+      onPush: vi.fn(),
+      onSync: vi.fn(),
+      onRefresh: vi.fn(),
+      onResolveConflict: vi.fn(),
+      onCancel: vi.fn(),
+      onOpenFile: vi.fn(),
+      onPushPath: vi.fn().mockResolvedValue(undefined),
+      onDiscardPath: vi.fn().mockResolvedValue(undefined),
+      onPullPath: vi.fn().mockResolvedValue(undefined),
+    };
+    view.setActions(actions);
+    view.updateState({ lastSyncAt: null });
+
+    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (p: string) => void>;
+    props.onPushPath!("a.md");
+    props.onDiscardPath!("b.md");
+    props.onPullPath!("c.md");
+    expect(actions.onPushPath).toHaveBeenCalledWith("a.md");
+    expect(actions.onDiscardPath).toHaveBeenCalledWith("b.md");
+    expect(actions.onPullPath).toHaveBeenCalledWith("c.md");
+  });
+
   it("actions 없으면 mount 안 함", () => {
     view.updateState({});
     expect(mount).not.toHaveBeenCalled();

@@ -154,6 +154,7 @@ export default class ImNobsidianPlugin extends Plugin {
         },
         onPushPath: async (path: string) => this.syncController?.push([path]),
         onDiscardPath: async (path: string) => this.syncController?.discard(path),
+        onPullPath: async (path: string) => this.syncController?.pull([path]),
       });
       return view;
     });

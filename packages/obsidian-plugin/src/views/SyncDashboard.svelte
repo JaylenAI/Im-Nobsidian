@@ -39,6 +39,7 @@
     onOpenFile: (path: string) => void;
     onPushPath: (path: string) => void;
     onDiscardPath: (path: string) => void;
+    onPullPath: (path: string) => void;
     onResolveConflict: () => void;
   }
 
@@ -61,6 +62,7 @@
     onOpenFile,
     onPushPath,
     onDiscardPath,
+    onPullPath,
     onResolveConflict,
   }: Props = $props();
 
@@ -222,6 +224,22 @@
     return path.split("/").pop()?.replace(/\.md$/, "") ?? path;
   }
 
+  function folderOf(path: string): string {
+    return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  /** 원격 변경의 이름 — 볼트에 있는 노트는 노트 이름, 아직 없는 새 페이지는 Notion 제목. */
+  function remoteName(change: RemoteChange): string {
+    if (change.path) return fileName(change.path);
+    return change.title ?? "Notion 페이지";
+  }
+
+  function remotePullLabel(change: RemoteChange): string {
+    return change.type === "deleted"
+      ? "Notion 에서 지운 대로 이 노트도 지우기"
+      : "이 노트만 Notion 에서 받기";
+  }
+
   let changesExpanded = $state(true);
   let remoteExpanded = $state(true);
   let conflictsExpanded = $state(true);
@@ -328,9 +346,7 @@
                   >{typeIcon(change.type)}</span
                 >
                 <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
-                <span class="im-sync-file-path" title={change.path}
-                  >{change.path.substring(0, change.path.lastIndexOf("/"))}</span
-                >
+                <span class="im-sync-file-path" title={change.path}>{folderOf(change.path)}</span>
               </button>
               <span class="im-sync-file-actions">
                 <button
@@ -376,14 +392,39 @@
       {#if remoteExpanded}
         <div class="im-sync-file-list">
           {#each remoteChanges as change (change.pageId)}
-            <div class="im-sync-file-item">
-              <span class="im-sync-file-type {typeClass(change.type)}">{typeIcon(change.type)}</span>
-              <span class="im-sync-file-name" title={change.pageId}>
-                {change.pageId.slice(0, 8)}...
-              </span>
-              <span class="im-sync-file-path">
-                {change.type === "created" ? "새 페이지" : change.type === "modified" ? "수정됨" : change.type === "deleted" ? "삭제됨" : "이동됨"}
-              </span>
+            <div class="im-sync-file-row">
+              <button
+                class="im-sync-file-item"
+                onclick={() => change.path && onOpenFile(change.path)}
+                type="button"
+              >
+                <span class="im-sync-file-type {typeClass(change.type)}"
+                  >{typeIcon(change.type)}</span
+                >
+                <span class="im-sync-file-name" title={change.path ?? change.title}
+                  >{remoteName(change)}</span
+                >
+                <span class="im-sync-file-path" title={change.path}
+                  >{change.path
+                    ? folderOf(change.path)
+                    : change.type === "created"
+                      ? "새 페이지"
+                      : ""}</span
+                >
+              </button>
+              {#if change.path}
+                {@const path = change.path}
+                <span class="im-sync-file-actions">
+                  <button
+                    class="im-sync-file-action"
+                    aria-label={remotePullLabel(change)}
+                    title={remotePullLabel(change)}
+                    disabled={isSyncing}
+                    onclick={() => onPullPath(path)}
+                    type="button">↓</button
+                  >
+                </span>
+              {/if}
             </div>
           {/each}
         </div>

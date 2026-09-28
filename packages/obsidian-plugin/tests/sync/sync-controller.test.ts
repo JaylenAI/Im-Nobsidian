@@ -245,6 +245,123 @@ describe("SyncController", () => {
       expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("추적하지 않는 새 노트"));
       expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "error" }));
     });
+
+    it("항목 받기는 그 노트만 pull 한다 — 전체 받기는 범위를 싣지 않는다", async () => {
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull(["a/노트.md"]);
+      await controller.pull();
+      expect(mock.pull.mock.calls[0][0]).toMatchObject({ paths: ["a/노트.md"] });
+      expect(mock.pull.mock.calls[1][0]).not.toHaveProperty("paths");
+    });
+  });
+
+  describe("받은 원격 변경은 목록에서 빠진다", () => {
+    const edited = {
+      pageId: "3e813b18-d382-8127-a761-c5dc986d858a",
+      type: "modified",
+      path: "a/가.md",
+    };
+    const other = { pageId: "p-b", type: "modified", path: "나.md" };
+    const fresh = { pageId: "p-c", type: "created", title: "Notion 새 페이지" };
+
+    function pulled(overrides: Record<string, unknown> = {}) {
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        restored: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: 0,
+        imageCount: 0,
+        fileCount: 0,
+        linkCount: 0,
+        ...overrides,
+      };
+    }
+
+    /** 원격까지 확인해 세 변경을 목록에 올린 컨트롤러. */
+    async function checked() {
+      mock.status.mockResolvedValue({
+        lastSyncAt: null,
+        localChanges: [],
+        remoteChanges: [edited, other, fresh],
+        conflicts: [],
+        conflictRecords: [],
+        pendingOperations: 0,
+      });
+      const { hooks, onState } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.refreshStatus(true);
+      onState.mockClear();
+      const shown = () =>
+        onState.mock.calls
+          .map(([patch]) => patch)
+          .filter((patch) => "remoteChanges" in patch)
+          .at(-1)?.remoteChanges;
+      return { controller, shown };
+    }
+
+    it("항목 받기는 그 노트만 뺀다 — 이어 받으면 남은 목록에서 이어 뺀다", async () => {
+      const { controller, shown } = await checked();
+      mock.pull.mockResolvedValue(pulled({ updated: 1 }));
+      await controller.pull(["a/가.md"]);
+      expect(shown()).toEqual([other, fresh]);
+      await controller.pull(["나.md"]);
+      expect(shown()).toEqual([fresh]);
+    });
+
+    it("전체 받기는 모두 뺀다", async () => {
+      const { controller, shown } = await checked();
+      mock.pull.mockResolvedValue(pulled({ created: 1, updated: 2 }));
+      await controller.pull();
+      expect(shown()).toEqual([]);
+    });
+
+    it("받지 못한 노트는 남긴다 — 실패가 있으면 어느 새 페이지가 실패했는지 몰라 새 페이지도 남긴다", async () => {
+      const { controller, shown } = await checked();
+      mock.pull.mockResolvedValue(
+        pulled({ failed: [{ path: "나.md", operation: "update", error: "429" }] }),
+      );
+      await controller.pull();
+      expect(shown()).toEqual([other, fresh]);
+    });
+
+    it("충돌한 노트는 남긴다 — id 를 쓰는 모양이 달라도 같은 페이지로 본다", async () => {
+      const { controller, shown } = await checked();
+      mock.pull.mockResolvedValue(
+        pulled({
+          conflicts: [{ remoteChange: { pageId: "3e813b18d3828127a761c5dc986d858a" } }],
+        }),
+      );
+      await controller.pull();
+      expect(shown()).toEqual([edited]);
+    });
+
+    it("취소한 pull 은 무엇을 받았는지 몰라 목록을 그대로 둔다", async () => {
+      const { controller, shown } = await checked();
+      mock.pull.mockImplementation(async () => {
+        controller.cancel();
+        return pulled({ updated: 1 });
+      });
+      await controller.pull();
+      expect(shown()).toBeUndefined();
+    });
+
+    it("Sync · 볼트 이벤트 sync 도 받은 것을 뺀다", async () => {
+      const sync = { push: pulled(), pull: pulled({ updated: 1 }), conflicts: [], duration: 0 };
+      mock.sync.mockResolvedValue(sync);
+
+      const user = await checked();
+      await user.controller.sync();
+      expect(user.shown()).toEqual([]);
+
+      const vault = await checked();
+      await vault.controller.vaultSync();
+      expect(vault.shown()).toEqual([]);
+    });
   });
 
   describe("vaultSync", () => {

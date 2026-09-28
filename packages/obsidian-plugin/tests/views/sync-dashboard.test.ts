@@ -52,6 +52,9 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     onRefresh: vi.fn(),
     onCancel: vi.fn(),
     onOpenFile: vi.fn(),
+    onPushPath: vi.fn(),
+    onDiscardPath: vi.fn(),
+    onPullPath: vi.fn(),
     onResolveConflict: vi.fn(),
     ...overrides,
   };
@@ -131,5 +134,100 @@ describe("SyncDashboard (I9 마운트)", () => {
     m = renderComponent(SyncDashboard, props);
     m.target.querySelector<HTMLElement>(".im-sync-refresh-btn")!.click();
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("변경 패널 — 항목별 동작", () => {
+  const PULL = 'button[aria-label="이 노트만 Notion 에서 받기"]';
+  const PULL_DELETION = 'button[aria-label="Notion 에서 지운 대로 이 노트도 지우기"]';
+  const PUSH = 'button[aria-label="이 노트만 Notion 에 올리기"]';
+  const DISCARD = 'button[aria-label="지난 동기화 때의 글로 되돌리기"]';
+
+  const remoteChanges = [
+    { pageId: "3e813b18-d382-8127-a761-c5dc986d858a", type: "modified", path: "채소/감자.md" },
+    { pageId: "3e913b18-0000-4000-8000-0000000071e0", type: "created", title: "Notion 새 페이지" },
+    { pageId: "3e913b18-0000-4000-8000-00000000365e", type: "deleted", path: "과일/사과.md" },
+  ];
+
+  it("원격 변경은 내부 id 대신 노트 이름 · 폴더, 새 페이지는 Notion 제목으로 보인다", () => {
+    m = renderComponent(SyncDashboard, baseProps({ remoteChanges }));
+    const names = [...m.target.querySelectorAll(".im-sync-file-name")].map(normText);
+    const folders = [...m.target.querySelectorAll(".im-sync-file-path")].map(normText);
+
+    expect(names).toEqual(["감자", "Notion 새 페이지", "사과"]);
+    expect(folders).toEqual(["채소", "새 페이지", "과일"]);
+    expect(m.target.innerHTML).not.toContain("3e813b18");
+  });
+
+  it("↓ 는 볼트에 있는 노트에만 있고 그 노트만 받는다 — 지운 노트는 지운다고 말한다", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    expect(m.target.querySelectorAll(PULL)).toHaveLength(1);
+    expect(m.target.querySelectorAll(PULL_DELETION)).toHaveLength(1);
+    m.target.querySelector<HTMLElement>(PULL)!.click();
+    m.target.querySelector<HTMLElement>(PULL_DELETION)!.click();
+    expect(props.onPullPath.mock.calls).toEqual([["채소/감자.md"], ["과일/사과.md"]]);
+  });
+
+  it("원격 항목을 누르면 볼트의 그 노트를 연다 — 아직 없는 새 페이지는 열지 않는다", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+    const rows = m.target.querySelectorAll<HTMLElement>(".im-sync-file-item");
+
+    rows[0]!.click();
+    rows[1]!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["채소/감자.md"]]);
+  });
+
+  it("동기화 중에는 항목 동작을 누를 수 없다", () => {
+    const localChanges = [{ path: "노트.md", type: "modified" }];
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({ remoteChanges, localChanges, syncState: "syncing", operationType: "pull" }),
+    );
+    const actions = [...m.target.querySelectorAll<HTMLButtonElement>(".im-sync-file-action")];
+    expect(actions).toHaveLength(4);
+    expect(actions.every((button) => button.disabled)).toBe(true);
+  });
+
+  it("↑ 는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 ↺ 가 없다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified" },
+      { path: "새.md", type: "created" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    expect(m.target.querySelectorAll(PUSH)).toHaveLength(2);
+    expect(m.target.querySelectorAll(DISCARD)).toHaveLength(1);
+    m.target.querySelectorAll<HTMLElement>(PUSH)[1]!.click();
+    expect(props.onPushPath).toHaveBeenCalledWith("새.md");
+  });
+
+  it("↺ 는 두 번 눌러야 되돌리고, 3초 안에 다시 누르지 않으면 풀린다", () => {
+    vi.useFakeTimers();
+    try {
+      const props = baseProps({ localChanges: [{ path: "a/고친.md", type: "modified" }] });
+      m = renderComponent(SyncDashboard, props);
+      const discard = () => m!.target.querySelector<HTMLElement>(DISCARD)!;
+
+      discard().click();
+      m.flush();
+      expect(props.onDiscardPath).not.toHaveBeenCalled();
+      expect(normText(discard())).toBe("되돌리기?");
+
+      vi.advanceTimersByTime(3000);
+      m.flush();
+      expect(normText(discard())).toBe("↺");
+
+      discard().click();
+      m.flush();
+      discard().click();
+      m.flush();
+      expect(props.onDiscardPath.mock.calls).toEqual([["a/고친.md"]]);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
