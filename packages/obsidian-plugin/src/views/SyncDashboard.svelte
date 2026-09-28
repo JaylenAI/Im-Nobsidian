@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { LocalChange, FolderMoveChange, RemoteChange, Conflict } from "@im-nobsidian/core";
+  import type { LocalChange, FolderMoveChange, RemoteChange, SyncRecord } from "@im-nobsidian/core";
 
   interface SyncProgress {
     current: number;
@@ -13,7 +13,7 @@
     localChanges: LocalChange[];
     folderMoves?: FolderMoveChange[];
     remoteChanges?: RemoteChange[];
-    conflicts: Conflict[];
+    conflictRecords: SyncRecord[];
     syncState: "ready" | "syncing" | "error" | "conflict";
     operationType: "pull" | "push" | "sync" | null;
     progress: SyncProgress | null;
@@ -26,7 +26,8 @@
     localChanges: LocalChange[];
     folderMoves?: FolderMoveChange[];
     remoteChanges: RemoteChange[];
-    conflicts: Conflict[];
+    /** 충돌로 표시된 노트 — 상태 DB 의 충돌 기록. */
+    conflictRecords: SyncRecord[];
     syncState: "ready" | "syncing" | "error" | "conflict";
     operationType: "pull" | "push" | "sync" | null;
     progress: SyncProgress | null;
@@ -52,7 +53,7 @@
     localChanges: initialLocalChanges,
     folderMoves: initialFolderMoves = [],
     remoteChanges: initialRemoteChanges,
-    conflicts: initialConflicts,
+    conflictRecords: initialConflictRecords,
     syncState: initialSyncState,
     operationType: initialOperationType,
     progress: initialProgress,
@@ -90,7 +91,7 @@
       if (armedDiscard === path) armedDiscard = null;
     }, 3000);
   }
-  let conflicts: Conflict[] = $state(initialConflicts);
+  let conflictRecords: SyncRecord[] = $state(initialConflictRecords);
   let syncState: "ready" | "syncing" | "error" | "conflict" = $state(initialSyncState);
   let operationType: "pull" | "push" | "sync" | null = $state(initialOperationType);
   let progress: SyncProgress | null = $state(initialProgress);
@@ -104,7 +105,7 @@
     localChanges = s.localChanges;
     if (s.folderMoves) folderMoves = s.folderMoves;
     if (s.remoteChanges) remoteChanges = s.remoteChanges;
-    conflicts = s.conflicts;
+    conflictRecords = s.conflictRecords;
     syncState = s.syncState;
     operationType = s.operationType ?? null;
     progress = s.progress;
@@ -179,7 +180,7 @@
       : syncState === "error"
         ? "오류 발생"
         : syncState === "conflict"
-          ? `충돌 ${conflicts.length}건`
+          ? `충돌 ${conflictRecords.length}건`
           : "준비됨",
   );
 
@@ -503,7 +504,7 @@
   {/if}
 
   <!-- Conflicts Section -->
-  {#if conflicts.length > 0}
+  {#if conflictRecords.length > 0}
     <div class="im-sync-section im-sync-section-conflict">
       <button
         class="im-sync-section-header"
@@ -512,15 +513,15 @@
       >
         <span class="im-sync-section-chevron" class:im-sync-expanded={conflictsExpanded}>›</span>
         <span>충돌</span>
-        <span class="im-sync-badge im-sync-badge-warn">{conflicts.length}</span>
+        <span class="im-sync-badge im-sync-badge-warn">{conflictRecords.length}</span>
       </button>
       {#if conflictsExpanded}
         <div class="im-sync-file-list">
-          {#each conflicts as conflict (conflict.syncRecord.id)}
+          {#each conflictRecords as record (record.id)}
             <div class="im-sync-file-item im-sync-conflict-item">
               <span class="im-sync-file-type im-sync-change-conflict">C</span>
-              <span class="im-sync-file-name" title={conflict.localChange.path}
-                >{fileName(conflict.localChange.path)}</span
+              <span class="im-sync-file-name" title={record.obsidianPath}
+                >{fileName(record.obsidianPath)}</span
               >
             </div>
           {/each}
@@ -598,12 +599,16 @@
     font-size: var(--font-ui-smaller);
   }
 
-  /* Error */
+  /*
+   * Error — 옅은 빨강 바탕(main.css 의 `--im-nobsidian-tint`)에 보통 글색. 오류 바탕 변수는 테마에서 오류
+   * 글색과 같은 색일 수 있어, 예전처럼 함께 쓰면 실패 이유가 바탕에 묻혀 읽히지 않았다(1.13 기본 테마).
+   */
   .im-sync-error {
     margin: 4px 12px;
     padding: 6px 10px;
-    background: var(--background-modifier-error);
-    color: var(--text-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
+    border-left: 3px solid var(--text-error);
+    color: var(--text-normal);
     border-radius: 4px;
     font-size: var(--font-ui-smaller);
   }
@@ -668,7 +673,7 @@
     margin-left: 8px;
   }
   .im-sync-cancel-btn:hover {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
   }
 
   /* Completion Summary */
@@ -773,7 +778,7 @@
     font-weight: 500;
   }
   .im-sync-badge-warn {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
     color: var(--text-error);
   }
   .im-sync-badge-remote {

@@ -6,6 +6,7 @@ import {
   type Conflict,
   type ResolutionChoice,
   type SyncOrchestrator,
+  type SyncRecord,
 } from "@im-nobsidian/core";
 import { SyncController } from "../../src/sync/sync-controller.js";
 import type { SyncControllerHooks } from "../../src/sync/sync-controller.js";
@@ -80,6 +81,25 @@ function createMockOrchestrator(): MockOrchestrator {
 /** 충돌 하나 — 컨트롤러는 경로와 원격 변경 종류만 본다. */
 function conflictAt(path: string, remote: "modified" | "deleted" = "modified"): Conflict {
   return { syncRecord: { obsidianPath: path }, remoteChange: { type: remote } } as Conflict;
+}
+
+/** 상태 DB 의 충돌 기록 — 패널은 id 와 경로만 본다. */
+function conflictRecord(path: string): SyncRecord {
+  return { id: `record:${path}`, obsidianPath: path } as SyncRecord;
+}
+
+/** 로컬 새로고침(`statusLocal`)이 읽을 상태 DB — 충돌로 남은 노트를 준다. 원격을 읽지 않아 `conflicts` 는 늘 비었다. */
+function localStatus(conflictPaths: string[] = [], overrides: Record<string, unknown> = {}) {
+  return {
+    lastSyncAt: null,
+    localChanges: [],
+    folderMoves: [],
+    remoteChanges: [],
+    conflicts: [],
+    conflictRecords: conflictPaths.map(conflictRecord),
+    pendingOperations: conflictPaths.length,
+    ...overrides,
+  };
 }
 
 function createHooks(): {
@@ -229,13 +249,40 @@ describe("SyncController", () => {
         failed: [],
         duration: 2000,
       });
-      const { hooks, onNotice, onStatusBar } = createHooks();
+      mock.statusLocal.mockResolvedValue(localStatus(["x.md"]));
+      const { hooks, onNotice, onStatusBar, onState } = createHooks();
       await makeController(mock, hooks).pull();
 
       expect(onNotice).toHaveBeenCalledWith(
         "Im-Nobsidian: Pull 완료 — 생성 1 / 수정 0 / 삭제 0 / 충돌 1 (2.0s)",
       );
       expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "conflict",
+          conflictRecords: [conflictRecord("x.md")],
+        }),
+      );
+    });
+
+    it("끝난 뒤 로컬 새로고침이 실패해도 「동기화 중」 에 남지 않는다 — 작업이 정한 단계에 선다", async () => {
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [{ path: "x.md" }],
+        writtenPaths: [],
+        failed: [],
+        duration: 0,
+      });
+      mock.statusLocal.mockRejectedValue(new Error("vault read failed"));
+      const { hooks, onStatusBar, onState } = createHooks();
+      await makeController(mock, hooks).pull();
+
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "conflict", operationType: null, progress: null }),
+      );
     });
   });
 
@@ -400,15 +447,59 @@ describe("SyncController", () => {
   });
 
   describe("vaultSync", () => {
-    it("상태바만 갱신하고 사이드바/알림은 건드리지 않는다", async () => {
+    it("알림 · 진행 표시 없이 돌고, 끝나면 패널의 목록을 새로고친다 — 올린 노트가 변경으로 남지 않는다", async () => {
+      let pushed = false;
+      mock.sync.mockImplementation(async () => {
+        pushed = true;
+        return {
+          pull: { created: 0, updated: 0, deleted: 0 },
+          push: { created: 0, updated: 1, deleted: 0 },
+          conflicts: [],
+          duration: 0,
+        };
+      });
+      mock.statusLocal.mockImplementation(async () =>
+        localStatus([], {
+          lastSyncAt: pushed ? "2026-09-28T05:00:00Z" : null,
+          localChanges: pushed ? [] : [{ path: "a.md", type: "modified" }],
+        }),
+      );
       const { hooks, onState, onNotice, onStatusBar } = createHooks();
       await makeController(mock, hooks).vaultSync();
 
       expect(mock.sync).toHaveBeenCalledTimes(1);
       expect(onStatusBar).toHaveBeenNthCalledWith(1, "syncing");
       expect(onStatusBar).toHaveBeenLastCalledWith("ready");
-      expect(onState).not.toHaveBeenCalled();
+      // 도는 동안 패널을 「동기화 중」 으로 바꾸지 않는다 — 끝난 뒤 새로고침 한 번뿐이다
+      expect(onState).toHaveBeenCalledTimes(1);
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          lastSyncAt: "2026-09-28T05:00:00Z",
+          localChanges: [],
+          syncState: "ready",
+        }),
+      );
       expect(onNotice).not.toHaveBeenCalled();
+    });
+
+    it("자동 동기화가 만든 충돌도 패널에 보인다", async () => {
+      mock.sync.mockResolvedValue({
+        pull: { created: 0, updated: 0, deleted: 0 },
+        push: { created: 0, updated: 0, deleted: 0 },
+        conflicts: [conflictAt("a.md")],
+        duration: 0,
+      });
+      mock.statusLocal.mockResolvedValue(localStatus(["a.md"]));
+      const { hooks, onState, onStatusBar } = createHooks();
+      await makeController(mock, hooks).vaultSync();
+
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "conflict",
+          conflictRecords: [conflictRecord("a.md")],
+        }),
+      );
     });
 
     it("실패하면 알림 없이 상태바를 오류로 두고 이유를 사이드바에 남긴다", async () => {
@@ -585,6 +676,144 @@ describe("SyncController", () => {
     });
   });
 
+  describe("로컬 새로고침과 패널 단계", () => {
+    it("충돌로 표시된 노트를 싣는다 — 원격을 읽지 않아도 상태 DB 가 안다", async () => {
+      mock.statusLocal.mockResolvedValue(localStatus(["배추.md"]));
+      const { hooks, onState } = createHooks();
+      await makeController(mock, hooks).refreshStatus(false);
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "conflict",
+          conflictRecords: [conflictRecord("배추.md")],
+        }),
+      );
+    });
+
+    it("원격 확인도 충돌 목록은 상태 DB 의 충돌 기록이다", async () => {
+      mock.status.mockResolvedValue(
+        localStatus(["배추.md"], { conflicts: [conflictAt("배추.md")] }),
+      );
+      const { hooks, onState } = createHooks();
+      await makeController(mock, hooks).refreshStatus(true);
+
+      const patch = onState.mock.calls.at(-1)![0] as Record<string, unknown>;
+      expect(patch).toMatchObject({
+        syncState: "conflict",
+        conflictRecords: [conflictRecord("배추.md")],
+      });
+      expect("conflicts" in patch).toBe(false);
+    });
+
+    it("상태바도 패널과 같은 단계다 — 다시 불러온 뒤 충돌이 남았으면 「Ready」 가 아니다", async () => {
+      mock.statusLocal.mockResolvedValue(localStatus(["배추.md"]));
+      mock.status.mockResolvedValue(localStatus([]));
+      const { hooks, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.refreshStatus(false);
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+
+      await controller.refreshStatus(true);
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it("도는 작업 중에는 목록만 바꾼다 — 볼트 이벤트가 불러도 진행 · 단계를 덮지 않는다", async () => {
+      let finish!: () => void;
+      mock.pull.mockImplementation(
+        ({ onProgress }: { onProgress: (c: number, t: number, i: { path: string }) => void }) =>
+          new Promise((resolve) => {
+            onProgress(1, 3, { path: "감자.md" });
+            finish = () =>
+              resolve({
+                created: 0,
+                updated: 3,
+                deleted: 0,
+                conflicts: [],
+                writtenPaths: [],
+                failed: [],
+                duration: 0,
+              });
+          }),
+      );
+      mock.statusLocal.mockResolvedValue(
+        localStatus([], { localChanges: [{ path: "사과.md", type: "modified" }] }),
+      );
+      const { hooks, onState, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const pulling = controller.pull();
+      // pull 이 쓴 노트의 볼트 이벤트 · 도는 중에 연 패널이 부르는 새로고침
+      await controller.refreshStatus(false);
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          localChanges: [{ path: "사과.md", type: "modified" }],
+          syncState: "syncing",
+          operationType: "pull",
+          progress: { current: 1, total: 3, currentPath: "감자.md" },
+        }),
+      );
+      expect(onStatusBar.mock.calls).toEqual([["syncing"]]);
+
+      finish();
+      await pulling;
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "ready", operationType: null, progress: null }),
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it("올리기만 한 뒤에도 충돌이 남았으면 패널 · 상태바가 충돌이다", async () => {
+      mock.statusLocal.mockResolvedValue(localStatus(["배추.md"]));
+      const { hooks, onState, onStatusBar } = createHooks();
+      await makeController(mock, hooks).push();
+
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "conflict",
+          conflictRecords: [conflictRecord("배추.md")],
+        }),
+      );
+    });
+
+    it("되돌린 뒤에는 단계를 새로 정한다 — 지난 실패는 풀린다", async () => {
+      mock.push.mockRejectedValueOnce(new Error("Notion 502 bad gateway"));
+      const { hooks, onState, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.push();
+      await controller.discard("노트.md");
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "ready", errorMessage: null }),
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it("지난 작업의 실패 이유를 지우지 않는다 — 다음 작업이 끝나야 풀린다", async () => {
+      mock.push.mockRejectedValueOnce(new Error("Notion 502 bad gateway"));
+      const { hooks, onState, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.push();
+      await controller.refreshStatus(false);
+
+      expect(mock.statusLocal).toHaveBeenCalledTimes(1);
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "error", errorMessage: "Notion 502 bad gateway" }),
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+
+      await controller.push();
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "ready", errorMessage: null }),
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+  });
+
   describe("충돌 해결 (N-06)", () => {
     it("충돌로 표시된 노트만 읽고 pull 을 돌리지 않는다 — 고른 것을 오케스트레이터로 풀어 Notion 에 올린다", async () => {
       const a = conflictAt("a.md");
@@ -629,13 +858,21 @@ describe("SyncController", () => {
       const b = conflictAt("b.md");
       mock.listConflicts.mockResolvedValue([a, b]);
       const choose = vi.fn(async (conflict: Conflict) => (conflict === a ? null : "local"));
-      const { hooks, onNotice, onStatusBar } = createHooks();
+      mock.statusLocal.mockResolvedValue(localStatus(["a.md"]));
+      const { hooks, onNotice, onStatusBar, onState } = createHooks();
 
       await makeController(mock, hooks).resolveConflicts(choose);
 
       expect(mock.resolveConflict.mock.calls).toEqual([[b, "local"]]);
       expect(onNotice).toHaveBeenLastCalledWith("Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 1건");
       expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+      // 창을 닫은 뒤에도 남은 충돌이 패널에 있다 — 예전에는 로컬 새로고침이 목록을 비웠다
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "conflict",
+          conflictRecords: [conflictRecord("a.md")],
+        }),
+      );
     });
 
     it("Notion 에 올리지 못한 충돌은 이유를 알리고 남긴다 — 다음 충돌은 계속 묻는다", async () => {
@@ -643,6 +880,7 @@ describe("SyncController", () => {
       const b = conflictAt("b.md");
       mock.listConflicts.mockResolvedValue([a, b]);
       mock.resolveConflict.mockRejectedValueOnce(new Error("bad gateway"));
+      mock.statusLocal.mockResolvedValue(localStatus(["a.md"]));
       const { hooks, onNotice, onStatusBar } = createHooks();
 
       await makeController(mock, hooks).resolveConflicts(async () => "local");
@@ -696,6 +934,7 @@ describe("SyncController", () => {
         success: false,
         mergeHadConflicts: true,
       });
+      mock.statusLocal.mockResolvedValue(localStatus(["a.md"]));
       const { hooks, onNotice, onStatusBar } = createHooks();
 
       await makeController(mock, hooks).resolveConflicts(async () => "merge");
@@ -704,6 +943,31 @@ describe("SyncController", () => {
         "Im-Nobsidian: 자동 병합이 겹치는 줄을 남겼습니다 — a.md 에서 충돌 표시(<<<<<<<)를 고친 뒤 다시 해결하세요.",
         8000,
       );
+      expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
+    });
+
+    it("모두 풀면 패널도 충돌에서 준비됨으로 돌아간다", async () => {
+      mock.statusLocal.mockResolvedValueOnce(localStatus(["a.md"]));
+      mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
+      const { hooks, onState } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.refreshStatus(false);
+      expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "conflict" }));
+
+      await controller.resolveConflicts(async () => "local");
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "ready", conflictRecords: [] }),
+      );
+    });
+
+    it("푼 뒤 로컬 새로고침이 실패하면 남은 충돌 수로 상태바를 둔다", async () => {
+      mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
+      mock.statusLocal.mockRejectedValue(new Error("vault read failed"));
+      const { hooks, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(async () => null);
+
       expect(onStatusBar).toHaveBeenLastCalledWith("conflict");
     });
 

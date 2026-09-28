@@ -34,7 +34,7 @@ export class SyncSidebarView extends ItemView {
     localChanges: [],
     folderMoves: [],
     remoteChanges: [],
-    conflicts: [],
+    conflictRecords: [],
     syncState: "ready",
     operationType: null,
     progress: null,
