@@ -10,11 +10,94 @@ import matter from "gray-matter";
  * 안전하다. 모든 frontmatter 직렬화는 반드시 이 함수를 거쳐 footgun 을 한 곳에 봉인한다.
  */
 export function stringifyFrontmatter(content: string, data: Record<string, unknown>): string {
+  const astral = maskAstralCharacters(data);
   const out = matter.stringify(
     { content } as unknown as Parameters<typeof matter.stringify>[0],
-    data,
+    astral.data,
   );
-  return unquoteFrontmatterDates(out);
+  return unquoteFrontmatterDates(mapFrontmatter(out, astral.unmask));
+}
+
+/** 사용 영역(U+E000–U+F8FF). js-yaml 3 이 «찍을 수 있는» 문자로 보는 BMP 문자다. */
+const PRIVATE_USE_FIRST = 0xe000;
+const PRIVATE_USE_LAST = 0xf8ff;
+const ASTRAL_RE = /[\u{10000}-\u{10FFFF}]/gu;
+
+/**
+ * BMP 밖 문자(이모지 등)를 frontmatter 에 없는 사용 영역 문자로 잠시 바꾼다(F-i).
+ *
+ * gray-matter 가 쓰는 js-yaml 3 은 BMP 밖 문자를 «찍을 수 없는» 문자로 보고 `icon: "\U0001F680"` 처럼
+ * 이스케이프해 적는다. 값은 같지만 사람이 읽을 수 없고, Obsidian 이 적는 `icon: 🚀` 와 글자가 달라 왕복마다
+ * 다른 글이 된다. 찍을 수 있는 문자로 바꿔 적게 하면 js-yaml 이 따옴표 · 스타일을 그 문자가 없는 것처럼
+ * 고르고(js-yaml 4 와 같다), 적은 뒤 되돌린다. 바꿀 문자가 모자라면 바꾸지 않는다 — 이스케이프로 적힐 뿐
+ * 값은 같다.
+ */
+function maskAstralCharacters(data: Record<string, unknown>): {
+  data: Record<string, unknown>;
+  unmask: (text: string) => string;
+} {
+  const strings: string[] = [];
+  collectStrings(data, strings);
+  const astral = new Set(strings.flatMap((s) => s.match(ASTRAL_RE) ?? []));
+  const none = { data, unmask: (text: string) => text };
+  if (astral.size === 0) return none;
+
+  const used = new Set(strings.flatMap((s) => [...s]));
+  const toMask = new Map<string, string>();
+  let next = PRIVATE_USE_FIRST;
+  for (const char of astral) {
+    while (next <= PRIVATE_USE_LAST && used.has(String.fromCharCode(next))) next++;
+    if (next > PRIVATE_USE_LAST) return none;
+    toMask.set(char, String.fromCharCode(next++));
+  }
+  const fromMask = new Map([...toMask].map(([char, mask]) => [mask, char]));
+  const masks = new RegExp(`[${[...fromMask.keys()].join("")}]`, "g");
+  return {
+    data: mapStrings(data, (s) => s.replace(ASTRAL_RE, (char) => toMask.get(char)!)) as Record<
+      string,
+      unknown
+    >,
+    unmask: (text) => text.replace(masks, (mask) => fromMask.get(mask)!),
+  };
+}
+
+/** 키와 값의 모든 글자를 모은다 — 배열 · 객체 안쪽까지. */
+function collectStrings(value: unknown, into: string[]): void {
+  if (typeof value === "string") into.push(value);
+  else if (Array.isArray(value)) value.forEach((item) => collectStrings(item, into));
+  else if (isPlainObject(value)) {
+    for (const [key, item] of Object.entries(value)) {
+      into.push(key);
+      collectStrings(item, into);
+    }
+  }
+}
+
+/** 키와 값의 글자를 바꾼 사본. 글자가 아닌 값(`Date` · 수 · null)은 그대로 둔다. */
+function mapStrings(value: unknown, map: (s: string) => string): unknown {
+  if (typeof value === "string") return map(value);
+  if (Array.isArray(value)) return value.map((item) => mapStrings(item, map));
+  if (isPlainObject(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [map(key), mapStrings(item, map)]),
+    );
+  }
+  return value;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return (
+    typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype
+  );
+}
+
+/** frontmatter 영역에만 `map` 을 적용한다 — 본문은 그대로 둔다. */
+function mapFrontmatter(out: string, map: (frontmatter: string) => string): string {
+  if (!out.startsWith("---\n")) return out;
+  const close = out.indexOf("\n---\n", 3);
+  if (close === -1) return out;
+  const fmEnd = close + "\n---\n".length;
+  return map(out.slice(0, fmEnd)) + out.slice(fmEnd);
 }
 
 const QUOTED_DATE_LINE_RE = /^([ \t]*[^:\n]+:[ \t]*)'(\d{4}-\d{2}-\d{2})'([ \t]*)$/gm;
@@ -26,12 +109,7 @@ const QUOTED_DATE_LINE_RE = /^([ \t]*[^:\n]+:[ \t]*)'(\d{4}-\d{2}-\d{2})'([ \t]*
  * 의미가 동일하므로 프론트매터 영역에 한해 원 표기로 되돌린다.
  */
 function unquoteFrontmatterDates(out: string): string {
-  if (!out.startsWith("---\n")) return out;
-  const close = out.indexOf("\n---\n", 3);
-  if (close === -1) return out;
-  const fmEnd = close + "\n---\n".length;
-  const fm = out.slice(0, fmEnd).replace(QUOTED_DATE_LINE_RE, "$1$2$3");
-  return fm + out.slice(fmEnd);
+  return mapFrontmatter(out, (fm) => fm.replace(QUOTED_DATE_LINE_RE, "$1$2$3"));
 }
 
 /**
@@ -118,9 +196,7 @@ export function splitFrontmatter(text: string): FrontmatterSplit {
 
 /** YAML 이 키-값으로 읽혔는가. 글 · 목록 · 날짜(`Date`) · null 은 아니다. */
 function isYamlMapping(value: unknown): value is Record<string, unknown> {
-  return (
-    typeof value === "object" && value !== null && Object.getPrototypeOf(value) === Object.prototype
-  );
+  return isPlainObject(value);
 }
 
 /**
