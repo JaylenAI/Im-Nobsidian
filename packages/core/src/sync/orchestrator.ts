@@ -13,7 +13,6 @@ import type {
   ConflictStrategy,
   FailedOperation,
   FileType,
-  FolderMoveChange,
   ChangeDiff,
   ProgressCallback,
   ProgressItem,
@@ -25,7 +24,7 @@ import type { NotionClient } from "../notion/client.js";
 import { isNotionObjectNotFound } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
-import { ChangeDetector, type LocalScan, type LocalScanOptions } from "./change-detector.js";
+import { ChangeDetector } from "./change-detector.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
@@ -56,7 +55,7 @@ import { runPool } from "../utils/pool.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
-import { readLocalNote, type FileStatInfo, type VaultFS } from "./vault-fs.js";
+import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -91,6 +90,8 @@ import { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
 import { extractParentId } from "./notion-parent.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
+import { FolderPlacement } from "./folder-placement.js";
+import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
 import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import {
@@ -116,31 +117,17 @@ import {
 } from "./note-title.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import {
-  ancestorFolders,
-  databaseFolderIndex,
-  enclosingDatabaseFolder,
   folderContainer,
   folderNoteOf,
   isFolderNotePath,
   isFolderRecord,
   parentFolderOf,
-  type FolderLookup,
 } from "./folder-container.js";
 import {
-  deriveFolderMoves,
-  foldersOf,
   forgetRenameHint,
-  hintedFolderTarget,
   isEmptyRenameHints,
-  movePayload,
   moveOrigin,
-  parseRenameHints,
-  pendingMoveOrigins,
-  pruneRenameHints,
   recordRenameHint,
-  RENAME_HINTS_META_KEY,
-  type FolderMove,
-  type RenameHints,
   type RenameKind,
 } from "./local-moves.js";
 
@@ -149,36 +136,6 @@ interface RowState {
   readonly properties: Readonly<Record<string, unknown>>;
   readonly title: string;
   readonly body: string | null;
-}
-
-/**
- * 이번 실행의 로컬 스캔 — 옮긴 노트 · 폴더를 상태 DB 에 옮겨 적기 전의 결과(S-11).
- * dry-run 은 옮겨 적지 않고 {@link LocalView} 로 옮긴 뒤의 모습을 겹쳐 같은 판정을 쓴다.
- */
-interface LocalPlan {
-  readonly scan: LocalScan;
-  /** 스캔이 쓴 이름 변경 힌트 — 옮겨 적은 뒤 이 스냅샷만큼 지운다. */
-  readonly hints: RenameHints;
-  /** 옮겨진 폴더 레코드 — push 가 만든 폴더 페이지. */
-  readonly folderMoves: readonly FolderMove[];
-  /** 옮겨진 자동 발견 DB 폴더. */
-  readonly databaseFolderMoves: readonly FolderMove[];
-  /** 반영할 것이 없어 닫을 이동 WAL — {@link SyncOrchestrator.settledMoveOps}. */
-  readonly settledMoveOps: readonly string[];
-}
-
-/** 옮겨 적은 뒤의 볼트 — 경로의 레코드와 폴더 판정. */
-interface LocalView {
-  recordAt(path: string): SyncRecord | null;
-  readonly lookup: FolderLookup;
-}
-
-/** Notion 에 반영할 폴더 이동. 레코드는 이미 새 경로(`to`)를 추적한다. */
-interface PendingFolderMove {
-  readonly record: SyncRecord;
-  /** 마지막으로 Notion 에 반영한 경로. */
-  readonly from: string;
-  readonly to: string;
 }
 
 /** push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null. */
@@ -198,11 +155,6 @@ export class SyncOrchestrator {
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
   private readonly conflictResolver: ConflictResolver;
-  /** DB 폴더 → DB id. 자동 발견 목록이 바뀔 때만 다시 만든다({@link folderLookup}). */
-  private dbFolderCache: {
-    readonly raw: string | null;
-    readonly index: Map<string, string>;
-  } | null = null;
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
@@ -212,13 +164,16 @@ export class SyncOrchestrator {
   // 실행마다 비운다 — 지난 실행에서 삭제된 경로를 영구히 막지 않기 위해.
   private readonly claimedPaths = new Set<string>();
 
-  // 이번 push 에서 Notion 자리를 마련하지 못한 폴더 → 이유({@link prepareFolders}). 그 안의 노트가
-  // 이 이유로 실패한다 — 「폴더 페이지가 아직 없다」 로 뭉개면 무엇을 고쳐야 하는지 모른다.
-  private readonly unpreparedFolders = new Map<string, string>();
-
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
+
+  // 볼트 폴더의 Notion 자리 — 새 노트 · 옮긴 노트의 부모, 폴더 페이지 마련, 둘 자리가 없는 것의
+  // 거절(S-04 · S-11 · S-15).
+  private readonly placement: FolderPlacement;
+
+  // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
+  private readonly planner: LocalPlanner;
 
   // 원격에서 바뀐 것 — 전체 대조 · 증분 감지(ADR-027).
   private readonly detector: RemoteDetector;
@@ -320,6 +275,15 @@ export class SyncOrchestrator {
       this.rowSchemas,
       this.observation,
     );
+    this.placement = new FolderPlacement(
+      config,
+      stateDb,
+      notionClient,
+      this.observation,
+      this.drift,
+      this.recovery,
+    );
+    this.planner = new LocalPlanner(config, stateDb, vaultFs, this.changeDetector, this.placement);
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
     this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
@@ -353,17 +317,17 @@ export class SyncOrchestrator {
     // 정리한다(N-03). 끊긴 생성을 되살려 입양할 노트도 dry-run 은 새로 만들 것으로 센다.
     if (!options?.dryRun) {
       this.recovery.cleanupInterruptedSync();
-      this.repairFolderRecords();
+      this.placement.repairFolderRecords();
     }
     this.rowSchemas.clear();
-    this.unpreparedFolders.clear();
+    this.placement.resetUnpreparedFolders();
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
     // 한다 — dry-run 은 옮겨 적지 않고 같은 모습을 겹쳐 본다.
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
-    const view = this.localView(plan);
-    if (!options?.dryRun) this.adoptLocalMoves(plan);
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const view = this.planner.localView(plan);
+    if (!options?.dryRun) this.planner.adoptLocalMoves(plan);
     const changes = plan.scan.changes;
 
     const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
@@ -375,9 +339,9 @@ export class SyncOrchestrator {
     ).filter((c) => !excludeSet || !excludeSet.has(c.path));
     // 범위를 좁힌 push 는 그 범위 안의 폴더만 옮긴다. 노트의 부모는 폴더 레코드의 페이지라, 폴더
     // 페이지를 옮기기 전에도 노트는 맞는 자리로 간다.
-    const folderMoves = this.pendingFolderMoves(plan).filter((move) =>
-      inAnyPathScope(move.to, options?.paths),
-    );
+    const folderMoves = this.planner
+      .pendingFolderMoves(plan)
+      .filter((move) => inAnyPathScope(move.to, options?.paths));
 
     if (filtered.length === 0 && folderMoves.length === 0) {
       return {
@@ -392,8 +356,8 @@ export class SyncOrchestrator {
 
     // 둘 자리가 없는 새 노트와 Notion 에서 그렇게 옮길 수 없는 노트 · 폴더는 이유와 함께 실패로
     // 남긴다. dry-run 도 같은 판정을 쓴다 — 실제 push 가 거절할 것을 세지 않는다(S-04 · S-11).
-    const refusedCreates = this.refusedCreates(filtered, view.lookup);
-    const refusedMoves = this.refusedMoves(filtered, view);
+    const refusedCreates = this.placement.refusedCreates(filtered, view.lookup);
+    const refusedMoves = this.placement.refusedMoves(filtered, view);
     const refusedFailures: FailedOperation[] = [
       ...[...refusedCreates].map(([path, error]) => ({
         path,
@@ -404,7 +368,7 @@ export class SyncOrchestrator {
     ];
     const movableFolders: PendingFolderMove[] = [];
     for (const move of folderMoves) {
-      const error = this.folderMoveRefusal(move.to, view.lookup);
+      const error = this.placement.folderMoveRefusal(move.to, view.lookup);
       if (error) refusedFailures.push({ path: move.to, operation: "move", error });
       else movableFolders.push(move);
     }
@@ -491,7 +455,7 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.prepareFolders(applicable, firstAttempt);
+    const pushedEarly = await this.placement.prepareFolders(applicable, firstAttempt);
     await runPool(
       applicable.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
@@ -526,7 +490,7 @@ export class SyncOrchestrator {
       };
       // 첫 차례에 새 행 · 폴더 노트가 생기면 그 아래 폴더가 그제서야 자리를 얻는다 — 재시도 전에
       // 폴더를 다시 본다. 자리를 얻지 못한 폴더의 노트는 그 이유와 함께 실패로 남는다.
-      const retriedEarly = await this.prepareFolders(retryQueue, retry);
+      const retriedEarly = await this.placement.prepareFolders(retryQueue, retry);
       await runPool(
         retryQueue.filter((c) => !retriedEarly.has(c.path)),
         retry,
@@ -597,7 +561,7 @@ export class SyncOrchestrator {
     // 이번 pull 은 사라진 노트를 되살리지 않는다. 되살리면 옮긴 노트가 옛 자리에도 생긴다.
     let localPlan: LocalPlan | null = null;
     try {
-      localPlan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+      localPlan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     } catch (error) {
       getLogger().warn(
         `[Im-Nobsidian] 볼트를 읽지 못해 옮긴 노트를 확인하지 못함 — 이번 pull 은 사라진 노트를 되살리지 않는다: ${
@@ -605,7 +569,7 @@ export class SyncOrchestrator {
         }`,
       );
     }
-    if (localPlan && !options?.dryRun) this.adoptLocalMoves(localPlan);
+    if (localPlan && !options?.dryRun) this.planner.adoptLocalMoves(localPlan);
     const adopting = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
 
     const counts = { created: 0, updated: 0, deleted: 0, restored: 0 };
@@ -963,7 +927,7 @@ export class SyncOrchestrator {
 
   private async executeStatus(): Promise<StatusResult> {
     this.observation.begin(Date.now());
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
     await this.observation.resolveBotUserId();
@@ -983,7 +947,7 @@ export class SyncOrchestrator {
 
     return {
       localChanges,
-      folderMoves: this.folderMoveChanges(plan),
+      folderMoves: this.planner.folderMoveChanges(plan),
       remoteChanges,
       conflicts,
       conflictRecords,
@@ -999,13 +963,13 @@ export class SyncOrchestrator {
    * (옮긴 노트 · 폴더 포함). 상태 DB 는 바꾸지 않는다.
    */
   async statusLocal(): Promise<StatusResult> {
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
 
     return {
       localChanges: plan.scan.changes,
-      folderMoves: this.folderMoveChanges(plan),
+      folderMoves: this.planner.folderMoveChanges(plan),
       remoteChanges: [],
       conflicts: [],
       conflictRecords,
@@ -1022,14 +986,14 @@ export class SyncOrchestrator {
    * 기록 없이는 짝을 찾지 못해, 옛 페이지를 지우고 새 페이지를 만든다.
    */
   recordLocalRename(from: string, to: string, kind: RenameKind): void {
-    this.writeRenameHints(recordRenameHint(this.renameHints(), from, to, kind));
+    this.planner.writeRenameHints(recordRenameHint(this.planner.renameHints(), from, to, kind));
   }
 
   /** 볼트에서 지운 노트 · 폴더 — 그 자리를 새 경로로 적은 힌트를 버린다. */
   recordLocalDelete(path: string): void {
-    const hints = this.renameHints();
+    const hints = this.planner.renameHints();
     if (isEmptyRenameHints(hints)) return;
-    this.writeRenameHints(forgetRenameHint(hints, path));
+    this.planner.writeRenameHints(forgetRenameHint(hints, path));
   }
 
   /**
@@ -1320,14 +1284,14 @@ export class SyncOrchestrator {
       return;
     }
 
-    const rowDatabaseId = this.newRowDatabaseOf(path);
+    const rowDatabaseId = this.placement.newRowDatabaseOf(path);
     if (rowDatabaseId) {
       await this.pushCreateRow(path, rowDatabaseId);
       return;
     }
 
     const content = await this.vaultFs.readFile(path);
-    const parentId = await this.resolveNotionParent(path);
+    const parentId = await this.placement.resolveNotionParent(path);
 
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
@@ -1938,7 +1902,10 @@ export class SyncOrchestrator {
     const records = this.stateDb.getByStatus("conflict");
     if (records.length === 0) return [];
     const files = await this.vaultFs.listMarkdownFiles();
-    const localChanges = this.changeDetector.detectLocalChanges(files, this.localScanOptions());
+    const localChanges = this.changeDetector.detectLocalChanges(
+      files,
+      this.planner.localScanOptions(),
+    );
     return this.buildConflictsFromRecords(records, localChanges, [], { fullRender: true });
   }
 
@@ -2143,7 +2110,7 @@ export class SyncOrchestrator {
    * 하면 변경 목록에서 «옮김» 으로 본 사용자가 무엇을 해야 할지 모른다. 옛 자리를 알린다.
    */
   private async untrackedDiscardReason(path: string): Promise<string> {
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const moved = plan.scan.changes.find((c) => c.type === "moved" && c.path === path);
     return moved?.movedFrom
       ? `옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 ${moved.movedFrom} 로 다시 옮기세요 (${path})`
@@ -2303,7 +2270,7 @@ export class SyncOrchestrator {
     }
 
     await this.relocatePage(record, {
-      parentId: rowDatabaseId ? null : this.moveParentOf(path),
+      parentId: rowDatabaseId ? null : this.placement.moveParentOf(path),
       title: titleMayChange(base, current, from, path)
         ? (remoteTitle) => titleAfterMove(base, current, from, path, remoteTitle)
         : null,
@@ -2331,12 +2298,12 @@ export class SyncOrchestrator {
         const parentFolder = parentFolderOf(to);
         let parentId = this.config.notion.rootPageId;
         if (parentFolder) {
-          await this.ensureFolderPage(parentFolder);
-          const lookup = this.folderLookup();
+          await this.placement.ensureFolderPage(parentFolder);
+          const lookup = this.placement.folderLookup();
           const container = folderContainer(parentFolder, lookup);
           if (container?.kind !== "page") {
             throw new Error(
-              this.folderMoveRefusal(to, lookup) ??
+              this.placement.folderMoveRefusal(to, lookup) ??
                 `폴더(${parentFolder})의 Notion 페이지가 없어 옮기지 않음 — 다음 push 가 폴더부터 만든다`,
             );
           }
@@ -2808,7 +2775,7 @@ export class SyncOrchestrator {
     }
     const noPlace = isDatabaseMode(this.config)
       ? "DB 모드는 폴더 노트를 받지 않음"
-      : this.folderLookup().databaseAt(folder)
+      : this.placement.folderLookup().databaseAt(folder)
         ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
         : null;
     if (noPlace) {
@@ -2883,7 +2850,7 @@ export class SyncOrchestrator {
     // 옮겨 적지 않았으니 레코드는 옛 경로다 — 실제 pull 이 쓸 새 경로로 보인다(S-11).
     // 새 페이지는 받기 전에는 자리를 모른다(부모 · 자식 페이지가 정한다) — Notion 제목으로 보인다.
     // 예전에는 내부 id 를 보였다.
-    const plannedPath = this.plannedPaths(localPlan);
+    const plannedPath = this.planner.plannedPaths(localPlan);
     for (const change of [...planned, ...restoreChanges]) {
       const record = this.stateDb.getByNotionId(change.pageId);
       items.push({
@@ -3032,760 +2999,6 @@ export class SyncOrchestrator {
     return { ...outcome, path: record.obsidianPath };
   }
 
-  private async ensureFolderPage(folderPath: string): Promise<void> {
-    // DB 폴더는 DB 다. 폴더 이름과 같은 제목의 행은 폴더 노트가 아니다 — 아래 폴더 노트 규칙을
-    // 타면 그 행을 폴더의 페이지로 여겨 폴더 레코드를 지운다.
-    const lookup = this.folderLookup();
-    if (lookup.databaseAt(folderPath)) return;
-
-    // 이미 자리가 있는 폴더(폴더 노트 · 폴더 페이지 · 페이지 이름의 하위 폴더)는 만들지 않는다.
-    // DB 폴더 안의 다른 하위 폴더는 만들 자리가 없다 — 그 안의 노트가 이유와 함께 실패로 남는다
-    // (resolveNotionParent). 예전에는 DB 폴더와 함께 빈 페이지로 만들었다(S-04).
-    if (folderContainer(folderPath, lookup) || enclosingDatabaseFolder(folderPath, lookup)) {
-      return;
-    }
-
-    // 폴더 노트의 생성 요청이 적용됐는지 모르는 채 남아 있으면 그 페이지가 폴더의 페이지일 수
-    // 있다 — 폴더 페이지를 따로 만들면 같은 이름의 페이지가 둘이 된다(S-15). 폴더 노트의 생성을
-    // 먼저 매듭짓는다(pushCreate 가 부모에서 찾아 이어 쓴다).
-    const notePath = folderNoteOf(folderPath);
-    const note = this.stateDb.getByPath(notePath);
-    if (
-      !isDatabaseMode(this.config) &&
-      note &&
-      !note.notionPageId &&
-      this.stateDb.getIncompleteOpByState(note.id, "create")
-    ) {
-      throw new Error(
-        `폴더 노트(${notePath})의 생성이 아직 끝나지 않아 폴더 페이지를 따로 만들지 않음 — ` +
-          `폴더 노트가 폴더의 페이지다`,
-      );
-    }
-
-    const parts = folderPath.split("/");
-    const folderName = parts[parts.length - 1]!;
-
-    let parentId = this.config.notion.rootPageId;
-    if (parts.length > 1) {
-      const parentPath = parts.slice(0, -1).join("/");
-      await this.ensureFolderPage(parentPath);
-      const parent = folderContainer(parentPath, this.folderLookup());
-      // 부모에 자리가 없으면 만들지 않는다 — 예전에는 루트에 만들어 폴더가 엉뚱한 곳에 생겼다.
-      if (parent?.kind !== "page") throw new Error(this.folderNotReady(parentPath, "만들지"));
-      parentId = parent.pageId;
-    }
-
-    // 폴더 페이지 생성에는 WAL 이 없다. 생성 요청이 적용됐는데 응답을 못 받으면(S-07 —
-    // 클라이언트는 그런 생성 요청을 다시 보내지 않는다) 레코드 없이 페이지만 남고, 다음
-    // push 가 같은 폴더 페이지를 또 만든다. 그래서 만들기 전에 부모에서 먼저 찾는다 —
-    // 새 폴더에서만 드는 목록 조회 1회다.
-    const found = await this.recovery.findChildPageByTitle(parentId, folderName);
-    const folderPage =
-      found ??
-      (await this.notionClient.createPage({
-        parentId,
-        parentType: "page",
-        title: folderName,
-      }));
-    // 폴더 페이지의 본문 지문 — 폴더 노트가 이 페이지를 삼으면(S-15) 그 push 가 본문이 그대로임을
-    // 확인한다. 곧 그 아래에 노트가 생겨 수정 시각이 바뀌므로 시각으로는 가를 수 없다.
-    const bodyFingerprint = found
-      ? await this.drift.remoteBodyFingerprintOf(found.id)
-      : remoteBodyFingerprint("");
-
-    this.stateDb.upsert({
-      obsidianPath: folderPath,
-      notionPageId: folderPage.id,
-      notionParentId: parentId,
-      contentHash: "",
-      ...this.observation.fieldsOf(folderPage, bodyFingerprint),
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType: "folder-note",
-      status: "synced",
-    });
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // 로컬 이동 (S-11) — 볼트에서 옮기거나 이름을 바꾼 노트 · 폴더를 추적 레코드와 다시 짝짓고,
-  // 상태 DB 에 옮겨 적은 뒤 Notion 에는 부모와 제목만 바꿔 반영한다. 예전에는 이름을 바꾸면
-  // 옛 페이지를 두고 새 페이지를 만들거나(내용도 바꾼 경우), 짝을 지어도 아무것도 하지 않았다.
-  // ──────────────────────────────────────────────────────────────────────────
-
-  /** 변경 감지 옵션 — 플러그인이 적어 둔 이름 변경 힌트. */
-  private localScanOptions(): LocalScanOptions & { readonly hints: RenameHints } {
-    return { hints: this.renameHints() };
-  }
-
-  private renameHints(): RenameHints {
-    return parseRenameHints(this.stateDb.getMeta(RENAME_HINTS_META_KEY));
-  }
-
-  private writeRenameHints(hints: RenameHints): void {
-    this.stateDb.setMeta(
-      RENAME_HINTS_META_KEY,
-      isEmptyRenameHints(hints) ? "" : JSON.stringify(hints),
-    );
-  }
-
-  /** 이번 실행의 로컬 변경과 옮겨진 폴더. 상태 DB 는 바꾸지 않는다. */
-  private async planLocalChanges(stats: readonly FileStatInfo[]): Promise<LocalPlan> {
-    const options = this.localScanOptions();
-    const scan = await this.changeDetector.scanLocalChangesFast(
-      stats,
-      (path) => this.vaultFs.readFile(path),
-      options,
-    );
-    return {
-      scan,
-      hints: options.hints,
-      settledMoveOps: this.settledMoveOps(scan),
-      ...(await this.planFolderMoves(stats, scan, options.hints)),
-    };
-  }
-
-  /** 이번 실행이 옮겨 적을 레코드 id → 새 경로. dry-run 이 옮겨 적은 뒤의 경로로 보이는 데 쓴다. */
-  private plannedPaths(plan: LocalPlan | null): Map<string, string> {
-    const paths = new Map<string, string>();
-    if (!plan) return paths;
-    for (const { record, to } of plan.scan.adoptions) paths.set(record.id, to);
-    for (const { from, to } of [...plan.folderMoves, ...plan.databaseFolderMoves]) {
-      const record = this.stateDb.getByPath(from);
-      if (record) paths.set(record.id, to);
-    }
-    return paths;
-  }
-
-  /**
-   * 반영할 것이 없는 이동 WAL — 레코드가 마지막으로 Notion 에 반영한 자리에 이미 돌아와 있다.
-   * 옮겨 적기 말고 다른 길로 제자리에 온 경우다. pull 의 DB 동기화는 DB 밖으로 옮겨 거절된 행을
-   * 제 DB 폴더에 다시 쓰고 레코드를 옮긴다 — 그 WAL 은 아무도 닫지 않아 남는다. 이번에 옮겨 적는
-   * 레코드의 WAL 은 옮겨 적을 때 정한다(moveRecord).
-   */
-  private settledMoveOps(scan: LocalScan): string[] {
-    const ops = this.stateDb
-      .getIncompletePendingOperations()
-      .filter((op) => op.direction === "push" && op.operation === "move");
-    if (ops.length === 0) return [];
-    const adopting = new Set(scan.adoptions.map((adoption) => adoption.record.id));
-    const pathOf = new Map(this.stateDb.getAll().map((record) => [record.id, record.obsidianPath]));
-    return ops
-      .filter(
-        (op) =>
-          !adopting.has(op.syncStateId) && moveOrigin(op.payload) === pathOf.get(op.syncStateId),
-      )
-      .map((op) => op.id);
-  }
-
-  /**
-   * 옮겨진 폴더 — push 가 만든 폴더 페이지의 레코드와 자동 발견 DB 폴더. 새 자리는 폴더 힌트가,
-   * 없으면 그 폴더에 있던 노트들의 짝이 정한다({@link deriveFolderMoves}). 새 자리를 이미 다른
-   * 레코드 · DB 가 쓰고 있으면 옮기지 않는다.
-   */
-  private async planFolderMoves(
-    stats: readonly FileStatInfo[],
-    scan: LocalScan,
-    hints: RenameHints,
-  ): Promise<Pick<LocalPlan, "folderMoves" | "databaseFolderMoves">> {
-    const lookup = this.folderLookup();
-    const folderRecords = new Set(
-      this.stateDb
-        .getAll()
-        .filter((r) => isFolderRecord(r) && r.notionPageId && !lookup.databaseAt(r.obsidianPath))
-        .map((r) => r.obsidianPath),
-    );
-    const configured = new Set(
-      (this.config.notion.databases ?? []).map((db) => db.localFolder.replace(/\/+$/, "")),
-    );
-    const databaseFolders = new Set(
-      parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))
-        .map((db) => db.localFolder.replace(/\/+$/, ""))
-        .filter((folder) => folder && !configured.has(folder)),
-    );
-    const tracked = [...folderRecords, ...databaseFolders];
-    if (tracked.length === 0) return { folderMoves: [], databaseFolderMoves: [] };
-
-    // 노트가 없는 폴더(빈 DB 폴더 · 첨부만 든 폴더)도 볼트에 있을 수 있다 — 노트 목록에 없는
-    // 폴더는 디스크에서 확인한다. 그대로 있으면 옮기지 않은 것이다.
-    const live = foldersOf(stats.map((stat) => stat.path));
-    for (const folder of tracked) {
-      if (live.has(folder)) continue;
-      if (await this.vaultFs.exists(folder)) {
-        live.add(folder);
-        continue;
-      }
-      const target = hintedFolderTarget(hints, folder);
-      if (target !== null && !live.has(target) && (await this.vaultFs.exists(target))) {
-        live.add(target);
-      }
-    }
-
-    const pairs = scan.adoptions.map((a) => ({ from: a.record.obsidianPath, to: a.to }));
-    const folderMoves: FolderMove[] = [];
-    const databaseFolderMoves: FolderMove[] = [];
-    for (const move of deriveFolderMoves(tracked, live, pairs, hints)) {
-      if (this.stateDb.getByPath(move.to) || lookup.databaseAt(move.to)) continue;
-      (folderRecords.has(move.from) ? folderMoves : databaseFolderMoves).push(move);
-    }
-    return { folderMoves, databaseFolderMoves };
-  }
-
-  /** 옮겨 적은 뒤의 볼트 — dry-run 도 실제 push 와 같은 판정을 쓰도록 계획을 겹쳐 본다. */
-  private localView(plan: LocalPlan): LocalView {
-    const recorded = this.folderLookup();
-    const moved: Array<{ from: string; to: string; record: SyncRecord | null }> = [
-      ...plan.scan.adoptions.map((a) => ({
-        from: a.record.obsidianPath,
-        to: a.to,
-        record: a.record,
-      })),
-      ...plan.folderMoves.map((m) => ({ ...m, record: this.stateDb.getByPath(m.from) })),
-    ];
-    const recordAt = new Map<string, SyncRecord | null>();
-    for (const m of moved) recordAt.set(m.from, null);
-    for (const m of moved) recordAt.set(m.to, m.record);
-    const databaseAt = new Map<string, string | null>();
-    for (const m of plan.databaseFolderMoves) databaseAt.set(m.from, null);
-    for (const m of plan.databaseFolderMoves) databaseAt.set(m.to, recorded.databaseAt(m.from));
-
-    const at = (path: string): SyncRecord | null =>
-      recordAt.has(path) ? recordAt.get(path)! : this.stateDb.getByPath(path);
-    return {
-      recordAt: at,
-      lookup: {
-        databaseAt: (folder) =>
-          databaseAt.has(folder) ? databaseAt.get(folder)! : recorded.databaseAt(folder),
-        pageIdAt: (path) => at(path)?.notionPageId ?? null,
-      },
-    };
-  }
-
-  /**
-   * 옮긴 노트 · 폴더를 상태 DB 에 옮겨 적는다 — Notion 은 건드리지 않는다.
-   *
-   * 레코드가 새 경로를 추적해야 pull 이 옛 자리에 노트를 되살리지 않고, 원격 변경을 새 경로에
-   * 쓴다. Notion 에 반영할 것은 이동 WAL 이 «마지막으로 반영한 경로» 로 적고, 반영을 마치면
-   * 지운다(pushMove). 반영하기 전에 그 자리로 되돌아오면 반영할 것이 없어 바로 지운다.
-   */
-  private adoptLocalMoves(plan: LocalPlan): void {
-    const { adoptions } = plan.scan;
-    const moved = adoptions.length + plan.folderMoves.length + plan.databaseFolderMoves.length;
-    if (moved === 0 && plan.settledMoveOps.length === 0 && isEmptyRenameHints(plan.hints)) return;
-
-    this.stateDb.transaction(() => {
-      for (const opId of plan.settledMoveOps) this.stateDb.markPendingCompleted(opId);
-      for (const { record, to } of adoptions) {
-        this.moveRecord(record, to);
-        // 폴더 노트인지는 경로가 정한다 — 새로 만들 때(pushCreate)와 같다. 행은 그대로 행이다.
-        const fileType =
-          record.fileType === "db-row" ? "db-row" : isFolderNotePath(to) ? "folder-note" : "file";
-        if (fileType !== record.fileType) {
-          this.stateDb.upsert({
-            obsidianPath: to,
-            notionPageId: record.notionPageId,
-            notionParentId: record.notionParentId,
-            contentHash: record.contentHash,
-            notionLastEdited: record.notionLastEdited,
-            notionLastEditedBy: record.notionLastEditedBy,
-            notionSeenAt: record.notionSeenAt,
-            notionBodyFingerprint: record.notionBodyFingerprint,
-            localLastModified: record.localLastModified,
-            syncDirection: record.syncDirection,
-            fileType,
-            status: record.status,
-            baseSnapshot: record.baseSnapshot,
-            localMtime: record.localMtime,
-            localFileSize: record.localFileSize,
-          });
-        }
-      }
-      for (const move of plan.folderMoves) {
-        const record = this.stateDb.getByPath(move.from);
-        if (record) this.moveRecord(record, move.to);
-      }
-      if (plan.databaseFolderMoves.length > 0) {
-        this.remapDiscoveredDbFolders(plan.databaseFolderMoves);
-      }
-      // 이번 스캔이 쓴 힌트만 지운다 — 그 사이 플러그인이 적은 힌트는 다음 실행이 쓴다.
-      if (!isEmptyRenameHints(plan.hints)) {
-        this.writeRenameHints(pruneRenameHints(this.renameHints(), plan.hints));
-      }
-    });
-
-    if (moved > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 옮긴 노트 ${adoptions.length}건 · 폴더 ${
-          plan.folderMoves.length + plan.databaseFolderMoves.length
-        }건을 상태에 옮겨 적음`,
-      );
-    }
-    for (const move of plan.databaseFolderMoves) {
-      getLogger().info(
-        `[Im-Nobsidian] DB 폴더를 옮김: ${move.from} → ${move.to} — 볼트 쪽 자리만 바뀐다. ` +
-          `Notion 의 DB 는 옮기거나 이름을 바꾸지 않는다`,
-      );
-    }
-  }
-
-  /** 레코드를 새 경로로 옮겨 적는다 — 이동 WAL · 위키링크 · 보존 마커도 함께. */
-  private moveRecord(record: SyncRecord, to: string): void {
-    const from = record.obsidianPath;
-    let op = this.stateDb.getIncompleteOpByState(record.id, "move");
-    if (op && moveOrigin(op.payload) === null) {
-      this.stateDb.markPendingFailed(op.id, "invalid move payload");
-      op = null;
-    }
-    const origin = (op ? moveOrigin(op.payload) : null) ?? from;
-
-    this.stateDb.updatePath(record.id, to);
-    if (origin === to) {
-      if (op) this.stateDb.markPendingCompleted(op.id);
-    } else if (!op) {
-      this.stateDb.recordPendingOperation({
-        syncStateId: record.id,
-        operation: "move",
-        direction: "push",
-        payload: movePayload(from),
-      });
-    }
-
-    const entry = record.notionPageId ? this.stateDb.resolvePageId(record.notionPageId) : null;
-    if (entry && entry.obsidianPath === from) {
-      this.stateDb.deleteWikilink(from);
-      this.stateDb.upsertWikilink({
-        obsidianPath: to,
-        notionPageId: entry.notionPageId,
-        title: wikilinkTitleFromPath(to),
-        aliases: entry.aliases,
-      });
-    }
-    const markers = this.stateDb.getPreserveMarkers(from);
-    if (markers.length > 0) {
-      this.stateDb.storePreserveMarkers(to, markers);
-      this.stateDb.storePreserveMarkers(from, []);
-    }
-  }
-
-  /** 옮겨진 자동 발견 DB 폴더를 설정에 옮겨 적는다 — pull 이 행을 새 폴더에 쓴다. */
-  private remapDiscoveredDbFolders(moves: readonly FolderMove[]): void {
-    const target = new Map(moves.map((move) => [move.from, move.to]));
-    const configs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    let changed = false;
-    for (const config of configs) {
-      const to = target.get(config.localFolder.replace(/\/+$/, ""));
-      if (to === undefined) continue;
-      config.localFolder = to;
-      changed = true;
-    }
-    if (changed) this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(configs));
-  }
-
-  /**
-   * 변경 목록에 보일 폴더 이동 — Notion 에 반영할 폴더 페이지와, 볼트 쪽 자리만 바꿀 DB 폴더.
-   * 옮긴 폴더는 노트가 아니라 {@link LocalChange} 가 없다. 예전에는 목록에 보이지 않고 push 결과의
-   * 수에만 들었다.
-   */
-  private folderMoveChanges(plan: LocalPlan): FolderMoveChange[] {
-    return [...this.pendingFolderMoves(plan), ...plan.databaseFolderMoves].map(({ from, to }) => ({
-      from,
-      to,
-    }));
-  }
-
-  /**
-   * Notion 에 반영할 폴더 이동 — 앞선 실행에서 옮겨 적고 반영하지 못한 것까지, 얕은 것부터.
-   * dry-run 은 이번 실행의 폴더 이동을 옮겨 적지 않았으므로 계획에서 더한다.
-   */
-  private pendingFolderMoves(plan: LocalPlan): PendingFolderMove[] {
-    const origins = pendingMoveOrigins(this.stateDb.getIncompletePendingOperations());
-    const moves = new Map<string, PendingFolderMove>();
-    if (origins.size > 0) {
-      for (const record of this.stateDb.getAll()) {
-        const from = origins.get(record.id);
-        if (from !== undefined && from !== record.obsidianPath && isFolderRecord(record)) {
-          moves.set(record.id, { record, from, to: record.obsidianPath });
-        }
-      }
-    }
-    for (const move of plan.folderMoves) {
-      const record = this.stateDb.getByPath(move.from);
-      if (!record) continue; // 이미 옮겨 적었다 — 위에서 WAL 로 셌다.
-      const from = origins.get(record.id) ?? move.from;
-      if (from === move.to) moves.delete(record.id);
-      else moves.set(record.id, { record, from, to: move.to });
-    }
-    return [...moves.values()].sort((a, b) => a.to.split("/").length - b.to.split("/").length);
-  }
-
-  /**
-   * 변경을 올리기 전에 Notion 에 있어야 하는 폴더 — 새로 만들거나 옮기는 «페이지» 의 조상뿐,
-   * 얕은 것부터. 행은 DB 에 들고, 이미 있는 페이지의 갱신 · 삭제는 부모를 쓰지 않는다. 예전에는
-   * 모든 변경의 조상을 폴더 페이지로 만들어, DB 폴더와 DB 를 품은 폴더가 Notion 에 빈 페이지로
-   * 생겼다(S-04).
-   */
-  private foldersToEnsure(changes: readonly LocalChange[]): string[] {
-    const folders = new Set<string>();
-    for (const change of changes) {
-      if (change.type !== "created" && change.type !== "moved") continue;
-      if (this.newRowDatabaseOf(change.path)) continue;
-      for (const folder of ancestorFolders(change.path)) folders.add(folder);
-    }
-    return [...folders].sort((a, b) => a.split("/").length - b.split("/").length);
-  }
-
-  /**
-   * 새 노트 · 옮긴 노트가 들어갈 폴더의 Notion 자리를 마련한다 — 얕은 것부터.
-   *
-   * 폴더 노트 `F/F.md` 가 폴더 F 의 페이지다(pull 이 그렇게 받는다). 그래서 이번 push 에 새 폴더
-   * 노트가 있으면 폴더 페이지를 따로 만들지 않는다.
-   *
-   * - 폴더에 아직 자리가 없으면 폴더 노트를 먼저 올린다. 폴더가 설 자리(폴더의 부모)에 생기고, 같은
-   *   폴더의 노트 · 하위 폴더는 그 아래로 간다.
-   * - push 가 앞서 만든 폴더 페이지가 있으면 그 페이지를 폴더 노트의 페이지로 삼는다
-   *   ({@link adoptFolderPage}). 새로 만들지 않고 본문을 채워 하위 페이지와 페이지 id 가 그대로다.
-   *
-   * 예전에는 폴더 페이지를 먼저 만들고 폴더 노트를 그 아래에 만들어 같은 이름의 페이지가 두 겹으로
-   * 생기고, 형제 노트는 어느 쪽이 먼저 생겼느냐에 따라 두 부모로 갈렸다(S-15). DB 모드는 모든 노트가
-   * 루트 DB 의 행이라 마련할 폴더가 없다({@link foldersToEnsure}).
-   *
-   * 자리를 마련하지 못한 폴더는 이유를 적어 두고 넘어간다({@link unpreparedFolders}) — 그 안의 노트와
-   * 하위 폴더가 그 이유로 실패한다. 예전 첫 차례는 폴더 하나를 못 만들면 push 전체가 멈췄다.
-   *
-   * @param pushFolderNote 먼저 올릴 폴더 노트를 올린다. 실패는 호출자가 재시도 · 실패로 다룬다.
-   * @returns 여기서 올린 폴더 노트의 경로 — 호출자는 다시 올리지 않는다.
-   */
-  private async prepareFolders(
-    changes: readonly LocalChange[],
-    pushFolderNote: (change: LocalChange) => Promise<void>,
-  ): Promise<Set<string>> {
-    this.unpreparedFolders.clear();
-    const newNotes = new Map(
-      changes.filter((c) => c.type === "created").map((c) => [c.path, c] as const),
-    );
-    const pushed = new Set<string>();
-    for (const folder of this.foldersToEnsure(changes)) {
-      const inherited = ancestorFolders(folder)
-        .map((ancestor) => this.unpreparedFolders.get(ancestor))
-        .find((reason) => reason !== undefined);
-      if (inherited !== undefined) {
-        this.unpreparedFolders.set(folder, inherited);
-        continue;
-      }
-      try {
-        const note = newNotes.get(folderNoteOf(folder));
-        const lookup = this.folderLookup();
-        if (note && !lookup.databaseAt(folder)) {
-          if (this.adoptFolderPage(folder, note.path)) continue;
-          if (!folderContainer(folder, lookup) && !enclosingDatabaseFolder(folder, lookup)) {
-            pushed.add(note.path);
-            await pushFolderNote(note);
-            if (!folderContainer(folder, this.folderLookup())) {
-              throw new Error(`폴더 노트(${note.path})를 올리지 못함`);
-            }
-            continue;
-          }
-        }
-        await this.ensureFolderPage(folder);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.unpreparedFolders.set(folder, reason);
-        getLogger().warn(`[Im-Nobsidian] 폴더(${folder})의 Notion 자리를 마련하지 못함: ${reason}`);
-      }
-    }
-    return pushed;
-  }
-
-  /**
-   * push 가 만든 폴더 페이지를 새 폴더 노트의 페이지로 삼는다(S-15) — 폴더 레코드를 폴더 노트의
-   * 경로로 옮겨 적는다. 이어서 pushCreate 가 레코드를 보고 새로 만들지 않고 본문을 보낸다. 제목은
-   * frontmatter `title` 이 있을 때만 보낸다(changedPageTitle) — 폴더 페이지는 폴더 이름으로 만들어
-   * 폴더 노트의 기본 제목과 같다.
-   *
-   * 폴더 노트의 생성 요청이 적용됐는지 모르는 채 남아 있으면(미완료 create WAL) 삼지 않는다 — 그
-   * 요청이 만든 페이지를 찾아 매듭짓는 것이 먼저다. 폴더 이동을 아직 반영하지 못했어도(미완료 move
-   * WAL) 삼지 않는다 — 그 WAL 은 폴더 레코드의 옛 자리를 적은 것이다.
-   *
-   * @returns 삼았으면 true.
-   */
-  private adoptFolderPage(folder: string, notePath: string): boolean {
-    const record = this.stateDb.getByPath(folder);
-    if (!record?.notionPageId || !isFolderRecord(record)) return false;
-    if (this.stateDb.getIncompleteOpByState(record.id, "move")) return false;
-    const placeholder = this.stateDb.getByPath(notePath);
-    if (placeholder?.notionPageId) return false;
-    if (placeholder && this.stateDb.getIncompleteOpByState(placeholder.id, "create")) return false;
-    this.stateDb.transaction(() => {
-      // 생성 요청을 보내기 전에 끊긴 자리표시다 — 지워야 폴더 레코드가 그 경로를 쓴다.
-      if (placeholder) this.stateDb.delete(placeholder.id);
-      this.stateDb.updatePath(record.id, notePath);
-      this.stateDb.deleteWikilink(folder);
-    });
-    getLogger().info(
-      `[Im-Nobsidian] 폴더 페이지를 폴더 노트의 페이지로 삼음: ${folder} → ${notePath}`,
-    );
-    return true;
-  }
-
-  /**
-   * 폴더에 Notion 자리가 없어 그 안에 만들거나 옮기지 않는 이유. 이번 push 가 그 폴더의 자리를
-   * 마련하다 실패했으면 그 이유를 붙인다.
-   */
-  private folderNotReady(folder: string, verb: "만들지" | "옮기지"): string {
-    const reason = this.unpreparedFolders.get(folder);
-    return reason === undefined
-      ? `폴더(${folder})의 Notion 페이지가 아직 없어 ${verb} 않음 — 다음 push 가 폴더부터 만든다`
-      : `폴더(${folder})의 Notion 페이지를 마련하지 못해 ${verb} 않음 — ${reason}`;
-  }
-
-  /**
-   * 둘 자리가 없어 만들지 않을 새 노트 → 이유. 같은 push 에서 생길 새 행도 자리로 센다 —
-   * `DB/행.md` 와 `DB/행/노트.md` 를 함께 만들면 행이 먼저 생기고 노트는 그 아래로 간다.
-   *
-   * @param recorded 옮긴 노트 · 폴더를 옮겨 적은 뒤의 폴더 판정({@link localView}).
-   */
-  private refusedCreates(
-    changes: readonly LocalChange[],
-    recorded: FolderLookup,
-  ): Map<string, string> {
-    const newRows = new Set(
-      changes
-        .filter((c) => c.type === "created" && this.newRowDatabaseOf(c.path, recorded))
-        .map((c) => c.path),
-    );
-    const lookup: FolderLookup = {
-      databaseAt: recorded.databaseAt,
-      // 새 행은 아직 id 가 없다 — 여기서는 자리가 있는지만 본다.
-      pageIdAt: (path) => recorded.pageIdAt(path) ?? (newRows.has(path) ? "(새 행)" : null),
-    };
-    const refused = new Map<string, string>();
-    for (const change of changes) {
-      if (change.type !== "created" || newRows.has(change.path)) continue;
-      const reason = this.placementRefusal(parentFolderOf(change.path), lookup, "create");
-      if (reason) refused.set(change.path, reason);
-    }
-    return refused;
-  }
-
-  /**
-   * Notion 에서 그렇게 옮길 수 없는 노트 → 이유(S-11). DB 모드는 모든 노트가 루트 DB 의 행이라
-   * 폴더가 Notion 의 자리를 정하지 않는다 — 거절할 것이 없다.
-   */
-  private refusedMoves(changes: readonly LocalChange[], view: LocalView): Map<string, string> {
-    const refused = new Map<string, string>();
-    if (isDatabaseMode(this.config)) return refused;
-    for (const change of changes) {
-      if (change.type !== "moved") continue;
-      const record = view.recordAt(change.path);
-      if (!record) continue;
-      const reason = this.moveRefusal(change, record, view.lookup);
-      if (reason) refused.set(change.path, reason);
-    }
-    return refused;
-  }
-
-  /**
-   * 옮긴 노트를 Notion 에서 그 자리로 옮길 수 없는 이유. 옮길 수 있으면 null.
-   *
-   * - 행은 제 DB 폴더 바로 아래에서만 움직인다. Notion 에서 행을 DB 밖으로 옮기면 속성이 보이지
-   *   않게 되고, 다른 DB 로 옮기면 스키마가 달라 속성이 맞지 않는다.
-   * - 페이지는 DB 폴더로 옮길 수 없다 — DB 에는 행만 든다.
-   * - 나머지는 새 노트와 같다 — DB 폴더 안의, 같은 이름의 행이 없는 폴더에는 자리가 없다.
-   */
-  private moveRefusal(
-    change: LocalChange,
-    record: SyncRecord,
-    lookup: FolderLookup,
-  ): string | null {
-    const folder = parentFolderOf(change.path);
-    const databaseId = lookup.databaseAt(folder);
-    if (record.fileType === "db-row") {
-      if (
-        databaseId &&
-        record.notionParentId &&
-        notionIdsEqual(databaseId, record.notionParentId)
-      ) {
-        return null;
-      }
-      const home = change.movedFrom ? `«${parentFolderOf(change.movedFrom)}» ` : "";
-      return (
-        `DB 행은 그 DB 폴더 밖으로 옮기지 않음 — Notion 에서 행을 DB 밖 · 다른 DB 로 옮기면 ` +
-        `속성이 사라진다. 원래 DB 폴더 ${home}바로 아래로 되돌리세요`
-      );
-    }
-    const placement = pagePlacementFolder(change.path);
-    const databaseFolder = databaseId
-      ? folder
-      : placement && lookup.databaseAt(placement)
-        ? placement
-        : null;
-    if (databaseFolder !== null) {
-      return (
-        `페이지를 DB 폴더(${databaseFolder})로 옮기지 않음 — DB 에는 행만 든다. ` +
-        `DB 폴더 밖으로 옮기세요`
-      );
-    }
-    return this.placementRefusal(placement, lookup, "move");
-  }
-
-  /** 옮긴 폴더의 페이지를 Notion 에서 그 자리로 옮길 수 없는 이유. 옮길 수 있으면 null. */
-  private folderMoveRefusal(folder: string, lookup: FolderLookup): string | null {
-    const parent = parentFolderOf(folder);
-    if (!parent) return null;
-    if (lookup.databaseAt(parent)) {
-      return (
-        `폴더를 DB 폴더(${parent}) 안으로 옮기지 않음 — DB 에는 행만 든다. ` +
-        `DB 폴더 밖으로 옮기세요`
-      );
-    }
-    return this.placementRefusal(parent, lookup, "move");
-  }
-
-  /**
-   * 폴더에 페이지를 둘 자리가 없는 이유 — DB 폴더 안의, 같은 이름의 행이 없는 폴더. 자리가 있으면
-   * null. DB 에는 행만 들어 그런 폴더는 Notion 에 같은 것이 없다. 예전에는 그 폴더를 빈 페이지로
-   * 만들어 그 아래에 뒀다(S-04).
-   */
-  private placementRefusal(
-    folder: string,
-    lookup: FolderLookup,
-    action: "create" | "move",
-  ): string | null {
-    if (!folder || folderContainer(folder, lookup)) return null;
-    const databaseFolder = enclosingDatabaseFolder(folder, lookup);
-    if (!databaseFolder) return null;
-    const rowName = folder.slice(databaseFolder.length + 1).split("/")[0];
-    const place = `DB 폴더(${databaseFolder}) 안의 «${rowName}» 폴더는 그 이름의 행 아래 페이지 자리다`;
-    return action === "create"
-      ? `같은 이름의 행이 Notion 에 없는 폴더라 만들지 않음 — ${place}. ` +
-          `행으로 올리려면 DB 폴더 바로 아래로 옮기세요`
-      : `같은 이름의 행이 Notion 에 없는 폴더라 옮기지 않음 — ${place}. ` +
-          `그 이름의 행을 먼저 만들거나 다른 폴더로 옮기세요`;
-  }
-
-  /**
-   * 옮긴 페이지가 놓일 부모 페이지. 폴더 노트는 그 폴더의 페이지라 폴더의 부모 자리에 선다 —
-   * pull 이 폴더 노트를 그렇게 받는다. 새 폴더의 자리는 앞서 마련한다(prepareFolders).
-   */
-  private moveParentOf(path: string): string {
-    const folder = pagePlacementFolder(path);
-    if (!folder) return this.config.notion.rootPageId;
-    const lookup = this.folderLookup();
-    const container = folderContainer(folder, lookup);
-    if (container?.kind === "page") return container.pageId;
-    if (container?.kind === "database") {
-      throw new Error(`페이지를 DB 폴더(${folder})로 옮기지 않음 — DB 에는 행만 든다`);
-    }
-    throw new Error(
-      this.placementRefusal(folder, lookup, "move") ?? this.folderNotReady(folder, "옮기지"),
-    );
-  }
-
-  /**
-   * 새 페이지가 놓일 부모 페이지 — 폴더 노트 · 폴더 페이지 · 페이지 이름의 하위 폴더(DB 를 품은
-   * 페이지 · 행)의 페이지. DB 폴더 직속 노트는 행이라 여기 오지 않는다.
-   *
-   * 자리가 없는 폴더의 폴더 노트는 그 폴더의 자리가 된다 — 폴더가 설 자리(폴더의 부모)에 만든다.
-   * pull 이 폴더 노트를 그렇게 받고, 옮길 때(moveParentOf)도 같다.
-   */
-  private async resolveNotionParent(filePath: string): Promise<string> {
-    const folder = parentFolderOf(filePath);
-    if (!folder) return this.config.notion.rootPageId;
-
-    const lookup = this.folderLookup();
-    const container = folderContainer(folder, lookup);
-    if (container?.kind === "database") {
-      throw new Error("DB 폴더의 노트는 페이지가 아니라 행이다");
-    }
-    if (isFolderNotePath(filePath)) {
-      // push 가 만든 폴더 페이지는 폴더 노트가 삼는다(prepareFolders) — 여기 왔으면 아직 삼지 못한
-      // 것이다. 그 아래에 만들면 같은 이름의 페이지가 두 겹이 된다(S-15).
-      const folderRecord = this.stateDb.getByPath(folder);
-      if (folderRecord?.notionPageId && isFolderRecord(folderRecord)) {
-        throw new Error(
-          `폴더(${folder})의 페이지를 아직 폴더 노트의 페이지로 삼지 못해 만들지 않음 — ` +
-            `폴더 이동 · 앞선 생성 요청이 끝나면 다음 push 가 삼는다`,
-        );
-      }
-      if (!container && !enclosingDatabaseFolder(folder, lookup)) {
-        const placement = parentFolderOf(folder);
-        if (!placement) return this.config.notion.rootPageId;
-        const parent = folderContainer(placement, lookup);
-        if (parent?.kind === "page") return parent.pageId;
-        throw new Error(
-          this.placementRefusal(placement, lookup, "create") ??
-            this.folderNotReady(placement, "만들지"),
-        );
-      }
-    }
-    if (container?.kind === "page") return container.pageId;
-    // 폴더의 자리는 파일보다 먼저 마련한다(prepareFolders). 여기 온 것은 둘 자리가 없는 폴더,
-    // 자리를 마련하지 못한 폴더, 같은 push 에서 새 행이 생겨 그 아래 폴더의 자리가 그제서야 정해진
-    // 경우다 — 루트에 두면 엉뚱한 곳에 생기므로 실패로 남긴다. 재시도가 폴더를 다시 본다.
-    throw new Error(
-      this.placementRefusal(folder, lookup, "create") ?? this.folderNotReady(folder, "만들지"),
-    );
-  }
-
-  /**
-   * 폴더 판정에 쓰는 조회 — DB 폴더(설정 · 자동 발견)와 추적 레코드. DB 폴더 표는 자동 발견
-   * 목록이 바뀔 때만 다시 만든다(pull 이 새 DB 를 발견하면 바뀐다).
-   */
-  private folderLookup(): FolderLookup {
-    const raw = this.stateDb.getMeta(DISCOVERED_DBS_META_KEY);
-    if (!this.dbFolderCache || this.dbFolderCache.raw !== raw) {
-      this.dbFolderCache = {
-        raw,
-        // 설정 DB 를 앞에 둔다 — 같은 폴더를 가리키면 설정이 주인이다.
-        index: databaseFolderIndex([
-          ...(this.config.notion.databases ?? []),
-          ...parseDiscoveredDbs(raw),
-        ]),
-      };
-    }
-    const index = this.dbFolderCache.index;
-    return {
-      databaseAt: (folder) => index.get(folder) ?? null,
-      pageIdAt: (path) => this.stateDb.getByPath(path)?.notionPageId ?? null,
-    };
-  }
-
-  /**
-   * 이 경로에 새로 생긴 노트가 들어갈 DB — DB 폴더(설정 · 자동 발견) 직속이면 그 DB, 아니면
-   * null(페이지). DB 모드는 모든 노트가 루트 DB 의 행이다 — 폴더는 Notion 의 자리를 정하지 않는다.
-   */
-  private newRowDatabaseOf(
-    path: string,
-    lookup: FolderLookup = this.folderLookup(),
-  ): string | null {
-    if (isDatabaseMode(this.config)) return this.config.notion.databaseId!;
-    return lookup.databaseAt(parentFolderOf(path));
-  }
-
-  /**
-   * 587b405 이전 push 가 남긴 잘못된 폴더 레코드를 지운다 — 루트 페이지를 맨 위 폴더의 페이지로
-   * 적은 레코드. 그때 ensureFolderPage 는 폴더 노트의 부모 페이지를 폴더의 페이지로 적었고, 맨 위
-   * 폴더에서는 그것이 루트다. 루트는 어느 폴더의 페이지도 아니다. 더 깊은 폴더는 그 부모 페이지를
-   * 다른 레코드가 이미 가리켜(notion_page_id 고유 색인) 이런 레코드가 생기지 않았다.
-   *
-   * push 가 만든 폴더 페이지 아래에 폴더 노트가 든 두 겹의 폴더(S-15)는 지우지 않는다. 예전에는
-   * 폴더 노트가 페이지를 가지면 폴더 레코드를 지워, Notion 에 그대로 있는 폴더 페이지를 추적에서
-   * 놓았다 — 다음 pull 이 그것을 새 페이지로 받아 `(id)` 이름의 파일로 썼다.
-   */
-  private repairFolderRecords(): void {
-    for (const record of this.stateDb.getAll()) {
-      if (
-        isFolderRecord(record) &&
-        record.notionPageId &&
-        notionIdsEqual(record.notionPageId, this.config.notion.rootPageId)
-      ) {
-        this.stateDb.transaction(() => {
-          this.stateDb.delete(record.id);
-          this.stateDb.deleteWikilink(record.obsidianPath);
-        });
-      }
-    }
-  }
-
   private async resolveParentPath(page: PageObjectResponse): Promise<string> {
     const parentId = await extractParentId(this.notionClient, page);
     if (!parentId || notionIdsEqual(parentId, this.config.notion.rootPageId)) return "";
@@ -3797,7 +3010,7 @@ export class SyncOrchestrator {
       // 폴더 페이지는 빼고 예전 자리에 둔다 — DB 폴더에는 행만 든다.
       if (
         isFolderRecord(parentRecord) &&
-        !this.folderLookup().databaseAt(parentRecord.obsidianPath)
+        !this.placement.folderLookup().databaseAt(parentRecord.obsidianPath)
       ) {
         return parentRecord.obsidianPath;
       }
@@ -4115,15 +3328,6 @@ function extractTitle(filePath: string): string {
 /** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
 function titleProperty(title: string): Record<string, unknown> {
   return { title: { title: [{ text: { content: title } }] } };
-}
-
-/**
- * 이 노트의 Notion 페이지가 놓일 폴더. 폴더 노트(`A/B/B.md`)는 폴더 `A/B` 의 페이지라
- * 그 폴더의 부모(`A`)에 놓인다.
- */
-function pagePlacementFolder(path: string): string {
-  const folder = parentFolderOf(path);
-  return isFolderNotePath(path) ? parentFolderOf(folder) : folder;
 }
 
 function extractAliases(properties: Record<string, unknown>): string[] {
