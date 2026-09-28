@@ -151,18 +151,19 @@ nobsi watch    # 파일 변경 감시 + 자동 동기화
 
 ## CLI 명령어
 
-| 명령어              | 설명                                                                  |
-| ------------------- | --------------------------------------------------------------------- |
-| `nobsi init`        | 대화형 설정 — Notion 토큰 + 루트 페이지                               |
-| `nobsi push`        | 로컬 변경사항을 Notion에 반영                                         |
-| `nobsi pull`        | Notion 변경사항을 로컬에 반영                                         |
-| `nobsi sync`        | 양방향 동기화 (pull → push)                                           |
-| `nobsi status`      | 동기화 상태 + 충돌 표시                                               |
-| `nobsi diff [경로]` | 로컬과 Notion 간 차이 표시                                            |
-| `nobsi fetch`       | 원격 변경 스캔 (신규/수정/삭제, 읽기 전용)                            |
-| `nobsi verify`      | 완결성 검증 — 원격 행·**페이지**가 볼트에 빠짐없이 있는가 (읽기 전용) |
-| `nobsi resolve`     | 동기화 충돌 해결                                                      |
-| `nobsi watch`       | 파일 변경 감시 + 자동 동기화                                          |
+| 명령어                    | 설명                                                                  |
+| ------------------------- | --------------------------------------------------------------------- |
+| `nobsi init`              | 대화형 설정 — Notion 토큰 + 루트 페이지                               |
+| `nobsi push`              | 로컬 변경사항을 Notion에 반영                                         |
+| `nobsi pull`              | Notion 변경사항을 로컬에 반영                                         |
+| `nobsi sync`              | 양방향 동기화 (pull → push)                                           |
+| `nobsi status`            | 동기화 상태 + 충돌 표시                                               |
+| `nobsi diff [경로]`       | 로컬과 Notion 간 차이 표시                                            |
+| `nobsi discard <경로...>` | 로컬 편집 되돌리기 — 지난 동기화 때의 글로 (Notion 은 그대로)         |
+| `nobsi fetch`             | 원격 변경 스캔 (신규/수정/삭제, 읽기 전용)                            |
+| `nobsi verify`            | 완결성 검증 — 원격 행·**페이지**가 볼트에 빠짐없이 있는가 (읽기 전용) |
+| `nobsi resolve`           | 동기화 충돌 해결                                                      |
+| `nobsi watch`             | 파일 변경 감시 + 자동 동기화                                          |
 
 `push`, `pull`, `sync`는 `--dry-run` 옵션으로 적용 없이 변경사항을 미리 볼 수 있습니다. `pull --force`는 증분 감지를 건너뛰고 전체를 다시 스캔합니다 (Notion 검색 인덱싱 지연으로 누락된 페이지 복구).
 

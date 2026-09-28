@@ -18,6 +18,8 @@ export interface PushJson {
   readonly created: number;
   readonly updated: number;
   readonly deleted: number;
+  /** 옮김을 반영한 노트 · 폴더 수 — updated 와 겹치지 않는다. */
+  readonly moved: number;
   /** 원격에 실제로 쓴(또는 dry-run 이면 쓸) 항목 수. 멱등 판정의 기준값. */
   readonly churn: number;
   readonly failed: readonly FailedOperation[];
@@ -45,7 +47,8 @@ export function pushJson(result: PushResult): PushJson {
     created: result.created,
     updated: result.updated,
     deleted: result.deleted,
-    churn: result.created + result.updated + result.deleted,
+    moved: result.moved,
+    churn: result.created + result.updated + result.deleted + result.moved,
     failed: result.failed,
     durationMs: result.duration,
   };

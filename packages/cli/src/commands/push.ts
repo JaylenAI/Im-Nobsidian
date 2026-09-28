@@ -66,7 +66,7 @@ export const pushCommand = new Command("push")
       const failedCount = result.failed.length;
       console.log(`\n  ${completionHeader("Push", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted)}  ${failedCountText(failedCount)}`,
+        `  ${summary(result.created, result.updated, result.deleted, result.moved)}  ${failedCountText(failedCount)}`,
       );
       console.log(`  ${duration(result.duration)}`);
 

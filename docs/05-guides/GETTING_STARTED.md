@@ -81,6 +81,7 @@ nobsi sync --dry-run   # 실제 변경 없이 예정 작업만 확인
 ```bash
 nobsi status         # 변경/충돌 파일 표시
 nobsi diff           # 로컬 ↔ Notion 차이 상세 출력
+nobsi discard a.md   # a.md 의 로컬 편집을 지난 동기화 때의 글로 되돌리기 (Notion 은 그대로)
 ```
 
 ## Conflict Resolution / 충돌 해결

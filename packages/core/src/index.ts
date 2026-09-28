@@ -14,6 +14,7 @@ export type {
   PullResult,
   SyncResult,
   StatusResult,
+  FolderMoveChange,
   FailedOperation,
   SyncDirection,
   FileType,
@@ -101,6 +102,7 @@ export type {
   FileDownloadResult,
   DatabaseSyncResult,
   PlannedRow,
+  RowProgress,
   GatedOperation,
 } from "./sync/index.js";
 

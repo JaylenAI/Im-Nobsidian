@@ -14,7 +14,7 @@ const pullResult = {
   fileCount: 0,
   linkCount: 1,
 };
-const pushResult = { created: 0, updated: 3, deleted: 0, failed: [], duration: 800 };
+const pushResult = { created: 0, updated: 3, deleted: 0, moved: 0, failed: [], duration: 800 };
 
 const mockPull = vi.fn();
 const mockPush = vi.fn();
@@ -30,7 +30,16 @@ vi.mock("@im-nobsidian/core", () => ({
     vi.fn().mockImplementation(() => ({})),
     { fromConfig: vi.fn().mockReturnValue({}) },
   ),
-  SyncOrchestrator: vi.fn().mockImplementation(() => ({ pull: mockPull, push: mockPush })),
+  SyncOrchestrator: vi.fn().mockImplementation(() => ({
+    pull: mockPull,
+    push: mockPush,
+    // CLI sync 는 오케스트레이터의 sync 하나를 부른다(F-j) — 결과는 위 두 모의가 정한다.
+    sync: async (options: unknown) => {
+      const pull = await mockPull(options);
+      const push = await mockPush(options);
+      return { pull, push, conflicts: pull.conflicts, duration: pull.duration + push.duration };
+    },
+  })),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
   setLogger: (...args: unknown[]) => mockSetLogger(...args),
 }));
@@ -81,10 +90,16 @@ describe("--json 출력 계약", () => {
     expect(mockPull).toHaveBeenCalledWith(expect.objectContaining({ onProgress: undefined }));
   });
 
-  it("push --dry-run: churn 은 생성·수정·삭제의 합", async () => {
-    mockPush.mockResolvedValueOnce({ ...pushResult, created: 1, deleted: 1 });
+  it("push --dry-run: churn 은 생성·수정·삭제·옮김의 합", async () => {
+    mockPush.mockResolvedValueOnce({ ...pushResult, created: 1, deleted: 1, moved: 2 });
     await run(pushCommand, "push", "--dry-run", "--json");
-    expect(stdoutJson(write)).toMatchObject({ created: 1, updated: 3, deleted: 1, churn: 5 });
+    expect(stdoutJson(write)).toMatchObject({
+      created: 1,
+      updated: 3,
+      deleted: 1,
+      moved: 2,
+      churn: 7,
+    });
     expect(mockPush).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
     expect(log).not.toHaveBeenCalled();
   });

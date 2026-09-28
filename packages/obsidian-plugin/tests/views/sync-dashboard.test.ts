@@ -205,6 +205,25 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onPushPath).toHaveBeenCalledWith("새.md");
   });
 
+  it("옮긴 폴더는 폴더 행으로, 옮긴 노트는 어디서 왔는지와 함께 보인다 — ↑ 는 그 폴더를 올린다", () => {
+    const localChanges = [{ path: "B/x.md", type: "moved", movedFrom: "A/x.md" }];
+    const folderMoves = [{ from: "A", to: "B" }];
+    const props = baseProps({ localChanges, folderMoves });
+    m = renderComponent(SyncDashboard, props);
+
+    const names = [...m.target.querySelectorAll(".im-sync-file-name")].map(normText);
+    const where = [...m.target.querySelectorAll(".im-sync-file-path")].map(normText);
+    expect(names).toEqual(["B/", "x"]);
+    expect(where).toEqual(["← A", "← A/x"]);
+    expect(normText(m.target.querySelector(".im-sync-badge"))).toBe("2");
+    // 옮긴 노트는 되돌릴 수 없다(고침 · 지움만) — ↑ 만 있다.
+    expect(m.target.querySelectorAll(DISCARD)).toHaveLength(0);
+    m.target
+      .querySelector<HTMLElement>('button[aria-label="이 폴더의 이동을 Notion 에 올리기"]')!
+      .click();
+    expect(props.onPushPath).toHaveBeenCalledWith("B");
+  });
+
   it("↺ 는 두 번 눌러야 되돌리고, 3초 안에 다시 누르지 않으면 풀린다", () => {
     vi.useFakeTimers();
     try {

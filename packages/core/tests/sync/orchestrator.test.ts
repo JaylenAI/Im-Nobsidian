@@ -902,11 +902,10 @@ describe("SyncOrchestrator", () => {
     });
 
     it("로컬 변경사항 감지", async () => {
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "new-note.md", content: "# New", mtime: new Date().toISOString() },
-        ]);
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new-note.md", mtime: new Date().toISOString(), size: 5 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# New");
 
       const result = await orchestrator.status();
 

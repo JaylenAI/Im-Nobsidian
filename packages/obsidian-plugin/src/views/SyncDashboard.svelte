@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { LocalChange, RemoteChange, Conflict } from "@im-nobsidian/core";
+  import type { LocalChange, FolderMoveChange, RemoteChange, Conflict } from "@im-nobsidian/core";
 
   interface SyncProgress {
     current: number;
@@ -11,6 +11,7 @@
   interface SyncStateUpdate {
     lastSyncAt: string | null;
     localChanges: LocalChange[];
+    folderMoves?: FolderMoveChange[];
     remoteChanges?: RemoteChange[];
     conflicts: Conflict[];
     syncState: "ready" | "syncing" | "error" | "conflict";
@@ -23,6 +24,7 @@
   interface Props {
     lastSyncAt: string | null;
     localChanges: LocalChange[];
+    folderMoves?: FolderMoveChange[];
     remoteChanges: RemoteChange[];
     conflicts: Conflict[];
     syncState: "ready" | "syncing" | "error" | "conflict";
@@ -46,6 +48,7 @@
   let {
     lastSyncAt: initialLastSyncAt,
     localChanges: initialLocalChanges,
+    folderMoves: initialFolderMoves = [],
     remoteChanges: initialRemoteChanges,
     conflicts: initialConflicts,
     syncState: initialSyncState,
@@ -68,6 +71,7 @@
 
   let lastSyncAt: string | null = $state(initialLastSyncAt);
   let localChanges: LocalChange[] = $state(initialLocalChanges);
+  let folderMoves: FolderMoveChange[] = $state(initialFolderMoves);
   let remoteChanges: RemoteChange[] = $state(initialRemoteChanges);
   /** 되돌리기는 두 번 눌러야 한다 — 로컬 편집을 지우므로 한 번의 실수로 잃지 않게 한다. */
   let armedDiscard: string | null = $state(null);
@@ -94,6 +98,7 @@
   function applyUpdate(s: SyncStateUpdate) {
     lastSyncAt = s.lastSyncAt;
     localChanges = s.localChanges;
+    if (s.folderMoves) folderMoves = s.folderMoves;
     if (s.remoteChanges) remoteChanges = s.remoteChanges;
     conflicts = s.conflicts;
     syncState = s.syncState;
@@ -144,7 +149,7 @@
     moved: localChanges.filter((c) => c.type === "moved"),
   });
 
-  const totalChanges = $derived(localChanges.length);
+  const totalChanges = $derived(localChanges.length + folderMoves.length);
   const totalRemoteChanges = $derived(remoteChanges.length);
 
   const remoteChangesByType = $derived({
@@ -226,6 +231,13 @@
 
   function folderOf(path: string): string {
     return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  /** 옮긴 노트는 어디서 왔는지를 보인다 — 새 이름만 보이면 새 노트와 구분되지 않는다. */
+  function localWhere(change: LocalChange): string {
+    return change.type === "moved" && change.movedFrom
+      ? `← ${change.movedFrom.replace(/\.md$/, "")}`
+      : folderOf(change.path);
   }
 
   /** 원격 변경의 이름 — 볼트에 있는 노트는 노트 이름, 아직 없는 새 페이지는 Notion 제목. */
@@ -335,6 +347,25 @@
       </button>
       {#if changesExpanded}
         <div class="im-sync-file-list">
+          {#each folderMoves as move (move.to)}
+            <div class="im-sync-file-row">
+              <div class="im-sync-file-item" title="{move.from} → {move.to}">
+                <span class="im-sync-file-type {typeClass('moved')}">{typeIcon("moved")}</span>
+                <span class="im-sync-file-name">{fileName(move.to)}/</span>
+                <span class="im-sync-file-path">← {move.from}</span>
+              </div>
+              <span class="im-sync-file-actions">
+                <button
+                  class="im-sync-file-action"
+                  aria-label="이 폴더의 이동을 Notion 에 올리기"
+                  title="이 폴더의 이동을 Notion 에 올리기"
+                  disabled={isSyncing}
+                  onclick={() => onPushPath(move.to)}
+                  type="button">↑</button
+                >
+              </span>
+            </div>
+          {/each}
           {#each localChanges as change (change.path)}
             <div class="im-sync-file-row">
               <button
@@ -346,7 +377,11 @@
                   >{typeIcon(change.type)}</span
                 >
                 <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
-                <span class="im-sync-file-path" title={change.path}>{folderOf(change.path)}</span>
+                <span
+                  class="im-sync-file-path"
+                  title={change.movedFrom ? `${change.movedFrom} → ${change.path}` : change.path}
+                  >{localWhere(change)}</span
+                >
               </button>
               <span class="im-sync-file-actions">
                 <button

@@ -13,6 +13,8 @@ import type {
   ConflictStrategy,
   FailedOperation,
   FileType,
+  FolderMoveChange,
+  ProgressCallback,
   ProgressItem,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
@@ -32,7 +34,7 @@ import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
-import { DatabaseSyncer, type PlannedRow } from "./database-syncer.js";
+import { DatabaseSyncer, type PlannedRow, type RowProgress } from "./database-syncer.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
 import {
@@ -382,7 +384,14 @@ export class SyncOrchestrator {
     const startTime = Date.now();
 
     if (this.config.sync.direction === "pull") {
-      return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        moved: 0,
+        failed: [],
+        duration: Date.now() - startTime,
+      };
     }
 
     this.beginRemoteObservation(startTime);
@@ -417,7 +426,14 @@ export class SyncOrchestrator {
     );
 
     if (filtered.length === 0 && folderMoves.length === 0) {
-      return { created: 0, updated: 0, deleted: 0, failed: [], duration: Date.now() - startTime };
+      return {
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        moved: 0,
+        failed: [],
+        duration: Date.now() - startTime,
+      };
     }
 
     // 둘 자리가 없는 새 노트와 Notion 에서 그렇게 옮길 수 없는 노트 · 폴더는 이유와 함께 실패로
@@ -448,26 +464,18 @@ export class SyncOrchestrator {
       const planned = this.config.sync.deleteSync
         ? applicable
         : applicable.filter((c) => c.type !== "deleted");
-      const dryCreated = planned.filter((c) => c.type === "created").length;
-      const dryUpdated =
-        planned.filter((c) => c.type === "modified" || c.type === "moved").length +
-        movableFolders.length;
-      const dryDeleted = planned.filter((c) => c.type === "deleted").length;
-      let dryProgress = 0;
-      const dryTotal = planned.length;
-      for (const change of planned) {
-        const op =
-          change.type === "created"
-            ? ("create" as const)
-            : change.type === "deleted"
-              ? ("delete" as const)
-              : ("update" as const);
-        options?.onProgress?.(++dryProgress, dryTotal, { path: change.path, operation: op });
-      }
+      const items: ProgressItem[] = [
+        ...movableFolders.map(({ to }) => ({ path: to, operation: "move" as const })),
+        ...planned.map((change) => ({ path: change.path, operation: pushOperationOf(change) })),
+      ];
+      items.forEach((item, index) => options?.onProgress?.(index + 1, items.length, item));
+      const count = (operation: ProgressItem["operation"]): number =>
+        items.filter((item) => item.operation === operation).length;
       return {
-        created: dryCreated,
-        updated: dryUpdated,
-        deleted: dryDeleted,
+        created: count("create"),
+        updated: count("update"),
+        deleted: count("delete"),
+        moved: count("move"),
         failed: refusedFailures,
         duration: Date.now() - startTime,
       };
@@ -476,19 +484,16 @@ export class SyncOrchestrator {
     this.stateDb.setMeta("push_in_progress", "true");
     await this.resolveBotUserId();
 
-    const counts = { created: 0, updated: 0, deleted: 0 };
+    const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
 
-    // 옮긴 폴더의 페이지부터 — 그 아래로 옮긴 노트의 부모다.
-    counts.updated += await this.pushFolderMoves(movableFolders, failed);
-
     let completed = 0;
-    const total = applicable.length;
+    const total = movableFolders.length + applicable.length;
 
-    const opOf = (change: LocalChange): "create" | "update" | "delete" =>
-      change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update";
-    const failureOf = (change: LocalChange): FailedOperation["operation"] =>
-      change.type === "moved" ? "move" : opOf(change);
+    // 옮긴 폴더의 페이지부터 — 그 아래로 옮긴 노트의 부모다.
+    counts.moved += await this.pushFolderMoves(movableFolders, failed, (to) =>
+      options?.onProgress?.(++completed, total, { path: to, operation: "move" }),
+    );
 
     // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
     const applyPushChange = async (change: LocalChange): Promise<void> => {
@@ -503,7 +508,7 @@ export class SyncOrchestrator {
           break;
         case "moved":
           await this.pushMove(change);
-          counts.updated++;
+          counts.moved++;
           break;
         case "deleted": {
           const propagated = await this.pushDelete(change.path);
@@ -517,7 +522,10 @@ export class SyncOrchestrator {
     const retryQueue: LocalChange[] = [];
     const firstAttempt = async (change: LocalChange): Promise<void> => {
       if (options?.signal?.aborted) return;
-      options?.onProgress?.(++completed, total, { path: change.path, operation: opOf(change) });
+      options?.onProgress?.(++completed, total, {
+        path: change.path,
+        operation: pushOperationOf(change),
+      });
       try {
         await withDeadline(
           () => applyPushChange(change),
@@ -556,7 +564,7 @@ export class SyncOrchestrator {
         } catch (error) {
           failed.push({
             path: change.path,
-            operation: failureOf(change),
+            operation: pushOperationOf(change),
             error: error instanceof Error ? error.message : String(error),
           });
           getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${change.path}`);
@@ -593,6 +601,7 @@ export class SyncOrchestrator {
       created: counts.created,
       updated: counts.updated,
       deleted: counts.deleted,
+      moved: counts.moved,
       failed,
       duration: Date.now() - startTime,
     };
@@ -735,6 +744,18 @@ export class SyncOrchestrator {
       return this.planPull(filtered, restoreChanges, localPlan, options, startTime);
     }
 
+    let pullTotal = workItems.length;
+    let pullCompleted = 0;
+    // 행은 DB 를 조회해야 몇 개인지 안다 — 받을 행 수만큼 전체를 늘려 페이지와 한 수 · 한 목록으로
+    // 보인다. 예전에는 행을 알리지 않아, 행이 대부분인 볼트는 pull 내내 진행 표시가 멈춰 보였다.
+    const onProgress = options?.onProgress;
+    const rowProgress: RowProgress | undefined = onProgress && {
+      planned: (count) => {
+        pullTotal += count;
+      },
+      done: (item) => onProgress(++pullCompleted, pullTotal, item),
+    };
+
     if (workItems.length === 0) {
       // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
       // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
@@ -750,7 +771,10 @@ export class SyncOrchestrator {
       let dbRestored = 0;
       if ((this.config.notion.databases?.length ?? 0) > 0) {
         try {
-          const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
+          const dbResult = await this.databaseSyncer.pullAll({
+            paths: options?.paths,
+            progress: rowProgress,
+          });
           dbCreated += dbResult.created;
           dbUpdated += dbResult.updated;
           dbDeleted += dbResult.deleted;
@@ -768,6 +792,7 @@ export class SyncOrchestrator {
         conflicts,
         options?.force === true,
         options?.paths,
+        rowProgress,
       );
       return finalize(
         dbCreated + dbDiscovery.created,
@@ -778,9 +803,6 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("pull_in_progress", "true");
-
-    const pullTotal = workItems.length;
-    let pullCompleted = 0;
 
     // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
     const toFailure = (change: RemoteChange, error: unknown): FailedOperation => {
@@ -890,7 +912,10 @@ export class SyncOrchestrator {
 
     if ((this.config.notion.databases?.length ?? 0) > 0) {
       try {
-        const dbResult = await this.databaseSyncer.pullAll({ paths: options?.paths });
+        const dbResult = await this.databaseSyncer.pullAll({
+          paths: options?.paths,
+          progress: rowProgress,
+        });
         counts.created += dbResult.created;
         counts.updated += dbResult.updated;
         counts.deleted += dbResult.deleted;
@@ -913,6 +938,7 @@ export class SyncOrchestrator {
         conflicts,
         options?.force === true,
         options?.paths,
+        rowProgress,
       );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
@@ -929,9 +955,14 @@ export class SyncOrchestrator {
 
   private async executeSync(options?: SyncOptions): Promise<SyncResult> {
     const startTime = Date.now();
-    const pullResult = await this.executePull(options);
+    // 받기 · 올리기를 한 번에 돌리므로 진행 항목에 어느 쪽인지 적는다 — 화면이 둘을 가른다.
+    const onProgress = options?.onProgress;
+    const tagged = (direction: "pull" | "push"): ProgressCallback | undefined =>
+      onProgress && ((current, total, item) => onProgress(current, total, { ...item, direction }));
+    const pullResult = await this.executePull({ ...options, onProgress: tagged("pull") });
     const pushResult = await this.executePush({
       ...options,
+      onProgress: tagged("push"),
       paths: options?.paths,
       excludePaths: pullResult.writtenPaths,
     });
@@ -951,8 +982,8 @@ export class SyncOrchestrator {
 
   private async executeStatus(): Promise<StatusResult> {
     this.beginRemoteObservation(Date.now());
-    const files = await this.vaultFs.listMarkdownFiles();
-    const localChanges = this.changeDetector.detectLocalChanges(files, this.localScanOptions());
+    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const localChanges = plan.scan.changes;
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
     await this.resolveBotUserId();
     const watermark = this.incrementalWatermark();
@@ -971,6 +1002,7 @@ export class SyncOrchestrator {
 
     return {
       localChanges,
+      folderMoves: this.folderMoveChanges(plan),
       remoteChanges,
       conflicts,
       conflictRecords,
@@ -979,18 +1011,18 @@ export class SyncOrchestrator {
     };
   }
 
+  /**
+   * 로컬만 본다 — 원격 기준을 정하지 않아 도는 작업과 겹쳐도 된다. 변경은 push 가 쓰는 판정 그대로다
+   * (옮긴 노트 · 폴더 포함). 상태 DB 는 바꾸지 않는다.
+   */
   async statusLocal(): Promise<StatusResult> {
-    const stats = await this.vaultFs.listMarkdownFileStats();
-    const localChanges = await this.changeDetector.detectLocalChangesFast(
-      stats,
-      (path) => this.vaultFs.readFile(path),
-      this.localScanOptions(),
-    );
+    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
 
     return {
-      localChanges,
+      localChanges: plan.scan.changes,
+      folderMoves: this.folderMoveChanges(plan),
       remoteChanges: [],
       conflicts: [],
       conflictRecords,
@@ -1325,6 +1357,7 @@ export class SyncOrchestrator {
     conflicts: Conflict[],
     forceRediscovery = false,
     paths?: readonly string[],
+    progress?: RowProgress,
   ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
     if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
 
@@ -1529,6 +1562,7 @@ export class SyncOrchestrator {
             const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, {
               resolveDbFolder,
               paths,
+              progress,
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
@@ -2652,13 +2686,13 @@ export class SyncOrchestrator {
    * 지난 동기화 사본(`baseSnapshot`)으로 다시 쓴다. Notion 은 건드리지 않는다.
    *
    * 되돌릴 원본이 없는 것은 이유와 함께 거절한다 — 추적하지 않는 새 노트(지우는 것은 사용자가 휴지통으로),
-   * 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
+   * 옮긴 노트의 새 자리(파일을 옛 자리로 옮기면 된다), 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", async () => {
       const record = this.stateDb.getByPath(path);
       if (!record) {
-        throw new Error(`추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`);
+        throw new Error(await this.untrackedDiscardReason(path));
       }
       if (record.status === "conflict") {
         throw new Error(`충돌 중인 노트는 충돌 해결에서 고르세요 — ${path}`);
@@ -2668,6 +2702,18 @@ export class SyncOrchestrator {
       }
       await this.vaultFs.writeFile(path, record.baseSnapshot.toString("utf-8"));
     });
+  }
+
+  /**
+   * 추적하지 않는 경로를 되돌리려 한 이유. 옮긴 노트의 새 자리도 추적 레코드가 없다 — 「새 노트」 라고
+   * 하면 변경 목록에서 «옮김» 으로 본 사용자가 무엇을 해야 할지 모른다. 옛 자리를 알린다.
+   */
+  private async untrackedDiscardReason(path: string): Promise<string> {
+    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const moved = plan.scan.changes.find((c) => c.type === "moved" && c.path === path);
+    return moved?.movedFrom
+      ? `옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 ${moved.movedFrom} 로 다시 옮기세요 (${path})`
+      : `추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`;
   }
 
   /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */
@@ -2842,9 +2888,11 @@ export class SyncOrchestrator {
   private async pushFolderMoves(
     moves: readonly PendingFolderMove[],
     failed: FailedOperation[],
+    onMove?: (to: string) => void,
   ): Promise<number> {
     let moved = 0;
     for (const { record, from, to } of moves) {
+      onMove?.(to);
       try {
         const parentFolder = parentFolderOf(to);
         let parentId = this.config.notion.rootPageId;
@@ -3907,11 +3955,17 @@ export class SyncOrchestrator {
 
     const items: ProgressItem[] = [];
     // 옮겨 적지 않았으니 레코드는 옛 경로다 — 실제 pull 이 쓸 새 경로로 보인다(S-11).
+    // 새 페이지는 받기 전에는 자리를 모른다(부모 · 자식 페이지가 정한다) — Notion 제목으로 보인다.
+    // 예전에는 내부 id 를 보였다.
     const plannedPath = this.plannedPaths(localPlan);
     for (const change of [...planned, ...restoreChanges]) {
       const record = this.stateDb.getByNotionId(change.pageId);
       items.push({
-        path: (record && plannedPath.get(record.id)) ?? record?.obsidianPath ?? change.pageId,
+        path:
+          (record && plannedPath.get(record.id)) ??
+          record?.obsidianPath ??
+          change.title ??
+          change.pageId,
         operation:
           change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
       });
@@ -4384,6 +4438,18 @@ export class SyncOrchestrator {
       changed = true;
     }
     if (changed) this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(configs));
+  }
+
+  /**
+   * 변경 목록에 보일 폴더 이동 — Notion 에 반영할 폴더 페이지와, 볼트 쪽 자리만 바꿀 DB 폴더.
+   * 옮긴 폴더는 노트가 아니라 {@link LocalChange} 가 없다. 예전에는 목록에 보이지 않고 push 결과의
+   * 수에만 들었다.
+   */
+  private folderMoveChanges(plan: LocalPlan): FolderMoveChange[] {
+    return [...this.pendingFolderMoves(plan), ...plan.databaseFolderMoves].map(({ from, to }) => ({
+      from,
+      to,
+    }));
   }
 
   /**
@@ -5352,6 +5418,20 @@ export class SyncOrchestrator {
     const fallback = candidates[candidates.length - 1]!;
     this.claimedPaths.add(fallback);
     return fallback;
+  }
+}
+
+/** 로컬 변경을 Notion 에 반영하는 일 — 진행 표시 · 결과 수 · 실패가 같은 이름을 쓴다. */
+function pushOperationOf(change: LocalChange): ProgressItem["operation"] {
+  switch (change.type) {
+    case "created":
+      return "create";
+    case "deleted":
+      return "delete";
+    case "moved":
+      return "move";
+    case "modified":
+      return "update";
   }
 }
 
