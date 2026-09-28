@@ -11,7 +11,8 @@ import type { SyncResult, WatchSyncScope } from "@im-nobsidian/core";
 
 function formatResult(result: SyncResult): string {
   const pull = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
-  const push = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`;
+  const moved = result.push.moved > 0 ? ` →${result.push.moved}` : "";
+  const push = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}${moved}`;
   const parts = [pull, push];
 
   if (result.conflicts.length > 0) {
