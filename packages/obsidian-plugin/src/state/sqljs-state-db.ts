@@ -15,7 +15,12 @@ import type {
   PreserveMarker,
   RemoteObservation,
 } from "@im-nobsidian/core";
-import { generateId, getLogger } from "@im-nobsidian/core";
+import {
+  SAVED_STATE_TABLES_QUERY,
+  SavedStateDbError,
+  generateId,
+  getLogger,
+} from "@im-nobsidian/core";
 
 const INITIAL_MIGRATION = `
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -179,17 +184,6 @@ interface RawPendingRow {
   completed_at: string | null;
 }
 
-/**
- * 저장된 상태 DB 파일로 DB 를 열지 못했다 — 비었거나 잘렸거나 상태 DB 가 아닌 파일이다. 엔진(wasm)을 띄우지 못한
- * 것 같은 다른 실패와 가른다 — 파일을 치우라는 안내는 이 경우에만 맞다.
- */
-export class SavedStateDbError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = "SavedStateDbError";
-  }
-}
-
 export class SqlJsStateDB implements IStateDB {
   private db: SqlJsDatabase;
   private dirty = false;
@@ -223,23 +217,18 @@ export class SqlJsStateDB implements IStateDB {
     } catch (error) {
       db.close();
       if (!existingData || error instanceof SavedStateDbError) throw error;
-      const message = error instanceof Error ? error.message : String(error);
-      throw new SavedStateDbError(`저장된 상태 DB 파일을 열지 못함 (${message})`);
+      throw SavedStateDbError.unreadable(error);
     }
     return stateDb;
   }
 
   /**
-   * 저장된 파일에 동기화 기록 표가 있는지 본다 — 한 번이라도 쓴 파일에는 마이그레이션이 만든 표가 있다. SQLite 는
-   * 비었거나(0바이트) 앞 한 바이트만 남은 파일을 «빈 DB» 로 연다. 보지 않으면 기록을 잃은 채 처음부터 시작하고,
-   * 다음 push 가 모든 노트의 페이지를 또 만든다. 한 페이지 이상 잘린 파일은 SQLite 가 이 조회에서 던진다(malformed).
+   * 저장된 파일에 동기화 기록 표가 있는지 본다 — SQLite 는 비었거나(0바이트) 앞 한 바이트만 남은 파일을 «빈 DB»
+   * 로 연다. 보지 않으면 기록을 잃은 채 처음부터 시작한다({@link SavedStateDbError.noTables}).
    */
   private checkSavedTables(bytes: number): void {
-    const found = this.db.exec(
-      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sync_metadata'",
-    );
-    if (found.length === 0) {
-      throw new SavedStateDbError(`저장된 상태 DB 파일에 동기화 기록이 없음 (${bytes}바이트)`);
+    if (this.db.exec(SAVED_STATE_TABLES_QUERY).length === 0) {
+      throw SavedStateDbError.noTables(bytes);
     }
   }
 

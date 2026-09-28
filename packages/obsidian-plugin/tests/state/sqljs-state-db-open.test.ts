@@ -7,7 +7,8 @@
  */
 import { describe, it, expect, onTestFinished, vi } from "vitest";
 import initSqlJs from "sql.js";
-import { SavedStateDbError, SqlJsStateDB } from "../../src/state/sqljs-state-db.js";
+import { SavedStateDbError } from "@im-nobsidian/core";
+import { SqlJsStateDB } from "../../src/state/sqljs-state-db.js";
 
 /** 동기화 기록 하나를 담아 저장한 파일의 내용. */
 async function savedFile(): Promise<Uint8Array> {

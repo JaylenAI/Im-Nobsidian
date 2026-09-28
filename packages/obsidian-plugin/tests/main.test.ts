@@ -28,8 +28,7 @@ vi.mock("../src/discard-confirm-modal.js", () => ({
 }));
 vi.mock("../src/views/ViewContainer.svelte", () => ({ default: {} }));
 
-vi.mock("../src/state/sqljs-state-db.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../src/state/sqljs-state-db.js")>()),
+vi.mock("../src/state/sqljs-state-db.js", () => ({
   SqlJsStateDB: {
     open: vi.fn().mockResolvedValue({
       close: vi.fn(),
@@ -41,7 +40,14 @@ vi.mock("../src/state/sqljs-state-db.js", async (importOriginal) => ({
   },
 }));
 
-vi.mock("@im-nobsidian/core", () => ({
+vi.mock("@im-nobsidian/core", async () => ({
+  // 저장된 상태 DB 오류와 안내 문구는 진짜를 쓴다 — 사용자가 보는 문구를 그대로 본다
+  ...(await vi
+    .importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
+    .then(({ SavedStateDbError, damagedStateDbGuidance }) => ({
+      SavedStateDbError,
+      damagedStateDbGuidance,
+    }))),
   NotionClient: class {
     constructor() {}
     static fromConfig() {
@@ -94,7 +100,8 @@ vi.mock("@im-nobsidian/core", () => ({
 }));
 
 import ImNobsidianPlugin from "../src/main.js";
-import { SavedStateDbError, SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { SavedStateDbError } from "@im-nobsidian/core";
+import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { WASM_FILE } from "../src/constants.js";
 
 /** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
@@ -348,9 +355,7 @@ describe("ImNobsidianPlugin", () => {
   it("저장된 상태 DB 파일이 깨졌으면 치우는 법을 알린다 — 다른 실패에는 붙이지 않는다", async () => {
     const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
     const open = vi.mocked(SqlJsStateDB.open);
-    open.mockRejectedValueOnce(
-      new SavedStateDbError("저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트)"),
-    );
+    open.mockRejectedValueOnce(SavedStateDbError.noTables(0));
     await plugin.initOrchestrator();
     const damaged = internals.initFailure;
 
@@ -359,7 +364,7 @@ describe("ImNobsidianPlugin", () => {
     await plugin.initOrchestrator();
 
     expect(damaged).toBe(
-      "초기화 실패: 저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .state/sync.db 를 " +
+      "초기화 실패: 저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .im-nobsidian/sync.db 를 " +
         "사본으로 바꾸거나 다른 곳으로 옮긴 뒤 동기화 사이드바에서 새로고침을 누르세요. 옮기면 처음부터 " +
         "시작합니다 — 노트와 Notion 페이지의 짝을 잃어 다음 push 가 페이지를 새로 만듭니다.",
     );
