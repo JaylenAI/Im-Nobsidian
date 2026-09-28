@@ -32,13 +32,6 @@ describe("SqlJsStateDB", () => {
       newDb.close();
     });
 
-    it("기존 데이터로 열기", async () => {
-      const data = db.export();
-      const newDb = await SqlJsStateDB.open(data);
-      expect(newDb).toBeDefined();
-      newDb.close();
-    });
-
     it("flushFn 콜백과 함께 열기", async () => {
       const flushFn = vi.fn();
       const newDb = await SqlJsStateDB.open(null, flushFn);

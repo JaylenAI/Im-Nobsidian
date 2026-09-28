@@ -28,7 +28,8 @@ vi.mock("../src/discard-confirm-modal.js", () => ({
 }));
 vi.mock("../src/views/ViewContainer.svelte", () => ({ default: {} }));
 
-vi.mock("../src/state/sqljs-state-db.js", () => ({
+vi.mock("../src/state/sqljs-state-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/state/sqljs-state-db.js")>()),
   SqlJsStateDB: {
     open: vi.fn().mockResolvedValue({
       close: vi.fn(),
@@ -93,7 +94,7 @@ vi.mock("@im-nobsidian/core", () => ({
 }));
 
 import ImNobsidianPlugin from "../src/main.js";
-import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { SavedStateDbError, SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { WASM_FILE } from "../src/constants.js";
 
 /** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
@@ -342,6 +343,27 @@ describe("ImNobsidianPlugin", () => {
 
     expect([...readFileSync(join(vaultPath, ".state", "sync.db"))]).toEqual([1, 2, 3]);
     expect(readdirSync(join(vaultPath, ".state"))).toEqual(["sync.db"]);
+  });
+
+  it("저장된 상태 DB 파일이 깨졌으면 치우는 법을 알린다 — 다른 실패에는 붙이지 않는다", async () => {
+    const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    const open = vi.mocked(SqlJsStateDB.open);
+    open.mockRejectedValueOnce(
+      new SavedStateDbError("저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트)"),
+    );
+    await plugin.initOrchestrator();
+    const damaged = internals.initFailure;
+
+    // 엔진을 띄우지 못한 것 같은 실패에 치우라고 하면 멀쩡한 기록을 치운다
+    open.mockRejectedValueOnce(new Error("wasm 을 띄우지 못함"));
+    await plugin.initOrchestrator();
+
+    expect(damaged).toBe(
+      "초기화 실패: 저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .state/sync.db 를 " +
+        "사본으로 바꾸거나 다른 곳으로 옮긴 뒤 동기화 사이드바에서 새로고침을 누르세요. 옮기면 처음부터 " +
+        "시작합니다 — 노트와 Notion 페이지의 짝을 잃어 다음 push 가 페이지를 새로 만듭니다.",
+    );
+    expect(internals.initFailure).toBe("초기화 실패: wasm 을 띄우지 못함");
   });
 
   it("동기화할 수 없는 까닭을 가린다 — 설정이 비었으면 설정, 초기화 중이면 준비 중", async () => {
