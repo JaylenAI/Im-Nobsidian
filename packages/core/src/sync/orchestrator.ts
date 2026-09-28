@@ -2572,6 +2572,29 @@ export class SyncOrchestrator {
     });
   }
 
+  /**
+   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다. 고친 노트 · 지운 노트는
+   * 지난 동기화 사본(`baseSnapshot`)으로 다시 쓴다. Notion 은 건드리지 않는다.
+   *
+   * 되돌릴 원본이 없는 것은 이유와 함께 거절한다 — 추적하지 않는 새 노트(지우는 것은 사용자가 휴지통으로),
+   * 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
+   */
+  async discardLocalChange(path: string): Promise<void> {
+    return this.gate.run("discard", async () => {
+      const record = this.stateDb.getByPath(path);
+      if (!record) {
+        throw new Error(`추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`);
+      }
+      if (record.status === "conflict") {
+        throw new Error(`충돌 중인 노트는 충돌 해결에서 고르세요 — ${path}`);
+      }
+      if (!record.baseSnapshot) {
+        throw new Error(`지난 동기화 사본이 없어 되돌릴 수 없습니다 — ${path}`);
+      }
+      await this.vaultFs.writeFile(path, record.baseSnapshot.toString("utf-8"));
+    });
+  }
+
   /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */
   generateConflictDiff(conflict: Conflict): string {
     return this.conflictResolver.generateDiff(conflict);
