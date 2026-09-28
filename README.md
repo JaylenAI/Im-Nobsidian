@@ -50,7 +50,7 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Notion DB → Obsidian Bases** &nbsp; Notion databases are automatically converted to Obsidian Bases `.base` files. Gallery views get cover images via `file.embeds[0]` formulas. Table, cards, list views with sorting, grouping, and property ordering — all mapped from Notion's Views API.
 
-**Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, bidirectional change detection, cancel button), 6 DB view types, and ribbon icons for one-click sync.
+**Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, cancel button, and a Git-style change list — click a file to see its line diff, then push, revert or pull just that file), 6 DB view types, and ribbon icons for one-click sync.
 
 **Library + CLI + Plugin** &nbsp; Use it as a CLI tool, import it as a Node.js library for custom integrations, or install it as an Obsidian plugin.
 
@@ -160,7 +160,7 @@ That's it. Your vault and Notion workspace are now linked.
 | `nobsi pull`              | Pull Notion changes to local                                                    |
 | `nobsi sync`              | Bidirectional sync (pull → push)                                                |
 | `nobsi status`            | Show sync status + conflicts (add `--full` for bidirectional)                   |
-| `nobsi diff [path]`       | Show diff between local and Notion                                              |
+| `nobsi diff [path]`       | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)  |
 | `nobsi discard <path...>` | Discard local edits — restore notes to the last synced text (Notion untouched)  |
 | `nobsi fetch`             | Scan remote for new / modified / deleted pages (read-only)                      |
 | `nobsi verify`            | Verify completeness — every remote row **and page** is in the vault (read-only) |
