@@ -15,7 +15,7 @@ import type {
   PreserveMarker,
   RemoteObservation,
 } from "@im-nobsidian/core";
-import { generateId } from "@im-nobsidian/core";
+import { generateId, getLogger } from "@im-nobsidian/core";
 
 const INITIAL_MIGRATION = `
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -184,6 +184,8 @@ export class SqlJsStateDB implements IStateDB {
   private dirty = false;
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly flushFn: ((data: Uint8Array) => Promise<void>) | null;
+  /** 파일 쓰기를 한 줄로 세운다 — 늦게 끝난 옛 사본이 새 사본을 덮지 않게 한다. */
+  private writes: Promise<void> = Promise.resolve();
 
   private constructor(db: SqlJsDatabase, flushFn?: (data: Uint8Array) => Promise<void>) {
     this.db = db;
@@ -248,30 +250,54 @@ export class SqlJsStateDB implements IStateDB {
     if (!this.flushFn || this.flushTimer) return;
     this.flushTimer = setTimeout(() => {
       this.flushTimer = null;
-      void this.flush();
+      // 못 쓴 것은 «바뀜» 으로 남아 다음 쓰기(다음 변경 · 닫기)가 다시 쓴다.
+      this.flush().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        getLogger().warn(`[Im-Nobsidian] 상태 DB 를 파일에 쓰지 못함: ${message}`);
+      });
     }, 5000);
   }
 
-  async flush(): Promise<void> {
+  /**
+   * 바뀐 것이 있으면 DB 를 파일에 쓴다. 쓰기는 한 줄로 서서, 앞 쓰기가 끝난 뒤에 그때의 DB 를 내보낸다.
+   *
+   * «바뀜» 은 내보낼 때 내린다 — 쓰는 동안 바뀐 것은 다시 «바뀜» 이 되어 다음 쓰기가 담는다. 예전에는 쓰기가
+   * 끝난 뒤에 내려, 쓰는 사이에 바뀐 것이 파일에 가지 않았고 설정을 바꾸거나 플러그인을 다시 불러오면
+   * 사라졌다. 못 쓰면 «바뀜» 을 되살리고 이유를 던진다.
+   */
+  flush(): Promise<void> {
+    const write = this.writes.then(() => this.writeIfDirty());
+    this.writes = write.catch(() => undefined);
+    return write;
+  }
+
+  private async writeIfDirty(): Promise<void> {
     if (!this.dirty || !this.flushFn) return;
     const data = this.db.export();
-    await this.flushFn(data);
     this.dirty = false;
+    try {
+      await this.flushFn(data);
+    } catch (error) {
+      this.dirty = true;
+      throw error;
+    }
   }
 
   export(): Uint8Array {
     return this.db.export();
   }
 
-  close(): void {
+  /**
+   * 남은 쓰기를 마치고 닫는다 — 닫은 뒤 같은 파일을 다시 여는 쪽(설정을 바꾼 플러그인 · 다시 불러온
+   * 플러그인)이 마지막 기록을 읽는다. 예전에는 쓰기를 기다리지 않고 닫았다. 못 쓰면 닫지 않고 이유를
+   * 던진다 — 닫으면 그 기록은 어디에도 남지 않는다.
+   */
+  async close(): Promise<void> {
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    if (this.dirty && this.flushFn) {
-      const data = this.db.export();
-      void this.flushFn(data);
-    }
+    await this.flush();
     this.db.close();
   }
 
