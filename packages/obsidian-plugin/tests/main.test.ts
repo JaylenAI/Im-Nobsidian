@@ -653,6 +653,29 @@ describe("ImNobsidianPlugin", () => {
     ]);
   });
 
+  it("「전체 확인」 명령은 전체 대조 Pull 을, 「Pull」 명령은 보통 Pull 을 부른다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const commands = new Map<string, () => unknown>();
+    const internals = plugin as unknown as {
+      addCommand: (command: { id: string; callback: () => unknown }) => void;
+      executePull: (options?: { force?: boolean }) => Promise<void>;
+      registerColorPostProcessor: () => void;
+      registerVaultEvents: () => void;
+    };
+    internals.addCommand = (command) => commands.set(command.id, command.callback);
+    // 볼트 · 편집기에 거는 것은 이 시험의 관심 밖이다 — 스텁 앱에는 없다.
+    internals.registerColorPostProcessor = () => {};
+    internals.registerVaultEvents = () => {};
+    const executePull = vi.fn(async () => {});
+    internals.executePull = executePull;
+
+    await plugin.onload();
+    await commands.get("im-nobsidian-pull-full")!();
+    await commands.get("im-nobsidian-pull")!();
+
+    expect(executePull.mock.calls).toEqual([[{ force: true }], []]);
+  });
+
   it("상태 알림은 마지막 전체 확인을 적고, 바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 덧붙인다", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
     const status = (remoteScan: object, lastFullScanAt: string | null) => ({

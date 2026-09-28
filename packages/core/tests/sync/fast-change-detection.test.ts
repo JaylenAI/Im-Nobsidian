@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
+import { DatabaseSyncer } from "../../src/sync/database-syncer.js";
 import { StateDB } from "../../src/state/state-db.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { DatabaseSyncConfig } from "../../src/types/config.js";
@@ -316,6 +317,35 @@ describe.each([
     expect(queried()).toEqual([]);
   });
 
+  it("이제 동기화하지 않는 DB 는 대기에서 뺀다 — 들고 있으면 대기가 영영 비지 않는다", async () => {
+    const { orchestrator } = await synced();
+    const dropped = "db000000-0000-4000-8000-0000000000d4";
+    db.setMeta(PENDING_DATABASES_META_KEY, JSON.stringify([compact(dropped), compact(NOTES)]));
+    at("10:10:00");
+
+    await orchestrator.pull();
+
+    expect(queried()).toEqual([NOTES]);
+    expect(pending()).toEqual(new Set());
+  });
+
+  it.runIf(configured)(
+    "설정한 DB 를 받다 예기치 않게 멈추면 이유를 실패로 싣는다 — 경고로만 남기면 pull 이 성공으로 끝난다",
+    async () => {
+      const { orchestrator } = await synced();
+      vi.spyOn(DatabaseSyncer.prototype, "pullAll").mockRejectedValueOnce(
+        new Error("상태 DB 잠김"),
+      );
+      at("10:10:00");
+
+      const result = await orchestrator.pull({ force: true });
+
+      expect(result.failed).toEqual([
+        { path: "", operation: "update", error: "설정한 DB 를 받지 못함: 상태 DB 잠김" },
+      ]);
+    },
+  );
+
   it("행 하나라도 받지 못한 DB 는 대기로 남는다 — 그 행의 수정 시각은 곧 조회 창 밖이다", async () => {
     const { orchestrator, r1 } = await synced();
     at("10:20:00");
@@ -386,6 +416,77 @@ describe.each([
     expect(pending()).toEqual(new Set());
   });
 
+  it("전체 대조하던 pull 을 DB 조회에서 취소하면 전체 대조를 마쳤다고 적지 않는다 — 다 훑지 못했다", async () => {
+    const { orchestrator, r1, n1 } = await synced();
+    at("10:20:00");
+    editBody(r1, "고친 R1");
+    editBody(n1, "고친 N1");
+    const controller = new AbortController();
+    const query = notion.client.queryAllDatabasePages.getMockImplementation()!;
+    notion.client.queryAllDatabasePages.mockImplementationOnce(async (...args: unknown[]) => {
+      controller.abort();
+      return query(...(args as Parameters<typeof query>));
+    });
+    at("10:21:00");
+
+    const result = await orchestrator.pull({ force: true, signal: controller.signal });
+
+    expect(result.remoteScan).toMatchObject({ kind: "full", reason: "forced" });
+    expect(queried()).toEqual([TASKS]);
+    expect(pending()).toEqual(new Set([compact(NOTES)]));
+    expect(db.getMeta(LAST_FULL_PULL_META_KEY)).toBe(time("10:05:00"));
+  });
+
+  it("원격 삭제를 확인하다 취소하면 남은 페이지를 묻지 않고 아무것도 지우지 않는다", async () => {
+    const orchestrator = build();
+    const first = notion.add(ROOT, "First", "하나");
+    const second = notion.add(ROOT, "Second", "둘");
+    at("10:05:00");
+    await orchestrator.pull();
+    at("10:10:00");
+    for (const page of [first, second]) {
+      notion.edit(page.id, (trashed) => {
+        trashed.archived = true;
+      });
+    }
+    const controller = new AbortController();
+    const get = notion.client.getPage.getMockImplementation()!;
+    vi.clearAllMocks();
+    notion.client.getPage.mockImplementation(async (id: string) => {
+      controller.abort();
+      return get(id);
+    });
+    at("10:11:00");
+
+    const result = await orchestrator.pull({ force: true, signal: controller.signal });
+
+    expect(result).toMatchObject({ deleted: 0, failed: [] });
+    expect(notion.client.getPage).toHaveBeenCalledTimes(1);
+    expect(vault.read("First.md")).toContain("하나");
+    expect(vault.read("Second.md")).toContain("둘");
+    expect(db.getMeta(LAST_FULL_PULL_META_KEY)).toBe(time("10:05:00"));
+  });
+
+  it("바뀐 것을 찾다 취소하면 새 페이지의 부모를 묻지 않고 끝낸다", async () => {
+    const { orchestrator } = await synced();
+    at("10:20:00");
+    notion.add(ROOT, "Fresh", "새 본문");
+    const controller = new AbortController();
+    const search = notion.client.searchRecentPages.getMockImplementation()!;
+    notion.client.searchRecentPages.mockImplementationOnce(async (...args: unknown[]) => {
+      controller.abort();
+      return search(...(args as Parameters<typeof search>));
+    });
+    at("10:21:00");
+
+    const result = await orchestrator.pull({ signal: controller.signal });
+
+    expect(result).toMatchObject({ created: 0, failed: [] });
+    expect(notion.client.getPage).not.toHaveBeenCalled();
+    expect(vault.read("Fresh.md")).toBeUndefined();
+    expect(db.getMeta("last_pull_at")).toBe(time("10:05:00"));
+  });
+
   it("상태 확인은 주기가 됐어도 전체 대조하지 않고 고친 행을 원격 변경으로 보인다", async () => {
     const { orchestrator, r1 } = await synced();
     at("11:10:00");
@@ -435,6 +536,21 @@ describe.each([
     expect(db.getMeta(LAST_FULL_PULL_META_KEY)).toBe(time("10:05:00"));
     expect(db.getMeta("last_pull_at")).toBe(time("10:05:00"));
     expect(pending()).toEqual(new Set([compact(NOTES)]));
+  });
+
+  it("경로를 좁힌 pull 은 바뀐 것이 보이지 않아도 범위에 닿는 DB 를 조회한다 — search 가 늦게 색인한 행도 받는다", async () => {
+    const { orchestrator, r1 } = await synced();
+    at("10:20:00");
+    editBody(r1, "고친 본문");
+    // search 가 아직 색인하지 못했다 — 고친 행이 결과에 없다.
+    notion.client.searchRecentPages.mockResolvedValueOnce([]);
+    at("10:21:00");
+
+    const result = await orchestrator.pull({ paths: ["Tasks"] });
+
+    expect(result).toMatchObject({ updated: 1, failed: [] });
+    expect(queried()).toEqual([TASKS]);
+    expect(vault.read("Tasks/R1.md")).toContain("고친 본문");
   });
 
   it("dry-run 은 실제 pull 이 조회할 DB 만 세고 아무것도 적지 않는다", async () => {
@@ -522,8 +638,8 @@ describe("빠른 변경 감지 — 새로 발견한 DB", () => {
     await rm(tempDir, { recursive: true, force: true });
   });
 
-  it("증분 pull 이 새 페이지에서 발견한 DB 는 바뀐 것이 보이지 않아도 조회한다 — 받은 적이 없다", async () => {
-    const orchestrator = new SyncOrchestrator(
+  const build = () =>
+    new SyncOrchestrator(
       createConfig({
         notion: { token: "ntn_test_token", rootPageId: ROOT, parentMode: "page", databases: [] },
         sync: { ...DEFAULT_CONFIG.sync, deleteSync: true },
@@ -533,18 +649,23 @@ describe("빠른 변경 감지 — 새로 발견한 DB", () => {
       notion.client as never,
       vault.fs(),
     );
+  const pending = () => parsePendingDatabases(db.getMeta(PENDING_DATABASES_META_KEY));
+  const inlineDb = (id: string, title: string) =>
+    `<database url="https://www.notion.so/${compact(id)}" inline="true">${title}</database>`;
+
+  it("증분 pull 이 새 페이지에서 발견한 DB 는 바뀐 것이 보이지 않아도 조회한다 — 받은 적이 없다", async () => {
+    const orchestrator = build();
     notion.add(TASKS, "R1", "", {});
     at("10:05:00");
     await orchestrator.pull();
 
-    // 발견한 DB 의 행은 새 DB 가 생기기 전에 만들어졌다 — search 의 조회 창 밖이다.
+    // 발견한 DB 의 행은 조회 창(기준 시각 − 15분) 밖에서 만들어졌다 — search 로는 그 DB 가 바뀐 것이
+    // 보이지 않는다. 기준 시각을 옮기는 pull 을 한 번 더 돌려 창을 지나게 한다.
     notion.add(FOUND, "F1", "", {});
+    at("10:30:00");
+    await orchestrator.pull();
     at("10:40:00");
-    notion.add(
-      ROOT,
-      "Hub",
-      `<database url="https://www.notion.so/${compact(FOUND)}" inline="true">Found</database>`,
-    );
+    notion.add(ROOT, "Hub", inlineDb(FOUND, "Found"));
     notion.client.getDatabaseSyncability.mockResolvedValue({ title: "Found", queryable: true });
     vi.clearAllMocks();
     at("10:41:00");
@@ -554,5 +675,45 @@ describe("빠른 변경 감지 — 새로 발견한 DB", () => {
     expect(result).toMatchObject({ failed: [], remoteScan: { kind: "incremental" } });
     expect(notion.client.queryAllDatabasePages.mock.calls.map(([id]) => id)).toEqual([FOUND]);
     expect([...vault.files.keys()].some((path) => path.endsWith("/F1.md"))).toBe(true);
+  });
+
+  it("중첩 DB 발견 라운드 한도에 걸린 DB 는 대기로 남아 다음 pull 이 받는다 — 바뀐 것이 보이지 않아도", async () => {
+    // 행 본문에 DB 가 한 층씩 들어 있다 — TASKS 행 → B 행 → C 행 → D 행 → E. 한 pull 은 네 라운드까지만 판다.
+    const [B, C, D, E] = ["b", "c", "d", "e"].map(
+      (tail) => `db000000-0000-4000-8000-00000000000${tail}`,
+    );
+    const chain = [TASKS, B, C, D, E];
+    chain.forEach((dbId, level) => {
+      const next = chain[level + 1];
+      notion.add(dbId, `L${level}`, next ? inlineDb(next, `DB${level + 1}`) : "맨 아래", {});
+    });
+    notion.client.getDatabaseSyncability.mockImplementation(async (id: string) => ({
+      title: `DB ${compact(id).slice(-1)}`,
+      queryable: true,
+    }));
+    const orchestrator = build();
+    at("10:05:00");
+
+    await orchestrator.pull();
+
+    expect(notion.client.queryAllDatabasePages.mock.calls.map(([id]) => id)).toEqual([
+      TASKS,
+      B,
+      C,
+      D,
+    ]);
+    expect(pending()).toEqual(new Set([compact(E)]));
+    expect([...vault.files.keys()].some((path) => path.endsWith("/L4.md"))).toBe(false);
+
+    // 다음 pull 은 증분이다 — E 의 행은 조회 창에 들지만, 대기가 없으면 E 는 새로 등록한 DB 도 아니다.
+    vi.clearAllMocks();
+    notion.client.searchRecentPages.mockResolvedValueOnce([]);
+    at("10:30:00");
+    const next = await orchestrator.pull();
+
+    expect(next).toMatchObject({ failed: [], remoteScan: { kind: "incremental" } });
+    expect(notion.client.queryAllDatabasePages.mock.calls.map(([id]) => id)).toEqual([E]);
+    expect([...vault.files.keys()].some((path) => path.endsWith("/L4.md"))).toBe(true);
+    expect(pending()).toEqual(new Set());
   });
 });
