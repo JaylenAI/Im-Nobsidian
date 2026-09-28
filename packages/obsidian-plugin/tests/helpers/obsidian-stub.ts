@@ -180,7 +180,11 @@ export class MarkdownRenderChild {
 }
 
 export class Notice {
-  constructor(_msg: string) {}
+  /** 띄운 알림 — 시험이 무엇을 알렸는지 본다. */
+  static shown: string[] = [];
+  constructor(msg: string) {
+    Notice.shown.push(msg);
+  }
 }
 
 export class WorkspaceLeaf {}

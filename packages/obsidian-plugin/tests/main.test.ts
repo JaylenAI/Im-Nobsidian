@@ -1,4 +1,8 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, onTestFinished } from "vitest";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { Notice } from "obsidian";
 
 vi.mock("svelte", () => ({
   mount: vi.fn(() => ({ $$: {} })),
@@ -39,6 +43,9 @@ vi.mock("../src/state/sqljs-state-db.js", () => ({
 vi.mock("@im-nobsidian/core", () => ({
   NotionClient: class {
     constructor() {}
+    static fromConfig() {
+      return {};
+    }
   },
   SyncOrchestrator: class {
     constructor() {}
@@ -86,6 +93,55 @@ vi.mock("@im-nobsidian/core", () => ({
 }));
 
 import ImNobsidianPlugin from "../src/main.js";
+import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { WASM_FILE } from "../src/constants.js";
+
+/** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
+function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
+  const plugin = new ImNobsidianPlugin({} as never, {} as never);
+  plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+  const vaultPath = mkdtempSync(join(tmpdir(), "im-nobsidian-main-"));
+  onTestFinished(() => rmSync(vaultPath, { recursive: true, force: true }));
+  const pluginDir = join(vaultPath, ".obsidian", "plugins", "test-plugin");
+  mkdirSync(pluginDir, { recursive: true });
+  writeFileSync(join(pluginDir, WASM_FILE), "");
+  let reads = 0;
+  const patches: unknown[] = [];
+  const internals = plugin as unknown as {
+    app: unknown;
+    manifest: unknown;
+    syncController: unknown;
+    initFailure: string | null;
+    executePush: () => Promise<void>;
+    refreshSidebarStatus: (fullCheck?: boolean) => Promise<void>;
+    renderInlineView: (source: string, container: HTMLElement) => Promise<void>;
+  };
+  internals.manifest = { id: "test-plugin" };
+  internals.app = {
+    vault: {
+      adapter: {
+        basePath: vaultPath,
+        exists: async () => true,
+        readBinary: () => {
+          reads++;
+          return readBinary();
+        },
+      },
+    },
+    workspace: {
+      getLeavesOfType: () => [{ view: { updateState: (patch: unknown) => patches.push(patch) } }],
+    },
+  };
+  return { plugin, internals, patches, reads: () => reads };
+}
+
+/** 상태 DB 파일을 쥔 다른 프로그램(백신 · 클라우드 동기화)이 있을 때 읽기가 내는 오류. */
+function busy(): Promise<ArrayBuffer> {
+  return Promise.reject(new Error("EBUSY: resource busy or locked"));
+}
+
+const READ_FAILURE =
+  "초기화 실패: 상태 DB 를 읽지 못함 (<state-db>): EBUSY: resource busy or locked";
 
 describe("ImNobsidianPlugin", () => {
   it("인스턴스 생성", () => {
@@ -224,6 +280,73 @@ describe("ImNobsidianPlugin", () => {
     }
   });
 
+  it("상태 DB 파일을 읽지 못하면 빈 DB 를 열지 않는다 — 초기화 실패로 이유를 알린다", async () => {
+    const { plugin, reads } = pluginWithStateFile(busy);
+    vi.mocked(SqlJsStateDB.open).mockClear();
+    Notice.shown.splice(0);
+
+    await plugin.initOrchestrator();
+
+    // 예전에는 «처음» 으로 보고 빈 DB 를 열었다 — 다음 쓰기가 파일의 동기화 기록 전체를 덮었다
+    expect(reads()).toBe(1);
+    expect(SqlJsStateDB.open).not.toHaveBeenCalled();
+    expect(Notice.shown).toEqual([`Im-Nobsidian ${READ_FAILURE}`]);
+  });
+
+  it("초기화가 실패하면 명령 · 변경 패널 · DB 뷰가 그 이유를 보인다 — 「설정을 먼저」 가 아니다", async () => {
+    const { plugin, internals, patches } = pluginWithStateFile(busy);
+    await plugin.initOrchestrator();
+    Notice.shown.splice(0);
+
+    await internals.executePush();
+    await internals.refreshSidebarStatus();
+    const shown: unknown[] = [];
+    await internals.renderInlineView("database: db1", {
+      createEl: (_tag: string, options: { text: string }) => shown.push(options.text),
+    } as unknown as HTMLElement);
+
+    expect(Notice.shown).toEqual([`Im-Nobsidian ${READ_FAILURE}`]);
+    // 초기화가 실패할 때 한 번, 패널을 새로고칠 때(패널을 연 것과 같다) 한 번
+    expect(patches).toEqual([
+      { syncState: "error", errorMessage: READ_FAILURE },
+      { syncState: "error", errorMessage: READ_FAILURE },
+    ]);
+    expect(shown).toEqual([`Im-Nobsidian ${READ_FAILURE}`]);
+  });
+
+  it("실패한 뒤 새로고침을 누르면 초기화를 다시 해 본다 — 이제 읽히면 그 파일로 연다", async () => {
+    let locked = true;
+    const saved = new Uint8Array([1, 2, 3]);
+    const { plugin, internals, reads } = pluginWithStateFile(() =>
+      locked ? busy() : Promise.resolve(saved.buffer),
+    );
+    await plugin.initOrchestrator();
+    locked = false;
+    vi.mocked(SqlJsStateDB.open).mockClear();
+
+    await internals.refreshSidebarStatus(true);
+
+    expect(reads()).toBe(2);
+    expect(vi.mocked(SqlJsStateDB.open).mock.calls.map((call) => call[0])).toEqual([saved]);
+    expect(internals.syncController).not.toBeNull();
+    expect(internals.initFailure).toBeNull();
+  });
+
+  it("동기화할 수 없는 까닭을 가린다 — 설정이 비었으면 설정, 초기화 중이면 준비 중", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const internals = plugin as unknown as { executePush: () => Promise<void> };
+    Notice.shown.splice(0);
+
+    await internals.executePush();
+    plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+    await internals.executePush();
+
+    expect(Notice.shown).toEqual([
+      "Im-Nobsidian: 설정을 먼저 완료해주세요.",
+      "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.",
+    ]);
+  });
+
   it("충돌 창은 플러그인을 내리면(신호 취소) 닫히고 고르지 않은 것으로 끝난다 (S-09)", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
     const abort = new AbortController();
@@ -264,6 +387,8 @@ describe("ImNobsidianPlugin", () => {
   it("초기화는 차례로 돈다 — 설정을 칠 때마다 불러도 앞 초기화가 끝난 뒤에 다음이 DB 를 닫고 연다", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
     plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+    // 볼트가 없어 초기화는 실패한다 — 차례만 본다. 실패 이유는 변경 패널에도 보내므로 작업 공간은 둔다.
+    (plugin as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
     const events: string[] = [];
     let release!: () => void;
     const firstClose = new Promise<void>((resolve) => (release = resolve));
