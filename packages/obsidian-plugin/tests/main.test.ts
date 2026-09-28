@@ -635,6 +635,76 @@ describe("ImNobsidianPlugin", () => {
     expect(events).toEqual(["close1:start", "close1:end", "close2:start", "close2:end"]);
   });
 
+  it("전체 확인 Pull 은 원격을 전체 대조하라고 넘긴다 — 보통 Pull 은 넘기지 않는다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const controller = { pull: vi.fn(async () => {}) };
+    const internals = plugin as unknown as {
+      syncController: unknown;
+      executePull: (options?: { force?: boolean }) => Promise<void>;
+    };
+    internals.syncController = controller;
+
+    await internals.executePull({ force: true });
+    await internals.executePull();
+
+    expect(controller.pull.mock.calls).toEqual([
+      [undefined, { force: true }],
+      [undefined, { force: false }],
+    ]);
+  });
+
+  it("상태 알림은 마지막 전체 확인을 적고, 바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 덧붙인다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const status = (remoteScan: object, lastFullScanAt: string | null) => ({
+      lastSyncAt: null,
+      lastFullScanAt,
+      localChanges: [],
+      remoteChanges: [{ pageId: "p1", type: "modified" }],
+      pendingOperations: 0,
+      remoteScan,
+    });
+    const controller = {
+      getStatus: vi
+        .fn()
+        .mockResolvedValueOnce(
+          status(
+            { kind: "incremental", lastFullAt: null, nextFullAt: null, deletionsDeferred: true },
+            null,
+          ),
+        )
+        .mockResolvedValueOnce(
+          status(
+            {
+              kind: "full",
+              reason: "every-pull",
+              lastFullAt: null,
+              nextFullAt: null,
+              deletionsDeferred: false,
+            },
+            "2026-09-28T01:05:00.000Z",
+          ),
+        ),
+    };
+    const internals = plugin as unknown as {
+      syncController: unknown;
+      showStatus: () => Promise<void>;
+    };
+    internals.syncController = controller;
+    Notice.shown.splice(0);
+
+    await internals.showStatus();
+    await internals.showStatus();
+
+    const [incremental, full] = Notice.shown;
+    expect(incremental).toContain("전체 확인: 아직 안 함");
+    expect(incremental).toContain("원격 변경: 1건 (Notion 에서 지운 노트는 전체 확인 때 반영)");
+    expect(full).toContain(
+      `마지막 전체 확인: ${new Date("2026-09-28T01:05:00.000Z").toLocaleString()}`,
+    );
+    expect(full).toContain("원격 변경: 1건");
+    expect(full).not.toContain("전체 확인 때 반영");
+  });
+
   it("자동 주기는 도는 작업이 있으면 건너뛰는 autoSync 를 부른다 — 알림을 띄우는 수동 sync 가 아니다 (S-09)", () => {
     vi.useFakeTimers();
     try {

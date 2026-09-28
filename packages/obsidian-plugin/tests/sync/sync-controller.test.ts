@@ -336,6 +336,18 @@ describe("SyncController", () => {
       expect(mock.pull.mock.calls[0][0]).toMatchObject({ paths: ["a/노트.md"] });
       expect(mock.pull.mock.calls[1][0]).not.toHaveProperty("paths");
     });
+
+    it("전체 확인 pull 은 원격을 전체 대조하라고 넘기고 그렇게 알린다 — 보통 pull 은 넘기지 않는다", async () => {
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull(undefined, { force: true });
+      await controller.pull();
+
+      expect(mock.pull.mock.calls[0][0]).toMatchObject({ force: true });
+      expect(mock.pull.mock.calls[0][0]).not.toHaveProperty("paths");
+      expect(mock.pull.mock.calls[1][0]).not.toHaveProperty("force");
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: Pull(전체 확인) 시작...");
+    });
   });
 
   describe("받은 원격 변경은 목록에서 빠진다", () => {
@@ -620,6 +632,18 @@ describe("SyncController", () => {
           remoteChanges: [{ path: "b.md" }],
           syncState: "ready",
         }),
+      );
+    });
+
+    it("새로고침은 마지막 전체 확인 시각을 싣는다 — 로컬만 볼 때도", async () => {
+      mock.statusLocal.mockResolvedValue(
+        localStatus([], { lastFullScanAt: "2026-09-28T01:05:00.000Z" }),
+      );
+      const { hooks, onState } = createHooks();
+      await makeController(mock, hooks).refreshStatus(false);
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ lastFullScanAt: "2026-09-28T01:05:00.000Z" }),
       );
     });
 

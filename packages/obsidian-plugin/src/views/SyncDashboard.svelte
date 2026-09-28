@@ -11,6 +11,7 @@
 
   interface SyncStateUpdate {
     lastSyncAt: string | null;
+    lastFullScanAt: string | null;
     localChanges: LocalChange[];
     folderMoves?: FolderMoveChange[];
     remoteChanges?: RemoteChange[];
@@ -24,6 +25,8 @@
 
   interface Props {
     lastSyncAt: string | null;
+    /** 마지막으로 원격을 전체 대조한 때 — Notion 에서 지운 노트는 그때 볼트에 반영된다. */
+    lastFullScanAt: string | null;
     localChanges: LocalChange[];
     folderMoves?: FolderMoveChange[];
     remoteChanges: RemoteChange[];
@@ -52,6 +55,7 @@
 
   let {
     lastSyncAt: initialLastSyncAt,
+    lastFullScanAt: initialLastFullScanAt,
     localChanges: initialLocalChanges,
     folderMoves: initialFolderMoves = [],
     remoteChanges: initialRemoteChanges,
@@ -77,6 +81,7 @@
   }: Props = $props();
 
   let lastSyncAt: string | null = $state(initialLastSyncAt);
+  let lastFullScanAt: string | null = $state(initialLastFullScanAt);
   let localChanges: LocalChange[] = $state(initialLocalChanges);
   let folderMoves: FolderMoveChange[] = $state(initialFolderMoves);
   let remoteChanges: RemoteChange[] = $state(initialRemoteChanges);
@@ -91,6 +96,7 @@
 
   function applyUpdate(s: SyncStateUpdate) {
     lastSyncAt = s.lastSyncAt;
+    lastFullScanAt = s.lastFullScanAt;
     localChanges = s.localChanges;
     if (s.folderMoves) folderMoves = s.folderMoves;
     if (s.remoteChanges) remoteChanges = s.remoteChanges;
@@ -185,8 +191,9 @@
           : "준비됨",
   );
 
-  function formatTime(iso: string | null): string {
-    if (!iso) return "아직 동기화 안됨";
+  /** 지난 때를 「N분 전」 처럼 — 없으면 `never` 를 보인다. */
+  function formatTime(iso: string | null, never: string): string {
+    if (!iso) return never;
     const d = new Date(iso);
     const now = Date.now();
     const diff = now - d.getTime();
@@ -285,6 +292,13 @@
   } as const;
 
   /**
+   * 「전체 확인」 줄의 툴팁. 동기화는 평소 바뀐 노트만 확인해 빠르다 — 대신 Notion 에서 지운 노트는 전체
+   * 확인 때 반영된다. 주기는 설정이 정하므로 숫자는 적지 않는다.
+   */
+  const FULL_SCAN_HINT =
+    "Notion 에서 지운 노트는 전체 확인 때 볼트에 반영됩니다. 전체 확인은 동기화가 주기마다 함께 하고, 그 사이에는 바뀐 노트만 확인합니다. 지금 하려면 명령 「Pull from Notion (전체 확인)」 을 실행하세요.";
+
+  /**
    * 단추에 Obsidian 아이콘을 넣는다 — 글 없이 아이콘만 두고, 무엇을 하는지는 `aria-label` 이 마우스를 올렸을
    * 때 Obsidian 툴팁으로 보인다. `title` 은 두지 않는다 — 브라우저 툴팁이 한 번 더 뜬다.
    */
@@ -330,7 +344,14 @@
   {#if lastSyncAt || syncState !== "error"}
     <div class="im-sync-meta">
       <span class="im-sync-meta-label">마지막 동기화</span>
-      <span class="im-sync-meta-value">{formatTime(lastSyncAt)}</span>
+      <span class="im-sync-meta-value">{formatTime(lastSyncAt, "아직 동기화 안됨")}</span>
+    </div>
+  {/if}
+  <!-- 마지막 전체 확인 — 동기화는 평소 바뀐 노트만 확인한다. Notion 에서 지운 노트가 언제 반영되는지를 여기서 안다(ADR-027). -->
+  {#if lastFullScanAt || syncState !== "error"}
+    <div class="im-sync-meta im-sync-meta-full" aria-label={FULL_SCAN_HINT}>
+      <span class="im-sync-meta-label">전체 확인</span>
+      <span class="im-sync-meta-value">{formatTime(lastFullScanAt, "아직 안 함")}</span>
     </div>
   {/if}
 
@@ -625,6 +646,10 @@
     padding: 6px 12px;
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
+  }
+  /* 마지막 동기화 · 전체 확인을 한 덩어리로 — 두 줄 사이를 벌리지 않는다. */
+  .im-sync-meta + .im-sync-meta {
+    padding-top: 0;
   }
 
   /*

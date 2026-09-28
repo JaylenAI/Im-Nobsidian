@@ -29,6 +29,8 @@ export type SyncOperation = "pull" | "push" | "sync";
 /** 사이드바 대시보드가 그리는 동기화 상태의 정규 형태. */
 export interface SyncDashboardState {
   lastSyncAt: string | null;
+  /** 마지막으로 원격을 전체 대조한 때 — Notion 에서 지운 노트는 그때 볼트에 반영된다 (ADR-027). */
+  lastFullScanAt: string | null;
   localChanges: LocalChange[];
   /** 옮긴 폴더 — 그 안의 노트는 `localChanges` 에 옮김으로 따로 있다. */
   folderMoves: FolderMoveChange[];
@@ -266,12 +268,23 @@ export class SyncController {
     );
   }
 
-  /** Pull. `paths` 를 주면 그 노트만 받는다 — 변경 패널의 항목별 받기. */
-  async pull(paths?: string[]): Promise<void> {
+  /**
+   * Pull. `paths` 를 주면 그 노트만 받는다 — 변경 패널의 항목별 받기. `force` 는 원격을 전체 대조한다 —
+   * Notion 에서 지운 노트를 주기를 기다리지 않고 반영한다(CLI `pull --force`, ADR-027).
+   */
+  async pull(
+    paths?: string[],
+    { force = false }: { readonly force?: boolean } = {},
+  ): Promise<void> {
     await this.runUserOperation(
       "pull",
-      "Pull",
-      (options) => this.orchestrator.pull(paths ? { ...options, paths } : options),
+      force ? "Pull(전체 확인)" : "Pull",
+      (options) =>
+        this.orchestrator.pull({
+          ...options,
+          ...(paths ? { paths } : {}),
+          ...(force ? { force } : {}),
+        }),
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
@@ -627,10 +640,11 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 상태 조회가 준 목록 — 로컬 변경 · 옮긴 폴더 · 충돌 · 마지막 동기화. */
+/** 상태 조회가 준 목록 — 로컬 변경 · 옮긴 폴더 · 충돌 · 마지막 동기화 · 마지막 전체 대조. */
 function listsOf(status: StatusResult): SyncStatePatch {
   return {
     lastSyncAt: status.lastSyncAt,
+    lastFullScanAt: status.lastFullScanAt,
     localChanges: status.localChanges,
     folderMoves: [...status.folderMoves],
     conflictRecords: status.conflictRecords,

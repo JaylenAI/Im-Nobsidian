@@ -13,6 +13,7 @@ import { renderComponent, normText, type Mounted } from "../helpers/mount-svelte
 
 interface SyncStateUpdate {
   lastSyncAt: string | null;
+  lastFullScanAt?: string | null;
   localChanges: unknown[];
   remoteChanges?: unknown[];
   conflictRecords: unknown[];
@@ -35,6 +36,7 @@ afterEach(() => {
 function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     lastSyncAt: null,
+    lastFullScanAt: null,
     localChanges: [],
     remoteChanges: [],
     conflictRecords: [],
@@ -423,6 +425,38 @@ describe("변경 패널 — 항목별 동작", () => {
       }),
     );
     expect(meta()).toBe("방금 전");
+  });
+
+  it("전체 확인 줄 — 마지막 전체 대조를 보이고, 툴팁이 Notion 에서 지운 노트가 언제 반영되는지 말한다", () => {
+    const row = () => m!.target.querySelector(".im-sync-meta-full");
+    const value = () => normText(row()?.querySelector(".im-sync-meta-value") ?? null);
+    m = renderComponent(SyncDashboard, baseProps());
+    expect(normText(row()?.querySelector(".im-sync-meta-label") ?? null)).toBe("전체 확인");
+    expect(value()).toBe("아직 안 함");
+    expect(row()?.getAttribute("aria-label")).toContain("Notion 에서 지운 노트는 전체 확인 때");
+    expect(row()?.getAttribute("aria-label")).toContain("Pull from Notion (전체 확인)");
+
+    updater!({
+      lastSyncAt: null,
+      lastFullScanAt: new Date(Date.now() - 5 * 60_000 - 1_000).toISOString(),
+      localChanges: [],
+      conflictRecords: [],
+      syncState: "ready",
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+    });
+    m.flush();
+    expect(value()).toBe("5분 전");
+    m.destroy();
+
+    // 초기화가 실패하면 상태 DB 를 못 읽었다 — 「아직 안 함」 이 거짓일 수 있어 줄을 뺀다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({ syncState: "error", errorMessage: "초기화 실패: 상태 DB 를 읽지 못함" }),
+    );
+    expect(row()).toBeNull();
   });
 
   it("충돌만 남았으면 「변경 사항 없음」 을 띄우지 않는다 — 충돌 칸이 할 일을 말한다", () => {
