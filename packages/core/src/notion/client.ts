@@ -38,6 +38,13 @@ export function isNotionObjectNotFound(error: unknown): boolean {
   return e.code === "object_not_found" || e.status === 404;
 }
 
+/** 이 통합에 권한이 없어 거절된 요청인가(403 `restricted_resource`). */
+export function isNotionAccessDenied(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: unknown; status?: unknown };
+  return e.code === "restricted_resource" || e.status === 403;
+}
+
 /** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
 export function isTrashedOrArchived(page: PageObjectResponse): boolean {
   // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근

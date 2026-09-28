@@ -19,7 +19,11 @@ import type { Config } from "../types/config.js";
 import type { ConversionResult } from "../types/convert.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
-import { isNotionObjectNotFound, DiscoveryTooLargeError } from "../notion/client.js";
+import {
+  isNotionAccessDenied,
+  isNotionObjectNotFound,
+  DiscoveryTooLargeError,
+} from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { ChangeDetector, type LocalScan, type LocalScanOptions } from "./change-detector.js";
@@ -193,7 +197,7 @@ type DiscoveredDbOutcome =
   | { kind: "ok"; config: DiscoveredDbConfig }
   | { kind: "linked"; originalDbId: string }
   | { kind: "inaccessible" }
-  | { kind: "error" };
+  | { kind: "error"; error: string };
 
 /** 자동 발견 DB 목록을 보존하는 상태 메타 키. */
 const DISCOVERED_DBS_META_KEY = "discovered_dbs";
@@ -203,6 +207,33 @@ const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
 
 /** linked view 컨테이너 → 원본 DB 매핑을 보존하는 상태 메타 키(nohyph → nohyph). */
 const LINKED_DBS_META_KEY = "linked_dbs";
+
+/**
+ * 발견하다 읽지 못해 다음 pull 이 다시 볼 것을 보존하는 상태 메타 키. 캐시가 차면 블록 스캔을 다시
+ * 하지 않으므로, 따로 적어 두지 않으면 한 번 읽지 못한 DB 는 `--force` 전까지 발견되지 않는다.
+ * DB 행 조회 실패는 여기 두지 않는다 — 그 DB 는 캐시에 남아 다음 pull 이 다시 받는다.
+ */
+const DISCOVERY_RETRY_META_KEY = "discovery_retry";
+
+interface DiscoveryRetry {
+  /** 자식 DB 를 확인하지 못한 페이지. */
+  readonly parents: string[];
+  /** 찾았지만 설정(제목 · 조회 가능 여부)을 읽지 못한 DB. */
+  readonly dbs: Array<{ dbId: string; parentPageId: string }>;
+}
+
+function parseDiscoveryRetry(raw: string | null): DiscoveryRetry {
+  if (!raw) return { parents: [], dbs: [] };
+  try {
+    const parsed = JSON.parse(raw) as Partial<DiscoveryRetry>;
+    return {
+      parents: Array.isArray(parsed.parents) ? parsed.parents : [],
+      dbs: Array.isArray(parsed.dbs) ? parsed.dbs : [],
+    };
+  } catch {
+    return { parents: [], dbs: [] };
+  }
+}
 
 /** 자동 발견 DB 목록. 없거나 깨졌으면 빈 목록 — 설정 · 볼트 추적분만으로 계속한다. */
 function parseDiscoveredDbs(raw: string | null): DiscoveredDbConfig[] {
@@ -1151,10 +1182,12 @@ export class SyncOrchestrator {
     return this.config.notion.parentMode === "database" && !!this.config.notion.databaseId;
   }
 
-  private async discoverChildDatabases(): Promise<Array<{ dbId: string; parentPageId: string }>> {
-    const allDbs: Array<{ dbId: string; parentPageId: string }> = [];
-    const trackedPages = this.stateDb.getAll().filter((r) => r.notionPageId);
-    const pageIds = [this.config.notion.rootPageId, ...trackedPages.map((r) => r.notionPageId!)];
+  private async discoverChildDatabases(pageIds: readonly string[]): Promise<{
+    found: Array<{ dbId: string; parentPageId: string }>;
+    unread: Array<{ pageId: string; error: string }>;
+  }> {
+    const found: Array<{ dbId: string; parentPageId: string }> = [];
+    const unread: Array<{ pageId: string; error: string }> = [];
     const seen = new Set<string>();
 
     for (const parentId of pageIds) {
@@ -1163,14 +1196,19 @@ export class SyncOrchestrator {
       try {
         const dbIds = await this.notionClient.getChildDatabaseIds(parentId);
         for (const dbId of dbIds) {
-          allDbs.push({ dbId, parentPageId: parentId });
+          found.push({ dbId, parentPageId: parentId });
         }
-      } catch {
-        // 접근 권한 없는 블록 무시
+      } catch (error) {
+        // 공유하지 않은 블록(404 · 403)은 건너뛴다. 그 밖에 읽지 못한 것은 없다고 하지 않는다.
+        if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) continue;
+        unread.push({
+          pageId: parentId,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
-    return allDbs;
+    return { found, unread };
   }
 
   /**
@@ -1215,7 +1253,7 @@ export class SyncOrchestrator {
       // 삭제된 DB 도 404 → 접근 불가로 강등(재시도하지 않음). 그 외는 일시 오류로 본다.
       if (isNotionObjectNotFound(error)) return { kind: "inaccessible" };
       getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
-      return { kind: "error" };
+      return { kind: "error", error: error instanceof Error ? error.message : String(error) };
     }
 
     const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
@@ -1360,6 +1398,31 @@ export class SyncOrchestrator {
       const linkedMap = this.loadLinkedDbMap();
       let linkedChanged = false;
 
+      // 발견하다 읽지 못한 것 — 이유와 함께 실패로 싣고 다음 pull 이 다시 본다. 읽지 못한 것을
+      // 없다고 하면 pull 이 성공으로 끝나, 사용자는 그 DB 를 받지 못한 줄 모른다.
+      const retry = parseDiscoveryRetry(this.stateDb.getMeta(DISCOVERY_RETRY_META_KEY));
+      const nextRetry: DiscoveryRetry = { parents: [], dbs: [] };
+      const pathOf = (pageId: string): string =>
+        notionIdsEqual(pageId, this.config.notion.rootPageId)
+          ? ""
+          : (this.stateDb.getByNotionId(pageId)?.obsidianPath ?? pageId);
+      const unreadParent = (pageId: string, error: string): void => {
+        nextRetry.parents.push(pageId);
+        failed.push({
+          path: pathOf(pageId),
+          operation: "update",
+          error: `하위 DB 를 확인하지 못함 — 다음 pull 이 다시 확인한다: ${error}`,
+        });
+      };
+      const retryLater = (dbId: string, parentPageId: string, error: string): void => {
+        nextRetry.dbs.push({ dbId, parentPageId });
+        failed.push({
+          path: pathOf(parentPageId),
+          operation: "create",
+          error: `DB ${compactNotionId(dbId).slice(0, 8)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
+        });
+      };
+
       // 발견 1건 등록 — 원본 DB 면 설정 추가, linked view 컨테이너면 원본으로 해소해 매핑
       // 기록 후 원본을 같은 부모 아래로 등록한다. 해소는 1홉: 원본이 또 linked 면(순환·
       // 다단 참조) 접근 불가로 강등해 무한 추적을 차단한다.
@@ -1376,7 +1439,9 @@ export class SyncOrchestrator {
             claimFolder(outcome.config);
             dbConfigs.push(outcome.config);
             changed = true;
-          } else if (outcome.kind !== "error") {
+          } else if (outcome.kind === "error") {
+            retryLater(origId, parentPageId, outcome.error);
+          } else {
             degrade(origId);
           }
         };
@@ -1401,17 +1466,34 @@ export class SyncOrchestrator {
           await registerOriginal(origNohyph);
         } else if (outcome.kind === "inaccessible") {
           degrade(dbId);
+        } else if (outcome.kind === "error") {
+          retryLater(dbId, parentPageId, outcome.error);
         }
       };
 
       // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
       //     캐시가 비었을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
       //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
-      if (dbConfigs.length === 0 || forceRediscovery) {
-        const discovered = await this.discoverChildDatabases();
-        for (const { dbId, parentPageId } of discovered) {
+      //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다.
+      const scanAll = dbConfigs.length === 0 || forceRediscovery;
+      const scanIds = scanAll
+        ? [
+            this.config.notion.rootPageId,
+            ...this.stateDb
+              .getAll()
+              .filter((r) => r.notionPageId)
+              .map((r) => r.notionPageId!),
+          ]
+        : retry.parents;
+      if (scanIds.length > 0) {
+        const { found, unread } = await this.discoverChildDatabases(scanIds);
+        for (const { dbId, parentPageId } of found) {
           await register(dbId, parentPageId);
         }
+        for (const { pageId, error } of unread) unreadParent(pageId, error);
+      }
+      for (const { dbId, parentPageId } of retry.dbs) {
+        await register(dbId, parentPageId);
       }
 
       // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
@@ -1478,8 +1560,13 @@ export class SyncOrchestrator {
               // 캐시에 있었지만 이제 행 조회가 404 — 링크드/미공유/삭제로 강등(스택트레이스 억제).
               degrade(dbConfig.databaseId);
             } else {
-              // 일시적/실제 오류 — 캐시에 유지해 다음 pull 에 재시도한다.
+              // 일시적/실제 오류 — 캐시에 유지해 다음 pull 에 재시도한다. 이유는 실패로 싣는다.
               getLogger().warn(`[Im-Nobsidian] DB ${dbConfig.databaseId} 동기화 실패:`, error);
+              failed.push({
+                path: dbConfig.localFolder,
+                operation: "update",
+                error: error instanceof Error ? error.message : String(error),
+              });
               stillSyncable.push(dbConfig);
             }
           }
@@ -1515,12 +1602,25 @@ export class SyncOrchestrator {
       if (linkedChanged) {
         this.stateDb.setMeta(LINKED_DBS_META_KEY, JSON.stringify(Object.fromEntries(linkedMap)));
       }
+      if (
+        retry.parents.length + retry.dbs.length + nextRetry.parents.length + nextRetry.dbs.length >
+        0
+      ) {
+        this.stateDb.setMeta(DISCOVERY_RETRY_META_KEY, JSON.stringify(nextRetry));
+      }
 
       // 이번 pull 산출 md 의 인라인 DB placeholder 를 .base 임베드로 재작성한다(F22).
       // .base 생성(위 pullDatabase)이 끝난 뒤여야 임베드가 깨진 링크가 되지 않는다.
       await this.rewriteDbPlaceholderEmbeds(writtenPaths, stillSyncable, linkedMap);
     } catch (error) {
       getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
+      failed.push({
+        path: "",
+        operation: "update",
+        error: `DB 자동 발견이 멈춤 — 다음 pull 이 다시 한다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      });
     }
 
     return { created, updated, deleted, restored };
