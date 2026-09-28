@@ -8,7 +8,8 @@
  *   - fetchDatabaseModern(=getDatabaseSchema/Full) → 1차 DS 스키마만(2번째+ 컬럼 유실).
  *
  * 수정: getDataSourceMetas 로 전 data source 를 받아 queryAllDatabasePages 가 전 소스를
- *   순회·페이지네이션·디듀프하고, fetchDatabaseModern 이 전 소스 properties 를 union 병합.
+ *   순회·페이지네이션·디듀프하고, getDatabaseMeta(옛 fetchDatabaseModern)가 전 소스 properties 를
+ *   union 병합.
  *
  * 본 테스트는 실 NotionClient 의 내부 SDK 클라이언트를 mock 해 각 분기를 단언한다.
  * 가드 유효성: 수정 전(1차 DS 만)에는 ds-B 행/컬럼이 빠져 이 테스트가 실패한다.

@@ -1,6 +1,6 @@
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
-import type { NotionClient } from "../notion/client.js";
+import type { DatabaseMeta, NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { Conflict, FailedOperation, ProgressItem, SyncRecord } from "../types/sync.js";
@@ -209,13 +209,13 @@ export class DatabaseSyncer {
     if (target.kind === "linked") {
       if (target.wholeDbInScope) {
         const viewsConfig = await this.pullDatabaseViews(dbConfig);
-        await this.generateBaseFile(dbConfig, viewsConfig, target.ownerFolder);
+        await this.generateBaseFile(dbConfig, viewsConfig, target.meta, target.ownerFolder);
       }
       return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: target.ownerDbId };
     }
-    const { pages, wholeDbInScope } = target;
+    const { pages, wholeDbInScope, meta } = target;
 
-    const schema = await this.notionClient.getDatabaseSchema(dbConfig.databaseId);
+    const schema = await this.notionClient.getDatabaseSchema(dbConfig.databaseId, meta);
     this.propertyMapper.loadSchema(schema);
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
@@ -223,7 +223,7 @@ export class DatabaseSyncer {
     // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
     if (wholeDbInScope) {
       const viewsConfig = await this.pullDatabaseViews(dbConfig);
-      await this.generateBaseFile(dbConfig, viewsConfig);
+      await this.generateBaseFile(dbConfig, viewsConfig, meta);
     }
 
     let created = 0;
@@ -382,6 +382,9 @@ export class DatabaseSyncer {
    * 릴레이 재배치해 원격 무변경에도 매 pull 재작성이 쌓인다(실측 66건/pull, 행당 최대 4중).
    * 컨테이너로 판정되면 행은 원본에 양보하고 .base 만 원본 폴더 필터로 재지향해
    * "같은 데이터의 다른 뷰"라는 Notion 의미를 보존한다.
+   *
+   * DB 는 한 번만 받는다(`meta`) — 행 조회 · 스키마 · `.base` 제목이 이것을 같이 읽는다. 예전에는 같은 DB 를
+   * 세 번 넘게 다시 받아 DB 하나에 요청 6~8회가 들었다(ADR-027).
    */
   private async queryRows(
     dbConfig: DatabaseSyncConfig,
@@ -396,11 +399,13 @@ export class DatabaseSyncer {
         readonly ownerDbId: string;
         readonly ownerFolder: string;
         readonly wholeDbInScope: boolean;
+        readonly meta: DatabaseMeta;
       }
     | {
         readonly kind: "rows";
         readonly pages: PageObjectResponse[];
         readonly wholeDbInScope: boolean;
+        readonly meta: DatabaseMeta;
       }
   > {
     const scope = opts?.paths;
@@ -410,18 +415,22 @@ export class DatabaseSyncer {
       return { kind: "out-of-scope" };
     }
 
+    const meta = await this.notionClient.getDatabaseMeta(dbConfig.databaseId);
     const pages = await this.notionClient.queryAllDatabasePages(
       dbConfig.databaseId,
       dbConfig.pullFilter,
+      meta,
     );
 
     const parent = pages[0]?.parent as { type?: string; database_id?: string } | undefined;
     const ownerDbId = parent?.database_id;
     if (ownerDbId && !notionIdsEqual(ownerDbId, dbConfig.databaseId)) {
       const ownerFolder = opts?.resolveDbFolder?.(ownerDbId) ?? null;
-      if (ownerFolder !== null) return { kind: "linked", ownerDbId, ownerFolder, wholeDbInScope };
+      if (ownerFolder !== null) {
+        return { kind: "linked", ownerDbId, ownerFolder, wholeDbInScope, meta };
+      }
     }
-    return { kind: "rows", pages, wholeDbInScope };
+    return { kind: "rows", pages, wholeDbInScope, meta };
   }
 
   /**
@@ -562,6 +571,8 @@ export class DatabaseSyncer {
   private async generateBaseFile(
     dbConfig: DatabaseSyncConfig,
     viewsConfig: DatabaseViewsConfig | null,
+    /** {@link queryRows} 가 받은 이 DB — 스키마 · 제목을 다시 받지 않는다. */
+    meta: DatabaseMeta,
     /**
      * F25: 행이 실제로 사는 폴더(.base 의 inFolder 필터 대상). linked view 컨테이너의
      * .base 는 자기 폴더가 아니라 원본 DB 폴더를 가리켜야 행 이관 후에도 빈 뷰가 되지
@@ -570,10 +581,10 @@ export class DatabaseSyncer {
     rowsFolder?: string,
   ): Promise<void> {
     try {
-      const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId);
+      const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId, meta);
       const dbName =
         viewsConfig?.databaseName ||
-        (await this.notionClient.getDatabaseTitle(dbConfig.databaseId)) ||
+        (await this.notionClient.getDatabaseTitle(dbConfig.databaseId, meta)) ||
         dbConfig.localFolder.split("/").pop() ||
         "Database";
 

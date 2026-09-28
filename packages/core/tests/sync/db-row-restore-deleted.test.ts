@@ -30,7 +30,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
-import { settledObservation } from "../helpers/mock-orchestrator.js";
+import { mockDatabaseMeta, settledObservation } from "../helpers/mock-orchestrator.js";
 
 const ROW_ID = "row-alive";
 const ROW_TITLE = "살아 있던 행";
@@ -92,6 +92,7 @@ function createMockNotionClient() {
     getDatabaseViewsConfig: vi
       .fn()
       .mockResolvedValue({ databaseId: "db-123", lastSynced: "", views: [] }),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([
       {
         id: ROW_ID,

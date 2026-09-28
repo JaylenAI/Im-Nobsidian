@@ -5,6 +5,7 @@ import type { VaultFS } from "../../src/sync/vault-fs.js";
 import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
+import { mockDatabaseMeta } from "../helpers/mock-orchestrator.js";
 
 // P3-A: DB 행 files 속성의 notion-hosted 서명 URL(약 1시간 만료)을 pull 때
 // 로컬 첨부로 내려받아 [[wikilink]] 로 대체한다 — frontmatter 에 만료 URL 이
@@ -119,6 +120,7 @@ describe("DatabaseSyncer — files 속성 pull 로컬라이즈", () => {
       getDatabaseViewsConfig: vi
         .fn()
         .mockResolvedValue({ databaseId: "db-123", lastSynced: "", views: [] }),
+      getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
       queryAllDatabasePages: vi.fn().mockResolvedValue([page]),
       getPageMarkdown: vi
         .fn()

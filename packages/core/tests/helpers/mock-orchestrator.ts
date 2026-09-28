@@ -127,6 +127,14 @@ export const MOCK_BOT_USER_ID = "bot-user-id";
 /** 목 Notion 클라이언트가 돌려주는 페이지의 수정 시각. */
 export const MOCK_REMOTE_EDITED = "2026-01-01T00:00:00.000Z";
 
+/**
+ * `getDatabaseMeta` 가 돌려주는 모양 — 받은 DB 를 행 조회 · 스키마 · 제목이 같이 읽는다. 스키마 · 제목은
+ * 시험이 따로 흉내 내므로 여기에는 어느 DB 를 받았는지만 싣는다.
+ */
+export function mockDatabaseMeta(databaseId: string) {
+  return { databaseId, title: "", dataSources: [], properties: {} };
+}
+
 export function createMockNotionClient() {
   return {
     createPage: vi.fn().mockResolvedValue({
@@ -185,6 +193,7 @@ export function createMockNotionClient() {
     resolveLinkedDatabase: vi.fn().mockResolvedValue(null),
     getChildDatabaseIds: vi.fn().mockResolvedValue([]),
     getDatabaseTitle: vi.fn().mockResolvedValue("Test DB"),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     getDatabaseViewsConfig: vi.fn().mockResolvedValue(null),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),

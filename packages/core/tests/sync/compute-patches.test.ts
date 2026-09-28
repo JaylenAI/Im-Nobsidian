@@ -3,7 +3,11 @@ import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import type { Config } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
-import { MOCK_BOT_USER_ID, settledObservation } from "../helpers/mock-orchestrator.js";
+import {
+  MOCK_BOT_USER_ID,
+  mockDatabaseMeta,
+  settledObservation,
+} from "../helpers/mock-orchestrator.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -100,6 +104,7 @@ function createMockNotionClient() {
     extractProperties: vi.fn().mockReturnValue({}),
     setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     movePage: vi.fn().mockResolvedValue({}),

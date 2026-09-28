@@ -22,7 +22,7 @@ import type {
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
-import { normalizeNotionId } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 
@@ -110,6 +110,31 @@ export interface RecentPage {
   readonly id: string;
   readonly last_edited_time: string;
   readonly last_edited_by: { readonly id: string } | null;
+}
+
+/**
+ * DB 하나를 한 번 받은 것 — 행 조회 · 스키마 · 제목이 같은 것을 다시 받지 않고 이것을 읽는다. 예전에는 DB 하나를
+ * 받는 데 같은 DB 를 서너 번 다시 받아(요청 6~8회) 발견 DB 166개의 pull 이 분 단위였다.
+ */
+export interface DatabaseMeta {
+  readonly databaseId: string;
+  /** DB 제목. 없으면 "". */
+  readonly title: string;
+  /** 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. */
+  readonly dataSources: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /**
+   * 속성 스키마 — 읽을 수 있는 모든 data source 의 속성을 합친 것(이름이 겹치면 앞의 것). 읽을 수 있는 data
+   * source 가 없으면 DB 객체의 속성.
+   */
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
+/** 행을 조회할 data source — 없으면(레거시 · 단일) DB id 하나로 폴백해 늘 1개 이상. */
+function dataSourcesToQuery(
+  meta: Pick<DatabaseMeta, "databaseId" | "dataSources">,
+): Array<{ id: string; name: string }> {
+  if (meta.dataSources.length === 0) return [{ id: meta.databaseId, name: "" }];
+  return meta.dataSources.map((ds) => ({ id: ds.id, name: ds.name }));
 }
 
 export interface NotionClientOptions {
@@ -390,20 +415,22 @@ export class NotionClient {
   // ─── Database / DataSource ───
 
   /**
-   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다.
-   * - title: database 객체에 그대로 존재한다.
-   * - properties(스키마): 신 모델에선 data source 에 있으므로 1차 data source 를 조회해 채운다.
+   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다 — DB 1회 + data source 마다 1회.
+   * - title · data source 목록: database 객체에 그대로 존재한다.
+   * - properties(스키마): 신 모델에선 data source 에 있으므로 data source 를 조회해 채운다.
    *   data source 접근 불가(링크드 DB 등)면 database 객체의 properties 로 폴백한다(제목은 보존).
+   *
+   * 같은 DB 의 행 조회 · 스키마 · 제목은 받은 것({@link DatabaseMeta})을 넘겨 다시 받지 않는다.
    *
    * 폐기한 레거시 raw fetch(`GET /v1/databases/{id}`, Notion-Version 2022-06-28)는 신 모델로
    * 업그레이드된 다수 DB에 400 을 반환해 자동 발견 DB 가 통째 드롭(내용 손실)되던 원인이었다.
    * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
    */
-  private async fetchDatabaseModern(databaseId: string): Promise<Record<string, unknown>> {
+  async getDatabaseMeta(databaseId: string): Promise<DatabaseMeta> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
-      title?: unknown;
+      title?: Array<{ plain_text: string }>;
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
     };
@@ -432,14 +459,24 @@ export class NotionClient {
       }
     }
 
-    const properties: Record<string, unknown> = anyAccessible ? merged : (db.properties ?? {});
-    return { title: db.title, properties };
+    return {
+      databaseId,
+      title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
+      dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+      properties: anyAccessible ? merged : (db.properties ?? {}),
+    };
   }
 
-  async getDatabaseTitle(databaseId: string): Promise<string> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const titleArr = db.title as Array<{ plain_text: string }> | undefined;
-    return titleArr?.[0]?.plain_text ?? "";
+  /** `from` 이 이 DB 를 받은 것이면 그것을, 아니면 새로 받는다. */
+  private async metaOf(databaseId: string, from: DatabaseMeta | undefined): Promise<DatabaseMeta> {
+    return from && notionIdsEqual(from.databaseId, databaseId)
+      ? from
+      : this.getDatabaseMeta(databaseId);
+  }
+
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
+  async getDatabaseTitle(databaseId: string, from?: DatabaseMeta): Promise<string> {
+    return (await this.metaOf(databaseId, from)).title;
   }
 
   /**
@@ -510,12 +547,15 @@ export class NotionClient {
     }
   }
 
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
   async getDatabaseSchema(
     databaseId: string,
+    from?: DatabaseMeta,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
-    if (!properties) return {};
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      { id: string; type: string }
+    >;
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -530,11 +570,17 @@ export class NotionClient {
    * 옵션명이 아니라 **그룹명**(`To-do` 등)으로 오기 때문에 `groups[].optionIds` 를
    * 옵션명으로 되돌리려면 이 id 가 있어야 한다. 예전엔 여기서 id 를 떨궈,
    * 그룹으로 필터링된 뷰를 Bases 로 옮길 방법이 아예 없었다.
+   *
+   * @param from 이미 받은 이 DB — 주면 다시 받지 않는다.
    */
-  async getDatabaseSchemaFull(databaseId: string): Promise<Record<string, BasePropertySchema>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
-    if (!properties) return {};
+  async getDatabaseSchemaFull(
+    databaseId: string,
+    from?: DatabaseMeta,
+  ): Promise<Record<string, BasePropertySchema>> {
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
 
     const schema: Record<string, BasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
@@ -584,9 +630,18 @@ export class NotionClient {
    * 페이지네이션하면 2번째+ 의 행이 통째 침묵 유실된다. 전 data source 를 순회·페이지네이션
    * 하고 page_id 로 디듀프(소스 간 동일 페이지 방어)한 뒤 합친다. 다중 소스면 1회 경고해
    * "소스별 탭 구분이 한 폴더로 병합"되는 점을 비침묵으로 알린다.
+   *
+   * @param from 이미 받은 이 DB — 주면 data source 목록을 다시 받지 않는다.
    */
-  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
-    const metas = await this.getDataSourceMetas(databaseId);
+  async queryAllDatabasePages(
+    databaseId: string,
+    filter?: unknown,
+    from?: DatabaseMeta,
+  ): Promise<PageObjectResponse[]> {
+    const metas =
+      from && notionIdsEqual(from.databaseId, databaseId)
+        ? dataSourcesToQuery(from)
+        : await this.getDataSourceMetas(databaseId);
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
@@ -631,9 +686,10 @@ export class NotionClient {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as { data_sources?: Array<{ id: string; name?: string }> };
-    const list = db.data_sources ?? [];
-    if (list.length === 0) return [{ id: databaseId, name: "" }];
-    return list.map((ds) => ({ id: ds.id, name: ds.name ?? "" }));
+    return dataSourcesToQuery({
+      databaseId,
+      dataSources: (db.data_sources ?? []).map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+    });
   }
 
   async archivePage(pageId: string): Promise<void> {
