@@ -166,6 +166,10 @@ describe("dry-run 은 세기만 한다", () => {
       expect(counts(await orchestrator.pull())).toEqual(counts(dry.result));
     });
 
+    /**
+     * deleteSync 가 켜져 있으면 볼트에서 지운 행은 되살리지 않는다 — Notion 에서도 지우라는 뜻이라
+     * 다음 push 가 지운다.
+     */
     it("지운 행 · 사라진 행 파일은 실제 pull 처럼 가른다 — 올리지 않은 편집이 있는 행은 지운 것으로 세지 않는다", async () => {
       const orchestrator = build({ ...FULL_EVERY_PULL, conflictStrategy: "manual" });
       const { a, b, c } = await seedRows(orchestrator);
@@ -181,13 +185,30 @@ describe("dry-run 은 세기만 한다", () => {
 
       const dry = await dryPull(orchestrator);
 
-      expect(counts(dry.result)).toEqual({ created: 0, updated: 0, deleted: 1, restored: 1 });
-      expect(dry.seen).toEqual([`delete ${b.path}`, `update ${c.path}`]);
+      expect(counts(dry.result)).toEqual({ created: 0, updated: 0, deleted: 1, restored: 0 });
+      expect(dry.seen).toEqual([`delete ${b.path}`]);
 
       const real = await orchestrator.pull();
       expect(counts(real)).toEqual(counts(dry.result));
       expect(real.conflicts).toHaveLength(1);
       expect(vault.read(a.path)).toBe("A 로컬 편집\n");
+      expect(vault.files.has(c.path)).toBe(false);
+    });
+
+    it("deleteSync 가 꺼져 있으면 사라진 행 파일을 되살린다고 세고 실제 pull 도 그렇게 한다", async () => {
+      const orchestrator = build();
+      const { c } = await seedRows(orchestrator);
+      vault.files.delete(c.path);
+      at("10:03:00");
+
+      const dry = await dryPull(orchestrator);
+
+      expect(counts(dry.result)).toEqual({ created: 0, updated: 0, deleted: 0, restored: 1 });
+      expect(dry.seen).toEqual([`update ${c.path}`]);
+
+      const real = await orchestrator.pull();
+      expect(counts(real)).toEqual(counts(dry.result));
+      expect(vault.read(c.path)).toContain("C 처음");
     });
 
     it("다른 DB 로 옮긴 행은 조회에 없어도 지운 것으로 세지 않는다", async () => {

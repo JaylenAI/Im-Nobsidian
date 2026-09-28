@@ -464,6 +464,8 @@ export class DatabaseSyncer {
    *    소실된다. 페이지 경로는 R0 으로 이미 마감한 계약인데 행 경로만 빠져 있었다 —
    *    오케스트레이터의 detectMissingLocalFiles 가 "행은 여기서 이미 같은 판정을 거친다"는
    *    (틀린) 전제로 db-row 를 제외해 두었기에 양쪽 어디에도 복원 경로가 없는 상태였다.
+   *    deleteSync 가 켜져 있으면 되살리지 않는다 — 지운 것은 Notion 에서도 지우라는 뜻이고, sync 는
+   *    pull 을 먼저 돌려 되살리면 뒤이은 push 가 지울 것을 잃는다(detectMissingLocalFiles 와 같다).
    */
   private async rowAction(
     dbConfig: DatabaseSyncConfig,
@@ -476,6 +478,7 @@ export class DatabaseSyncer {
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
     if (misplaced || this.remoteVerdict(record, page) !== "unchanged") return "pull";
+    if (this.config.sync.deleteSync) return "skip";
     return (await this.vaultFs.exists(record.obsidianPath)) ? "skip" : "restore";
   }
 
