@@ -19,7 +19,6 @@ import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { ChangeDetector } from "./change-detector.js";
-import type { ConversionPipeline } from "../converter/pipeline.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
@@ -72,10 +71,6 @@ import {
 } from "./local-moves.js";
 
 export class SyncOrchestrator {
-  private readonly changeDetector: ChangeDetector;
-  private readonly pipeline: ConversionPipeline;
-  private readonly blockConverter: BlockConverter;
-  private readonly imageHandler: ImageHandler;
   private readonly fileHandler: FileHandler;
   private readonly databaseSyncer: DatabaseSyncer;
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
@@ -131,12 +126,12 @@ export class SyncOrchestrator {
     this.observation = new RunObservation(stateDb, notionClient);
     this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
     this.detector = new RemoteDetector(config, stateDb, notionClient, this.observation);
-    this.changeDetector = new ChangeDetector(stateDb);
-    this.pipeline = createDefaultPipeline({
+    const changeDetector = new ChangeDetector(stateDb);
+    const pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
-    this.blockConverter = new BlockConverter();
-    this.imageHandler = new ImageHandler(
+    const blockConverter = new BlockConverter();
+    const imageHandler = new ImageHandler(
       vaultFs,
       config.paths.attachments,
       notionClient,
@@ -167,8 +162,8 @@ export class SyncOrchestrator {
       stateDb,
       notionClient,
       vaultFs,
-      this.pipeline,
-      this.imageHandler,
+      pipeline,
+      imageHandler,
       () => this.observation.context,
     );
     this.discovery = new DatabaseDiscovery(
@@ -214,15 +209,15 @@ export class SyncOrchestrator {
       this.drift,
       this.recovery,
     );
-    this.planner = new LocalPlanner(config, stateDb, vaultFs, this.changeDetector, this.placement);
+    this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
     this.puller = new PagePuller(
       config,
       stateDb,
       notionClient,
       vaultFs,
-      this.pipeline,
-      this.blockConverter,
-      this.imageHandler,
+      pipeline,
+      blockConverter,
+      imageHandler,
       propertyMapper,
       this.databaseSyncer,
       this.observation,
@@ -244,9 +239,9 @@ export class SyncOrchestrator {
       stateDb,
       notionClient,
       vaultFs,
-      this.pipeline,
-      this.blockConverter,
-      this.imageHandler,
+      pipeline,
+      blockConverter,
+      imageHandler,
       this.rowSchemas,
       this.observation,
       this.drift,
@@ -257,7 +252,7 @@ export class SyncOrchestrator {
       stateDb,
       vaultFs,
       notionClient,
-      this.changeDetector,
+      changeDetector,
       new ConflictResolver(stateDb, vaultFs),
       this.observation,
       this.planner,
@@ -266,7 +261,7 @@ export class SyncOrchestrator {
     );
     this.inspector = new ChangeInspector(stateDb, vaultFs, notionClient, this.planner, this.puller);
 
-    this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
+    blockConverter.initNotionToMd(this.notionClient.getInternalClient());
   }
 
   /** 도는 작업 — 없으면 null(S-09). 부른 쪽이 겹칠 요청을 미리 거를 때 쓴다. */
