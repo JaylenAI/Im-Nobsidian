@@ -44,36 +44,27 @@ export const syncCommand = new Command("sync")
       log(`  ${separator()}`);
       if (options.dryRun) log(dimText("  (dry-run mode)"));
 
-      // Pull phase
+      // 받기 · 올리기를 한 번에 돈다 — 플러그인 · watch 와 같은 sync 다. push 는 pull 이 방금 쓴 노트를
+      // 다시 올리지 않는다(F-j). 예전에는 pull · push 를 따로 불러 두 «sync» 가 따로 자랐다.
       log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
+      let pushShown = false;
+      const showPush = (): void => {
+        if (pushShown) return;
+        pushShown = true;
+        log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
+      };
 
-      const pullResult = await orchestrator.pull({
+      const result = await orchestrator.sync({
         dryRun: options.dryRun,
         onProgress: (_current, _total, item) => {
+          if (item.direction === "push") showPush();
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);
           log(`    ${icon} ${item.path} ${label}`);
         },
       });
-
-      if (pullResult.imageCount > 0) {
-        log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
-      }
-      if (pullResult.linkCount > 0) {
-        log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
-      }
-
-      // Push phase
-      log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
-
-      const pushResult = await orchestrator.push({
-        dryRun: options.dryRun,
-        onProgress: (_current, _total, item) => {
-          const icon = operationIcon(item.operation);
-          const label = operationLabel(item.operation);
-          log(`    ${icon} ${item.path} ${label}`);
-        },
-      });
+      showPush();
+      const { pull: pullResult, push: pushResult } = result;
 
       if (json) {
         const pull = pullJson(pullResult);
@@ -83,7 +74,7 @@ export const syncCommand = new Command("sync")
           push,
           churn: pull.churn + push.churn,
           conflicts: pull.conflicts,
-          durationMs: pullResult.duration + pushResult.duration,
+          durationMs: result.duration,
         });
         if (pullResult.failed.length + pushResult.failed.length > 0) process.exitCode = 1;
         return;
@@ -92,7 +83,6 @@ export const syncCommand = new Command("sync")
       // Summary
       // 예전엔 양쪽 failed 를 아예 찍지 않아, 전 건 실패한 sync 도 화면 끝은 초록 "complete"
       // 였다 — 실패를 헤더와 목록 양쪽에 드러낸다.
-      const totalDuration = pullResult.duration + pushResult.duration;
       const pullFailed = pullResult.failed.length;
       const pushFailed = pushResult.failed.length;
       console.log(`\n  ${completionHeader("Sync", pullFailed + pushFailed)}`);
@@ -102,15 +92,21 @@ export const syncCommand = new Command("sync")
           (pullResult.restored > 0 ? `  ${chalk.yellow(`${pullResult.restored} restored`)}` : "") +
           (pullFailed > 0 ? `  ${chalk.red(`${pullFailed} failed`)}` : ""),
       );
+      if (pullResult.imageCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
+      }
+      if (pullResult.linkCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
+      }
       console.log(
-        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted)}` +
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved)}` +
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
-      console.log(`  ${duration(totalDuration)}`);
+      console.log(`  ${duration(result.duration)}`);
 
-      if (pullResult.conflicts.length > 0) {
+      if (result.conflicts.length > 0) {
         console.log(
-          `\n  ${icons.conflict} ${chalk.magenta(`${pullResult.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
+          `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );
       }
 
