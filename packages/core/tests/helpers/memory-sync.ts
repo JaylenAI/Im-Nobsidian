@@ -328,6 +328,7 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       id: page.id,
       last_edited_time: page.lastEdited,
       last_edited_by: { id: page.lastEditedBy },
+      parentDatabaseId: page.parentType === "database" ? page.parent : null,
     })),
   );
   // 전체 대조(deleteSync)의 순회 — 루트 아래의 휴지통이 아닌 페이지. Notion 은 부모를 휴지통에

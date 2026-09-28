@@ -23,6 +23,8 @@ import type {
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import type { AbortLike } from "../utils/pool.js";
+import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 
@@ -110,6 +112,22 @@ export interface RecentPage {
   readonly id: string;
   readonly last_edited_time: string;
   readonly last_edited_by: { readonly id: string } | null;
+  /**
+   * DB 행이면 그 DB 의 id, 페이지면 null — 바뀐 행이 있는 DB 만 조회하는 데 쓴다(ADR-027). search 는 행의
+   * 부모를 `data_source_id` 로 주면서 DB id 를 함께 싣는다(실측 2026-09-28).
+   */
+  readonly parentDatabaseId: string | null;
+}
+
+/**
+ * {@link NotionClient.searchRecentDataSources} 의 한 줄 — 속성(스키마) · 제목이 바뀐 data source. 행을 고쳐도
+ * data source 의 수정 시각은 오르지 않는다(실측 2026-09-28) — 행의 변경은 {@link RecentPage} 로 본다.
+ */
+export interface RecentDataSource {
+  readonly id: string;
+  readonly last_edited_time: string;
+  /** 이 data source 가 속한 DB. 모르면 null. */
+  readonly databaseId: string | null;
 }
 
 /**
@@ -127,6 +145,13 @@ export interface DatabaseMeta {
    * source 가 없으면 DB 객체의 속성.
    */
   readonly properties: Readonly<Record<string, unknown>>;
+}
+
+/** 페이지가 DB 행이면 그 DB 의 id. */
+function parentDatabaseIdOf(page: { readonly parent?: unknown }): string | null {
+  const parent = page.parent as { type?: string; database_id?: string } | undefined;
+  if (parent?.type !== "data_source_id" && parent?.type !== "database_id") return null;
+  return parent.database_id ?? null;
 }
 
 /** 행을 조회할 data source — 없으면(레거시 · 단일) DB id 하나로 폴백해 늘 1개 이상. */
@@ -935,15 +960,16 @@ export class NotionClient {
   }
 
   /**
-   * `since` 뒤에 고친 페이지 — 최근 것부터. 누가 마지막으로 고쳤는지도 싣는다: 수정 시각은 분
-   * 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
+   * `since` 뒤에 고친 페이지 — 최근 것부터. DB 행도 온다. 누가 마지막으로 고쳤는지도 싣는다: 수정
+   * 시각은 분 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
    */
-  async searchRecentPages(since: string): Promise<RecentPage[]> {
+  async searchRecentPages(since: string, signal?: AbortLike): Promise<RecentPage[]> {
     const results: RecentPage[] = [];
     let cursor: string | undefined;
     const sinceDate = new Date(since);
 
     outer: do {
+      throwIfAborted(signal);
       const response = await this.withRateLimit(() =>
         this.client.search({
           filter: { property: "object", value: "page" },
@@ -962,6 +988,47 @@ export class NotionClient {
           id: p.id,
           last_edited_time: p.last_edited_time,
           last_edited_by: p.last_edited_by ? { id: p.last_edited_by.id } : null,
+          parentDatabaseId: parentDatabaseIdOf(p),
+        });
+      }
+
+      cursor = response.next_cursor ?? undefined;
+    } while (cursor);
+
+    return results;
+  }
+
+  /**
+   * `since` 뒤에 속성(스키마) · 제목이 바뀐 data source — 최근 것부터. 속성을 더하거나 이름을 바꾸면 행은
+   * 그대로라도 그 DB 의 `.base` 와 행의 frontmatter 가 바뀐다.
+   */
+  async searchRecentDataSources(since: string, signal?: AbortLike): Promise<RecentDataSource[]> {
+    const results: RecentDataSource[] = [];
+    let cursor: string | undefined;
+    const sinceDate = new Date(since);
+
+    outer: do {
+      throwIfAborted(signal);
+      const response = await this.withRateLimit(() =>
+        this.client.search({
+          filter: { property: "object", value: "data_source" },
+          sort: { direction: "descending", timestamp: "last_edited_time" },
+          start_cursor: cursor,
+          page_size: this.defaultPageSize,
+        }),
+      );
+
+      for (const result of response.results) {
+        const ds = result as unknown as {
+          id: string;
+          last_edited_time: string;
+          parent?: { database_id?: string };
+        };
+        if (new Date(ds.last_edited_time) <= sinceDate) break outer;
+        results.push({
+          id: ds.id,
+          last_edited_time: ds.last_edited_time,
+          databaseId: ds.parent?.database_id ?? null,
         });
       }
 
@@ -998,10 +1065,11 @@ export class NotionClient {
    *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
    *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
    *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
+   * @param opts.signal 취소되면 다음 페이지로 가기 전에 `OperationAbortedError` 로 멈춘다.
    */
   async getChildPagesRecursive(
     parentId: string,
-    opts?: { deadlineMs?: number },
+    opts?: { deadlineMs?: number; signal?: AbortLike },
   ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
@@ -1011,6 +1079,7 @@ export class NotionClient {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
+        throwIfAborted(opts?.signal);
         if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
           throw new DiscoveryTooLargeError(Date.now() - start, all);
         }
@@ -1040,10 +1109,11 @@ export class NotionClient {
   }
 
   /** 워크스페이스에서 통합에 공유된 모든 페이지를 bulk search 로 열거한다(100/요청). */
-  async searchAllPages(): Promise<PageObjectResponse[]> {
+  async searchAllPages(signal?: AbortLike): Promise<PageObjectResponse[]> {
     const pages: PageObjectResponse[] = [];
     let cursor: string | undefined;
     do {
+      throwIfAborted(signal);
       const r = await this.search({
         filter: { property: "object", value: "page" },
         startCursor: cursor,
@@ -1068,8 +1138,11 @@ export class NotionClient {
    *  - 휴지통/보관(in_trash/archived) 페이지 제외
    *  - root 자신은 제외(직접 순회도 root 의 *자식*부터 수집)
    */
-  async getPagesUnderRootViaSearch(rootId: string): Promise<PageObjectResponse[]> {
-    const all = await this.searchAllPages();
+  async getPagesUnderRootViaSearch(
+    rootId: string,
+    signal?: AbortLike,
+  ): Promise<PageObjectResponse[]> {
+    const all = await this.searchAllPages(signal);
     const rootN = normalizeNotionId(rootId);
     const byId = new Map<string, PageObjectResponse>();
     for (const p of all) byId.set(normalizeNotionId(p.id), p);
@@ -1159,6 +1232,7 @@ export class NotionClient {
 
     const out: PageObjectResponse[] = [];
     for (const p of all) {
+      throwIfAborted(signal);
       const pid = normalizeNotionId(p.id);
       if (pid === rootN) continue; // root 자신 제외
       const ptype = (p.parent as Parent).type;

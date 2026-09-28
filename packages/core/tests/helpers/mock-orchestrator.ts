@@ -200,6 +200,7 @@ export function createMockNotionClient() {
     movePage: vi.fn().mockResolvedValue({}),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
     searchRecentPages: vi.fn().mockResolvedValue([]),
+    searchRecentDataSources: vi.fn().mockResolvedValue([]),
     getBotUserId: vi.fn().mockResolvedValue(MOCK_BOT_USER_ID),
   };
 }
