@@ -131,6 +131,13 @@ export default class ImNobsidianPlugin extends Plugin {
       callback: () => this.executePull(),
     });
 
+    // 동기화는 평소 바뀐 노트만 확인한다 — Notion 에서 지운 노트를 주기를 기다리지 않고 반영한다(ADR-027).
+    this.addCommand({
+      id: "im-nobsidian-pull-full",
+      name: "Pull from Notion (전체 확인)",
+      callback: () => this.executePull({ force: true }),
+    });
+
     this.addCommand({
       id: "im-nobsidian-sync",
       name: "Sync (양방향)",
@@ -594,12 +601,13 @@ export default class ImNobsidianPlugin extends Plugin {
     await this.syncController.push();
   }
 
-  private async executePull(): Promise<void> {
+  /** Pull. `force` 는 원격을 전체 대조한다 — Notion 에서 지운 노트를 바로 반영한다. */
+  private async executePull({ force = false }: { readonly force?: boolean } = {}): Promise<void> {
     if (!this.syncController) {
       new Notice(this.notReadyReason());
       return;
     }
-    await this.syncController.pull();
+    await this.syncController.pull(undefined, { force });
   }
 
   private async executeSync(): Promise<void> {
@@ -626,9 +634,19 @@ export default class ImNobsidianPlugin extends Plugin {
       } else {
         lines.push("아직 동기화된 적 없음");
       }
+      lines.push(
+        status.lastFullScanAt
+          ? `마지막 전체 확인: ${new Date(status.lastFullScanAt).toLocaleString()}`
+          : "전체 확인: 아직 안 함",
+      );
 
       lines.push(`로컬 변경: ${status.localChanges.length}건`);
-      lines.push(`원격 변경: ${status.remoteChanges.length}건`);
+      // 바뀐 것만 찾았으면 Notion 에서 지운 노트는 아직 원격 변경에 없다 — 없다고 읽히지 않게 적는다.
+      lines.push(
+        status.remoteScan?.deletionsDeferred
+          ? `원격 변경: ${status.remoteChanges.length}건 (Notion 에서 지운 노트는 전체 확인 때 반영)`
+          : `원격 변경: ${status.remoteChanges.length}건`,
+      );
 
       if (status.pendingOperations > 0) {
         lines.push(`충돌/대기: ${status.pendingOperations}건`);

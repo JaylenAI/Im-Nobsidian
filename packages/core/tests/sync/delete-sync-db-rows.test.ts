@@ -37,11 +37,14 @@ function at(hms: string): void {
   vi.setSystemTime(new Date(`${DAY}T${hms}.000Z`));
 }
 
-/** 플러그인과 같은 설정 — 페이지 모드 · deleteSync 켬. */
+/**
+ * 플러그인과 같은 설정 — 페이지 모드 · deleteSync 켬. 전체 대조는 pull 마다 한다 — 이 시험은 전체
+ * 대조가 무엇을 지우는지 본다(ADR-027 — 이제 전체 대조는 주기마다다).
+ */
 const deleteSyncConfig = (databases: DatabaseSyncConfig[] = [ROW_DB]): Config =>
   createConfig({
     notion: { token: "ntn_test_token", rootPageId: "root-page-id", databases },
-    sync: { ...DEFAULT_CONFIG.sync, deleteSync: true },
+    sync: { ...DEFAULT_CONFIG.sync, deleteSync: true, fullReconcileInterval: 0 },
     advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
   });
 

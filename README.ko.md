@@ -165,7 +165,7 @@ nobsi watch    # 파일 변경 감시 + 자동 동기화
 | `nobsi resolve`           | 동기화 충돌 해결                                                      |
 | `nobsi watch`             | 파일 변경 감시 + 자동 동기화                                          |
 
-`push`, `pull`, `sync`는 `--dry-run` 옵션으로 적용 없이 변경사항을 미리 볼 수 있습니다. `pull --force`는 증분 감지를 건너뛰고 전체를 다시 스캔합니다 (Notion 검색 인덱싱 지연으로 누락된 페이지 복구).
+`push`, `pull`, `sync`는 `--dry-run` 옵션으로 적용 없이 변경사항을 미리 볼 수 있습니다. `pull --force`는 바뀐 것만 받는 대신 지금 전체 대조합니다 — Notion 에서 지운 것을 반영하고, Notion 검색 인덱싱 지연으로 누락된 페이지를 복구합니다 ([Pull](#pull-notion--obsidian) 참고).
 
 `verify`는 `status`와 다른 질문에 답합니다 — "낡은 게 있는가"가 아니라 **"빠진 게 있는가"**입니다.
 카운트가 아니라 **집합**을 두 축으로 대조합니다 — database 별 행, 그리고 root 하위 페이지. Notion에는
@@ -211,10 +211,19 @@ Obsidian 볼트                          Notion 워크스페이스
 
 ### Pull (Notion → Obsidian)
 
-1. 루트 페이지 하위 페이지를 재귀적으로 읽기
-2. `last_edited_time`으로 변경 감지
-3. Notion 블록 → 마크다운, 속성 → 프론트매터 변환
-4. 이미지를 첨부파일 폴더에 다운로드 (중복 제거)
+1. 지난 pull 뒤에 Notion 에서 바뀐 것 — 페이지 · DB 행 · 스키마가 바뀐 DB — 만 찾고, 그 DB 만 조회합니다.
+   바뀌지 않은 DB 는 요청을 쓰지 않습니다
+2. 한 시간에 한 번(`sync.fullReconcileInterval`)은 대신 **전체 대조**합니다 — 루트 아래 페이지와 DB 를 모두
+   읽습니다. Notion 에서 지웠거나 범위 밖으로 옮긴 페이지는 전체 대조만 알아봅니다(검색은 휴지통 페이지를 돌려주지
+   않습니다)
+3. `last_edited_time`으로 변경 감지
+4. Notion 블록 → 마크다운, 속성 → 프론트매터 변환
+5. 이미지를 첨부파일 폴더에 다운로드 (중복 제거)
+
+첫 pull · `pull --force` · 데이터베이스 모드는 늘 전체 대조합니다. `pull` · `sync` · `status` 는 어느 쪽으로
+훑었는지와 마지막 전체 대조 시각을 알려 줍니다. 바뀐 것만 찾았고 `sync.deleteSync` 가 켜져 있으면 Notion 에서 지운
+노트가 언제 반영되는지도 알려 줍니다. 플러그인은 사이드바에 마지막 전체 확인 시각을 보이고(마우스를 올리면 설명),
+명령 **Pull from Notion (전체 확인)** 이 지금 전체 대조합니다.
 
 ### 충돌 해결
 
@@ -282,6 +291,8 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "deleteSync": false, // true: 한쪽에서 지운 노트를 다른 쪽에서도 지움 (플러그인은 늘 켬)
+    "fullReconcileInterval": 3600, // Notion 전체 대조 주기(초) — 0 이면 pull 마다
   },
   "paths": {
     "include": ["**/*"], // 포함할 glob 패턴
@@ -352,6 +363,7 @@ await orchestrator.sync({ dryRun: false });
 | 노트 임베드 (`![[노트]]`) | Notion에 노트 트랜스클루전 개념이 없고, 커스텀 스킴 링크는 버림 | **원문 그대로 텍스트로 보존** — 동기화 후에도 옵시디언에서 임베드로 렌더링                                                                                                                                   |
 | 첫 Push 위키링크          | 신규 페이지 간 상호 참조가 첫 동기화 시 미해결 가능             | 다음 동기화에서 자동 해결                                                                                                                                                                                    |
 | 볼트 밖 페이지 링크       | 대상이 인테그레이션에 공유되지 않았거나 pull 대상이 아님        | 끊긴 위키링크 대신 **클릭 가능한 `https://www.notion.so/…` 링크**로 유지 — 페이지 id 가 살아 있어 그 페이지가 볼트에 들어오면 정식 위키링크가 됨. 각주 앵커(`#<blockId>`)도 살려서 해당 블록으로 정확히 이동 |
+| Notion 삭제·이름변경 늦음 | 검색은 휴지통 · DB 이름 변경을 못 봄 — 전체 대조만 봄           | `nobsi pull --force` 또는 플러그인 명령 **Pull from Notion (전체 확인)** 이 지금 전체 대조. 주기(`sync.fullReconcileInterval`, 기본 1시간)를 `0` 으로 두면 pull 마다                                         |
 
 ### 1회성 정규화
 

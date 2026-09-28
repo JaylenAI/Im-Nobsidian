@@ -78,6 +78,8 @@ describe("증분 pull 기준 시각 — 받지 못한 변경이 다음 조회에
     // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
     vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockImplementation(async () => [...remote.values()]);
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
     vi.spyOn(client, "searchRecentPages").mockImplementation(async (since: string) => {
       searchSince.push(since);
       return [...remote.values()]

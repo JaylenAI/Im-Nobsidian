@@ -32,6 +32,7 @@ export class SyncSidebarView extends ItemView {
   private stateUpdater: ((state: SyncState) => void) | null = null;
   private state: SyncState = {
     lastSyncAt: null,
+    lastFullScanAt: null,
     localChanges: [],
     folderMoves: [],
     remoteChanges: [],

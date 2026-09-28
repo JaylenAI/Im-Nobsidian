@@ -6,7 +6,7 @@ import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
 import { remoteBodyFingerprint } from "../../src/sync/remote-observation.js";
-import { settledObservation } from "../helpers/mock-orchestrator.js";
+import { mockDatabaseMeta, settledObservation } from "../helpers/mock-orchestrator.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -57,6 +57,7 @@ function createMockNotionClient() {
       Status: { id: "prop1", type: "select" },
       Tags: { id: "prop2", type: "multi_select" },
     }),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     getPage: vi.fn().mockResolvedValue({
       id: "page-1",
@@ -963,8 +964,15 @@ describe("DatabaseSyncer", () => {
       const result = await multiSyncer.pullAll();
 
       expect(mockNotionClient.getDatabaseSchema).toHaveBeenCalledTimes(2);
-      expect(mockNotionClient.getDatabaseSchema).toHaveBeenCalledWith("db-1");
-      expect(mockNotionClient.getDatabaseSchema).toHaveBeenCalledWith("db-2");
+      // 스키마는 행 조회 때 받은 그 DB 에서 읽는다 — DB 를 다시 받지 않는다(ADR-027).
+      expect(mockNotionClient.getDatabaseSchema).toHaveBeenCalledWith(
+        "db-1",
+        mockDatabaseMeta("db-1"),
+      );
+      expect(mockNotionClient.getDatabaseSchema).toHaveBeenCalledWith(
+        "db-2",
+        mockDatabaseMeta("db-2"),
+      );
       expect(result.created).toBe(0);
     });
 

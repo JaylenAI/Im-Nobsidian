@@ -19,6 +19,7 @@ import {
   dimText,
   completionHeader,
   failedCountText,
+  remoteScanLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 
@@ -92,6 +93,9 @@ export const pullCommand = new Command("pull")
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
       }
       console.log(`  ${duration(result.duration)}`);
+      if (result.remoteScan) {
+        for (const line of remoteScanLines(result.remoteScan)) console.log(`  ${line}`);
+      }
 
       if (result.conflicts.length > 0) {
         console.log(

@@ -27,6 +27,9 @@ export const ConfigSchema = z.object({
       .default("manual"),
     autoSync: z.boolean().default(false),
     autoSyncInterval: z.number().min(30).max(3600).default(300),
+    // 전체 대조 주기(초) — 그 사이의 pull 은 바뀐 페이지 · 행 · DB 만 받는다. 원격 삭제는 전체 대조가
+    // 반영한다. 0 이면 pull 마다 전체 대조(ADR-027). 최대 7일.
+    fullReconcileInterval: z.number().int().min(0).max(604800).default(3600),
     deleteSync: z.boolean().default(false),
     syncFiles: z.boolean().default(true),
   }),
@@ -92,6 +95,7 @@ export const DEFAULT_CONFIG: Config = {
     conflictStrategy: "manual",
     autoSync: false,
     autoSyncInterval: 300,
+    fullReconcileInterval: 3600,
     deleteSync: false,
     syncFiles: true,
   },

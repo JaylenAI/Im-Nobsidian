@@ -9,10 +9,12 @@ import {
   createMockNotionClient,
   createConfig,
   MOCK_REMOTE_EDITED,
+  mockDatabaseMeta,
   settledObservation,
   UNOBSERVED,
 } from "../helpers/mock-orchestrator.js";
 import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
+import type { DbBaseFiles } from "../../src/sync/db-base-files.js";
 
 /**
  * upsert 한 레코드를 getByPath 가 돌려주게 한다. push 는 폴더 페이지를 먼저 만들고 그 기록으로
@@ -1588,7 +1590,10 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
     await orch.pullDiscoveredDatabases([], [], []);
 
     // 정상 pull 경로 진입(행 소유 유지) — 스키마 로드가 그 증거.
-    expect(notion.getDatabaseSchema).toHaveBeenCalledWith("db-linked");
+    expect(notion.getDatabaseSchema).toHaveBeenCalledWith(
+      "db-linked",
+      mockDatabaseMeta("db-linked"),
+    );
     // linked 매핑은 기록하지 않고, 캐시 재기록이 있어도 컨테이너는 유지된다.
     expect(setMetaCalls.find(([k]) => k === "linked_dbs")).toBeUndefined();
     const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
@@ -1617,7 +1622,7 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
       parentPageId: string,
     ): Promise<{ kind: string; config?: { localFolder: string } }>;
     databaseSyncer: {
-      baseFileInfo: Map<string, { basePath: string; title: string }>;
+      baseFileInfo: Pick<DbBaseFiles, "get" | "set">;
       pullDatabase: (cfg: unknown) => Promise<unknown>;
     };
   };

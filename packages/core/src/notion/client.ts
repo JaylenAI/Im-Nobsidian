@@ -22,7 +22,9 @@ import type {
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import { getLogger } from "../utils/logger.js";
-import { normalizeNotionId } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import type { AbortLike } from "../utils/pool.js";
+import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 
@@ -110,6 +112,54 @@ export interface RecentPage {
   readonly id: string;
   readonly last_edited_time: string;
   readonly last_edited_by: { readonly id: string } | null;
+  /**
+   * DB 행이면 그 DB 의 id, 페이지면 null — 바뀐 행이 있는 DB 만 조회하는 데 쓴다(ADR-027). search 는 행의
+   * 부모를 `data_source_id` 로 주면서 DB id 를 함께 싣는다(실측 2026-09-28).
+   */
+  readonly parentDatabaseId: string | null;
+}
+
+/**
+ * {@link NotionClient.searchRecentDataSources} 의 한 줄 — 속성(스키마) · 제목이 바뀐 data source. 행을 고쳐도
+ * data source 의 수정 시각은 오르지 않는다(실측 2026-09-28) — 행의 변경은 {@link RecentPage} 로 본다.
+ */
+export interface RecentDataSource {
+  readonly id: string;
+  readonly last_edited_time: string;
+  /** 이 data source 가 속한 DB. 모르면 null. */
+  readonly databaseId: string | null;
+}
+
+/**
+ * DB 하나를 한 번 받은 것 — 행 조회 · 스키마 · 제목이 같은 것을 다시 받지 않고 이것을 읽는다. 예전에는 DB 하나를
+ * 받는 데 같은 DB 를 서너 번 다시 받아(요청 6~8회) 발견 DB 166개의 pull 이 분 단위였다.
+ */
+export interface DatabaseMeta {
+  readonly databaseId: string;
+  /** DB 제목. 없으면 "". */
+  readonly title: string;
+  /** 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. */
+  readonly dataSources: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /**
+   * 속성 스키마 — 읽을 수 있는 모든 data source 의 속성을 합친 것(이름이 겹치면 앞의 것). 읽을 수 있는 data
+   * source 가 없으면 DB 객체의 속성.
+   */
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
+/** 페이지가 DB 행이면 그 DB 의 id. */
+function parentDatabaseIdOf(page: { readonly parent?: unknown }): string | null {
+  const parent = page.parent as { type?: string; database_id?: string } | undefined;
+  if (parent?.type !== "data_source_id" && parent?.type !== "database_id") return null;
+  return parent.database_id ?? null;
+}
+
+/** 행을 조회할 data source — 없으면(레거시 · 단일) DB id 하나로 폴백해 늘 1개 이상. */
+function dataSourcesToQuery(
+  meta: Pick<DatabaseMeta, "databaseId" | "dataSources">,
+): Array<{ id: string; name: string }> {
+  if (meta.dataSources.length === 0) return [{ id: meta.databaseId, name: "" }];
+  return meta.dataSources.map((ds) => ({ id: ds.id, name: ds.name }));
 }
 
 export interface NotionClientOptions {
@@ -390,20 +440,22 @@ export class NotionClient {
   // ─── Database / DataSource ───
 
   /**
-   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다.
-   * - title: database 객체에 그대로 존재한다.
-   * - properties(스키마): 신 모델에선 data source 에 있으므로 1차 data source 를 조회해 채운다.
+   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다 — DB 1회 + data source 마다 1회.
+   * - title · data source 목록: database 객체에 그대로 존재한다.
+   * - properties(스키마): 신 모델에선 data source 에 있으므로 data source 를 조회해 채운다.
    *   data source 접근 불가(링크드 DB 등)면 database 객체의 properties 로 폴백한다(제목은 보존).
+   *
+   * 같은 DB 의 행 조회 · 스키마 · 제목은 받은 것({@link DatabaseMeta})을 넘겨 다시 받지 않는다.
    *
    * 폐기한 레거시 raw fetch(`GET /v1/databases/{id}`, Notion-Version 2022-06-28)는 신 모델로
    * 업그레이드된 다수 DB에 400 을 반환해 자동 발견 DB 가 통째 드롭(내용 손실)되던 원인이었다.
    * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
    */
-  private async fetchDatabaseModern(databaseId: string): Promise<Record<string, unknown>> {
+  async getDatabaseMeta(databaseId: string): Promise<DatabaseMeta> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
-      title?: unknown;
+      title?: Array<{ plain_text: string }>;
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
     };
@@ -432,14 +484,24 @@ export class NotionClient {
       }
     }
 
-    const properties: Record<string, unknown> = anyAccessible ? merged : (db.properties ?? {});
-    return { title: db.title, properties };
+    return {
+      databaseId,
+      title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
+      dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+      properties: anyAccessible ? merged : (db.properties ?? {}),
+    };
   }
 
-  async getDatabaseTitle(databaseId: string): Promise<string> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const titleArr = db.title as Array<{ plain_text: string }> | undefined;
-    return titleArr?.[0]?.plain_text ?? "";
+  /** `from` 이 이 DB 를 받은 것이면 그것을, 아니면 새로 받는다. */
+  private async metaOf(databaseId: string, from: DatabaseMeta | undefined): Promise<DatabaseMeta> {
+    return from && notionIdsEqual(from.databaseId, databaseId)
+      ? from
+      : this.getDatabaseMeta(databaseId);
+  }
+
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
+  async getDatabaseTitle(databaseId: string, from?: DatabaseMeta): Promise<string> {
+    return (await this.metaOf(databaseId, from)).title;
   }
 
   /**
@@ -510,12 +572,15 @@ export class NotionClient {
     }
   }
 
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
   async getDatabaseSchema(
     databaseId: string,
+    from?: DatabaseMeta,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
-    if (!properties) return {};
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      { id: string; type: string }
+    >;
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -530,11 +595,17 @@ export class NotionClient {
    * 옵션명이 아니라 **그룹명**(`To-do` 등)으로 오기 때문에 `groups[].optionIds` 를
    * 옵션명으로 되돌리려면 이 id 가 있어야 한다. 예전엔 여기서 id 를 떨궈,
    * 그룹으로 필터링된 뷰를 Bases 로 옮길 방법이 아예 없었다.
+   *
+   * @param from 이미 받은 이 DB — 주면 다시 받지 않는다.
    */
-  async getDatabaseSchemaFull(databaseId: string): Promise<Record<string, BasePropertySchema>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
-    if (!properties) return {};
+  async getDatabaseSchemaFull(
+    databaseId: string,
+    from?: DatabaseMeta,
+  ): Promise<Record<string, BasePropertySchema>> {
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
 
     const schema: Record<string, BasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
@@ -584,9 +655,18 @@ export class NotionClient {
    * 페이지네이션하면 2번째+ 의 행이 통째 침묵 유실된다. 전 data source 를 순회·페이지네이션
    * 하고 page_id 로 디듀프(소스 간 동일 페이지 방어)한 뒤 합친다. 다중 소스면 1회 경고해
    * "소스별 탭 구분이 한 폴더로 병합"되는 점을 비침묵으로 알린다.
+   *
+   * @param from 이미 받은 이 DB — 주면 data source 목록을 다시 받지 않는다.
    */
-  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
-    const metas = await this.getDataSourceMetas(databaseId);
+  async queryAllDatabasePages(
+    databaseId: string,
+    filter?: unknown,
+    from?: DatabaseMeta,
+  ): Promise<PageObjectResponse[]> {
+    const metas =
+      from && notionIdsEqual(from.databaseId, databaseId)
+        ? dataSourcesToQuery(from)
+        : await this.getDataSourceMetas(databaseId);
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
@@ -631,9 +711,10 @@ export class NotionClient {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as { data_sources?: Array<{ id: string; name?: string }> };
-    const list = db.data_sources ?? [];
-    if (list.length === 0) return [{ id: databaseId, name: "" }];
-    return list.map((ds) => ({ id: ds.id, name: ds.name ?? "" }));
+    return dataSourcesToQuery({
+      databaseId,
+      dataSources: (db.data_sources ?? []).map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+    });
   }
 
   async archivePage(pageId: string): Promise<void> {
@@ -879,15 +960,16 @@ export class NotionClient {
   }
 
   /**
-   * `since` 뒤에 고친 페이지 — 최근 것부터. 누가 마지막으로 고쳤는지도 싣는다: 수정 시각은 분
-   * 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
+   * `since` 뒤에 고친 페이지 — 최근 것부터. DB 행도 온다. 누가 마지막으로 고쳤는지도 싣는다: 수정
+   * 시각은 분 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
    */
-  async searchRecentPages(since: string): Promise<RecentPage[]> {
+  async searchRecentPages(since: string, signal?: AbortLike): Promise<RecentPage[]> {
     const results: RecentPage[] = [];
     let cursor: string | undefined;
     const sinceDate = new Date(since);
 
     outer: do {
+      throwIfAborted(signal);
       const response = await this.withRateLimit(() =>
         this.client.search({
           filter: { property: "object", value: "page" },
@@ -906,6 +988,47 @@ export class NotionClient {
           id: p.id,
           last_edited_time: p.last_edited_time,
           last_edited_by: p.last_edited_by ? { id: p.last_edited_by.id } : null,
+          parentDatabaseId: parentDatabaseIdOf(p),
+        });
+      }
+
+      cursor = response.next_cursor ?? undefined;
+    } while (cursor);
+
+    return results;
+  }
+
+  /**
+   * `since` 뒤에 속성(스키마) · 제목이 바뀐 data source — 최근 것부터. 속성을 더하거나 이름을 바꾸면 행은
+   * 그대로라도 그 DB 의 `.base` 와 행의 frontmatter 가 바뀐다.
+   */
+  async searchRecentDataSources(since: string, signal?: AbortLike): Promise<RecentDataSource[]> {
+    const results: RecentDataSource[] = [];
+    let cursor: string | undefined;
+    const sinceDate = new Date(since);
+
+    outer: do {
+      throwIfAborted(signal);
+      const response = await this.withRateLimit(() =>
+        this.client.search({
+          filter: { property: "object", value: "data_source" },
+          sort: { direction: "descending", timestamp: "last_edited_time" },
+          start_cursor: cursor,
+          page_size: this.defaultPageSize,
+        }),
+      );
+
+      for (const result of response.results) {
+        const ds = result as unknown as {
+          id: string;
+          last_edited_time: string;
+          parent?: { database_id?: string };
+        };
+        if (new Date(ds.last_edited_time) <= sinceDate) break outer;
+        results.push({
+          id: ds.id,
+          last_edited_time: ds.last_edited_time,
+          databaseId: ds.parent?.database_id ?? null,
         });
       }
 
@@ -942,10 +1065,11 @@ export class NotionClient {
    *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
    *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
    *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
+   * @param opts.signal 취소되면 다음 페이지로 가기 전에 `OperationAbortedError` 로 멈춘다.
    */
   async getChildPagesRecursive(
     parentId: string,
-    opts?: { deadlineMs?: number },
+    opts?: { deadlineMs?: number; signal?: AbortLike },
   ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
@@ -955,6 +1079,7 @@ export class NotionClient {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
+        throwIfAborted(opts?.signal);
         if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
           throw new DiscoveryTooLargeError(Date.now() - start, all);
         }
@@ -984,10 +1109,11 @@ export class NotionClient {
   }
 
   /** 워크스페이스에서 통합에 공유된 모든 페이지를 bulk search 로 열거한다(100/요청). */
-  async searchAllPages(): Promise<PageObjectResponse[]> {
+  async searchAllPages(signal?: AbortLike): Promise<PageObjectResponse[]> {
     const pages: PageObjectResponse[] = [];
     let cursor: string | undefined;
     do {
+      throwIfAborted(signal);
       const r = await this.search({
         filter: { property: "object", value: "page" },
         startCursor: cursor,
@@ -1012,8 +1138,11 @@ export class NotionClient {
    *  - 휴지통/보관(in_trash/archived) 페이지 제외
    *  - root 자신은 제외(직접 순회도 root 의 *자식*부터 수집)
    */
-  async getPagesUnderRootViaSearch(rootId: string): Promise<PageObjectResponse[]> {
-    const all = await this.searchAllPages();
+  async getPagesUnderRootViaSearch(
+    rootId: string,
+    signal?: AbortLike,
+  ): Promise<PageObjectResponse[]> {
+    const all = await this.searchAllPages(signal);
     const rootN = normalizeNotionId(rootId);
     const byId = new Map<string, PageObjectResponse>();
     for (const p of all) byId.set(normalizeNotionId(p.id), p);
@@ -1103,6 +1232,7 @@ export class NotionClient {
 
     const out: PageObjectResponse[] = [];
     for (const p of all) {
+      throwIfAborted(signal);
       const pid = normalizeNotionId(p.id);
       if (pid === rootN) continue; // root 자신 제외
       const ptype = (p.parent as Parent).type;

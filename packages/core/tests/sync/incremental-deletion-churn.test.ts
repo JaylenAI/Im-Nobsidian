@@ -11,8 +11,9 @@
  *    new Date()(로컬 시각)를 notionLastEdited 로 저장해 다음 pull 이 가짜 modified 로 오인.
  *
  * 수정:
- *  - I10: deleteSync 가 켜지면 증분 fast-path 를 쓰지 않고 전체 스캔으로 우회 → 사라진
- *    추적 페이지를 삭제로 전파.
+ *  - I10: 원격 삭제는 전체 대조(서브트리 순회)가 가른다 → 사라진 추적 페이지를 삭제로 전파.
+ *    예전에는 deleteSync 가 켜지면 pull 마다 전체 대조했다. 이제는 주기마다 한다(ADR-027) —
+ *    전체 대조를 한 적이 없으면(업그레이드 직후 포함) 다음 pull 이 한다.
  *  - I5: pullUpdate 가 remoteContent===localContent 면 파일을 건드리지 않고 메타만 정렬
  *    (unchanged) → updated 0. pushUpdate 는 Notion 권위 last_edited 를 저장.
  *
@@ -68,10 +69,20 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
 
   // ── I10: 증분/전체 스캔 라우팅 + 삭제 전파 ──────────────────────────────────
 
-  it("deleteSync OFF: 증분 fast-path(searchRecentPages) 를 탄다", async () => {
+  /** 방금 전체 대조를 마친 상태 — 주기 안이라 이번 pull 은 증분이다(ADR-027). */
+  function justReconciled(): void {
+    const lastFullPull = new Date().toISOString();
     stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
+      k === "last_pull_at"
+        ? "2026-05-01T00:00:00.000Z"
+        : k === "last_full_pull_at"
+          ? lastFullPull
+          : null,
     );
+  }
+
+  it("전체 대조를 마친 지 주기 안이면 증분(searchRecentPages)을 탄다", async () => {
+    justReconciled();
     stateDb.getAll.mockReturnValue([{ notionPageId: "p1", obsidianPath: "a.md" }]);
 
     const orch = makeOrchestrator(
@@ -82,7 +93,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     expect(notion.searchRecentPages).toHaveBeenCalled();
   });
 
-  it("deleteSync ON: 증분을 우회해 전체 스캔(서브트리 순회)으로 삭제를 전파한다", async () => {
+  it("전체 대조를 한 적이 없으면(업그레이드 직후) 전체 스캔(서브트리 순회)으로 삭제를 전파한다", async () => {
     const gone: MutableRecord = {
       id: 1,
       obsidianPath: "gone.md",
@@ -142,9 +153,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
       localFileSize: 9,
       baseSnapshot: null,
     };
-    stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
-    );
+    justReconciled();
     stateDb.getAll.mockReturnValue([rec]);
     stateDb.getByNotionId.mockImplementation((id: string) => (id === "page-id-123" ? rec : null));
     // upsert 결과를 레코드에 반영해 두 번째 pull 이 갱신된 상태를 본다.

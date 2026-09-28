@@ -1,5 +1,5 @@
 import { setLogger } from "@im-nobsidian/core";
-import type { FailedOperation, PullResult, PushResult } from "@im-nobsidian/core";
+import type { FailedOperation, PullResult, PushResult, RemoteScanInfo } from "@im-nobsidian/core";
 
 /**
  * `--json` 모드 — 자동화(E2E 하니스 · CI)가 사람용 문구를 grep 하지 않고 결과를 읽게 한다.
@@ -40,6 +40,8 @@ export interface PullJson {
   readonly files: number;
   readonly links: number;
   readonly durationMs: number;
+  /** 원격을 얼마나 훑었나 — 바뀐 것만 찾았으면 Notion 에서 지운 것은 다음 전체 대조가 반영한다. */
+  readonly remoteScan: RemoteScanInfo | null;
 }
 
 export function pushJson(result: PushResult): PushJson {
@@ -68,6 +70,7 @@ export function pullJson(result: PullResult): PullJson {
     files: result.fileCount,
     links: result.linkCount,
     durationMs: result.duration,
+    remoteScan: result.remoteScan ?? null,
   };
 }
 

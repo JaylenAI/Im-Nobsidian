@@ -88,8 +88,14 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
 
   /** 원격은 멀쩡한데 로컬 파일만 사라진 상황을 만든다. */
   function stageMissingFile(record: MutableRecord): void {
+    // 방금 전체 대조를 마쳤다 — 이번 pull 은 바뀐 것만 본다(ADR-027).
+    const lastFullPull = new Date().toISOString();
     stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
+      k === "last_pull_at"
+        ? "2026-05-01T00:00:00.000Z"
+        : k === "last_full_pull_at"
+          ? lastFullPull
+          : null,
     );
     stateDb.getAll.mockReturnValue([record]);
     stateDb.getByPath.mockImplementation((path: string) =>

@@ -18,6 +18,7 @@ import {
   dimText,
   completionHeader,
   failedItem,
+  remoteScanLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
 
@@ -103,6 +104,9 @@ export const syncCommand = new Command("sync")
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);
+      if (pullResult.remoteScan) {
+        for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
+      }
 
       if (result.conflicts.length > 0) {
         console.log(

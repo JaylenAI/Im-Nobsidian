@@ -14,6 +14,8 @@ export type {
   PullResult,
   SyncResult,
   StatusResult,
+  RemoteScanInfo,
+  FullScanReason,
   FolderMoveChange,
   ChangeDiff,
   FailedOperation,

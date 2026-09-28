@@ -135,6 +135,36 @@ describe("sync command", () => {
     spy.mockRestore();
   });
 
+  it("받기가 바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 적는다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+      remoteScan: {
+        kind: "incremental",
+        lastFullAt: "2026-09-28T01:05:00.000Z",
+        nextFullAt: null,
+        deletionsDeferred: true,
+        skippedDatabases: 1,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runSync();
+    const lines = spy.mock.calls.map((call) => String(call[0]));
+    spy.mockRestore();
+    expect(lines).toContain("  Changes-only scan · 1 unchanged database skipped");
+    expect(lines).toContain(
+      "  Deletions in Notion apply at the next pull (full scan due) — or run nobsi pull --force",
+    );
+  });
+
   it("충돌 발생 시 안내", async () => {
     mockPull.mockResolvedValueOnce({
       created: 0,

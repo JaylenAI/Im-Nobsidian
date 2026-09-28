@@ -17,6 +17,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { mockDatabaseMeta } from "../helpers/mock-orchestrator.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -76,6 +77,7 @@ function createMockNotionClient() {
     getDatabaseViewsConfig: vi
       .fn()
       .mockResolvedValue({ databaseId: "db-123", lastSynced: "", views: [] }),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     getPage: vi.fn().mockResolvedValue({ id: "p", last_edited_time: "2026-07-27T00:00:00.000Z" }),
     getPageMarkdown: vi

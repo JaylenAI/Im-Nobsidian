@@ -49,12 +49,20 @@ describe("D 원격에서 지운 노트의 올리지 않은 로컬 편집", () =>
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
 
-  /** 플러그인과 같은 설정 — 페이지 모드 · deleteSync 켬 · 전략만 바꾼다. */
+  /**
+   * 플러그인과 같은 설정 — 페이지 모드 · deleteSync 켬 · 전략만 바꾼다. 전체 대조는 pull 마다 한다 —
+   * 원격에서 지운 노트는 전체 대조로만 보인다(ADR-027 — 이제 전체 대조는 주기마다다).
+   */
   const build = (strategy: ConflictStrategy): SyncOrchestrator =>
     new SyncOrchestrator(
       createConfig({
         notion: { token: "ntn_test_token", rootPageId: "root-page-id", databases: [ROW_DB] },
-        sync: { ...DEFAULT_CONFIG.sync, deleteSync: true, conflictStrategy: strategy },
+        sync: {
+          ...DEFAULT_CONFIG.sync,
+          deleteSync: true,
+          conflictStrategy: strategy,
+          fullReconcileInterval: 0,
+        },
         advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
       }),
       db,

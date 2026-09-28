@@ -135,6 +135,40 @@ export interface PushResult {
   readonly duration: number;
 }
 
+/**
+ * 전체 대조를 한 이유 (ADR-027).
+ *
+ * - `first` — 받은 것이 없다(처음 pull · 빈 상태 DB).
+ * - `forced` — `--force`.
+ * - `database-mode` — 루트가 DB 하나라 그 DB 조회가 곧 전체 대조다.
+ * - `every-pull` — 주기(`sync.fullReconcileInterval`)가 0 이다.
+ * - `due` — 주기가 됐다.
+ */
+export type FullScanReason = "first" | "forced" | "database-mode" | "every-pull" | "due";
+
+/**
+ * 이번 실행이 원격을 얼마나 훑었나 (ADR-027). `incremental` 은 지난 pull 뒤에 바뀐 페이지 · 행 · DB 만
+ * 찾았다는 뜻이다 — 원격에서 지운 것 · 범위 밖으로 옮긴 것은 다음 전체 대조가 반영한다. 화면은 이것으로
+ * 그 사실과 다음 전체 대조 시각을 알린다.
+ */
+export interface RemoteScanInfo {
+  readonly kind: "full" | "incremental";
+  /** 전체 대조한 이유 — `full` 에만. */
+  readonly reason?: FullScanReason;
+  /** 마지막으로 전체 대조를 마친 때. 한 번도 없으면 null. */
+  readonly lastFullAt: string | null;
+  /** 다음 전체 대조 예정 시각 — `incremental` 에만. null 이면 이미 때가 됐다(다음 pull 이 한다). */
+  readonly nextFullAt: string | null;
+  /**
+   * Notion 에서 지운 노트가 아직 볼트에 반영되지 않았을 수 있나 — 바뀐 것만 찾았고 원격 삭제를 볼트에
+   * 반영하는 설정(`sync.deleteSync`)일 때. 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
+   * 볼트에 반영하지 않으므로 늘 false 다.
+   */
+  readonly deletionsDeferred: boolean;
+  /** 바뀐 것이 보이지 않아 조회하지 않은 DB 수 — pull 에만. */
+  readonly skippedDatabases?: number;
+}
+
 export interface PullResult {
   readonly created: number;
   readonly updated: number;
@@ -152,6 +186,8 @@ export interface PullResult {
   readonly imageCount: number;
   readonly fileCount: number;
   readonly linkCount: number;
+  /** 원격을 얼마나 훑었나. 원격을 보지 않은 실행(받기 방향이 아님 · 취소)에는 없다. */
+  readonly remoteScan?: RemoteScanInfo;
 }
 
 export interface SyncResult {
@@ -192,6 +228,13 @@ export interface StatusResult {
   readonly conflictRecords: SyncRecord[];
   readonly pendingOperations: number;
   readonly lastSyncAt: string | null;
+  /**
+   * 마지막으로 원격을 전체 대조한 pull 이 시작한 때. 한 번도 없으면 null. Notion 에서 지운 노트는 전체
+   * 대조 때 볼트에 반영된다 — 화면은 이것으로 그때를 알린다 (ADR-027).
+   */
+  readonly lastFullScanAt: string | null;
+  /** 원격을 얼마나 훑었나. 로컬만 본 확인(`statusLocal`)에는 없다. */
+  readonly remoteScan?: RemoteScanInfo;
 }
 
 export interface FailedOperation {

@@ -39,7 +39,8 @@ describe("변경 하나의 두 글 — 줄 비교", () => {
     orchestrator = new SyncOrchestrator(
       createConfig({
         notion: { token: "ntn_test_token", rootPageId: "root-page-id", databases: [] },
-        sync: { ...DEFAULT_CONFIG.sync, deleteSync: true },
+        // 전체 대조를 pull · 상태 확인마다 — 원격에서 지운 페이지는 전체 대조로만 보인다(ADR-027).
+        sync: { ...DEFAULT_CONFIG.sync, deleteSync: true, fullReconcileInterval: 0 },
         advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
       }),
       db,

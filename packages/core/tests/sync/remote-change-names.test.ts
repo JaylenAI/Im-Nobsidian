@@ -31,11 +31,17 @@ describe("원격 변경은 경로 · 제목을 싣는다", () => {
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
 
+  // deleteSync 를 켠 시험은 원격에서 지운 노트를 본다 — 전체 대조를 pull 마다 한다(ADR-027 — 이제
+  // 전체 대조는 주기마다다. 예전에는 deleteSync 면 늘 전체 대조였다).
   const build = (deleteSync: boolean): SyncOrchestrator =>
     new SyncOrchestrator(
       createConfig({
         notion: { token: "ntn_test_token", rootPageId: "root-page-id", databases: [] },
-        sync: { ...DEFAULT_CONFIG.sync, deleteSync },
+        sync: {
+          ...DEFAULT_CONFIG.sync,
+          deleteSync,
+          fullReconcileInterval: deleteSync ? 0 : DEFAULT_CONFIG.sync.fullReconcileInterval,
+        },
         advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
       }),
       db,
