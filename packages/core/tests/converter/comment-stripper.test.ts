@@ -48,6 +48,13 @@ describe("CommentStripper (F26)", () => {
     expect(result.content).toBe(content);
   });
 
+  it("코드 속 ```bash 줄 뒤의 %% 도 코드다 — 마크다운 예제 코드(S-25)", () => {
+    const content = "````markdown\n예시:\n```bash\n%%코드 속 주석%%\n```\n끝\n````";
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
   it("pull 방향에서는 무동작", () => {
     const content = "%%주석%%";
     const result = run(content, "pull");

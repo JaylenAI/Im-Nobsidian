@@ -32,11 +32,61 @@ export function computeAnchor(content: string, idx: number): string {
   return "";
 }
 
+/** 코드 펜스를 여는 줄의 펜스 — 닫는 줄을 가리는 데 쓴다. */
+export interface CodeFenceOpening {
+  /** 펜스 문자 — 백틱 또는 물결. */
+  readonly char: string;
+  /** 펜스 길이 — 닫는 펜스는 이보다 짧을 수 없다. */
+  readonly length: number;
+  /** 들여쓰기 폭({@link indentWidth}). */
+  readonly indent: number;
+}
+
+/** 여는 펜스 — 정보 문자열은 줄 끝 `\r`(CRLF 노트) 앞까지. */
+const FENCE_OPEN_RE = /^([\t ]*)(`{3,}|~{3,})(.*)\r?$/;
+/** 닫는 펜스 — 뒤에는 공백만. CRLF 노트의 줄 끝 `\r` 도 공백이다. */
+const FENCE_CLOSE_RE = /^([\t ]*)(`{3,}|~{3,})[\t ]*\r?$/;
+
+/** 줄머리 들여쓰기의 폭 — 탭은 다음 4칸 경계까지 민다(CommonMark). */
+export function indentWidth(indent: string): number {
+  let width = 0;
+  for (const ch of indent) width = ch === "\t" ? width + 4 - (width % 4) : width + 1;
+  return width;
+}
+
+/**
+ * 코드 펜스를 여는 줄인가 — 들여쓰기 · 펜스 · 정보 문자열. 인용(`>`) 안의 펜스는 보지 않는다.
+ * 백틱 펜스의 정보 문자열에 백틱이 있으면 펜스가 아니라 인라인 코드다(CommonMark).
+ */
+export function openCodeFence(line: string): CodeFenceOpening | null {
+  const m = FENCE_OPEN_RE.exec(line);
+  if (!m) return null;
+  const bar = m[2]!;
+  if (bar[0] === "`" && m[3]!.includes("`")) return null;
+  return { char: bar[0]!, length: bar.length, indent: indentWidth(m[1]!) };
+}
+
+/**
+ * `open` 을 닫는 줄인가 — 같은 문자 · 여는 것 이상의 길이 · 뒤에 공백만 · 여는 쪽보다 3칸 넘게
+ * 들여쓰지 않은 줄이다(CommonMark). 코드 속의 ```bash 같은 줄 · 여는 것보다 짧은 펜스 ·
+ * 더 깊이 들여쓴 펜스는 코드다 — 이것들에서 닫으면 코드 뒷부분을 본문으로 다룬다(S-25).
+ */
+export function closesCodeFence(line: string, open: CodeFenceOpening): boolean {
+  const m = FENCE_CLOSE_RE.exec(line);
+  return (
+    m !== null &&
+    m[2]![0] === open.char &&
+    m[2]!.length >= open.length &&
+    indentWidth(m[1]!) <= open.indent + 3
+  );
+}
+
 /**
  * 펜스 코드블록(``` / ~~~) 바깥 영역에만 변환 함수를 적용한다.
  *
  * 주석 제거·각주 이스케이프·이스케이프 정규화 같은 텍스트 치환이 코드블록
- * 내부 리터럴을 오염시키지 않도록 하는 공용 가드.
+ * 내부 리터럴을 오염시키지 않도록 하는 공용 가드. 닫는 줄은 {@link closesCodeFence} 로
+ * 가린다 — 마크다운 예제를 담은 코드의 ```bash 줄에서 구간을 닫으면 그 뒤 코드가 치환된다.
  */
 export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string {
   const lines = content.split("\n");
@@ -44,7 +94,7 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
   let buffer: string[] = [];
   let bufferStart = 0;
   let pos = 0;
-  let fence: string | null = null;
+  let fence: CodeFenceOpening | null = null;
 
   const flush = () => {
     if (buffer.length > 0) {
@@ -54,16 +104,14 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
   };
 
   for (const line of lines) {
-    const fenceMatch = line.match(/^\s*(```+|~~~+)/);
-    if (fence === null && fenceMatch) {
+    const opening: CodeFenceOpening | null = fence === null ? openCodeFence(line) : null;
+    if (opening) {
       flush();
-      fence = fenceMatch[1]![0]!.repeat(3);
+      fence = opening;
       out.push(line);
     } else if (fence !== null) {
       out.push(line);
-      if (fenceMatch && fenceMatch[1]!.startsWith(fence)) {
-        fence = null;
-      }
+      if (closesCodeFence(line, fence)) fence = null;
     } else {
       // 펜스가 끊기면 flush 되므로 버퍼는 항상 연속 구간 — 조각 내 offset 이 원문과 1:1.
       if (buffer.length === 0) bufferStart = pos;

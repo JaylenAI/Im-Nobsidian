@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND } from "../../constants/markers.js";
 import { CLAMPED_INDENT } from "../callout-indent.js";
+import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../utils/md-regions.js";
 
 /**
  * 블록 간격 정규화(D1) — Notion markdown export 는 블록 사이 빈 줄이 없는 압축형이라
@@ -52,7 +53,6 @@ const QUOTE_RE = /^[ \t]*>/;
 const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;
 const FOOTNOTE_DEF_RE = /^\[\^[^\]]+\]:/;
-const FENCE_RE = /^[ \t]*(```+|~~~+)/;
 const MATH_FENCE_RE = /^[ \t]*\$\$\s*$/;
 const BRAND_MARKER_LINE_RE = new RegExp(`^[ \\t]*%%\\s*${MARKER_BRAND}:`);
 
@@ -85,8 +85,9 @@ export function respace(content: string, sourceCompact?: boolean): string {
 
   // 블록 그룹핑
   const blocks: { kind: BlockKind; lines: string[] }[] = [];
-  let fence: "code" | "math" | null = null;
-  let fenceToken = "";
+  // 열린 펜스 — 코드면 여는 펜스, 수식이면 "math". 코드 안의 ```bash · 짧은 펜스 줄에서 닫으면
+  // 그 뒤 코드를 문단으로 보고 빈 줄을 끼운다(S-25). 닫는 줄은 Obsidian 이 읽는 대로 가린다.
+  let fence: CodeFenceOpening | "math" | null = null;
   // 압축 export 의 빈 줄은 <empty-block/>(명시적 빈 문단) 유래 — 사용자가 의도한
   // 블록 경계다. 다음 줄이 같은 종류라도 직전 블록에 붙이지 않는다(리스트/인용 재병합 방지).
   let boundary = false;
@@ -104,10 +105,7 @@ export function respace(content: string, sourceCompact?: boolean): string {
 
     if (fence !== null) {
       appendToLast(raw);
-      const closed =
-        fence === "code"
-          ? FENCE_RE.test(raw) && raw.trim().startsWith(fenceToken)
-          : MATH_FENCE_RE.test(raw);
+      const closed = fence === "math" ? MATH_FENCE_RE.test(raw) : closesCodeFence(raw, fence);
       if (closed) fence = null;
       continue;
     }
@@ -119,11 +117,10 @@ export function respace(content: string, sourceCompact?: boolean): string {
     const atBoundary = boundary;
     boundary = false;
 
-    const fenceMatch = raw.match(FENCE_RE);
-    if (fenceMatch) {
+    const opening = openCodeFence(raw);
+    if (opening) {
       push("fence", raw);
-      fence = "code";
-      fenceToken = fenceMatch[1]![0]!.repeat(3);
+      fence = opening;
       continue;
     }
     if (MATH_FENCE_RE.test(raw)) {
@@ -210,22 +207,17 @@ function hasBlankOutsideFences(lines: string[], start: number): boolean {
   let end = lines.length - 1;
   while (end >= start && lines[end]!.trim() === "") end--;
 
-  let fence: "code" | "math" | null = null;
-  let fenceToken = "";
+  let fence: CodeFenceOpening | "math" | null = null;
   for (let i = start; i <= end; i++) {
     const raw = lines[i]!;
     if (fence !== null) {
-      const closed =
-        fence === "code"
-          ? FENCE_RE.test(raw) && raw.trim().startsWith(fenceToken)
-          : MATH_FENCE_RE.test(raw);
+      const closed = fence === "math" ? MATH_FENCE_RE.test(raw) : closesCodeFence(raw, fence);
       if (closed) fence = null;
       continue;
     }
-    const fenceMatch = raw.match(FENCE_RE);
-    if (fenceMatch) {
-      fence = "code";
-      fenceToken = fenceMatch[1]![0]!.repeat(3);
+    const opening = openCodeFence(raw);
+    if (opening) {
+      fence = opening;
       continue;
     }
     if (MATH_FENCE_RE.test(raw)) {

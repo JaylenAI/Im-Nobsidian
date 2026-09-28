@@ -48,6 +48,38 @@ describe("respace — Notion 압축형 export 블록 간격 복원 (D1/D4)", () 
     expect(respace(`앞\n${fence}\n뒤\n`)).toBe(`앞\n\n${fence}\n\n뒤\n`);
   });
 
+  // S-25 — 닫는 줄은 Obsidian 이 읽는 대로 가린다. 코드 속 ```bash · 짧은 펜스 줄에서 닫으면
+  // 그 뒤 코드를 문단으로 보고 빈 줄을 끼워 코드가 바뀐다.
+  describe("코드 속 펜스 모양 줄은 블록을 닫지 않는다(S-25)", () => {
+    it("여는 것보다 짧은 펜스 · 정보 문자열이 붙은 펜스", () => {
+      const fence = "````markdown\n예시:\n```bash\necho hi\n```\n끝\n````";
+      expect(respace(`문단\n${fence}\n다음 문단`, true)).toBe(`문단\n\n${fence}\n\n다음 문단`);
+    });
+
+    it("같은 길이라도 정보 문자열이 붙은 줄", () => {
+      const fence = "```js\n```python\nx\n```";
+      expect(respace(`앞\n${fence}\n뒤`, true)).toBe(`앞\n\n${fence}\n\n뒤`);
+    });
+
+    it("여는 쪽보다 3칸 넘게 들여쓴 펜스", () => {
+      const fence = "```\n    ```\n안\n```";
+      expect(respace(`앞\n${fence}\n뒤`, true)).toBe(`앞\n\n${fence}\n\n뒤`);
+    });
+
+    it("물결 펜스는 백틱 줄로 닫히지 않는다", () => {
+      const fence = "~~~\n```\n안\n~~~";
+      expect(respace(`앞\n${fence}\n뒤`, true)).toBe(`앞\n\n${fence}\n\n뒤`);
+    });
+
+    it("정보 문자열에 백틱이 있는 줄은 펜스가 아니다 — 인라인 코드", () => {
+      expect(respace("```js``` 는 인라인\n다음", true)).toBe("```js``` 는 인라인\n\n다음");
+    });
+
+    it("압축형 판정도 같은 기준으로 코드 속 빈 줄을 세지 않는다", () => {
+      expect(isCompactExport("앞\n````md\n```\n\n안\n````\n뒤\n")).toBe(true);
+    });
+  });
+
   it("수식 펜스($$) 내부는 건드리지 않는다", () => {
     const math = "$$\nE = mc^2\n$$";
     expect(respace(`앞\n${math}\n`)).toBe(`앞\n\n${math}\n`);
