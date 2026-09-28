@@ -795,9 +795,15 @@ describe("SyncOrchestrator", () => {
         )
         .mockResolvedValue(3);
       vi.spyOn(
-        orchestrator as unknown as {
-          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
-        },
+        (
+          orchestrator as unknown as {
+            discovery: {
+              pullDiscoveredDatabases: (
+                w: string[],
+              ) => Promise<{ created: number; updated: number }>;
+            };
+          }
+        ).discovery,
         "pullDiscoveredDatabases",
       ).mockImplementation(async (wp: string[]) => {
         wp.push("databases/wiki/Row.md");
@@ -820,9 +826,15 @@ describe("SyncOrchestrator", () => {
         )
         .mockResolvedValue(0);
       vi.spyOn(
-        orchestrator as unknown as {
-          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
-        },
+        (
+          orchestrator as unknown as {
+            discovery: {
+              pullDiscoveredDatabases: (
+                w: string[],
+              ) => Promise<{ created: number; updated: number }>;
+            };
+          }
+        ).discovery,
         "pullDiscoveredDatabases",
       ).mockResolvedValue({ created: 0, updated: 0 });
 
@@ -1353,7 +1365,7 @@ describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결�
       notion as any,
       createMockVaultFs(),
     );
-    return { orch: orch as unknown as Privates, notion, sdb };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb };
   }
 
   describe("layer 1 — 발견 단계 선제 차단 (buildDiscoveredDbConfig)", () => {
@@ -1506,7 +1518,7 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
       notion as any,
       createMockVaultFs(),
     );
-    return { orch: orch as unknown as Privates, notion, sdb };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb };
   }
 
   it("발견 단계: queryable=true 라도 ds 소유자가 다르면 kind=linked 로 원본 id 전달", async () => {
@@ -1632,7 +1644,7 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
     const sdb = stateDb ?? createMockStateDb();
     const vaultFs = createMockVaultFs();
     const orch = new SyncOrchestrator(createConfig(), sdb as any, notion as any, vaultFs);
-    return { orch: orch as unknown as Privates, notion, sdb, vaultFs };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb, vaultFs };
   }
 
   it("재작성은 DatabaseSyncer 가 실제 기록한 .base 경로(baseFileInfo)를 쓴다 — 폴더명 추측 금지", async () => {
