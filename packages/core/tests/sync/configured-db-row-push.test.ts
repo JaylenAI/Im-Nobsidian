@@ -293,7 +293,7 @@ describe("설정 DB · DB 모드의 행 push 는 행 경로를 탄다", () => {
       vault.rename("Tasks/Row.md", "Tasks/Renamed.md");
       const result = await orchestrator.push();
 
-      expect(result).toMatchObject({ created: 0, updated: 1, failed: [] });
+      expect(result).toMatchObject({ created: 0, updated: 0, moved: 1, failed: [] });
       expect(row.title).toBe("Renamed");
       expect(rowsIn(DB_ID)).toHaveLength(1);
       expect(db.getByPath("Tasks/Renamed.md")!.notionPageId).toBe(row.id);

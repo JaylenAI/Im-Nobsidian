@@ -97,7 +97,10 @@ export interface Conflict {
 
 export interface ProgressItem {
   readonly path: string;
-  readonly operation: "create" | "update" | "delete";
+  /** `move` — 볼트에서 옮기거나 이름을 바꾼 노트 · 폴더를 Notion 에 반영한다(push). */
+  readonly operation: "create" | "update" | "delete" | "move";
+  /** 받기(pull) · 올리기(push) 중 어느 쪽 항목인가 — `sync` 만 채운다. 둘을 한 번에 돌려 가를 수 없다. */
+  readonly direction?: "pull" | "push";
 }
 
 export type ProgressCallback = (current: number, total: number, item: ProgressItem) => void;
@@ -123,6 +126,11 @@ export interface PushResult {
   readonly created: number;
   readonly updated: number;
   readonly deleted: number;
+  /**
+   * Notion 에 옮김을 반영한 노트 · 폴더 수. 옮기며 본문도 고친 노트도 여기서만 센다 — updated 와
+   * 겹치지 않는다. 예전에는 updated 에 섞여, 이름만 바꾼 노트도 「수정」 으로 보였다.
+   */
+  readonly moved: number;
   readonly failed: FailedOperation[];
   readonly duration: number;
 }
@@ -153,8 +161,16 @@ export interface SyncResult {
   readonly duration: number;
 }
 
+/** 볼트에서 옮기거나 이름을 바꾼 폴더 — 다음 push 가 Notion 에 반영한다(DB 폴더는 볼트 쪽만). */
+export interface FolderMoveChange {
+  readonly from: string;
+  readonly to: string;
+}
+
 export interface StatusResult {
   readonly localChanges: LocalChange[];
+  /** 옮긴 폴더. 그 안의 노트는 `localChanges` 에 `moved` 로 따로 있다. */
+  readonly folderMoves: readonly FolderMoveChange[];
   readonly remoteChanges: RemoteChange[];
   readonly conflicts: Conflict[];
   readonly conflictRecords: SyncRecord[];

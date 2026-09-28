@@ -1,9 +1,11 @@
 import chalk from "chalk";
+import type { ProgressItem } from "@im-nobsidian/core";
 
 export const icons = {
   create: chalk.green("+"),
   update: chalk.yellow("~"),
   delete: chalk.red("-"),
+  move: chalk.cyan("→"),
   success: chalk.green("✓"),
   fail: chalk.red("✕"),
   conflict: chalk.magenta("!"),
@@ -21,11 +23,11 @@ export function separator(width = 35): string {
   return chalk.dim("━".repeat(width));
 }
 
-export function operationIcon(op: "create" | "update" | "delete"): string {
+export function operationIcon(op: ProgressItem["operation"]): string {
   return icons[op];
 }
 
-export function operationLabel(op: "create" | "update" | "delete"): string {
+export function operationLabel(op: ProgressItem["operation"]): string {
   switch (op) {
     case "create":
       return chalk.green("created");
@@ -33,13 +35,17 @@ export function operationLabel(op: "create" | "update" | "delete"): string {
       return chalk.yellow("updated");
     case "delete":
       return chalk.red("deleted");
+    case "move":
+      return chalk.cyan("moved");
   }
 }
 
-export function summary(created: number, updated: number, deleted: number): string {
+/** 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). */
+export function summary(created: number, updated: number, deleted: number, moved = 0): string {
   const parts: string[] = [];
   if (created > 0) parts.push(chalk.green(`${created} created`));
   if (updated > 0) parts.push(chalk.yellow(`${updated} updated`));
+  if (moved > 0) parts.push(chalk.cyan(`${moved} moved`));
   if (deleted > 0) parts.push(chalk.red(`${deleted} deleted`));
   if (parts.length === 0) parts.push(chalk.dim("no changes"));
   return parts.join("  ");

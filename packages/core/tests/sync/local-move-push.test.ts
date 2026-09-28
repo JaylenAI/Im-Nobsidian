@@ -105,7 +105,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     vault.rename("notes/Old.md", "notes/New.md");
     const result = await orchestrator.push();
 
-    expect(result).toMatchObject({ created: 0, updated: 1, deleted: 0, failed: [] });
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 1, deleted: 0, failed: [] });
     expect(db.getByPath("notes/Old.md")).toBeNull();
     expect(db.getByPath("notes/New.md")!.notionPageId).toBe(pageId);
     expect(notion.pages.get(pageId)!.title).toBe("New");
@@ -126,7 +126,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     vault.rename("A/x.md", "B/x.md");
     const result = await orchestrator.push();
 
-    expect(result).toMatchObject({ created: 0, updated: 1, failed: [] });
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 1, failed: [] });
     const page = pageOf("B/x.md");
     expect(notion.client.movePage).toHaveBeenCalledWith(page.id, folderB);
     expect(page.parent).toBe(folderB);
@@ -179,7 +179,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     orchestrator.recordLocalRename("notes/Draft.md", "notes/Final.md", "file");
     const result = await orchestrator.push();
 
-    expect(result).toMatchObject({ created: 0, updated: 1, deleted: 0, failed: [] });
+    expect(result).toMatchObject({ created: 0, updated: 0, moved: 1, deleted: 0, failed: [] });
     expect(db.getByPath("notes/Final.md")!.notionPageId).toBe(pageId);
     expect(notion.pages.get(pageId)!.title).toBe("Final");
     expect(notion.client.replacePageMarkdown).toHaveBeenCalledTimes(1);
@@ -240,7 +240,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     vault.rename("Tasks/Old Row.md", "Tasks/New Row.md");
     const result = await orchestrator.push();
 
-    expect(result).toMatchObject({ updated: 1, failed: [] });
+    expect(result).toMatchObject({ updated: 0, moved: 1, failed: [] });
     expect(row.title).toBe("New Row");
     expect(row.parent).toBe(DB_ID);
     expect(notion.client.movePage).not.toHaveBeenCalled();
@@ -322,15 +322,21 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     expect(writeCalls()).toBe(0);
 
     const real = await orchestrator.push();
-    expect({ created: dry.created, updated: dry.updated, deleted: dry.deleted }).toEqual({
+    expect({
+      created: dry.created,
+      updated: dry.updated,
+      deleted: dry.deleted,
+      moved: dry.moved,
+    }).toEqual({
       created: real.created,
       updated: real.updated,
       deleted: real.deleted,
+      moved: real.moved,
     });
     expect(dry.failed.map((f) => [f.path, f.operation, f.error])).toEqual(
       real.failed.map((f) => [f.path, f.operation, f.error]),
     );
-    expect(real.updated).toBe(1);
+    expect(real).toMatchObject({ updated: 0, moved: 1 });
   });
 
   it("옮기다 끊기면 다음 push 가 같은 이동을 다시 해 마친다", async () => {
@@ -365,7 +371,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     );
     const second = await orchestrator.push();
 
-    expect(second).toMatchObject({ updated: 1, failed: [] });
+    expect(second).toMatchObject({ updated: 0, moved: 1, failed: [] });
     expect(page.parent).toBe(folderB);
     expect(page.title).toBe("x2");
     expect(incompleteOps()).toEqual([]);
@@ -408,7 +414,7 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
 
     // 앞선 WAL 재개(recoverInterruptedPushOps)가 이동 WAL 을 지우지 않아야 반영된다.
     const pushed = await orchestrator.push();
-    expect(pushed).toMatchObject({ created: 0, updated: 1, failed: [] });
+    expect(pushed).toMatchObject({ created: 0, updated: 0, moved: 1, failed: [] });
     expect(notion.pages.get(pageId)!.title).toBe("Final");
     expect(incompleteOps()).toEqual([]);
   });

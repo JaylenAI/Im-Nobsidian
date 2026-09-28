@@ -14,6 +14,7 @@ export type {
   PullResult,
   SyncResult,
   StatusResult,
+  FolderMoveChange,
   FailedOperation,
   SyncDirection,
   FileType,

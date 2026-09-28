@@ -237,7 +237,7 @@ describe("폴더 노트가 폴더의 페이지다 (S-15)", () => {
     vault.write("N/N.md", "# N\n");
     const result = await orchestrator.push();
 
-    expect(result).toMatchObject({ created: 1, updated: 1, failed: [] });
+    expect(result).toMatchObject({ created: 1, updated: 0, moved: 1, failed: [] });
     expect(notion.client.createPage).not.toHaveBeenCalled();
     expect(db.getByPath("N")).toBeNull();
     const n = pageOf("N/N.md");
