@@ -541,29 +541,39 @@ describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
     // NFM 에서 진짜 토글은 **항상** `<details>` 로 오므로 이 변환은 순수 오탐이었고,
     // 열 0 `<details>` 를 주입해 바깥 컨테이너의 dedent 기준까지 0 으로 무너뜨렸다
     // (`협업 Project & Guide.md`: 토글 본문 78줄이 통째로 코드로 오파싱).
-    const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n");
+    //
+    // 입력은 Notion 이 실제로 내보내는 비대칭 모양이다 — 코드 줄은 열 0(실측, S-24). 리스트로 남기고
+    // 코드 줄만 펜스 깊이로 맞추는 것이 정답이다.
+    const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "echo nested", "\t\t```"].join("\n");
     const out = notionEnhancedToObsidian(notion);
 
     expect(out).not.toContain("[!toggle]");
-    expect(out).toBe(notion); // 손대지 않는 것이 정답
+    expect(out).toBe(
+      ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n"),
+    );
     expect(fencesBalanced(out)).toBe(true);
-    expect(obsidianToNotionEnhanced(out)).toBe(notion); // 무손실 왕복
+    expect(obsidianToNotionEnhanced(out)).toBe(out); // 무손실 왕복
   });
 
-  it("중첩 백틱 예제도 원문 그대로 왕복한다", () => {
+  it("중첩 백틱 예제도 코드 그대로 왕복한다", () => {
+    // Notion 이 내보내는 비대칭 모양 — 코드 줄은 열 0 이다(실측, S-24).
     const notion = [
       "- 마크다운 예제",
       "\t````markdown",
-      "\t```js",
-      "\tconst x = 1;",
-      "\t```",
+      "```js",
+      "const x = 1;",
+      "```",
       "\t````",
     ].join("\n");
     const out = notionEnhancedToObsidian(notion);
 
     expect(fencesBalanced(out)).toBe(true);
-    expect(out).toBe(notion);
-    expect(obsidianToNotionEnhanced(out)).toBe(notion);
+    expect(out).toBe(
+      ["- 마크다운 예제", "\t````markdown", "\t```js", "\tconst x = 1;", "\t```", "\t````"].join(
+        "\n",
+      ),
+    );
+    expect(obsidianToNotionEnhanced(out)).toBe(out);
   });
 
   // 실데이터(Empowerment/Blog) 회귀 가드 — Notion 실제 출력의 **비대칭 들여쓰기**:

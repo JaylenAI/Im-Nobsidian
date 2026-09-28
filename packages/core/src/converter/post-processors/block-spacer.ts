@@ -9,12 +9,14 @@ import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../uti
  * (2) 인접 콜아웃이 하나의 콜아웃으로 합쳐진다. 재push 시 실제 병합이 일어나는
  * ping-pong 손상이므로 표준 마크다운 간격(블록 사이 빈 줄 1개)으로 되살린다.
  *
- * 묶음 유지(내부 빈 줄 없음): 리스트 연속(중첩·들여쓴 하위 내용 포함), 인용 연속
+ * 묶음 유지(내부 빈 줄 없음): 리스트 연속(중첩·들여쓴 하위 내용 · 자식 코드블록 포함), 인용 연속
  * (단 `> [!type]` 콜아웃 시작은 새 블록), 표 행 연속, 각주 정의(`[^n]:`) 연속,
  * 펜스(``` ~~~ $$) 내부, 브랜드 보존 마커 줄(직전 블록에 부착 — 앵커 인접성 유지).
  *
  * 들여쓰기 정규화(D4): export 는 리스트 중첩에 탭을 쓴다. Obsidian/작성 관행의
- * 4-space 로 통일한다(펜스 내부 제외).
+ * 4-space 로 통일한다(펜스 내부 제외). 리스트 자식 코드블록은 변환기가 코드 줄까지 펜스
+ * 깊이로 맞춰 둔 구조 탭(`alignNestedCodeBodies`)만 같은 폭으로 편다 — 리스트 줄은 4칸, 펜스는
+ * 탭이면 Notion 이 코드를 다른 항목에 붙인다(실측). 코드 속 탭은 코드라 그대로 둔다.
  *
  * 압축형 감지: 1차 신호는 `metadata.notionExportCompact` — orchestrator 가 **원시**
  * export(enhanced 변환 전)에서 `isCompactExport` 로 판정해 전달한다. 원시 export 는
@@ -59,6 +61,9 @@ const BRAND_MARKER_LINE_RE = new RegExp(`^[ \\t]*%%\\s*${MARKER_BRAND}:`);
 /** 리스트 항목 아래 들여쓴 연속 내용(자식 문단 등)인지 — 리스트 블록에 묶는다. */
 const INDENTED_CONTINUATION_RE = /^(?:\t| {2,})\S/;
 
+/** 들여쓴 줄 — 리스트 자식 코드블록의 펜스는 깊이에 따라 탭이 여럿이다. */
+const INDENTED_RE = /^(?:\t| {2})/;
+
 export function respace(content: string, sourceCompact?: boolean): string {
   // 원시 export 가 간격 있는 문서였다면(blocks-API 폴백 등) 무동작
   if (sourceCompact === false) return content;
@@ -88,6 +93,8 @@ export function respace(content: string, sourceCompact?: boolean): string {
   // 열린 펜스 — 코드면 여는 펜스, 수식이면 "math". 코드 안의 ```bash · 짧은 펜스 줄에서 닫으면
   // 그 뒤 코드를 문단으로 보고 빈 줄을 끼운다(S-25). 닫는 줄은 Obsidian 이 읽는 대로 가린다.
   let fence: CodeFenceOpening | "math" | null = null;
+  // 리스트 자식 코드블록의 구조 탭 — 펜스 · 코드 줄머리에서 이만큼을 4칸씩으로 편다(D4).
+  let fenceLead = "";
   // 압축 export 의 빈 줄은 <empty-block/>(명시적 빈 문단) 유래 — 사용자가 의도한
   // 블록 경계다. 다음 줄이 같은 종류라도 직전 블록에 붙이지 않는다(리스트/인용 재병합 방지).
   let boundary = false;
@@ -104,9 +111,12 @@ export function respace(content: string, sourceCompact?: boolean): string {
     const raw = lines[i]!;
 
     if (fence !== null) {
-      appendToLast(raw);
+      appendToLast(expandLead(raw, fenceLead));
       const closed = fence === "math" ? MATH_FENCE_RE.test(raw) : closesCodeFence(raw, fence);
-      if (closed) fence = null;
+      if (closed) {
+        fence = null;
+        fenceLead = "";
+      }
       continue;
     }
 
@@ -119,7 +129,12 @@ export function respace(content: string, sourceCompact?: boolean): string {
 
     const opening = openCodeFence(raw);
     if (opening) {
-      push("fence", raw);
+      // 리스트 항목의 자식 코드블록은 항목에 붙인다(S-24) — 들여쓴 자식 문단과 같다. 따로 떼면
+      // 앞뒤에 빈 줄이 들어가 목록 전체가 느슨한 목록(항목마다 문단 간격)이 된다.
+      const inList = last()?.kind === "list" && INDENTED_RE.test(raw);
+      fenceLead = inList ? alignedLead(lines, i, opening) : "";
+      if (inList) appendToLast(expandLead(raw, fenceLead));
+      else push("fence", raw);
       fence = opening;
       continue;
     }
@@ -190,6 +205,28 @@ export function respace(content: string, sourceCompact?: boolean): string {
   const tail = content.endsWith("\n") ? "\n" : "";
   if (head.length === 0) return body + tail;
   return `${head.join("\n")}\n\n${body}${tail}`;
+}
+
+/**
+ * 리스트 자식 코드블록의 구조 탭 — 여는 펜스의 선행 탭이 닫는 펜스와 모든 코드 줄 머리에도
+ * 있으면(`alignNestedCodeBodies` 가 맞춘 블록) 그 탭, 아니면 "" 다. 맞춰지지 않은 블록의 탭은
+ * 코드의 것일 수 있어 펴지 않는다. 닫히지 않은 블록도 펴지 않는다.
+ */
+function alignedLead(lines: readonly string[], open: number, opening: CodeFenceOpening): string {
+  const lead = /^\t+/.exec(lines[open]!)?.[0] ?? "";
+  if (lead === "") return "";
+  for (let j = open + 1; j < lines.length; j++) {
+    const line = lines[j]!;
+    if (closesCodeFence(line, opening)) return line.startsWith(lead) ? lead : "";
+    if (line !== "" && !line.startsWith(lead)) return "";
+  }
+  return "";
+}
+
+/** 줄머리의 구조 탭(`lead`)을 탭 하나에 4칸씩으로 편다 — 리스트 줄의 D4 와 같은 폭. */
+function expandLead(line: string, lead: string): string {
+  if (lead === "" || !line.startsWith(lead)) return line;
+  return "    ".repeat(lead.length) + line.slice(lead.length);
 }
 
 /**

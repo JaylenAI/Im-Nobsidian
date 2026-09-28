@@ -3,6 +3,7 @@
  * 한곳에서 보장한다. 토글/콜아웃/칼럼(enhanced-md-converter)과 토글 헤딩
  * (toggle-heading)이 같은 기준을 공유해야 왕복이 수렴한다.
  */
+import { indentWidth } from "../utils/md-regions.js";
 
 /**
  * 컨테이너 본문 한 줄의 성격. 들여쓰기를 **붙일 때도 뗄 때도** 같은 기준으로 갈라야
@@ -261,6 +262,69 @@ function widenAmbiguousFences(
     if (b.close !== null) widened.set(b.close, bar);
   }
   return widened;
+}
+
+/** 목록 항목 줄 — 글머리표 · 번호 · 할 일(`- [ ]`). */
+const LIST_ITEM_LINE_RE = /^[\t ]*(?:[-*+]|\d{1,9}[.)])[\t ]/;
+
+/**
+ * 목록 안 코드블록의 코드 줄을 경계 펜스와 같은 깊이로 들여쓴다(S-24).
+ *
+ * NFM 은 목록 항목의 자식 코드블록도 컨테이너 안처럼 경계 펜스만 탭으로 들여쓰고 코드는 열 0 에
+ * 둔다(비대칭 들여쓰기). 그대로 두면 Obsidian 은 열 0 의 코드 줄에서 목록을 끝낸다 — 목록 안에는
+ * 빈 코드블록이, 목록 밖에는 코드가 문단으로 보인다(실볼트 12노트 · 37곳). 코드 줄에 펜스와 같은
+ * 탭을 입히면 CommonMark 가 그 폭만큼 떼고 읽으므로 코드는 그대로다.
+ *
+ * 고치는 것은 **부모가 목록 항목인** 코드블록뿐이다 — 들여쓰기가 더 얕은 가장 가까운 앞 줄이 목록
+ * 항목이면 그 항목의 자식이다. 문단 · 인용의 자식은 Obsidian 에 들여쓸 자리가 없어 둔다. 닫는
+ * 펜스의 들여쓰기가 여는 펜스와 다르면 어디까지가 코드인지 확신할 수 없어 둔다.
+ *
+ * 코드 줄이 경계와 같은 깊이가 되면 코드 속 ``` 줄을 닫는 줄과 가를 근거가 사라진다 — 경계 펜스를
+ * 코드 속 어떤 펜스보다 길게 넓힌다({@link widenAmbiguousFences}).
+ *
+ * 탭 기준 구조 들여쓰기로 부모를 가리므로 콜아웃 들여쓰기 클램프보다 **먼저** 부른다. 원시 export
+ * 에 한 번만 쓴다 — 코드 줄마다 탭을 한 겹 더하므로 두 번 쓰면 코드가 바뀐다.
+ */
+export function alignNestedCodeBodies(text: string): string {
+  const lines = text.split("\n");
+  const blocks = scanContainerBlocks(lines);
+  const kinds = kindsOf(lines, blocks);
+  const widened = widenAmbiguousFences(lines, blocks);
+
+  for (const b of blocks) {
+    if (b.type !== "code" || !b.fence || b.close === null) continue;
+    const indent = b.fence.indent;
+    if (!/^\t+$/.test(indent) || matchFence(lines[b.close]!)?.indent !== indent) continue;
+    if (!isListItemChild(lines, kinds, b.open)) continue;
+
+    for (let j = b.open + 1; j < b.close; j++) {
+      if (lines[j] !== "") lines[j] = indent + lines[j]!;
+    }
+    const bar = widened.get(b.open);
+    if (bar === undefined) continue;
+    lines[b.open] = lines[b.open]!.replace(/`{3,}|~{3,}/, bar);
+    lines[b.close] = lines[b.close]!.replace(/`{3,}|~{3,}/, bar);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 여는 펜스의 부모가 목록 항목인가 — 들여쓰기가 더 얕은 가장 가까운 앞 줄을 본다. 빈 줄과 다른
+ * 코드블록 · 표의 안쪽 줄은 건너뛴다 — 비대칭 들여쓰기로 열 0 에 있어 부모처럼 보인다.
+ */
+function isListItemChild(
+  lines: readonly string[],
+  kinds: readonly ContainerLineKind[],
+  open: number,
+): boolean {
+  const width = indentWidth(/^[\t ]*/.exec(lines[open]!)![0]);
+  for (let i = open - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.trim() === "" || kinds[i] === "code") continue;
+    if (indentWidth(/^[\t ]*/.exec(line)![0]) >= width) continue;
+    return LIST_ITEM_LINE_RE.test(line);
+  }
+  return false;
 }
 
 /**

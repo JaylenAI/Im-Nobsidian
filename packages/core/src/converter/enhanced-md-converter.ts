@@ -25,6 +25,7 @@ import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
+  alignNestedCodeBodies,
   codeInteriorRanges,
   dedentContainerBody,
   indentContainerBody,
@@ -89,6 +90,8 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = unescapeBrackets(result);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
+  // 목록 안 코드의 코드 줄을 펜스 깊이로 — 탭 기준 들여쓰기로 부모 목록 항목을 가린다(S-24).
+  result = alignNestedCodeBodies(result);
   // 들여쓰기 클램프가 가장 마지막 — 위 변환기들은 모두 탭 기준 구조 들여쓰기를 전제로
   // 경계를 판정한다. 먼저 누르면 그 판정이 어긋난다(callout-indent 주석 참조).
   result = clampCalloutIndent(result);
