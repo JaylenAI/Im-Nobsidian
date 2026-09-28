@@ -4,6 +4,7 @@ import { Command } from "commander";
 const { mockStatus, mockGetAll } = vi.hoisted(() => ({
   mockStatus: vi.fn().mockResolvedValue({
     localChanges: [],
+    folderMoves: [],
     remoteChanges: [],
     conflicts: [],
     conflictRecords: [],
@@ -73,6 +74,7 @@ describe("status command", () => {
   it("마지막 동기화 시간 표시", async () => {
     mockStatus.mockResolvedValueOnce({
       localChanges: [],
+      folderMoves: [],
       remoteChanges: [],
       conflicts: [],
       conflictRecords: [],
@@ -92,6 +94,7 @@ describe("status command", () => {
         { path: "mod.md", type: "modified", currentHash: "b", previousHash: "c" },
         { path: "del.md", type: "deleted", currentHash: "d", previousHash: "e" },
       ],
+      folderMoves: [],
       remoteChanges: [],
       conflicts: [],
       conflictRecords: [],
@@ -110,6 +113,7 @@ describe("status command", () => {
   it("충돌 표시", async () => {
     mockStatus.mockResolvedValueOnce({
       localChanges: [],
+      folderMoves: [],
       remoteChanges: [],
       conflicts: [],
       conflictRecords: [{ obsidianPath: "conflict.md" }],
@@ -123,9 +127,108 @@ describe("status command", () => {
     spy.mockRestore();
   });
 
+  it("옮긴 폴더 · 노트와 지운 노트를 경로로 보이고, 옮긴 노트는 synced 로 세지 않는다", async () => {
+    mockGetAll.mockReturnValueOnce([
+      { obsidianPath: "A/x.md", status: "synced" },
+      { obsidianPath: "gone.md", status: "synced" },
+      { obsidianPath: "keep.md", status: "synced" },
+    ]);
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [
+        { path: "B/x.md", type: "moved", movedFrom: "A/x.md", currentHash: "a", previousHash: "a" },
+        { path: "gone.md", type: "deleted", currentHash: "", previousHash: "b" },
+      ],
+      folderMoves: [{ from: "A", to: "B" }],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus();
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContainEqual(expect.stringMatching(/synced\s+1$/));
+    expect(lines).toContainEqual(expect.stringMatching(/moved\s+1$/));
+    expect(lines).toContainEqual(expect.stringContaining("A/ → B/ (folder)"));
+    expect(lines).toContainEqual(expect.stringContaining("A/x.md → B/x.md"));
+    expect(lines).toContainEqual(expect.stringContaining("Deleted files:"));
+    expect(lines).toContainEqual(expect.stringMatching(/- gone\.md$/));
+    expect(lines).not.toContainEqual(expect.stringContaining("Everything up to date"));
+  });
+
+  it("폴더 이동만 있어도 변경으로 본다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [{ from: "Tasks", to: "Work/Tasks" }],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus();
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContainEqual(expect.stringContaining("Tasks/ → Work/Tasks/ (folder)"));
+    expect(lines).not.toContainEqual(expect.stringContaining("Everything up to date"));
+  });
+
+  it("--full 의 원격 변경은 노트 경로나 Notion 제목으로 보이고, 옮김은 따로 센다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [],
+      remoteChanges: [
+        {
+          pageId: "11111111-aaaa",
+          type: "modified",
+          path: "notes/a.md",
+          lastEdited: "",
+          previousEdited: null,
+        },
+        {
+          pageId: "22222222-bbbb",
+          type: "created",
+          title: "Fresh",
+          lastEdited: "",
+          previousEdited: null,
+        },
+        {
+          pageId: "33333333-cccc",
+          type: "moved",
+          path: "b.md",
+          lastEdited: "",
+          previousEdited: null,
+        },
+        { pageId: "44444444-dddd", type: "deleted", lastEdited: "", previousEdited: null },
+      ],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus("--full");
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContainEqual(expect.stringMatching(/~ notes\/a\.md \(modified\)$/));
+    expect(lines).toContainEqual(expect.stringMatching(/\+ Fresh \(new page\) \(created\)$/));
+    expect(lines).toContainEqual(expect.stringMatching(/→ b\.md \(moved\)$/));
+    expect(lines).toContainEqual(expect.stringMatching(/moved\s+1$/));
+    // 경로도 제목도 없을 때만 내부 id 를 줄여 보인다.
+    expect(lines).toContainEqual(expect.stringMatching(/- 44444444\.\.\. \(deleted\)$/));
+    expect(lines.join("\n")).not.toContain("11111111");
+  });
+
   it("--full 은 Notion 에서 지운 노트의 충돌을 따로 적는다", async () => {
     mockStatus.mockResolvedValueOnce({
       localChanges: [],
+      folderMoves: [],
       remoteChanges: [],
       conflicts: [
         { syncRecord: { obsidianPath: "gone.md" }, remoteChange: { type: "deleted" } },
