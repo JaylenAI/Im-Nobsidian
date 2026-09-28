@@ -167,6 +167,22 @@ export interface FolderMoveChange {
   readonly to: string;
 }
 
+/**
+ * 변경 하나를 줄 비교로 보이는 두 글 — `SyncOrchestrator.localChangeDiff` · `remoteChangeDiff` 가 내고,
+ * `lineDiff` 로 견준다.
+ */
+export interface ChangeDiff {
+  /** 볼트 경로 — 옮긴 노트는 새 자리. */
+  readonly path: string;
+  readonly type: LocalChange["type"];
+  /** 옮긴 노트의 옛 자리. */
+  readonly movedFrom?: string;
+  /** 지난 동기화 때의 글. 새 노트는 null — 견줄 옛 글이 없다. */
+  readonly before: string | null;
+  /** 지금 글 — 로컬 변경은 볼트의 글, 원격 변경은 Notion 의 글. 지운 노트 · 페이지는 null. */
+  readonly after: string | null;
+}
+
 export interface StatusResult {
   readonly localChanges: LocalChange[];
   /** 옮긴 폴더. 그 안의 노트는 `localChanges` 에 `moved` 로 따로 있다. */

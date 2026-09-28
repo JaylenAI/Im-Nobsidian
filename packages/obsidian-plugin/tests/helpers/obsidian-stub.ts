@@ -30,6 +30,7 @@ function createMockElement(): Record<string, unknown> {
 
 export class Modal {
   app: unknown;
+  modalEl = createMockElement();
   contentEl = createMockElement();
   constructor(app: unknown) {
     this.app = app;

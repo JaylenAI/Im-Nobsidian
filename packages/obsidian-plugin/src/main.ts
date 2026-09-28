@@ -7,13 +7,22 @@ import {
   EntryEditor,
   getLogger,
 } from "@im-nobsidian/core";
-import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import type {
+  IStateDB,
+  Config,
+  Conflict,
+  LocalChange,
+  RemoteChange,
+  ResolutionChoice,
+} from "@im-nobsidian/core";
 import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
+import { ChangeDiffModal } from "./change-diff-modal.js";
+import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
 import { SyncController } from "./sync/sync-controller.js";
@@ -155,6 +164,8 @@ export default class ImNobsidianPlugin extends Plugin {
         onPushPath: async (path: string) => this.syncController?.push([path]),
         onDiscardPath: async (path: string) => this.syncController?.discard(path),
         onPullPath: async (path: string) => this.syncController?.pull([path]),
+        onShowLocalDiff: (change: LocalChange) => this.showLocalDiff(change),
+        onShowRemoteDiff: (change: RemoteChange) => this.showRemoteDiff(change),
       });
       return view;
     });
@@ -525,6 +536,29 @@ export default class ImNobsidianPlugin extends Plugin {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`상태 확인 실패: ${msg}`);
     }
+  }
+
+  /** 변경 패널에서 누른 로컬 변경의 줄 비교 창 — 보기만 하므로 도는 작업이 있어도 연다. */
+  private showLocalDiff(change: LocalChange): void {
+    if (!this.syncController) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+    new ChangeDiffModal(this.app, localDiffSource(change, this.syncController)).open();
+  }
+
+  /** 변경 패널에서 누른 원격 변경의 줄 비교 창 — Notion 의 지금 글을 읽어 지난 동기화 때와 견준다. */
+  private showRemoteDiff(change: RemoteChange): void {
+    if (!this.syncController) {
+      new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
+      return;
+    }
+    const source = remoteDiffSource(change, this.syncController);
+    if (!source) {
+      new Notice("Im-Nobsidian: 아직 받지 않은 새 페이지라 견줄 글이 없습니다 — 받은 뒤에 보세요.");
+      return;
+    }
+    new ChangeDiffModal(this.app, source).open();
   }
 
   private async resolveConflicts(): Promise<void> {

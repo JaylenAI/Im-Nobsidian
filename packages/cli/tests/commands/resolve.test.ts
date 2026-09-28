@@ -234,6 +234,42 @@ describe("resolve command", () => {
     spy.mockRestore();
   });
 
+  it("충돌 비교는 이름 줄 · 묶음 머리 · 로컬 줄 · 원격 줄을 색으로 가른다 — 구분선을 지운 줄도 지운 줄이다", async () => {
+    const restore = asTerminal();
+    mockListConflicts.mockResolvedValueOnce([conflict("both.md")]);
+    mockResolveConflict.mockResolvedValueOnce({ path: "both.md", choice: "local", success: true });
+    mockGenerateDiff.mockReturnValueOnce(
+      [
+        "--- local: both.md",
+        "+++ remote: Notion (p)",
+        "@@ -1,3 +1,2 @@",
+        " 같음",
+        "----",
+        "-로컬",
+        "+원격",
+      ].join("\n"),
+    );
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runResolve();
+    } finally {
+      restore();
+    }
+    const printed = spy.mock.calls.map(([line]) => line);
+    expect(printed).toEqual(
+      expect.arrayContaining([
+        "\x1b[1m--- local: both.md\x1b[0m",
+        "\x1b[1m+++ remote: Notion (p)\x1b[0m",
+        "\x1b[36m@@ -1,3 +1,2 @@\x1b[0m",
+        " 같음",
+        "\x1b[31m----\x1b[0m",
+        "\x1b[31m-로컬\x1b[0m",
+        "\x1b[32m+원격\x1b[0m",
+      ]),
+    );
+    spy.mockRestore();
+  });
+
   it("일괄 remote-first 는 원격 삭제 노트의 파일을 지운다고 먼저 알린다", async () => {
     mockListConflicts.mockResolvedValueOnce([conflict("gone.md", "deleted"), conflict("b.md")]);
     mockResolveAll.mockResolvedValueOnce([

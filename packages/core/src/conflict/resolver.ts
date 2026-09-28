@@ -4,6 +4,7 @@ import type { VaultFS } from "../sync/vault-fs.js";
 import { removeTrackedNote } from "../sync/remote-deletion.js";
 import { threeWayMerge } from "./merger.js";
 import { computeHash } from "../utils/hash.js";
+import { formatUnifiedDiff, lineDiff } from "../utils/line-diff.js";
 
 export type ResolutionChoice = "local" | "remote" | "merge" | "duplicate";
 
@@ -185,28 +186,20 @@ export class ConflictResolver {
     return { path: originalPath, choice: "duplicate", success: true };
   }
 
+  /**
+   * 충돌 미리보기 — 로컬(`-`)과 원격(`+`)의 줄 비교. 바뀐 곳과 앞뒤 세 줄을 `@@` 묶음으로 보인다.
+   *
+   * 예전에는 같은 번호의 줄끼리 견줬다 — 한쪽 앞에 한 줄만 더해도 그 뒤의 모든 줄이 바뀐 것으로 보여,
+   * 무엇이 실제로 다른지 찾을 수 없었다.
+   */
   generateDiff(conflict: Conflict): string {
-    const localLines = conflict.localContent.split("\n");
-    const remoteLines = conflict.remoteContent.split("\n");
-    const lines: string[] = [];
-
-    lines.push(`--- local: ${conflict.syncRecord.obsidianPath}`);
-    lines.push(`+++ remote: Notion (${conflict.remoteChange.pageId})`);
-    lines.push("");
-
-    const maxLen = Math.max(localLines.length, remoteLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const localLine = localLines[i];
-      const remoteLine = remoteLines[i];
-
-      if (localLine === remoteLine) {
-        lines.push(`  ${localLine ?? ""}`);
-      } else {
-        if (localLine !== undefined) lines.push(`- ${localLine}`);
-        if (remoteLine !== undefined) lines.push(`+ ${remoteLine}`);
-      }
-    }
-
+    const hunks = lineDiff(conflict.localContent, conflict.remoteContent);
+    const lines = formatUnifiedDiff(
+      hunks,
+      `local: ${conflict.syncRecord.obsidianPath}`,
+      `remote: Notion (${conflict.remoteChange.pageId})`,
+    );
+    if (hunks.length === 0) lines.push("(로컬과 원격의 내용이 같습니다)");
     return lines.join("\n");
   }
 }

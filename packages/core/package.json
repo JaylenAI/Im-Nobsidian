@@ -29,6 +29,7 @@
     "async-sema": "^3.1.0",
     "better-sqlite3": "^12.11.1",
     "chokidar": "^5.0.0",
+    "diff": "^9.0.0",
     "gray-matter": "^4.0.0",
     "notion-to-md": "^3.1.0",
     "zod": "^3.23.0"
