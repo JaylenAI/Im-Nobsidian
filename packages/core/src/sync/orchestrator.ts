@@ -84,6 +84,8 @@ import {
 import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties } from "./row-properties.js";
+import { OperationGate } from "./operation-gate.js";
+import type { GatedOperation } from "./operation-gate.js";
 import {
   explicitTitle,
   followsFileName,
@@ -254,6 +256,9 @@ export class SyncOrchestrator {
   // ({@link beginRemoteObservation}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private observation: ObservationContext = NO_OBSERVATION;
 
+  // 작업은 한 번에 하나만 돈다(S-09) — 위의 실행별 상태를 두 실행이 함께 쓰지 않도록.
+  private readonly gate = new OperationGate();
+
   // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
   // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
   // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
@@ -331,7 +336,16 @@ export class SyncOrchestrator {
     this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
   }
 
+  /** 도는 작업 — 없으면 null(S-09). 부른 쪽이 겹칠 요청을 미리 거를 때 쓴다. */
+  get runningOperation(): GatedOperation | null {
+    return this.gate.running;
+  }
+
   async push(options?: PushOptions): Promise<PushResult> {
+    return this.gate.run("push", () => this.executePush(options));
+  }
+
+  private async executePush(options?: PushOptions): Promise<PushResult> {
     const startTime = Date.now();
 
     if (this.config.sync.direction === "pull") {
@@ -543,6 +557,10 @@ export class SyncOrchestrator {
   }
 
   async pull(options?: PullOptions): Promise<PullResult> {
+    return this.gate.run("pull", () => this.executePull(options));
+  }
+
+  private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
     // 이번 실행의 경로 선점 장부를 비운다 — 지난 실행에서 삭제된 경로를 계속 막지 않도록.
     this.claimedPaths.clear();
@@ -898,9 +916,13 @@ export class SyncOrchestrator {
   }
 
   async sync(options?: SyncOptions): Promise<SyncResult> {
+    return this.gate.run("sync", () => this.executeSync(options));
+  }
+
+  private async executeSync(options?: SyncOptions): Promise<SyncResult> {
     const startTime = Date.now();
-    const pullResult = await this.pull(options);
-    const pushResult = await this.push({
+    const pullResult = await this.executePull(options);
+    const pushResult = await this.executePush({
       ...options,
       paths: options?.paths,
       excludePaths: pullResult.writtenPaths,
@@ -914,7 +936,12 @@ export class SyncOrchestrator {
     };
   }
 
+  /** 원격까지 본다 — 이번 실행의 원격 기준을 정하므로 다른 작업과 겹치지 않는다. */
   async status(): Promise<StatusResult> {
+    return this.gate.run("status", () => this.executeStatus());
+  }
+
+  private async executeStatus(): Promise<StatusResult> {
     this.beginRemoteObservation(Date.now());
     const files = await this.vaultFs.listMarkdownFiles();
     const localChanges = this.changeDetector.detectLocalChanges(files, this.localScanOptions());
@@ -1023,6 +1050,15 @@ export class SyncOrchestrator {
   }
 
   async fetch(): Promise<{
+    newPages: number;
+    deletedPages: number;
+    modifiedPages: number;
+    duration: number;
+  }> {
+    return this.gate.run("fetch", () => this.executeFetch());
+  }
+
+  private async executeFetch(): Promise<{
     newPages: number;
     deletedPages: number;
     modifiedPages: number;
@@ -2461,6 +2497,10 @@ export class SyncOrchestrator {
    * 건만 골라 상태를 되돌린다(진짜 충돌은 손대지 않는다).
    */
   clearStaleConflicts(conflicts: readonly Conflict[]): string[] {
+    return this.gate.runSync("resolve", () => this.executeClearStaleConflicts(conflicts));
+  }
+
+  private executeClearStaleConflicts(conflicts: readonly Conflict[]): string[] {
     const cleared: string[] = [];
     for (const conflict of conflicts) {
       // 양쪽 다 비었으면 "같다"가 아니라 양쪽 다 사라진 것이다 — 삭제 전파의 몫으로 남긴다.
@@ -2486,6 +2526,13 @@ export class SyncOrchestrator {
 
   /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
   async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
+    return this.gate.run("resolve", () => this.executeResolveConflict(conflict, choice));
+  }
+
+  private async executeResolveConflict(
+    conflict: Conflict,
+    choice: ResolutionChoice,
+  ): Promise<ResolutionResult> {
     const result = await this.conflictResolver.resolve(conflict, choice);
     await this.propagateOrReopen(conflict, choice, result);
     return result;
@@ -2504,11 +2551,15 @@ export class SyncOrchestrator {
     conflicts: Conflict[],
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult[]> {
-    const results: ResolutionResult[] = [];
-    for (const conflict of conflicts) {
-      results.push(await this.resolveConflictByStrategy(conflict, strategy));
-    }
-    return results;
+    return this.gate.run("resolve", async () => {
+      const results: ResolutionResult[] = [];
+      for (const conflict of conflicts) {
+        results.push(
+          await this.executeResolveConflict(conflict, choiceForStrategy(conflict, strategy)),
+        );
+      }
+      return results;
+    });
   }
 
   /** 충돌 미리보기용 통합 diff(원본 vs 로컬 vs 원격). 해소 없이 표시 전용. */

@@ -1,6 +1,7 @@
-import { getLogger, isRemoteDeletion } from "@im-nobsidian/core";
+import { getLogger, isRemoteDeletion, SyncBusyError } from "@im-nobsidian/core";
 import type {
   SyncOrchestrator,
+  GatedOperation,
   ProgressCallback,
   LocalChange,
   RemoteChange,
@@ -53,19 +54,40 @@ export interface SyncControllerHooks {
 /** 알림이 사용자가 읽고 고칠 것을 담을 때 — 기본보다 오래 둔다. */
 const ACTIONABLE_NOTICE_MS = 8000;
 
+/** 도는 작업 하나 — 취소하고 끝나기를 기다릴 때 쓴다. */
+interface ActiveTask {
+  readonly operation: GatedOperation;
+  readonly abort: AbortController;
+  /** 작업이 끝나면 풀린다 — 실패해도 거절되지 않는다. */
+  readonly done: Promise<void>;
+}
+
+/** 충돌 하나를 무엇으로 풀지 묻는다. 고르지 않으면 null. 신호가 취소되면 묻기를 닫는다. */
+export type ConflictChooser = (
+  conflict: Conflict,
+  signal: AbortSignal,
+) => Promise<ResolutionChoice | null>;
+
 export class SyncController {
-  private abortController: AbortController | null = null;
-  private vaultSyncing = false;
-  private resolving = false;
+  /**
+   * 볼트 · 상태 DB · 원격을 만지는 작업은 한 번에 하나만 돈다(S-09). 수동 · 자동 · 볼트 이벤트
+   * sync 와 충돌 해결 · 원격 상태 확인이 모두 이 줄에 선다. 예전에는 셋이 저마다 다른 표시로
+   * 가드해, 수동 pull 중에 볼트 이벤트 sync 가 같은 오케스트레이터를 불렀다.
+   */
+  private active: ActiveTask | null = null;
+  /** 도는 작업이 있어 미룬 볼트 이벤트 sync — 끝난 뒤 한 번 돈다. */
+  private vaultSyncPending = false;
+  /** {@link shutdown} 뒤 — 어떤 작업도 받지 않는다. */
+  private closed = false;
 
   constructor(
     private readonly orchestrator: SyncOrchestrator,
     private readonly hooks: SyncControllerHooks = {},
   ) {}
 
-  /** UI 트리거(push/pull/sync) 가 진행 중인지. */
+  /** 작업이 도는 중인지 — 취소한 작업도 실제로 멈출 때까지 돈다. */
   isSyncing(): boolean {
-    return this.abortController !== null;
+    return this.active !== null;
   }
 
   /** 진행률 콜백 — core 의 진행 신호를 사이드바 상태 패치로 변환한다. */
@@ -78,9 +100,42 @@ export class SyncController {
     };
   }
 
-  /** 실행 직전 공통 상태 진입(취소 토큰 발급 + 시작 표시). */
-  private begin(operation: SyncOperation, label: string): AbortSignal {
-    this.abortController = new AbortController();
+  /**
+   * 사용자가 부른 작업을 받을 수 있나. 도는 작업이 있으면 무엇이 돌아 거절했는지 알린다 —
+   * 기다리게 하지 않는다(실볼트 pull 은 500초가 걸린다).
+   */
+  private admit(requested: GatedOperation): boolean {
+    if (this.closed) return false;
+    if (!this.active) return true;
+    this.hooks.onNotice?.(
+      `Im-Nobsidian: ${new SyncBusyError(this.active.operation, requested).message}`,
+    );
+    return false;
+  }
+
+  /** 작업을 줄에 세워 돌린다. 부르기 전에 도는 작업이 없음을 확인한다({@link admit}). */
+  private async exclusive(
+    operation: GatedOperation,
+    task: (signal: AbortSignal) => Promise<void>,
+  ): Promise<void> {
+    const abort = new AbortController();
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => (settle = resolve));
+    this.active = { operation, abort, done };
+    try {
+      await task(abort.signal);
+    } finally {
+      this.active = null;
+      settle();
+      if (this.vaultSyncPending) {
+        this.vaultSyncPending = false;
+        void this.vaultSync();
+      }
+    }
+  }
+
+  /** 실행 직전 공통 상태 진입(시작 표시). */
+  private begin(operation: SyncOperation, label: string): void {
     this.hooks.onStatusBar?.("syncing");
     this.hooks.onState?.({
       syncState: "syncing",
@@ -90,12 +145,10 @@ export class SyncController {
       completionSummary: null,
     });
     this.hooks.onNotice?.(`Im-Nobsidian: ${label} 시작...`);
-    return this.abortController.signal;
   }
 
   /** 실패 공통 처리(에러 표시 + 상태바 error). */
   private fail(label: string, error: unknown): void {
-    this.abortController = null;
     const msg = error instanceof Error ? error.message : String(error);
     this.hooks.onNotice?.(`Im-Nobsidian ${label} 실패: ${msg}`);
     this.hooks.onStatusBar?.("error");
@@ -107,86 +160,127 @@ export class SyncController {
     });
   }
 
-  async push(): Promise<void> {
-    const signal = this.begin("push", "Push");
-    try {
-      const result = await this.orchestrator.push({
-        onProgress: this.progressCallback(),
-        signal,
-      });
-      this.abortController = null;
+  /** 취소한 작업이 멈췄다 — 그때까지 처리한 것은 남는다. */
+  private cancelled(): void {
+    this.hooks.onNotice?.("Im-Nobsidian: 동기화 취소됨");
+    this.hooks.onStatusBar?.("ready");
+    this.hooks.onState?.({
+      syncState: "ready",
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+      completionSummary: "동기화가 취소되었습니다",
+    });
+  }
 
-      const summary = `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
-      this.hooks.onNotice?.(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.hooks.onStatusBar?.("ready");
-      this.hooks.onState?.({ completionSummary: summary, operationType: null });
-      await this.refreshStatus();
-    } catch (error) {
-      this.fail("Push", error);
-    }
+  /** 사용자가 부른 push · pull · sync — 시작 · 완료 · 취소 · 실패를 알린다. */
+  private async runUserOperation<R extends { readonly duration: number }>(
+    operation: SyncOperation,
+    label: string,
+    call: (options: { onProgress: ProgressCallback; signal: AbortSignal }) => Promise<R>,
+    report: (result: R) => { summary: string; phase: SyncPhase },
+  ): Promise<void> {
+    if (!this.admit(operation)) return;
+    await this.exclusive(operation, async (signal) => {
+      this.begin(operation, label);
+      try {
+        const result = await call({ onProgress: this.progressCallback(), signal });
+        if (signal.aborted) {
+          this.cancelled();
+        } else {
+          const { summary, phase } = report(result);
+          this.hooks.onNotice?.(
+            `Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
+          );
+          this.hooks.onStatusBar?.(phase);
+          this.hooks.onState?.({ completionSummary: summary, operationType: null });
+        }
+        await this.refreshLocal();
+      } catch (error) {
+        this.fail(label, error);
+      }
+    });
+  }
+
+  async push(): Promise<void> {
+    await this.runUserOperation(
+      "push",
+      "Push",
+      (options) => this.orchestrator.push(options),
+      (result) => ({
+        summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        phase: "ready",
+      }),
+    );
   }
 
   async pull(): Promise<void> {
-    const signal = this.begin("pull", "Pull");
-    try {
-      const result = await this.orchestrator.pull({
-        onProgress: this.progressCallback(),
-        signal,
-      });
-      this.abortController = null;
-
-      const summary = `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`;
-      this.hooks.onNotice?.(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
-      this.hooks.onState?.({ completionSummary: summary, operationType: null });
-      await this.refreshStatus();
-    } catch (error) {
-      this.fail("Pull", error);
-    }
+    await this.runUserOperation(
+      "pull",
+      "Pull",
+      (options) => this.orchestrator.pull(options),
+      (result) => ({
+        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        phase: result.conflicts.length > 0 ? "conflict" : "ready",
+      }),
+    );
   }
 
   async sync(): Promise<void> {
-    const signal = this.begin("sync", "Sync");
-    try {
-      const result = await this.orchestrator.sync({
-        onProgress: this.progressCallback(),
-        signal,
-      });
-      this.abortController = null;
+    await this.runUserOperation(
+      "sync",
+      "Sync",
+      (options) => this.orchestrator.sync(options),
+      (result) => ({
+        summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
+        phase: result.conflicts.length > 0 ? "conflict" : "ready",
+      }),
+    );
+  }
 
-      const summary = `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`;
-      this.hooks.onNotice?.(`Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`);
-      this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
-      this.hooks.onState?.({ completionSummary: summary, operationType: null });
-      await this.refreshStatus();
-    } catch (error) {
-      this.fail("Sync", error);
-    }
+  /**
+   * 자동 동기화 주기. 도는 작업이 있으면 조용히 건너뛴다 — 다음 주기에 돈다. 예전에는 긴 sync
+   * 동안 주기가 돌아와 같은 오케스트레이터를 겹쳐 불렀다(S-09).
+   */
+  async autoSync(): Promise<void> {
+    if (this.closed || this.active) return;
+    await this.sync();
   }
 
   /**
    * Vault 이벤트 기반 자동 동기화. UI 트리거(push/pull/sync)와 달리 사이드바/알림은 건드리지
-   * 않고 상태바만 갱신하며, 재진입을 자체 가드로 막는다.
+   * 않고 상태바만 갱신한다. 도는 작업이 있으면 끝난 뒤 한 번 돈다 — 그 사이의 편집을 버리지
+   * 않는다. 충돌을 푸는 동안 병합 결과를 쓴 파일이 부른 것도 푼 뒤에 돈다.
    */
   async vaultSync(): Promise<void> {
-    // 충돌을 푸는 동안에는 끼어들지 않는다 — 병합 결과를 쓴 파일이 이 동기화를 부른다.
-    if (this.vaultSyncing || this.resolving) return;
-    this.vaultSyncing = true;
-    this.hooks.onStatusBar?.("syncing");
-    try {
-      const result = await this.orchestrator.sync();
-      this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
-    } catch {
-      this.hooks.onStatusBar?.("error");
-    } finally {
-      this.vaultSyncing = false;
+    if (this.closed) return;
+    if (this.active) {
+      this.vaultSyncPending = true;
+      return;
     }
+    await this.exclusive("sync", async (signal) => {
+      this.hooks.onStatusBar?.("syncing");
+      try {
+        const result = await this.orchestrator.sync({ signal });
+        this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
+      } catch {
+        this.hooks.onStatusBar?.("error");
+      }
+    });
   }
 
-  /** 사이드바 상태 새로고침. fullCheck=true 면 원격까지 조회(status), 아니면 로컬만(statusLocal). */
+  /**
+   * 사이드바 상태 새로고침. fullCheck=true 면 원격까지 조회(status), 아니면 로컬만(statusLocal).
+   * 원격 조회는 이번 실행의 원격 기준을 정하므로 도는 작업과 겹치지 않는다 — 도는 작업이 있으면
+   * 알리고 로컬만 새로고친다.
+   */
   async refreshStatus(fullCheck = false): Promise<void> {
-    try {
-      if (fullCheck) {
+    if (!fullCheck || !this.admit("status")) {
+      await this.refreshLocal();
+      return;
+    }
+    await this.exclusive("status", async () => {
+      try {
         this.hooks.onState?.({
           syncState: "syncing",
           operationType: null,
@@ -204,37 +298,53 @@ export class SyncController {
           progress: null,
           errorMessage: null,
         });
-      } else {
-        const status = await this.orchestrator.statusLocal();
-        const syncState: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
-        this.hooks.onState?.({
-          lastSyncAt: status.lastSyncAt,
-          localChanges: status.localChanges,
-          conflicts: status.conflicts,
-          syncState,
-          progress: null,
-          errorMessage: null,
-        });
+      } catch {
+        // 사이드바 새로고침은 best-effort — 실패해도 무시.
       }
+    });
+  }
+
+  /** 로컬만 보는 새로고침 — 도는 작업과 함께 부를 수 있다. */
+  private async refreshLocal(): Promise<void> {
+    try {
+      const status = await this.orchestrator.statusLocal();
+      const syncState: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
+      this.hooks.onState?.({
+        lastSyncAt: status.lastSyncAt,
+        localChanges: status.localChanges,
+        conflicts: status.conflicts,
+        syncState,
+        progress: null,
+        errorMessage: null,
+      });
     } catch {
       // 사이드바 새로고침은 best-effort — 실패해도 무시.
     }
   }
 
-  /** 진행 중인 UI 트리거 동기화를 취소한다. */
+  /**
+   * 도는 작업을 취소한다. 잠금은 작업이 실제로 멈출 때까지 쥔다 — 처리 중인 항목은 끝까지 가므로,
+   * 예전처럼 바로 풀면 멈추는 중인 작업과 새 작업이 겹쳤다(S-09). 취소됐다는 표시는 멈춘 뒤에 한다.
+   */
   cancel(): void {
-    if (!this.abortController) return;
-    this.abortController.abort();
-    this.abortController = null;
-    this.hooks.onNotice?.("Im-Nobsidian: 동기화 취소됨");
-    this.hooks.onStatusBar?.("ready");
-    this.hooks.onState?.({
-      syncState: "ready",
-      operationType: null,
-      progress: null,
-      errorMessage: null,
-      completionSummary: "동기화가 취소되었습니다",
-    });
+    const active = this.active;
+    if (!active || active.abort.signal.aborted) return;
+    active.abort.abort();
+    this.hooks.onNotice?.("Im-Nobsidian: 취소하는 중 — 처리 중인 항목을 마친 뒤 멈춥니다");
+  }
+
+  /**
+   * 플러그인을 내리거나 설정이 바뀌어 오케스트레이터를 새로 만들 때 부른다. 도는 작업을 취소하고
+   * 끝나기를 기다린다 — 부른 쪽은 그 뒤에 상태 DB 를 닫는다. 예전에는 도는 sync 아래에서 DB 를
+   * 닫았다. 그 뒤로는 어떤 작업도 받지 않는다.
+   */
+  async shutdown(): Promise<void> {
+    this.closed = true;
+    this.vaultSyncPending = false;
+    const active = this.active;
+    if (!active) return;
+    active.abort.abort();
+    await active.done;
   }
 
   /**
@@ -282,9 +392,19 @@ export class SyncController {
     }
   }
 
-  /** 상태 조회 패스스루(상태 표시 커맨드용 — 표시 포맷은 셸이 담당). */
-  getStatus(): ReturnType<SyncOrchestrator["status"]> {
-    return this.orchestrator.status();
+  /**
+   * 상태 조회(상태 표시 커맨드용 — 표시 포맷은 셸이 담당). 원격까지 보므로 도는 작업이 있으면
+   * {@link SyncBusyError} 로 거절한다 — 무엇이 돌고 있는지는 오류가 말한다.
+   */
+  async getStatus(): Promise<Awaited<ReturnType<SyncOrchestrator["status"]>>> {
+    if (this.closed)
+      throw new Error("Im-Nobsidian 을 다시 불러오는 중입니다 — 잠시 뒤 다시 시도하세요");
+    if (this.active) throw new SyncBusyError(this.active.operation, "status");
+    let status!: Awaited<ReturnType<SyncOrchestrator["status"]>>;
+    await this.exclusive("status", async () => {
+      status = await this.orchestrator.status();
+    });
+    return status;
   }
 
   /**
@@ -297,27 +417,20 @@ export class SyncController {
    *   예전에는 ConflictResolver 만 불러 볼트와 상태 DB 만 바꿨고, 다음 sync 가 바뀐 원격으로
    *   고른 로컬 · 병합 결과를 덮었다.
    *
+   * 도는 작업이 있으면 알리고 풀지 않는다. 푸는 동안 온 볼트 이벤트 sync 는 푼 뒤에 돈다.
+   *
    * @param choose 충돌 하나를 무엇으로 풀지 묻는다(모달). 고르지 않으면 null — 그 충돌은 남는다.
+   *   플러그인을 내리면 신호가 취소된다 — 묻던 창을 닫고 남은 충돌은 묻지 않는다.
    */
-  async resolveConflicts(
-    choose: (conflict: Conflict) => Promise<ResolutionChoice | null>,
-  ): Promise<void> {
-    if (this.isSyncing() || this.vaultSyncing || this.resolving) {
-      this.hooks.onNotice?.("Im-Nobsidian: 동기화가 끝난 뒤 충돌을 해결하세요.");
-      return;
-    }
-    this.resolving = true;
-    try {
-      await this.resolveEach(choose);
-    } finally {
-      this.resolving = false;
-    }
-    await this.refreshStatus();
+  async resolveConflicts(choose: ConflictChooser): Promise<void> {
+    if (!this.admit("resolve")) return;
+    await this.exclusive("resolve", async (signal) => {
+      await this.resolveEach(choose, signal);
+      await this.refreshLocal();
+    });
   }
 
-  private async resolveEach(
-    choose: (conflict: Conflict) => Promise<ResolutionChoice | null>,
-  ): Promise<void> {
+  private async resolveEach(choose: ConflictChooser, signal: AbortSignal): Promise<void> {
     let conflicts: Conflict[];
     try {
       conflicts = await this.orchestrator.listConflicts();
@@ -341,7 +454,7 @@ export class SyncController {
     for (const conflict of conflicts) {
       const path = conflict.syncRecord.obsidianPath;
       if (cleared.has(path)) continue;
-      const choice = await choose(conflict);
+      const choice = signal.aborted ? null : await choose(conflict, signal);
       if (!choice) {
         remaining++;
         continue;

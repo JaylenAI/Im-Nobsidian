@@ -82,6 +82,8 @@ export {
   ImageHandler,
   FileHandler,
   DatabaseSyncer,
+  SyncBusyError,
+  operationLabel,
 } from "./sync/index.js";
 export type {
   VaultFS,
@@ -98,6 +100,7 @@ export type {
   FileUploadResult,
   FileDownloadResult,
   DatabaseSyncResult,
+  GatedOperation,
 } from "./sync/index.js";
 
 // Converter
@@ -150,7 +153,7 @@ export type {
 
 // Watcher
 export { FileWatcher, WatchSyncService } from "./watcher/index.js";
-export type { WatchSyncOptions } from "./watcher/index.js";
+export type { WatchSyncOptions, WatchSyncScope } from "./watcher/index.js";
 
 // View
 export {

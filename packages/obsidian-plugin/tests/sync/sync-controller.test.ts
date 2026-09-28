@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   getLogger,
   setLogger,
+  SyncBusyError,
   type Conflict,
   type ResolutionChoice,
   type SyncOrchestrator,
@@ -231,9 +232,9 @@ describe("SyncController", () => {
       expect(onNotice).not.toHaveBeenCalled();
     });
 
-    it("재진입을 가드한다 — 진행 중 두 번째 호출은 무시", async () => {
+    it("진행 중에 온 호출은 겹치지 않고 끝난 뒤 한 번 돈다 — 여러 번 와도 한 번 (S-09)", async () => {
       let resolveSync: (() => void) | null = null;
-      mock.sync.mockImplementation(
+      mock.sync.mockImplementationOnce(
         () =>
           new Promise((resolve) => {
             resolveSync = () =>
@@ -249,30 +250,53 @@ describe("SyncController", () => {
       const controller = makeController(mock, hooks);
 
       const first = controller.vaultSync();
-      await controller.vaultSync(); // 진행 중 → 즉시 무시
+      await controller.vaultSync(); // 진행 중 → 미룬다
+      await controller.vaultSync();
+      expect(mock.sync).toHaveBeenCalledTimes(1);
+
       resolveSync!();
       await first;
+      await vi.waitFor(() => expect(controller.isSyncing()).toBe(false));
 
-      expect(mock.sync).toHaveBeenCalledTimes(1);
+      // 그 사이의 편집을 버리지 않는다 — 예전에는 무시해 다음 이벤트 · 주기까지 올리지 않았다
+      expect(mock.sync).toHaveBeenCalledTimes(2);
     });
   });
 
   describe("cancel", () => {
-    it("진행 중 동기화의 신호를 abort 하고 취소 상태를 방출한다", async () => {
-      mock.push.mockImplementation(() => new Promise(() => {})); // 영원히 미해결
+    it("신호를 abort 하고, 작업이 멈춘 뒤에 취소 상태를 방출한다 — 멈출 때까지 새 작업을 받지 않는다 (S-09)", async () => {
+      let finish!: () => void;
+      mock.push.mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = () => resolve({ created: 1, updated: 0, deleted: 0, failed: [], duration: 0 });
+          }),
+      );
       const { hooks, onNotice, onStatusBar, onState } = createHooks();
       const controller = makeController(mock, hooks);
 
-      void controller.push();
+      const pushing = controller.push();
       expect(controller.isSyncing()).toBe(true);
       const signal = mock.push.mock.calls[0]![0].signal as AbortSignal;
 
       controller.cancel();
 
       expect(signal.aborted).toBe(true);
+      expect(onNotice).toHaveBeenLastCalledWith(
+        "Im-Nobsidian: 취소하는 중 — 처리 중인 항목을 마친 뒤 멈춥니다",
+      );
+      // 처리 중인 항목은 끝까지 간다 — 예전에는 여기서 잠금을 풀어 새 작업과 겹쳤다
+      expect(controller.isSyncing()).toBe(true);
+      await controller.pull();
+      expect(mock.pull).not.toHaveBeenCalled();
+
+      finish();
+      await pushing;
+
       expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 동기화 취소됨");
+      expect(onNotice).not.toHaveBeenCalledWith(expect.stringContaining("Push 완료"));
       expect(onStatusBar).toHaveBeenLastCalledWith("ready");
-      expect(onState).toHaveBeenLastCalledWith(
+      expect(onState).toHaveBeenCalledWith(
         expect.objectContaining({ completionSummary: "동기화가 취소되었습니다" }),
       );
       expect(controller.isSyncing()).toBe(false);
@@ -376,7 +400,7 @@ describe("SyncController", () => {
       await makeController(mock, hooks).resolveConflicts(choose);
 
       expect(choose).toHaveBeenCalledTimes(1);
-      expect(choose).toHaveBeenCalledWith(real);
+      expect(choose).toHaveBeenCalledWith(real, expect.any(AbortSignal));
       expect(onNotice).toHaveBeenLastCalledWith(
         "Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 0건 · 양쪽이 이미 같아 표시만 푼 1건",
       );
@@ -520,21 +544,190 @@ describe("SyncController", () => {
       await syncing;
 
       expect(mock.listConflicts).not.toHaveBeenCalled();
-      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 동기화가 끝난 뒤 충돌을 해결하세요.");
+      expect(onNotice).toHaveBeenCalledWith(
+        `Im-Nobsidian: ${new SyncBusyError("sync", "resolve").message}`,
+      );
     });
 
-    it("푸는 동안에는 자동 동기화가 끼어들지 않는다 — 병합 결과를 쓴 파일이 동기화를 부른다", async () => {
+    it("푸는 동안에는 자동 동기화가 끼어들지 않는다 — 병합 결과를 쓴 파일이 부른 동기화는 푼 뒤에 돈다", async () => {
       mock.listConflicts.mockResolvedValue([conflictAt("a.md")]);
       const { hooks } = createHooks();
       const controller = makeController(mock, hooks);
 
       await controller.resolveConflicts(async () => {
         await controller.vaultSync();
+        expect(mock.sync).not.toHaveBeenCalled();
         return "merge";
       });
 
-      expect(mock.sync).not.toHaveBeenCalled();
       expect(mock.resolveConflict).toHaveBeenCalledTimes(1);
+      await vi.waitFor(() => expect(mock.sync).toHaveBeenCalledTimes(1));
+      expect(mock.resolveConflict.mock.invocationCallOrder[0]!).toBeLessThan(
+        mock.sync.mock.invocationCallOrder[0]!,
+      );
+    });
+  });
+
+  describe("작업은 한 번에 하나 (S-09)", () => {
+    /** 다음 호출을 멈춘다 — 작업이 «도는 중» 인 때를 만든다. */
+    function hold(fn: ReturnType<typeof vi.fn>, value: unknown): () => void {
+      let release!: () => void;
+      fn.mockImplementationOnce(() => new Promise((resolve) => (release = () => resolve(value))));
+      return () => release();
+    }
+
+    const PULL_RESULT = {
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: 0,
+    };
+    const SYNC_RESULT = {
+      pull: { created: 0, updated: 0, deleted: 0 },
+      push: { created: 0, updated: 0, deleted: 0 },
+      conflicts: [],
+      duration: 0,
+    };
+
+    it("Pull 이 도는 동안 Push · Sync · 충돌 해결 · 원격 확인을 부르지 않고 무엇이 돌아 거절했는지 알린다", async () => {
+      const release = hold(mock.pull, PULL_RESULT);
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const pulling = controller.pull();
+      await controller.push();
+      await controller.sync();
+      await controller.resolveConflicts(vi.fn());
+      await controller.refreshStatus(true);
+
+      expect(mock.push).not.toHaveBeenCalled();
+      expect(mock.sync).not.toHaveBeenCalled();
+      expect(mock.listConflicts).not.toHaveBeenCalled();
+      expect(mock.status).not.toHaveBeenCalled();
+      for (const requested of ["push", "sync", "resolve", "status"] as const) {
+        expect(onNotice).toHaveBeenCalledWith(
+          `Im-Nobsidian: ${new SyncBusyError("pull", requested).message}`,
+        );
+      }
+      // 원격 확인을 거절해도 로컬 상태는 새로고친다
+      expect(mock.statusLocal).toHaveBeenCalled();
+
+      release();
+      await pulling;
+      await controller.push();
+      expect(mock.push).toHaveBeenCalledTimes(1);
+    });
+
+    it("자동 주기 sync 는 도는 작업이 있으면 알리지 않고 건너뛴다", async () => {
+      const release = hold(mock.sync, SYNC_RESULT);
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const running = controller.vaultSync();
+      onNotice.mockClear();
+      await controller.autoSync();
+
+      expect(mock.sync).toHaveBeenCalledTimes(1);
+      expect(onNotice).not.toHaveBeenCalled();
+
+      release();
+      await running;
+      await controller.autoSync();
+      expect(mock.sync).toHaveBeenCalledTimes(2);
+    });
+
+    it("수동 Pull 중에 온 볼트 이벤트 sync 는 끝난 뒤 한 번 돈다 — 겹치지 않는다", async () => {
+      const release = hold(mock.pull, PULL_RESULT);
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const pulling = controller.pull();
+      await controller.vaultSync();
+      await controller.vaultSync();
+      expect(mock.sync).not.toHaveBeenCalled();
+
+      release();
+      await pulling;
+      await vi.waitFor(() => expect(mock.sync).toHaveBeenCalledTimes(1));
+      expect(mock.pull.mock.invocationCallOrder[0]!).toBeLessThan(
+        mock.sync.mock.invocationCallOrder[0]!,
+      );
+    });
+
+    it("상태 표시 커맨드는 도는 작업이 있으면 무엇이 도는지 싣고 거절한다", async () => {
+      const release = hold(mock.sync, SYNC_RESULT);
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const running = controller.vaultSync();
+      await expect(controller.getStatus()).rejects.toMatchObject({
+        running: "sync",
+        requested: "status",
+      });
+      expect(mock.status).not.toHaveBeenCalled();
+
+      release();
+      await running;
+      await expect(controller.getStatus()).resolves.toMatchObject({ remoteChanges: [] });
+      // 상태 확인도 줄에 선다 — 도는 동안 온 볼트 이벤트 sync 는 끝난 뒤에 돈다
+      expect(controller.isSyncing()).toBe(false);
+    });
+
+    it("shutdown 은 도는 작업을 취소하고 끝나기를 기다린다 — 그 뒤로는 미룬 sync 도 새 작업도 돌리지 않는다", async () => {
+      const release = hold(mock.pull, PULL_RESULT);
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const pulling = controller.pull();
+      const signal = mock.pull.mock.calls[0]![0].signal as AbortSignal;
+      await controller.vaultSync(); // 미룬다
+
+      let stopped = false;
+      const stopping = controller.shutdown().then(() => (stopped = true));
+      await Promise.resolve();
+      expect(signal.aborted).toBe(true);
+      expect(stopped).toBe(false);
+
+      release();
+      await Promise.all([pulling, stopping]);
+      expect(stopped).toBe(true);
+
+      await controller.push();
+      await controller.vaultSync();
+      await controller.autoSync();
+      await expect(controller.getStatus()).rejects.toThrow("다시 불러오는 중");
+      expect(mock.sync).not.toHaveBeenCalled();
+      expect(mock.push).not.toHaveBeenCalled();
+      expect(controller.isSyncing()).toBe(false);
+    });
+
+    it("shutdown 은 묻던 충돌 창을 닫게 하고 남은 충돌은 묻지 않는다", async () => {
+      const a = conflictAt("a.md");
+      const b = conflictAt("b.md");
+      mock.listConflicts.mockResolvedValue([a, b]);
+      const { hooks } = createHooks();
+      const controller = makeController(mock, hooks);
+      let asked!: () => void;
+      const askedFirst = new Promise<void>((resolve) => (asked = resolve));
+      // 창은 신호가 취소되면 닫힌다 — 고르지 않고 닫은 것과 같다(null)
+      const choose = vi.fn(
+        (_conflict: Conflict, signal: AbortSignal) =>
+          new Promise<ResolutionChoice | null>((resolve) => {
+            signal.addEventListener("abort", () => resolve(null));
+            asked();
+          }),
+      );
+
+      const resolving = controller.resolveConflicts(choose);
+      await askedFirst;
+      await controller.shutdown();
+      await resolving;
+
+      expect(choose).toHaveBeenCalledTimes(1);
+      expect(mock.resolveConflict).not.toHaveBeenCalled();
     });
   });
 

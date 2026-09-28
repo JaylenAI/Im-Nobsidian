@@ -5,6 +5,7 @@ import {
   DEFAULT_CONFIG,
   ViewDataProvider,
   EntryEditor,
+  getLogger,
 } from "@im-nobsidian/core";
 import type { IStateDB, Config, Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
@@ -91,6 +92,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private stateDb: IStateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private initializing: Promise<void> = Promise.resolve();
   private debounceTimer: ReturnType<typeof setTimeout> | null = null;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
@@ -192,10 +194,28 @@ export default class ImNobsidianPlugin extends Plugin {
   onunload(): void {
     this.stopAutoSync();
     this.clearVaultDebounce();
-    if (this.stateDb && "flush" in this.stateDb) {
-      void (this.stateDb as SqlJsStateDB).flush();
+    // 도는 초기화가 있으면 그것이 연 DB 까지 닫는다.
+    this.initializing = this.initializing.then(() => this.closeStateDb());
+    void this.initializing.catch((error: unknown) => {
+      const message = error instanceof Error ? error.message : String(error);
+      getLogger().warn(`[Im-Nobsidian] 상태 DB 를 닫지 못함: ${message}`);
+    });
+  }
+
+  /**
+   * 도는 작업을 멈추고 끝나기를 기다린 뒤 상태 DB 를 닫는다(S-09). 예전에는 도는 sync 아래에서
+   * 닫아, 그 sync 가 닫힌 DB 에 쓰다 실패했다.
+   */
+  private async closeStateDb(): Promise<void> {
+    const controller = this.syncController;
+    const stateDb = this.stateDb;
+    this.syncController = null;
+    this.stateDb = null;
+    await controller?.shutdown();
+    if (stateDb && "flush" in stateDb) {
+      void (stateDb as SqlJsStateDB).flush();
     }
-    this.stateDb?.close();
+    stateDb?.close();
   }
 
   async loadSettings(): Promise<void> {
@@ -207,11 +227,20 @@ export default class ImNobsidianPlugin extends Plugin {
     await this.saveData(this.settings);
   }
 
-  async initOrchestrator(): Promise<void> {
+  /**
+   * 설정으로 오케스트레이터를 새로 만든다. 설정 창은 글자를 칠 때마다 부른다 — 차례로 돌려,
+   * 앞 초기화가 연 DB 를 뒤 초기화가 모르고 새로 여는 일이 없게 한다.
+   */
+  initOrchestrator(): Promise<void> {
+    this.initializing = this.initializing.then(() => this.createOrchestrator());
+    return this.initializing;
+  }
+
+  private async createOrchestrator(): Promise<void> {
     if (!this.settings.token || !this.settings.rootPageId) return;
 
     try {
-      this.stateDb?.close();
+      await this.closeStateDb();
 
       const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
       /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
@@ -324,8 +353,9 @@ export default class ImNobsidianPlugin extends Plugin {
     this.stopAutoSync();
     if (!this.settings.autoSync || !this.syncController) return;
 
+    // 도는 작업이 있으면 조용히 건너뛴다 — 긴 sync 동안 주기가 겹쳐 부르지 않는다(S-09).
     this.autoSyncTimer = setInterval(
-      () => this.executeSync(),
+      () => void this.syncController?.autoSync(),
       this.settings.autoSyncInterval * 1000,
     );
   }
@@ -499,13 +529,23 @@ export default class ImNobsidianPlugin extends Plugin {
       new Notice("Im-Nobsidian: 설정을 먼저 완료해주세요.");
       return;
     }
-    await this.syncController.resolveConflicts((conflict) => this.askConflictChoice(conflict));
+    await this.syncController.resolveConflicts((conflict, signal) =>
+      this.askConflictChoice(conflict, signal),
+    );
   }
 
-  /** 충돌 하나를 무엇으로 풀지 모달로 묻는다. 고르지 않고 닫으면 null. */
-  private askConflictChoice(conflict: Conflict): Promise<ResolutionChoice | null> {
+  /**
+   * 충돌 하나를 무엇으로 풀지 모달로 묻는다. 고르지 않고 닫으면 null. 플러그인을 내리면(신호
+   * 취소) 창을 닫는다 — 열린 창이 DB 를 닫는 것을 붙잡지 않게.
+   */
+  private askConflictChoice(
+    conflict: Conflict,
+    signal: AbortSignal,
+  ): Promise<ResolutionChoice | null> {
     return new Promise((resolve) => {
-      new ConflictModal(this.app, conflict, resolve).open();
+      const modal = new ConflictModal(this.app, conflict, resolve);
+      signal.addEventListener("abort", () => modal.close(), { once: true });
+      modal.open();
     });
   }
 
