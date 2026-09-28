@@ -322,6 +322,24 @@ export class SqlJsStateDB implements IStateDB {
     this.db.close();
   }
 
+  /**
+   * 파일에 쓰지 않고 닫는다 — 이 사본을 쓰면 다른 곳의 기록을 지울 때(다른 곳이 파일을 바꿈). 도는 쓰기가 끝나기를
+   * 기다린 뒤 남은 변경을 버린다.
+   *
+   * @returns 버린 변경이 있었나 — 있으면 마지막으로 쓴 뒤의 기록이 어디에도 남지 않는다.
+   */
+  async discard(): Promise<boolean> {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.writes;
+    const dropped = this.dirty;
+    this.dirty = false;
+    this.db.close();
+    return dropped;
+  }
+
   // --- helpers ---
 
   private queryOne<T>(sql: string, params: unknown[] = []): T | undefined {

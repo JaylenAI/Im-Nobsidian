@@ -193,6 +193,51 @@ describe("상태 DB 파일 쓰기", () => {
     expect(await metaInFile(file, "k")).toBe("v");
   });
 
+  it("버리면 파일에 쓰지 않고 닫는다 — 바뀐 것이 남아 있었는지 알린다", async () => {
+    const file = fakeFile();
+    const db = await SqlJsStateDB.open(null, file.write);
+    vi.useFakeTimers();
+    try {
+      db.setMeta("k", "v");
+
+      await expect(db.discard()).resolves.toBe(true);
+      // 예약한 주기 쓰기도 돌지 않는다
+      await vi.advanceTimersByTimeAsync(5000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    expect(file.write).not.toHaveBeenCalled();
+  });
+
+  it("버리기는 도는 쓰기가 끝나기를 기다린다 — 못 쓰고 끝났으면 버린 것이 있다", async () => {
+    const file = fakeFile();
+    const db = await SqlJsStateDB.open(null, file.write);
+
+    db.setMeta("k", "v");
+    const writing = db.flush().catch(() => undefined);
+    await waitForPending(file, 1);
+    let dropped: boolean | null = null;
+    const discarding = db.discard().then((value) => (dropped = value));
+    await tick();
+    expect(dropped).toBeNull();
+
+    file.pending.shift()!.fail(new Error("다른 곳이 파일을 바꿈"));
+    await Promise.all([writing, discarding]);
+
+    expect(dropped).toBe(true);
+  });
+
+  it("다 쓴 사본은 버려도 잃은 것이 없다", async () => {
+    const file = fakeFile();
+    file.autoFinish = true;
+    const db = await SqlJsStateDB.open(null, file.write);
+    db.setMeta("k", "v");
+    await db.flush();
+
+    await expect(db.discard()).resolves.toBe(false);
+  });
+
   it("주기 쓰기가 실패하면 이유를 경고로 남긴다 — 바뀐 것은 닫을 때 다시 쓴다", async () => {
     const file = fakeFile();
     const db = await SqlJsStateDB.open(null, file.write);

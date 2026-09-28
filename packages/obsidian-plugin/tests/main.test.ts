@@ -1,7 +1,15 @@
 import { describe, it, expect, vi, onTestFinished } from "vitest";
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Notice } from "obsidian";
 
 vi.mock("svelte", () => ({
@@ -41,12 +49,20 @@ vi.mock("../src/state/sqljs-state-db.js", () => ({
 }));
 
 vi.mock("@im-nobsidian/core", async () => ({
-  // 저장된 상태 DB 오류와 안내 문구는 진짜를 쓴다 — 사용자가 보는 문구를 그대로 본다
+  // 상태 DB 를 쓸 수 없는 까닭과 잠금은 진짜를 쓴다 — 사용자가 보는 문구와 볼트 폴더의 잠금 파일을 그대로 본다
   ...(await vi
     .importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
-    .then(({ StateDbUnavailableError, SavedStateDbError }) => ({
-      StateDbUnavailableError,
-      SavedStateDbError,
+    .then((core) => ({
+      getLogger: core.getLogger,
+      setLogger: core.setLogger,
+      StateDbUnavailableError: core.StateDbUnavailableError,
+      SavedStateDbError: core.SavedStateDbError,
+      StateDbLockedError: core.StateDbLockedError,
+      StateLock: core.StateLock,
+      stateDbLockPath: core.stateDbLockPath,
+      assertNoPendingWal: core.assertNoPendingWal,
+      pendingWalBytes: core.pendingWalBytes,
+      stateDbWalPath: core.stateDbWalPath,
     }))),
   NotionClient: class {
     constructor() {}
@@ -100,8 +116,15 @@ vi.mock("@im-nobsidian/core", async () => ({
 }));
 
 import ImNobsidianPlugin from "../src/main.js";
-import { SavedStateDbError } from "@im-nobsidian/core";
+import {
+  SavedStateDbError,
+  StateLock,
+  getLogger,
+  setLogger,
+  stateDbLockPath,
+} from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import { WASM_FILE } from "../src/constants.js";
 
 /** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
@@ -109,7 +132,6 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
   const plugin = new ImNobsidianPlugin({} as never, {} as never);
   plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
   const vaultPath = mkdtempSync(join(tmpdir(), "im-nobsidian-main-"));
-  onTestFinished(() => rmSync(vaultPath, { recursive: true, force: true }));
   const pluginDir = join(vaultPath, ".obsidian", "plugins", "test-plugin");
   mkdirSync(pluginDir, { recursive: true });
   writeFileSync(join(pluginDir, WASM_FILE), "");
@@ -120,11 +142,20 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
     manifest: unknown;
     syncController: unknown;
     initFailure: string | null;
+    initializing: Promise<void>;
+    stateDb: unknown;
+    stateDbFile: unknown;
+    closeStateDb: () => Promise<void>;
     executePush: () => Promise<void>;
     refreshSidebarStatus: (fullCheck?: boolean) => Promise<void>;
     renderInlineView: (source: string, container: HTMLElement) => Promise<void>;
   };
-  internals.manifest = { id: "test-plugin" };
+  internals.manifest = { id: "test-plugin", name: "Im-Notion Sync" };
+  // 연 상태 DB 를 닫아 잠금을 풀고 볼트를 지운다
+  onTestFinished(async () => {
+    await internals.closeStateDb().catch(() => undefined);
+    rmSync(vaultPath, { recursive: true, force: true });
+  });
   internals.app = {
     vault: {
       adapter: {
@@ -140,7 +171,13 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
       getLeavesOfType: () => [{ view: { updateState: (patch: unknown) => patches.push(patch) } }],
     },
   };
-  return { plugin, internals, patches, vaultPath, reads: () => reads };
+  const dbPath = join(vaultPath, ".state", "sync.db");
+  return { plugin, internals, patches, vaultPath, dbPath, reads: () => reads };
+}
+
+/** 시험 끝에 흔들리는 값(마지막 신호가 몇 초 전인지)을 가린다. */
+function steady(message: string | null): string | null {
+  return message?.replace(/마지막 신호 \d+초 전/, "마지막 신호 N초 전") ?? null;
 }
 
 /** 상태 DB 파일을 쥔 다른 프로그램(백신 · 클라우드 동기화)이 있을 때 읽기가 내는 오류. */
@@ -225,7 +262,7 @@ describe("ImNobsidianPlugin", () => {
     expect(closed).toBe(true);
   });
 
-  it("상태 DB 를 닫다가 못 쓰면 DB 를 쥔 채 이유를 던진다 — 다음 초기화가 다시 닫는다", async () => {
+  it("상태 DB 를 닫다가 못 쓰면 DB 와 잠금을 쥔 채 이유를 던진다 — 다음 초기화가 다시 닫고 푼다", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
     const stateDb = {
       close: vi
@@ -233,55 +270,63 @@ describe("ImNobsidianPlugin", () => {
         .mockRejectedValueOnce(new Error("권한 없음"))
         .mockResolvedValueOnce(undefined),
     };
-    const internals = plugin as unknown as { stateDb: unknown; closeStateDb: () => Promise<void> };
+    const stateDbFile = { release: vi.fn() };
+    const internals = plugin as unknown as {
+      stateDb: unknown;
+      stateDbFile: unknown;
+      closeStateDb: () => Promise<void>;
+    };
     internals.stateDb = stateDb;
+    internals.stateDbFile = stateDbFile;
 
     await expect(internals.closeStateDb()).rejects.toThrow("권한 없음");
     expect(internals.stateDb).toBe(stateDb);
+    // 못 쓴 기록이 남은 동안 다른 곳이 열면 그 기록을 모른다
+    expect(stateDbFile.release).not.toHaveBeenCalled();
 
     await internals.closeStateDb();
     expect(stateDb.close).toHaveBeenCalledTimes(2);
     expect(internals.stateDb).toBeNull();
+    expect(stateDbFile.release).toHaveBeenCalledTimes(1);
   });
 
-  it("다시 불러온 플러그인은 옛 인스턴스가 상태 DB 를 다 닫은 뒤에 파일을 읽는다", async () => {
+  it("다시 불러온 플러그인은 옛 인스턴스가 상태 DB 를 다 닫고 잠금을 푼 뒤에 잡고 읽는다", async () => {
     const events: string[] = [];
+    const {
+      plugin: fresh,
+      internals,
+      dbPath,
+    } = pluginWithStateFile(() => {
+      events.push("새 인스턴스가 읽음");
+      return Promise.resolve(new ArrayBuffer(0));
+    });
     const old = new ImNobsidianPlugin({} as never, {} as never);
     let finishOld!: () => void;
-    (old as unknown as { stateDb: unknown }).stateDb = {
-      close: () =>
-        new Promise<void>((resolve) => {
-          finishOld = () => {
-            events.push("옛 인스턴스가 닫음");
-            resolve();
-          };
-        }),
-    };
-    const fresh = new ImNobsidianPlugin({} as never, {} as never);
-    const internals = fresh as unknown as {
-      app: unknown;
-      readStateDbFile: () => Promise<Uint8Array | null>;
-    };
-    internals.app = {
-      vault: {
-        adapter: {
-          exists: async () => {
-            events.push("새 인스턴스가 읽음");
-            return false;
-          },
-        },
+    Object.assign(old, {
+      stateDbFile: StateDbFile.acquire(dbPath, "Im-Notion Sync"),
+      stateDb: {
+        close: () =>
+          new Promise<void>((resolve) => {
+            finishOld = () => {
+              events.push("옛 인스턴스가 닫음");
+              resolve();
+            };
+          }),
       },
-    };
+    });
 
     try {
       old.onunload();
-      const reading = internals.readStateDbFile();
+      const opening = fresh.initOrchestrator();
       await vi.waitFor(() => expect(finishOld).toBeDefined());
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(events).toEqual([]);
 
       finishOld();
-      await expect(reading).resolves.toBeNull();
+      await opening;
+
+      // 먼저 잡았으면 옛 인스턴스의 잠금에 막혔고, 먼저 읽었으면 옛 인스턴스의 마지막 기록이 빠졌다
+      expect(internals.initFailure).toBeNull();
       expect(events).toEqual(["옛 인스턴스가 닫음", "새 인스턴스가 읽음"]);
     } finally {
       delete (globalThis as Record<symbol, unknown>)[Symbol.for("im-nobsidian/state-db-closing")];
@@ -349,7 +394,148 @@ describe("ImNobsidianPlugin", () => {
     await write(new Uint8Array([1, 2, 3]));
 
     expect([...readFileSync(join(vaultPath, ".state", "sync.db"))]).toEqual([1, 2, 3]);
-    expect(readdirSync(join(vaultPath, ".state"))).toEqual(["sync.db"]);
+    // 잠금 파일은 쥔 동안 남는다
+    expect(readdirSync(join(vaultPath, ".state")).sort()).toEqual(["sync.db", "sync.db.lock"]);
+  });
+
+  it("CLI 가 상태 DB 를 쥐고 있으면 열지 않고 누가 쥐었는지와 기다리는 법을 알린다 — 끝나면 새로고침으로 연다", async () => {
+    const { plugin, internals, dbPath, reads } = pluginWithStateFile(() =>
+      Promise.resolve(new ArrayBuffer(0)),
+    );
+    const cli = StateLock.acquire(stateDbLockPath(dbPath), { tool: "cli" });
+    vi.mocked(SqlJsStateDB.open).mockClear();
+
+    await plugin.initOrchestrator();
+
+    // 예전에는 CLI 가 도는 중에 읽어, 기록이 WAL 에만 있는 파일을 «깨진 파일» 로 보고 치우라고 했다
+    expect(reads()).toBe(0);
+    expect(SqlJsStateDB.open).not.toHaveBeenCalled();
+    expect(steady(internals.initFailure)).toBe(
+      `초기화 실패: 이 볼트의 상태 DB 를 다른 곳이 쓰는 중 — CLI (pid ${process.pid}, 마지막 신호 N초 전) — ` +
+        "CLI 가 끝난 뒤 동기화 사이드바에서 새로고침을 누르세요. 쓰는 곳이 없는데도 이 말이 계속 나오면 볼트 " +
+        "폴더의 .im-nobsidian/sync.db.lock 을 지운 뒤 동기화 사이드바에서 새로고침을 누르세요.",
+    );
+
+    cli.release();
+    await internals.refreshSidebarStatus(true);
+
+    expect(internals.initFailure).toBeNull();
+    expect(reads()).toBe(1);
+  });
+
+  it("CLI 가 남긴 기록이 WAL 에만 있으면 열지 않고 합치는 법을 알린다 — 잠금은 풀어 둔다", async () => {
+    const { plugin, internals, dbPath, reads } = pluginWithStateFile(() =>
+      Promise.resolve(new ArrayBuffer(0)),
+    );
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(`${dbPath}-wal`, Buffer.alloc(4152));
+
+    await plugin.initOrchestrator();
+
+    expect(reads()).toBe(0);
+    expect(internals.initFailure).toBe(
+      "초기화 실패: 최근 동기화 기록이 아직 .im-nobsidian/sync.db-wal 에만 있음 (4152바이트) — CLI 가 쓰는 " +
+        "중이거나 끝까지 닫지 못함 — CLI 가 도는 중이면 끝난 뒤, 이미 끝났으면 볼트 폴더에서 CLI 명령 " +
+        "하나(예: status)를 실행해 기록을 상태 DB 로 합친 뒤 동기화 사이드바에서 새로고침을 누르세요.",
+    );
+    // 쥔 채 두면 기록을 합치려고 실행한 CLI 가 막힌다
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+  });
+
+  it("상태 DB 를 쥔 동안 잠금 파일에 플러그인을 적고, 닫으면 풀어 CLI 가 바로 연다", async () => {
+    const { plugin, internals, dbPath } = pluginWithStateFile(() =>
+      Promise.resolve(new ArrayBuffer(0)),
+    );
+    await plugin.initOrchestrator();
+    expect(JSON.parse(readFileSync(`${dbPath}.lock`, "utf8"))).toMatchObject({
+      tool: "plugin",
+      label: "Im-Notion Sync",
+      pid: process.pid,
+    });
+
+    await internals.closeStateDb();
+
+    expect(existsSync(`${dbPath}.lock`)).toBe(false);
+    StateLock.acquire(stateDbLockPath(dbPath), { tool: "cli" }).release();
+  });
+
+  it("다른 곳이 파일을 바꿨으면 쓰지 않고, 사본을 버리고 파일에서 다시 연다", async () => {
+    let onDisk = new Uint8Array([1, 2, 3]);
+    const { plugin, internals, dbPath } = pluginWithStateFile(() =>
+      Promise.resolve(onDisk.slice().buffer),
+    );
+    mkdirSync(dirname(dbPath), { recursive: true });
+    writeFileSync(dbPath, onDisk);
+    const open = vi.mocked(SqlJsStateDB.open);
+    open.mockClear();
+    // 닫으면 남은 변경을 파일에 쓴다 — 진짜 사본처럼
+    const discard = vi.fn(async () => true);
+    open.mockImplementationOnce(
+      async (_saved, write) =>
+        ({ close: () => write!(new Uint8Array([9])), discard }) as unknown as SqlJsStateDB,
+    );
+    await plugin.initOrchestrator();
+    const write = open.mock.calls[0]![1]!;
+    // 잠금을 모르는 옛 CLI 가 기록을 더했다
+    onDisk = new Uint8Array([1, 2, 3, 4]);
+    writeFileSync(dbPath, onDisk);
+    Notice.shown.splice(0);
+    const previous = getLogger();
+    setLogger({ ...previous, warn: vi.fn() });
+
+    try {
+      await expect(write(new Uint8Array([9]))).rejects.toThrow(StateDbCopyStaleError);
+      await internals.initializing;
+    } finally {
+      setLogger(previous);
+    }
+
+    expect([...readFileSync(dbPath)]).toEqual([1, 2, 3, 4]);
+    expect(discard).toHaveBeenCalledTimes(1);
+    expect(open.mock.calls.map(([saved]) => [...(saved ?? [])])).toEqual([
+      [1, 2, 3],
+      [1, 2, 3, 4],
+    ]);
+    expect(Notice.shown).toEqual([
+      "Im-Nobsidian: 이 창이 읽은 뒤에 다른 곳이 상태 DB 파일을 바꿔 파일에 쓰지 않음 — 이 창의 사본을 버리고 " +
+        "파일에서 다시 엽니다. 마지막으로 파일에 쓴 뒤의 동기화 기록은 남지 않았습니다 — 그 사이 올린 노트는 " +
+        "다음 push 가 페이지를 새로 만들 수 있습니다.",
+    ]);
+    expect(internals.initFailure).toBeNull();
+  });
+
+  it("닫다가 쓸 수 없게 된 사본은 버리고 잠금을 푼다 — 버린 변경이 없으면 잃은 것이 없다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const release = vi.fn();
+    const internals = plugin as unknown as {
+      stateDb: unknown;
+      stateDbFile: unknown;
+      closeStateDb: () => Promise<void>;
+    };
+    internals.stateDb = {
+      close: () =>
+        Promise.reject(new StateDbCopyStaleError("CLI 가 상태 DB 에 쓰는 중이라 파일에 쓰지 않음")),
+      discard: async () => false,
+    };
+    internals.stateDbFile = { release };
+    Notice.shown.splice(0);
+    const previous = getLogger();
+    const warn = vi.fn();
+    setLogger({ ...previous, warn });
+
+    try {
+      await internals.closeStateDb();
+    } finally {
+      setLogger(previous);
+    }
+
+    const told =
+      "Im-Nobsidian: CLI 가 상태 DB 에 쓰는 중이라 파일에 쓰지 않음 — 이 창의 사본을 버리고 파일에서 다시 엽니다.";
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(internals.stateDb).toBeNull();
+    expect(Notice.shown).toEqual([told]);
+    // 알림은 사라지므로 까닭을 로그에도 남긴다
+    expect(warn.mock.calls).toEqual([[told]]);
   });
 
   it("저장된 상태 DB 파일이 깨졌으면 치우는 법을 알린다 — 다른 실패에는 붙이지 않는다", async () => {
