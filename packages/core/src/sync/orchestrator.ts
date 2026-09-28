@@ -6,331 +6,115 @@ import type {
   SyncOptions,
   SyncResult,
   StatusResult,
-  SyncRecord,
   LocalChange,
   RemoteChange,
   Conflict,
   ConflictStrategy,
   FailedOperation,
-  FileType,
-  FolderMoveChange,
   ChangeDiff,
   ProgressCallback,
   ProgressItem,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
-import type { ConversionResult } from "../types/convert.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
-import {
-  isNotionAccessDenied,
-  isNotionObjectNotFound,
-  DiscoveryTooLargeError,
-} from "../notion/client.js";
-import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
-import { Sema } from "async-sema";
-import { ChangeDetector, type LocalScan, type LocalScanOptions } from "./change-detector.js";
-import type { ConversionPipeline } from "../converter/pipeline.js";
+import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
-import { DatabaseSyncer, type PlannedRow, type RowProgress } from "./database-syncer.js";
-import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
-import type { PullOutcome } from "./pull-outcome.js";
-import {
-  applyRemoteDeletion,
-  decideRemoteDeletion,
-  remoteDeletionChange,
-  remoteDeletionConflict,
-  remotePresence,
-  type RemoteDeletionOutcome,
-} from "./remote-deletion.js";
+import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
-import { ConflictResolver, choiceForStrategy, isRemoteDeletion } from "../conflict/resolver.js";
+import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
-import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
-import { sanitizeFileName } from "../utils/sanitize.js";
-import { compactNotionId, notionIdsEqual, normalizeNotionId } from "../utils/id.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool } from "../utils/pool.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
-import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
-import { readLocalNote, type FileStatInfo, type VaultFS } from "./vault-fs.js";
+import type { VaultFS } from "./vault-fs.js";
+import { nextPullWatermark } from "./pull-watermark.js";
 import {
-  notionEnhancedToObsidian,
-  obsidianToNotionEnhanced,
-} from "../converter/enhanced-md-converter.js";
-import { isCompactExport } from "../converter/post-processors/block-spacer.js";
-import { hasBodyBesidesChildren } from "../converter/child-tags.js";
-import {
-  resolveNotionIdWikilinks,
-  degradeUnresolvedNotionIdWikilinks,
-  resolveNotionRelativePageLinks,
-  degradeUnresolvedNotionRelativePageLinks,
-} from "../converter/notion-id-links.js";
-import { extractInlineDbIds } from "../utils/inline-db-refs.js";
-import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
-import { pagePathCandidates } from "../utils/db-row-path.js";
-import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
-import { replacePageBody } from "./page-body.js";
-import {
-  compareRemote,
-  NO_OBSERVATION,
-  observationOf,
-  observedRecordFields,
-  remoteBodyFingerprint,
-  remoteStampOf,
-  type ObservationContext,
-  type ObservedRecordFields,
-  type RemotePageStamp,
-  type RemoteVerdict,
-} from "./remote-observation.js";
-import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
-import {
-  ALL_DATABASES,
-  chooseRemoteScan,
   DatabasePullLedger,
   LAST_FULL_PULL_META_KEY,
   parsePendingDatabases,
   PENDING_DATABASES_META_KEY,
   remoteScanInfo,
-  serializePendingDatabases,
-  type DatabaseSelection,
-  type RemoteScan,
 } from "./remote-scan.js";
-import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
-import type { AbortLike } from "../utils/pool.js";
+import { OperationAbortedError } from "../utils/abort.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
-import { diffRowProperties } from "./row-properties.js";
 import { OperationGate } from "./operation-gate.js";
+import { RunObservation } from "./run-observation.js";
+import { InterruptedSyncRecovery } from "./interrupted-sync.js";
+import { isDatabaseMode } from "./parent-mode.js";
+import { DatabaseDiscovery } from "./database-discovery.js";
+import { FolderPlacement } from "./folder-placement.js";
+import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
+import { ChangeInspector } from "./change-inspector.js";
+import { ConflictWorkflow } from "./conflict-workflow.js";
+import { PagePusher } from "./page-pusher.js";
+import { PagePuller } from "./page-puller.js";
+import { resolveNotionLinks } from "./notion-link-pass.js";
+import { PullPlanner } from "./pull-planner.js";
+import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
+import { detectMissingLocalFiles } from "./missing-local-files.js";
+import { RemoteDriftChecker } from "./remote-drift.js";
+import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
-  explicitTitle,
-  followsFileName,
-  noteTitle,
-  titleAfterMove,
-  titleMayChange,
-  titleUnchangedSince,
-} from "./note-title.js";
-import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
-import {
-  ancestorFolders,
-  databaseFolderIndex,
-  enclosingDatabaseFolder,
-  folderContainer,
-  folderNoteOf,
-  isFolderNotePath,
-  isFolderRecord,
-  parentFolderOf,
-  type FolderLookup,
-} from "./folder-container.js";
-import {
-  deriveFolderMoves,
-  foldersOf,
   forgetRenameHint,
-  hintedFolderTarget,
   isEmptyRenameHints,
-  movePayload,
-  moveOrigin,
-  parseRenameHints,
-  pendingMoveOrigins,
-  pruneRenameHints,
   recordRenameHint,
-  RENAME_HINTS_META_KEY,
-  type FolderMove,
-  type RenameHints,
   type RenameKind,
 } from "./local-moves.js";
 
-/** DB 행을 보낼 때 견줄 기준 — 속성 · 제목 · 본문(null 이면 모름: 본문을 보낸다). */
-interface RowState {
-  readonly properties: Readonly<Record<string, unknown>>;
-  readonly title: string;
-  readonly body: string | null;
-}
-
-/**
- * 지난번에 본 뒤로 원격에서 바뀐 것(N-05).
- *
- * - `none` — 지난번 그대로다. 쓴 뒤 수정 시각을 올려도 된다.
- * - `outside-body` — 본문은 그대로지만 본문 밖(제목 · 행 속성 · 아이콘 · 커버)이 바뀌었다. 본문은
- *   써도 되지만 수정 시각은 올리지 않는다 — 올리면 다음 pull 이 그 변경을 «이미 받은 것» 으로
- *   여긴다.
- * - `body` — 본문이 바뀌었다.
- * - `unknown` — 지난번 본문의 지문을 몰라 확인하지 못했다.
- */
-type RemoteDrift = "none" | "outside-body" | "body" | "unknown";
-
-/**
- * 이번 실행의 로컬 스캔 — 옮긴 노트 · 폴더를 상태 DB 에 옮겨 적기 전의 결과(S-11).
- * dry-run 은 옮겨 적지 않고 {@link LocalView} 로 옮긴 뒤의 모습을 겹쳐 같은 판정을 쓴다.
- */
-interface LocalPlan {
-  readonly scan: LocalScan;
-  /** 스캔이 쓴 이름 변경 힌트 — 옮겨 적은 뒤 이 스냅샷만큼 지운다. */
-  readonly hints: RenameHints;
-  /** 옮겨진 폴더 레코드 — push 가 만든 폴더 페이지. */
-  readonly folderMoves: readonly FolderMove[];
-  /** 옮겨진 자동 발견 DB 폴더. */
-  readonly databaseFolderMoves: readonly FolderMove[];
-  /** 반영할 것이 없어 닫을 이동 WAL — {@link SyncOrchestrator.settledMoveOps}. */
-  readonly settledMoveOps: readonly string[];
-}
-
-/**
- * 원격에서 찾은 변경. 증분이면 바뀐 것이 보인 DB 도 함께 — 행을 고쳤거나 · 새 행이 생겼거나 · 스키마를
- * 고친 DB(id 는 {@link compactNotionId}). 전체 대조면 null 이다 — 모든 DB 를 조회한다(ADR-027).
- */
-interface RemoteDetection {
-  readonly changes: RemoteChange[];
-  readonly databaseIds: ReadonlySet<string> | null;
-}
-
-/** 옮겨 적은 뒤의 볼트 — 경로의 레코드와 폴더 판정. */
-interface LocalView {
-  recordAt(path: string): SyncRecord | null;
-  readonly lookup: FolderLookup;
-}
-
-/** Notion 에 반영할 폴더 이동. 레코드는 이미 새 경로(`to`)를 추적한다. */
-interface PendingFolderMove {
-  readonly record: SyncRecord;
-  /** 마지막으로 Notion 에 반영한 경로. */
-  readonly from: string;
-  readonly to: string;
-}
-
-/** push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null. */
-interface CreatedPage {
-  readonly page: PageObjectResponse;
-  readonly markdown: string | null;
-}
-
-/** 자동 발견된 DB 1개의 동기화 설정 — 상태 메타 `discovered_dbs` 에 목록으로 둔다. */
-interface DiscoveredDbConfig {
-  databaseId: string;
-  localFolder: string;
-  titleProperty: string;
-}
-
-/** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
-type DiscoveredDbOutcome =
-  | { kind: "ok"; config: DiscoveredDbConfig }
-  | { kind: "linked"; originalDbId: string }
-  | { kind: "inaccessible" }
-  | { kind: "error"; error: string };
-
-/** 자동 발견 DB 목록을 보존하는 상태 메타 키. */
-const DISCOVERED_DBS_META_KEY = "discovered_dbs";
-
-/** 접근 불가 DB denylist 를 보존하는 상태 메타 키. */
-const INACCESSIBLE_DBS_META_KEY = "inaccessible_dbs";
-
-/** linked view 컨테이너 → 원본 DB 매핑을 보존하는 상태 메타 키(nohyph → nohyph). */
-const LINKED_DBS_META_KEY = "linked_dbs";
-
-/**
- * 발견하다 읽지 못해 다음 pull 이 다시 볼 것을 보존하는 상태 메타 키. 캐시가 차면 블록 스캔을 다시
- * 하지 않으므로, 따로 적어 두지 않으면 한 번 읽지 못한 DB 는 `--force` 전까지 발견되지 않는다.
- * DB 행 조회 실패는 여기 두지 않는다 — 그 DB 는 캐시에 남아 다음 pull 이 다시 받는다.
- */
-const DISCOVERY_RETRY_META_KEY = "discovery_retry";
-
-/**
- * 하위 DB 블록 스캔을 마친 시각을 두는 상태 메타 키. 스캔은 추적 페이지마다 요청 1회라 처음 한 번만
- * 한다 — 그 뒤에 생긴 DB 는 받은 페이지의 본문(`<database>` 태그)으로 찾는다. 예전에는 «발견한 DB
- * 캐시가 비었는가» 로 가려, DB 가 하나도 없는 볼트는 원격이 그대로여도 pull 마다 모든 페이지를 다시
- * 훑었다.
- */
-const DISCOVERY_SCANNED_META_KEY = "discovery_scanned_at";
-
-interface DiscoveryRetry {
-  /** 자식 DB 를 확인하지 못한 페이지. */
-  readonly parents: string[];
-  /** 찾았지만 설정(제목 · 조회 가능 여부)을 읽지 못한 DB. */
-  readonly dbs: Array<{ dbId: string; parentPageId: string }>;
-}
-
-function parseDiscoveryRetry(raw: string | null): DiscoveryRetry {
-  if (!raw) return { parents: [], dbs: [] };
-  try {
-    const parsed = JSON.parse(raw) as Partial<DiscoveryRetry>;
-    return {
-      parents: Array.isArray(parsed.parents) ? parsed.parents : [],
-      dbs: Array.isArray(parsed.dbs) ? parsed.dbs : [],
-    };
-  } catch {
-    return { parents: [], dbs: [] };
-  }
-}
-
-/** 자동 발견 DB 목록. 없거나 깨졌으면 빈 목록 — 설정 · 볼트 추적분만으로 계속한다. */
-function parseDiscoveredDbs(raw: string | null): DiscoveredDbConfig[] {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? (parsed as DiscoveredDbConfig[]) : [];
-  } catch {
-    return [];
-  }
-}
-
 export class SyncOrchestrator {
-  private readonly changeDetector: ChangeDetector;
-  private readonly pipeline: ConversionPipeline;
-  private readonly blockConverter: BlockConverter;
-  private readonly imageHandler: ImageHandler;
   private readonly fileHandler: FileHandler;
   private readonly databaseSyncer: DatabaseSyncer;
-  private readonly propertyMapper: PropertyMapper;
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
-  private readonly conflictResolver: ConflictResolver;
-  /** DB 폴더 → DB id. 자동 발견 목록이 바뀔 때만 다시 만든다({@link folderLookup}). */
-  private dbFolderCache: {
-    readonly raw: string | null;
-    readonly index: Map<string, string>;
-  } | null = null;
-  private dbSchemaLoaded = false;
-  private _pullImageCount = 0;
-  private _pullFileCount = 0;
-  // pull 중 각 페이지 markdown(<database url=.../>)에서 추출한 인라인 DB 참조.
-  // key: 하이픈 제거 databaseId, value: 그 DB가 박힌 부모 페이지 id.
-  // 블록 트리 재귀 없이 markdown 신호만으로 컬럼/synced_block 등 깊이 중첩된
-  // child_database 까지 발견해 폴더+.base 동기화 대상으로 등록한다.
-  private _inlineDbRefs = new Map<string, string>();
-  // pull 발견 단계에서 모든 페이지의 부모를 해소하며 채우는 "자식을 가진 페이지" 집합
-  // (정규화된 page id). 폴더노트/폴더 판정의 단일 신뢰 원천 — 얕은 블록 검사로 callout·
-  // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
-  // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
-  private _childParentIds = new Set<string>();
-
-  // 이번 pull 실행에서 이미 배정된 파일 경로. 워커 풀이 동시에 도는 동안 동명 페이지가
-  // 같은 경로를 골라 서로를 덮어쓰는 것을 막는다({@link resolveUniqueFilePath}).
-  // 실행마다 비운다 — 지난 실행에서 삭제된 경로를 영구히 막지 않기 위해.
-  private readonly claimedPaths = new Set<string>();
-
-  // 이번 push 에서 Notion 자리를 마련하지 못한 폴더 → 이유({@link prepareFolders}). 그 안의 노트가
-  // 이 이유로 실패한다 — 「폴더 페이지가 아직 없다」 로 뭉개면 무엇을 고쳐야 하는지 모른다.
-  private readonly unpreparedFolders = new Map<string, string>();
-
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
-  // ({@link beginRemoteObservation}). 원격 판정과 관측 기록이 같은 값을 쓴다.
-  private observation: ObservationContext = NO_OBSERVATION;
+  // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
+  private readonly observation: RunObservation;
+
+  // 볼트 폴더의 Notion 자리 — 새 노트 · 옮긴 노트의 부모, 폴더 페이지 마련, 둘 자리가 없는 것의
+  // 거절(S-04 · S-11 · S-15).
+  private readonly placement: FolderPlacement;
+
+  // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
+  private readonly planner: LocalPlanner;
+
+  // 원격에서 바뀐 것 — 전체 대조 · 증분 감지(ADR-027).
+  private readonly detector: RemoteDetector;
+
+  // 지난번에 본 뒤로 원격이 바뀌었나(N-05) — 덮어쓰기 · 지우기 전에, 변경을 보이기 전에 본다.
+  private readonly drift: RemoteDriftChecker;
+
+  // 페이지 모드의 DB 자동 발견 — 페이지 안의 DB 를 찾아 등록하고 받는다.
+  private readonly discovery: DatabaseDiscovery;
+
+  // 원격 페이지를 볼트에 받는다 — 새로 생긴 · 바뀐 · 지운 페이지, 충돌의 원격 렌더.
+  private readonly puller: PagePuller;
+
+  // pull 할 것을 세기만 한다(dry-run).
+  private readonly pullPlanner: PullPlanner;
+
+  // 로컬 변경을 Notion 에 올린다 — 새 노트 · 고친 노트 · 옮긴 노트와 폴더 · 지운 노트, 충돌 해소 결과.
+  private readonly pusher: PagePusher;
+
+  // 충돌 해소 — 목록 · 해소 · Notion 전파(I8 · N-06).
+  private readonly conflictWorkflow: ConflictWorkflow;
+
+  // 변경 하나를 들여다보고 되돌린다 — 두 글 견주기 · 로컬 변경 되돌리기.
+  private readonly inspector: ChangeInspector;
+
+  // 중단된 실행의 정리 · 앞선 생성이 남긴 고아 페이지의 입양(I12 · S-07).
+  private readonly recovery: InterruptedSyncRecovery;
 
   // 작업은 한 번에 하나만 돈다(S-09) — 위의 실행별 상태를 두 실행이 함께 쓰지 않도록.
   private readonly gate = new OperationGate();
-
-  // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
-  // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
-  // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
-  // 이 예산 안에서 순회가 끝나 폴백 없이 빠르게 완료된다. (단위: ms)
-  private static readonly DISCOVERY_RECURSIVE_BUDGET_MS = 90_000;
 
   constructor(
     private readonly config: Config,
@@ -339,12 +123,15 @@ export class SyncOrchestrator {
     private readonly vaultFs: VaultFS,
     customFetch?: typeof globalThis.fetch,
   ) {
-    this.changeDetector = new ChangeDetector(stateDb);
-    this.pipeline = createDefaultPipeline({
+    this.observation = new RunObservation(stateDb, notionClient);
+    this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
+    this.detector = new RemoteDetector(config, stateDb, notionClient, this.observation);
+    const changeDetector = new ChangeDetector(stateDb);
+    const pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
-    this.blockConverter = new BlockConverter();
-    this.imageHandler = new ImageHandler(
+    const blockConverter = new BlockConverter();
+    const imageHandler = new ImageHandler(
       vaultFs,
       config.paths.attachments,
       notionClient,
@@ -369,22 +156,29 @@ export class SyncOrchestrator {
         itemTimeoutMs: config.advanced.itemTimeoutMs,
       },
     );
-    this.propertyMapper = new PropertyMapper();
+    const propertyMapper = new PropertyMapper();
     this.databaseSyncer = new DatabaseSyncer(
       config,
       stateDb,
       notionClient,
       vaultFs,
-      this.pipeline,
-      this.imageHandler,
-      () => this.observation,
+      pipeline,
+      imageHandler,
+      () => this.observation.context,
+    );
+    this.discovery = new DatabaseDiscovery(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      this.databaseSyncer,
     );
     // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 위키링크
     // 텍스트를 만든다. 원시 제목(.title)을 쓰면 슬래시·콜론 등 파일명 금지문자
     // 때문에 단일 패스 링크가 실제 파일을 못 가리키는 불일치가 생겼다.
     // M1: 동일 resolver 를 페이지 모드 변환 경로(notionClient.extractProperties)에도
     // 주입한다. 주입하지 않으면 페이지 모드 relation 이 raw UUID 로 남아 매 pull 마다
-    // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 this.propertyMapper 가 처리).
+    // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 propertyMapper 가 처리).
     const wikilinkResolver: WikilinkResolver = {
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
       resolvePageId: (pageId: string) => {
@@ -392,15 +186,82 @@ export class SyncOrchestrator {
         return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
       },
     };
-    this.propertyMapper.setWikilinkResolver(wikilinkResolver);
+    propertyMapper.setWikilinkResolver(wikilinkResolver);
     this.notionClient.setWikilinkResolver(wikilinkResolver);
     this.rowSchemas = new RowSchemaCache(
       (databaseId) => notionClient.getDatabaseSchema(databaseId),
       wikilinkResolver,
     );
 
-    this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
-    this.conflictResolver = new ConflictResolver(stateDb, vaultFs);
+    this.drift = new RemoteDriftChecker(
+      config,
+      stateDb,
+      notionClient,
+      this.databaseSyncer,
+      this.rowSchemas,
+      this.observation,
+    );
+    this.placement = new FolderPlacement(
+      config,
+      stateDb,
+      notionClient,
+      this.observation,
+      this.drift,
+      this.recovery,
+    );
+    this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
+    this.puller = new PagePuller(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      pipeline,
+      blockConverter,
+      imageHandler,
+      propertyMapper,
+      this.databaseSyncer,
+      this.observation,
+      this.drift,
+      this.placement,
+      this.detector,
+      this.discovery,
+    );
+    this.pullPlanner = new PullPlanner(
+      config,
+      stateDb,
+      vaultFs,
+      this.databaseSyncer,
+      this.drift,
+      this.planner,
+    );
+    this.pusher = new PagePusher(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      pipeline,
+      blockConverter,
+      imageHandler,
+      this.rowSchemas,
+      this.observation,
+      this.drift,
+      this.placement,
+      this.recovery,
+    );
+    this.conflictWorkflow = new ConflictWorkflow(
+      stateDb,
+      vaultFs,
+      notionClient,
+      changeDetector,
+      new ConflictResolver(stateDb, vaultFs),
+      this.observation,
+      this.planner,
+      this.puller,
+      this.pusher,
+    );
+    this.inspector = new ChangeInspector(stateDb, vaultFs, notionClient, this.planner, this.puller);
+
+    blockConverter.initNotionToMd(this.notionClient.getInternalClient());
   }
 
   /** 도는 작업 — 없으면 null(S-09). 부른 쪽이 겹칠 요청을 미리 거를 때 쓴다. */
@@ -426,22 +287,22 @@ export class SyncOrchestrator {
       };
     }
 
-    this.beginRemoteObservation(startTime);
+    this.observation.begin(startTime);
     // dry-run 은 상태를 바꾸지 않는다 — 끊긴 실행의 표시 · 폴더 레코드 · 끊긴 생성은 실제 push 가
     // 정리한다(N-03). 끊긴 생성을 되살려 입양할 노트도 dry-run 은 새로 만들 것으로 센다.
     if (!options?.dryRun) {
-      this.cleanupInterruptedSync();
-      this.repairFolderRecords();
+      this.recovery.cleanupInterruptedSync();
+      this.placement.repairFolderRecords();
     }
     this.rowSchemas.clear();
-    this.unpreparedFolders.clear();
-    if (!options?.dryRun) await this.recoverInterruptedPushOps();
+    this.placement.resetUnpreparedFolders();
+    if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
     // 한다 — dry-run 은 옮겨 적지 않고 같은 모습을 겹쳐 본다.
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
-    const view = this.localView(plan);
-    if (!options?.dryRun) this.adoptLocalMoves(plan);
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const view = this.planner.localView(plan);
+    if (!options?.dryRun) this.planner.adoptLocalMoves(plan);
     const changes = plan.scan.changes;
 
     const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
@@ -453,9 +314,9 @@ export class SyncOrchestrator {
     ).filter((c) => !excludeSet || !excludeSet.has(c.path));
     // 범위를 좁힌 push 는 그 범위 안의 폴더만 옮긴다. 노트의 부모는 폴더 레코드의 페이지라, 폴더
     // 페이지를 옮기기 전에도 노트는 맞는 자리로 간다.
-    const folderMoves = this.pendingFolderMoves(plan).filter((move) =>
-      inAnyPathScope(move.to, options?.paths),
-    );
+    const folderMoves = this.planner
+      .pendingFolderMoves(plan)
+      .filter((move) => inAnyPathScope(move.to, options?.paths));
 
     if (filtered.length === 0 && folderMoves.length === 0) {
       return {
@@ -470,8 +331,8 @@ export class SyncOrchestrator {
 
     // 둘 자리가 없는 새 노트와 Notion 에서 그렇게 옮길 수 없는 노트 · 폴더는 이유와 함께 실패로
     // 남긴다. dry-run 도 같은 판정을 쓴다 — 실제 push 가 거절할 것을 세지 않는다(S-04 · S-11).
-    const refusedCreates = this.refusedCreates(filtered, view.lookup);
-    const refusedMoves = this.refusedMoves(filtered, view);
+    const refusedCreates = this.placement.refusedCreates(filtered, view.lookup);
+    const refusedMoves = this.placement.refusedMoves(filtered, view);
     const refusedFailures: FailedOperation[] = [
       ...[...refusedCreates].map(([path, error]) => ({
         path,
@@ -482,7 +343,7 @@ export class SyncOrchestrator {
     ];
     const movableFolders: PendingFolderMove[] = [];
     for (const move of folderMoves) {
-      const error = this.folderMoveRefusal(move.to, view.lookup);
+      const error = this.placement.folderMoveRefusal(move.to, view.lookup);
       if (error) refusedFailures.push({ path: move.to, operation: "move", error });
       else movableFolders.push(move);
     }
@@ -514,7 +375,7 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("push_in_progress", "true");
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
@@ -523,7 +384,7 @@ export class SyncOrchestrator {
     const total = movableFolders.length + applicable.length;
 
     // 옮긴 폴더의 페이지부터 — 그 아래로 옮긴 노트의 부모다.
-    counts.moved += await this.pushFolderMoves(movableFolders, failed, (to) =>
+    counts.moved += await this.pusher.pushFolderMoves(movableFolders, failed, (to) =>
       options?.onProgress?.(++completed, total, { path: to, operation: "move" }),
     );
 
@@ -531,19 +392,19 @@ export class SyncOrchestrator {
     const applyPushChange = async (change: LocalChange): Promise<void> => {
       switch (change.type) {
         case "created":
-          await this.pushCreate(change.path);
+          await this.pusher.pushCreate(change.path);
           counts.created++;
           break;
         case "modified":
-          await this.pushUpdate(change.path);
+          await this.pusher.pushUpdate(change.path);
           counts.updated++;
           break;
         case "moved":
-          await this.pushMove(change);
+          await this.pusher.pushMove(change);
           counts.moved++;
           break;
         case "deleted": {
-          const propagated = await this.pushDelete(change.path);
+          const propagated = await this.pusher.pushDelete(change.path);
           if (propagated) counts.deleted++;
           break;
         }
@@ -569,7 +430,7 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.prepareFolders(applicable, firstAttempt);
+    const pushedEarly = await this.placement.prepareFolders(applicable, firstAttempt);
     await runPool(
       applicable.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
@@ -604,7 +465,7 @@ export class SyncOrchestrator {
       };
       // 첫 차례에 새 행 · 폴더 노트가 생기면 그 아래 폴더가 그제서야 자리를 얻는다 — 재시도 전에
       // 폴더를 다시 본다. 자리를 얻지 못한 폴더의 노트는 그 이유와 함께 실패로 남는다.
-      const retriedEarly = await this.prepareFolders(retryQueue, retry);
+      const retriedEarly = await this.placement.prepareFolders(retryQueue, retry);
       await runPool(
         retryQueue.filter((c) => !retriedEarly.has(c.path)),
         retry,
@@ -645,8 +506,7 @@ export class SyncOrchestrator {
 
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
-    // 이번 실행의 경로 선점 장부를 비운다 — 지난 실행에서 삭제된 경로를 계속 막지 않도록.
-    this.claimedPaths.clear();
+    this.puller.beginPull();
     this.rowSchemas.clear();
     const emptyResult: PullResult = {
       created: 0,
@@ -666,8 +526,8 @@ export class SyncOrchestrator {
       return emptyResult;
     }
 
-    this.beginRemoteObservation(startTime);
-    if (!options?.dryRun) this.cleanupInterruptedSync();
+    this.observation.begin(startTime);
+    if (!options?.dryRun) this.recovery.cleanupInterruptedSync();
 
     // 옮긴 노트를 먼저 옮겨 적는다 — 아니면 옛 자리의 노트를 되살리고 원격 변경을 옛 경로에
     // 쓴다(S-11). dry-run 은 옮겨 적지 않고, 옮겨 적을 노트를 되살릴 대상에서 뺀다.
@@ -675,7 +535,7 @@ export class SyncOrchestrator {
     // 이번 pull 은 사라진 노트를 되살리지 않는다. 되살리면 옮긴 노트가 옛 자리에도 생긴다.
     let localPlan: LocalPlan | null = null;
     try {
-      localPlan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+      localPlan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     } catch (error) {
       getLogger().warn(
         `[Im-Nobsidian] 볼트를 읽지 못해 옮긴 노트를 확인하지 못함 — 이번 pull 은 사라진 노트를 되살리지 않는다: ${
@@ -683,13 +543,11 @@ export class SyncOrchestrator {
         }`,
       );
     }
-    if (localPlan && !options?.dryRun) this.adoptLocalMoves(localPlan);
+    if (localPlan && !options?.dryRun) this.planner.adoptLocalMoves(localPlan);
     const adopting = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
 
     const counts = { created: 0, updated: 0, deleted: 0, restored: 0 };
-    this._pullImageCount = 0;
-    this._pullFileCount = 0;
-    this._inlineDbRefs.clear();
+    this.discovery.clearInlineRefs();
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
     const failed: FailedOperation[] = [];
@@ -697,13 +555,19 @@ export class SyncOrchestrator {
     let detected: readonly RemoteChange[] = [];
     const applied = new Set<RemoteChange>();
 
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
     // 원격을 얼마나 훑을지(ADR-027). 경로를 좁힌 pull 은 볼트 전체를 받지 않으므로 주기가 됐어도
     // 전체 대조하지 않는다 — 전체 대조를 마친 것으로 적을 수 없다.
-    const scan = this.remoteScan({ force: options?.force === true, deferDue: !!options?.paths });
+    const scan = this.detector.remoteScan({
+      force: options?.force === true,
+      deferDue: !!options?.paths,
+    });
     let detection: RemoteDetection;
     try {
-      detection = await this.detectRemote(scan, { signal: options?.signal, databases: true });
+      detection = await this.detector.detectRemote(scan, {
+        signal: options?.signal,
+        databases: true,
+      });
     } catch (error) {
       // 취소 — 받은 것이 없다. 기준 시각 · 전체 대조 시각을 옮기지 않고 끝낸다.
       if (error instanceof OperationAbortedError) {
@@ -717,7 +581,12 @@ export class SyncOrchestrator {
       this.stateDb.getMeta(PENDING_DATABASES_META_KEY),
     );
     const ledger = new DatabasePullLedger(
-      this.databaseSelection(detection, localPlan, pendingDatabases, options?.paths),
+      this.detector.databaseSelection(
+        detection,
+        localPlan?.scan.changes ?? null,
+        pendingDatabases,
+        options?.paths,
+      ),
       pendingDatabases,
     );
 
@@ -749,7 +618,7 @@ export class SyncOrchestrator {
         if (scan.kind === "full" && !options?.signal?.aborted) {
           this.stateDb.setMeta(LAST_FULL_PULL_META_KEY, startedAt);
         }
-        this.savePendingDatabases(ledger);
+        this.detector.savePendingDatabases(ledger);
       }
       this.stateDb.setMeta("last_sync_at", new Date().toISOString());
       this.stateDb.setMeta("pull_in_progress", "");
@@ -762,8 +631,8 @@ export class SyncOrchestrator {
         writtenPaths,
         failed,
         duration: Date.now() - startTime,
-        imageCount: this._pullImageCount,
-        fileCount: this._pullFileCount,
+        imageCount: this.puller.imageCount,
+        fileCount: this.puller.fileCount,
         linkCount,
         remoteScan: {
           ...remoteScanInfo(
@@ -788,7 +657,9 @@ export class SyncOrchestrator {
     // 영구히 발산했다(실측 0/4). 상태 DB 와 실제 볼트의 차집합으로 직접 잡아 복원 대상으로
     // 밀어 넣는다. 이미 원격 변경으로 큐에 오른 페이지는 중복 처리하지 않는다.
     const queuedIds = new Set(filtered.map((c) => c.pageId));
-    const missingLocal = localPlan ? await this.detectMissingLocalFiles(options?.paths) : [];
+    const missingLocal = localPlan
+      ? await detectMissingLocalFiles(this.config, this.stateDb, this.vaultFs, options?.paths)
+      : [];
     const restoreChanges: RemoteChange[] = missingLocal
       .filter(
         (r) => r.notionPageId !== null && !queuedIds.has(r.notionPageId) && !adopting.has(r.id),
@@ -805,7 +676,15 @@ export class SyncOrchestrator {
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
     // 예전에는 페이지 변경이 없으면 dry-run 도 아래 DB 경로로 가 행을 실제로 썼다(N-01).
     if (options?.dryRun) {
-      return this.planPull(filtered, restoreChanges, localPlan, options, startTime, scan, ledger);
+      return this.pullPlanner.planPull(
+        filtered,
+        restoreChanges,
+        localPlan,
+        options,
+        startTime,
+        scan,
+        ledger,
+      );
     }
 
     let pullTotal = workItems.length;
@@ -852,13 +731,18 @@ export class SyncOrchestrator {
           });
         }
       }
-      const dbDiscovery = await this.pullDiscoveredDatabases(writtenPaths, failed, conflicts, {
-        forceRediscovery: options?.force === true,
-        paths: options?.paths,
-        progress: rowProgress,
-        ledger,
-        signal: options?.signal,
-      });
+      const dbDiscovery = await this.discovery.pullDiscoveredDatabases(
+        writtenPaths,
+        failed,
+        conflicts,
+        {
+          forceRediscovery: options?.force === true,
+          paths: options?.paths,
+          progress: rowProgress,
+          ledger,
+          signal: options?.signal,
+        },
+      );
       counts.created += dbDiscovery.created;
       counts.updated += dbDiscovery.updated;
       counts.deleted += dbDiscovery.deleted;
@@ -895,13 +779,13 @@ export class SyncOrchestrator {
     const applyChange = async (change: RemoteChange): Promise<string | undefined> => {
       switch (change.type) {
         case "created": {
-          const path = await this.pullCreate(change.pageId);
+          const path = await this.puller.pullCreate(change.pageId);
           writtenPaths.push(path);
           counts.created++;
           return path;
         }
         case "modified": {
-          const outcome = await this.pullUpdate(change);
+          const outcome = await this.puller.pullUpdate(change);
           if (outcome.action === "conflict") {
             conflicts.push(outcome.conflict);
           } else if (outcome.action === "written") {
@@ -914,7 +798,7 @@ export class SyncOrchestrator {
           return outcome.path;
         }
         case "deleted": {
-          const outcome = await this.pullDelete(change);
+          const outcome = await this.puller.pullDelete(change);
           if (outcome.action === "deleted") counts.deleted++;
           else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
           return outcome.path;
@@ -1022,19 +906,19 @@ export class SyncOrchestrator {
   }
 
   private async executeStatus(): Promise<StatusResult> {
-    this.beginRemoteObservation(Date.now());
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    this.observation.begin(Date.now());
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
     // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
-    const scan = this.remoteScan({ force: false, deferDue: true });
-    const detection = await this.detectRemote(scan, { databases: false });
-    const remoteChanges = await this.withoutUnchangedRemotes(detection.changes);
+    const scan = this.detector.remoteScan({ force: false, deferDue: true });
+    const detection = await this.detector.detectRemote(scan, { databases: false });
+    const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes);
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
-    const conflicts: Conflict[] = await this.buildConflictsFromRecords(
+    const conflicts: Conflict[] = await this.conflictWorkflow.buildConflictsFromRecords(
       conflictRecords,
       localChanges,
       remoteChanges,
@@ -1043,7 +927,7 @@ export class SyncOrchestrator {
 
     return {
       localChanges,
-      folderMoves: this.folderMoveChanges(plan),
+      folderMoves: this.planner.folderMoveChanges(plan),
       remoteChanges,
       conflicts,
       conflictRecords,
@@ -1059,13 +943,13 @@ export class SyncOrchestrator {
    * (옮긴 노트 · 폴더 포함). 상태 DB 는 바꾸지 않는다.
    */
   async statusLocal(): Promise<StatusResult> {
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
+    const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
 
     return {
       localChanges: plan.scan.changes,
-      folderMoves: this.folderMoveChanges(plan),
+      folderMoves: this.planner.folderMoveChanges(plan),
       remoteChanges: [],
       conflicts: [],
       conflictRecords,
@@ -1082,14 +966,14 @@ export class SyncOrchestrator {
    * 기록 없이는 짝을 찾지 못해, 옛 페이지를 지우고 새 페이지를 만든다.
    */
   recordLocalRename(from: string, to: string, kind: RenameKind): void {
-    this.writeRenameHints(recordRenameHint(this.renameHints(), from, to, kind));
+    this.planner.writeRenameHints(recordRenameHint(this.planner.renameHints(), from, to, kind));
   }
 
   /** 볼트에서 지운 노트 · 폴더 — 그 자리를 새 경로로 적은 힌트를 버린다. */
   recordLocalDelete(path: string): void {
-    const hints = this.renameHints();
+    const hints = this.planner.renameHints();
     if (isEmptyRenameHints(hints)) return;
-    this.writeRenameHints(forgetRenameHint(hints, path));
+    this.planner.writeRenameHints(forgetRenameHint(hints, path));
   }
 
   /**
@@ -1100,8 +984,8 @@ export class SyncOrchestrator {
    * 그렇게 침묵 유실됐다. 여기서만 "빠짐없다"를 본다.
    *
    * 대조 대상 database id 는 이 클래스가 조립한다: 설정에 적힌 것 + 디스커버리 캐시가
-   * 아는 것 + DB 모드의 루트 DB. `discovered_dbs` 메타 키를 아는 곳을 이 파일 하나로
-   * 유지해, 호출부(CLI·E2E)가 캐시 표현을 각자 다시 해석하지 않게 한다.
+   * 아는 것 + DB 모드의 루트 DB. 캐시 표현(`discovered_dbs` 메타 키)은 `discovered-databases.ts`
+   * 한 곳이 정하고 여기서 조립한다 — 호출부(CLI·E2E)가 그 표현을 각자 다시 해석하지 않게.
    *
    * 페이지(R12-C)는 pull 이 쓴 경로가 아니라 **search 열거**로 대조한다. 페이지는 열거
    * 경로가 둘이고 둘이 같은 집합을 내지 않는 게 애초의 결함이므로(R12-A), 독립된 두 번째
@@ -1109,7 +993,7 @@ export class SyncOrchestrator {
    */
   async verifyCompleteness(): Promise<VaultCompletenessReport> {
     const ids: string[] = [];
-    if (this.isDatabaseMode) ids.push(this.config.notion.databaseId!);
+    if (isDatabaseMode(this.config)) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);
 
     // 캐시가 깨졌으면 설정·볼트 추적분만으로 대조한다(검증 자체는 계속).
@@ -1122,7 +1006,7 @@ export class SyncOrchestrator {
     });
 
     // 페이지 대조는 페이지 모드에서만 의미가 있다 — DB 모드에는 root 서브트리가 없다.
-    const pages = this.isDatabaseMode
+    const pages = isDatabaseMode(this.config)
       ? null
       : await verifyPageCompleteness(
           this.notionClient,
@@ -1149,7 +1033,7 @@ export class SyncOrchestrator {
     duration: number;
   }> {
     const startTime = Date.now();
-    const changes = await this.detectRemoteChanges();
+    const changes = await this.detector.detectRemoteChanges();
     this.stateDb.setMeta("last_fetch_at", new Date().toISOString());
     return {
       newPages: changes.filter((c) => c.type === "created").length,
@@ -1159,1662 +1043,47 @@ export class SyncOrchestrator {
     };
   }
 
-  /**
-   * @param options.fullRender 원격 본문을 pull 과 동일한 파이프라인으로 렌더할지.
-   *   기본(false)은 화면 미리보기용 경량 렌더 — 첨부를 내려받지 않으므로 `status` 처럼
-   *   읽기만 하는 경로가 쓴다. 볼트에 덮어쓸 본문이 필요한 해소 경로는 반드시 켠다.
-   */
-  private async buildConflictsFromRecords(
-    records: SyncRecord[],
-    localChanges: LocalChange[],
-    remoteChanges: RemoteChange[],
-    options?: { fullRender?: boolean },
-  ): Promise<Conflict[]> {
-    const conflicts: Conflict[] = [];
-
-    for (const record of records) {
-      const localChange = localChanges.find((c) => c.path === record.obsidianPath) ?? {
-        path: record.obsidianPath,
-        type: "modified" as const,
-        currentHash: record.contentHash,
-        previousHash: record.contentHash,
-      };
-
-      let localContent = "";
-      try {
-        localContent = await this.vaultFs.readFile(record.obsidianPath);
-      } catch {
-        // 파일이 삭제된 경우
-      }
-
-      let remoteContent = "";
-      let remoteLastEdited: string | null = null;
-      let remoteGone = false;
-      if (record.notionPageId) {
-        try {
-          // 휴지통 · 보관 · 없음이면 원격에서 지운 노트의 충돌이다 — 렌더할 본문이 없다.
-          const presence = await remotePresence(this.notionClient, record.notionPageId);
-          if (presence.kind === "gone") {
-            remoteGone = true;
-          } else if (options?.fullRender) {
-            remoteLastEdited = presence.page.last_edited_time;
-            remoteContent = (
-              await this.renderRemotePage(record, record.notionPageId, presence.page)
-            ).content;
-          } else {
-            remoteContent = (await this.fetchPageMarkdown(record.notionPageId)).content;
-          }
-        } catch (error) {
-          // 해소할 목록은 원격을 읽지 못하면 이유와 함께 실패한다(N-06). 빈 원격으로 충돌을 만들면
-          // 병합은 원격이 모든 줄을 지운 것으로 보고, 원격 유지는 로컬을 빈 파일로 덮는다.
-          if (options?.fullRender) {
-            throw new Error(
-              `충돌 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${
-                error instanceof Error ? error.message : String(error)
-              }`,
-              { cause: error },
-            );
-          }
-          // 상태 표시용 미리보기 — 읽지 못하면 원격을 비워 둔 채 충돌이 있다는 것만 보인다.
-        }
-      }
-
-      if (remoteGone) {
-        conflicts.push(
-          remoteDeletionConflict(
-            record,
-            localContent,
-            remoteChanges.find((c) => c.pageId === record.notionPageId && c.type === "deleted") ??
-              remoteDeletionChange(record),
-          ),
-        );
-        continue;
-      }
-
-      const remoteChange = remoteChanges.find((c) => c.pageId === record.notionPageId) ?? {
-        pageId: record.notionPageId ?? "",
-        type: "modified" as const,
-        // 현재 원격 시각을 실제로 읽어왔다면 그 값을 쓴다. 해소 후 재조정(propagateResolution)
-        // 이 이 값을 그대로 기준점으로 삼는데, 낡은 저장값을 실으면 다음 pull 이 같은 변경을
-        // 다시 충돌로 보고 무한 재충돌한다.
-        lastEdited: remoteLastEdited ?? record.notionLastEdited ?? "",
-        previousEdited: null,
-      };
-
-      conflicts.push({
-        syncRecord: record,
-        localChange,
-        remoteChange,
-        baseContent: record.baseSnapshot?.toString("utf-8") ?? null,
-        localContent,
-        remoteContent,
-      });
-    }
-
-    return conflicts;
-  }
-
-  private get isDatabaseMode(): boolean {
-    return this.config.notion.parentMode === "database" && !!this.config.notion.databaseId;
-  }
-
-  private async discoverChildDatabases(pageIds: readonly string[]): Promise<{
-    found: Array<{ dbId: string; parentPageId: string }>;
-    unread: Array<{ pageId: string; error: string }>;
-  }> {
-    const found: Array<{ dbId: string; parentPageId: string }> = [];
-    const unread: Array<{ pageId: string; error: string }> = [];
-    const seen = new Set<string>();
-
-    for (const parentId of pageIds) {
-      if (seen.has(parentId)) continue;
-      seen.add(parentId);
-      try {
-        const dbIds = await this.notionClient.getChildDatabaseIds(parentId);
-        for (const dbId of dbIds) {
-          found.push({ dbId, parentPageId: parentId });
-        }
-      } catch (error) {
-        // 공유하지 않은 블록(404 · 403)은 건너뛴다. 그 밖에 읽지 못한 것은 없다고 하지 않는다.
-        if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) continue;
-        unread.push({
-          pageId: parentId,
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-
-    return { found, unread };
-  }
-
-  /**
-   * 자동 발견된 child_database 1개를 DatabaseSyncer 설정으로 변환한다.
-   * 블록 스캔/markdown 양쪽 발견 경로에서 공통으로 사용한다.
-   * - localFolder: 부모 페이지의 obsidianPath 기준으로 폴더를 잡아 원본 중첩 구조를 보존
-   *   (예: 부모 "AI Engineer (1).md" + DB "Minirecord Project" → "AI Engineer (1)/Minirecord-Project")
-   * - 제목 취득 실패 시 부모 폴더명 기반 안전 이름으로 폴백
-   */
-  private async buildDiscoveredDbConfig(
-    dbId: string,
-    parentPageId: string,
-  ): Promise<DiscoveredDbOutcome> {
-    let dbTitle: string;
-    try {
-      // 제목 + 접근 가능한 data source 유무를 확인한다. data source 가 없으면
-      // 행 조회가 404 로 실패하고 빈 폴더/.base 만 남기므로, 발견 단계에서 미리 제외한다.
-      const info = await this.notionClient.getDatabaseSyncability(dbId);
-      // F25: data_sources 가 채워진 linked view 컨테이너(원본이 공유 범위에 있는 경우) —
-      // 원본으로 해소해 등록한다. 컨테이너를 원본처럼 등록하면 같은 행 집합을 이중
-      // pull 해 매 pull 폴더 릴레이 재배치(churn)가 된다.
-      if (info.linkedOriginalDbId) {
-        getLogger().info(
-          `[Im-Nobsidian] DB ${dbId}: linked view 컨테이너(원본 ${info.linkedOriginalDbId}) → 원본으로 해소(F25)`,
-        );
-        return { kind: "linked", originalDbId: info.linkedOriginalDbId };
-      }
-      if (!info.queryable) {
-        // linked database view 컨테이너는 data_sources 가 비지만 Views API 로 원본을
-        // 알 수 있다(F22). 해소되면 접근 불가가 아니라 "원본으로 향하는 참조"로 취급한다.
-        const linked = await this.notionClient.resolveLinkedDatabase(dbId);
-        if (linked) {
-          getLogger().info(
-            `[Im-Nobsidian] DB ${dbId}: linked view("${linked.viewName}") → 원본 ${linked.originalDbId} 로 해소`,
-          );
-          return { kind: "linked", originalDbId: linked.originalDbId };
-        }
-        return { kind: "inaccessible" };
-      }
-      dbTitle = info.title;
-    } catch (error) {
-      // 삭제된 DB 도 404 → 접근 불가로 강등(재시도하지 않음). 그 외는 일시 오류로 본다.
-      if (isNotionObjectNotFound(error)) return { kind: "inaccessible" };
-      getLogger().warn(`[Im-Nobsidian] 자동 발견 DB ${dbId} 설정 생성 실패:`, error);
-      return { kind: "error", error: error instanceof Error ? error.message : String(error) };
-    }
-
-    const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
-    let parentFolder = "";
-    if (parentEntry?.obsidianPath) {
-      const obsPath = parentEntry.obsidianPath;
-      if (obsPath.endsWith(".md")) {
-        const parts = obsPath.split("/");
-        const fileBase = (parts.pop() ?? "").replace(/\.md$/, "");
-        const dirName = parts[parts.length - 1] ?? "";
-        // folder note(파일명==폴더명)면 그 폴더가 곧 페이지 폴더. 아니면(플레인 페이지·
-        // DB row 파일) 페이지 이름의 하위 폴더로 중첩해 Notion 의 "페이지 안의 DB" 구조를
-        // 보존한다 — dirname 을 쓰면 형제 row 들이 가진 동명 DB 가 한 폴더에서 충돌한다
-        // (만다라트 81개 셀 페이지가 각자 동명 체크리스트 DB 를 갖는 실측 사례).
-        parentFolder =
-          fileBase === dirName ? parts.join("/") : [...parts, fileBase].filter(Boolean).join("/");
-      } else {
-        parentFolder = obsPath;
-      }
-    }
-    let safeName: string;
-    if (dbTitle) {
-      safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
-    } else {
-      const parentName = parentFolder.split("/").pop() || "";
-      safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
-    }
-    if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
-    if (!parentFolder) parentFolder = "databases";
-    return {
-      kind: "ok",
-      config: {
-        databaseId: dbId,
-        localFolder: `${parentFolder}/${safeName}`,
-        titleProperty: "Name",
-      },
-    };
-  }
-
-  /** 접근 불가 DB denylist 를 상태 메타에서 로드한다(하이픈 정규화). */
-  private loadInaccessibleDbIds(): Set<string> {
-    const raw = this.stateDb.getMeta(INACCESSIBLE_DBS_META_KEY);
-    if (!raw) return new Set();
-    try {
-      const arr = JSON.parse(raw) as string[];
-      return new Set(arr.map((id) => id.replace(/-/g, "")));
-    } catch {
-      return new Set();
-    }
-  }
-
-  /** linked view 컨테이너 → 원본 DB 매핑을 상태 메타에서 로드한다(nohyph → nohyph). */
-  private loadLinkedDbMap(): Map<string, string> {
-    const raw = this.stateDb.getMeta(LINKED_DBS_META_KEY);
-    if (!raw) return new Map();
-    try {
-      const obj = JSON.parse(raw) as Record<string, string>;
-      return new Map(
-        Object.entries(obj).map(([k, v]) => [k.replace(/-/g, ""), v.replace(/-/g, "")]),
-      );
-    } catch {
-      return new Map();
-    }
-  }
-
-  /**
-   * 자동 발견한 DB 를 받는다 — 새로 발견한 DB 를 등록하고, 등록된 DB 가운데 `ledger` 가 고른 것과
-   * 이번에 새로 등록한 것만 조회한다(ADR-027). 조회하지 않은 DB 는 목록에 그대로 남는다.
-   *
-   * @param options.forceRediscovery `--force` — 블록을 다시 훑고 접근 불가 DB 를 다시 확인한다.
-   * @param options.ledger 조회할 DB 와 DB 마다의 결과. 없으면 모든 DB 를 조회한다.
-   * @param options.signal 취소하면 다음 DB 를 조회하지 않는다 — 닿지 못한 DB 는 대기로 남는다.
-   */
-  private async pullDiscoveredDatabases(
-    writtenPaths: string[],
-    failed: FailedOperation[],
-    conflicts: Conflict[],
-    options: {
-      readonly forceRediscovery?: boolean;
-      readonly paths?: readonly string[];
-      readonly progress?: RowProgress;
-      readonly ledger?: DatabasePullLedger;
-      readonly signal?: AbortLike;
-    } = {},
-  ): Promise<{ created: number; updated: number; deleted: number; restored: number }> {
-    if (this.isDatabaseMode) return { created: 0, updated: 0, deleted: 0, restored: 0 };
-    const { paths, progress, ledger, signal } = options;
-    const forceRediscovery = options.forceRediscovery === true;
-
-    let created = 0;
-    let updated = 0;
-    let deleted = 0;
-    let restored = 0;
-
-    try {
-      const dbConfigs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-
-      const configuredIds = new Set(
-        (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
-      );
-      const knownIds = new Set<string>([
-        ...configuredIds,
-        ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
-      ]);
-      let changed = false;
-      // 이번 pull 이 새로 등록한 DB — 받은 적이 없어 바뀐 것이 보이지 않아도 조회한다.
-      const registeredNow = new Set<string>();
-
-      // F24: 동명 형제 DB(같은 부모 아래 같은 제목 인라인 DB — 실측 22쌍)는 제목 기반
-      // 폴더 유도가 충돌해 .base/사이드카를 서로 덮어쓰고 행이 한 폴더에 섞인다.
-      // 폴더 점유 대장을 두고 ① 캐시의 기존 충돌을 결정적으로 수리(첫 항목이 원 폴더
-      // 유지)하고 ② 신규 등록도 같은 대장을 거치게 한다. 사용자 설정 DB 폴더는 선점.
-      const folderOwner = new Map<string, string>(
-        (this.config.notion.databases ?? []).map((d) => [d.localFolder, d.databaseId]),
-      );
-      const repairedCount = repairDbFolderCollisions(dbConfigs, folderOwner);
-      for (const c of dbConfigs) folderOwner.set(c.localFolder, c.databaseId);
-      if (repairedCount > 0) {
-        changed = true;
-        getLogger().info(`[Im-Nobsidian] 동명 DB 폴더 충돌 ${repairedCount}건 분리(F24)`);
-      }
-      const claimFolder = (config: { databaseId: string; localFolder: string }): void => {
-        config.localFolder = resolveDbFolderPath(
-          config.localFolder,
-          config.databaseId,
-          (f) => folderOwner.get(f) ?? null,
-        );
-        folderOwner.set(config.localFolder, config.databaseId);
-      };
-
-      // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
-      // 스택트레이스 노이즈를 차단한다. 발견 단계에서 걸러 빈 폴더/.base 오염도 막는다.
-      const inaccessibleIds = this.loadInaccessibleDbIds();
-      let inaccessibleChanged = false;
-      const degrade = (rawId: string): void => {
-        const nohyph = rawId.replace(/-/g, "");
-        if (!inaccessibleIds.has(nohyph)) {
-          inaccessibleIds.add(nohyph);
-          inaccessibleChanged = true;
-        }
-        getLogger().info(
-          `[Im-Nobsidian] DB ${rawId}: 접근 가능한 data source 없음(링크드/미공유/삭제 추정) — 동기화 대상에서 제외(제목은 부모 페이지에 보존)`,
-        );
-      };
-
-      // --force: 과거 접근 불가로 강등된 DB 를 재검증한다(F23). 공유 복구·linked 해소
-      // 지원 추가 후에도 denylist 가 영구 차단해 구제 경로가 없었다. 비우면 재발견 루프가
-      // 다시 만나는 항목은 fresh 평가되고, 여전히 불가면 degrade 로 재편입된다.
-      if (forceRediscovery && inaccessibleIds.size > 0) {
-        getLogger().info(
-          `[Im-Nobsidian] --force: 접근 불가 DB ${inaccessibleIds.size}개 denylist 재검증`,
-        );
-        inaccessibleIds.clear();
-        inaccessibleChanged = true;
-      }
-
-      // linked view 컨테이너 → 원본 DB 매핑. placeholder 임베드 재작성이 원본 .base 로
-      // 향하게 하고, 해소 완료 컨테이너의 재해소(건당 API ~4회)를 건너뛰게 한다.
-      const linkedMap = this.loadLinkedDbMap();
-      let linkedChanged = false;
-
-      // 발견하다 읽지 못한 것 — 이유와 함께 실패로 싣고 다음 pull 이 다시 본다. 읽지 못한 것을
-      // 없다고 하면 pull 이 성공으로 끝나, 사용자는 그 DB 를 받지 못한 줄 모른다.
-      const retry = parseDiscoveryRetry(this.stateDb.getMeta(DISCOVERY_RETRY_META_KEY));
-      const nextRetry: DiscoveryRetry = { parents: [], dbs: [] };
-      const pathOf = (pageId: string): string =>
-        notionIdsEqual(pageId, this.config.notion.rootPageId)
-          ? ""
-          : (this.stateDb.getByNotionId(pageId)?.obsidianPath ?? pageId);
-      const unreadParent = (pageId: string, error: string): void => {
-        nextRetry.parents.push(pageId);
-        failed.push({
-          path: pathOf(pageId),
-          operation: "update",
-          error: `하위 DB 를 확인하지 못함 — 다음 pull 이 다시 확인한다: ${error}`,
-        });
-      };
-      const retryLater = (dbId: string, parentPageId: string, error: string): void => {
-        nextRetry.dbs.push({ dbId, parentPageId });
-        failed.push({
-          path: pathOf(parentPageId),
-          operation: "create",
-          error: `DB ${compactNotionId(dbId).slice(0, 8)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
-        });
-      };
-
-      // 발견 1건 등록 — 원본 DB 면 설정 추가, linked view 컨테이너면 원본으로 해소해 매핑
-      // 기록 후 원본을 같은 부모 아래로 등록한다. 해소는 1홉: 원본이 또 linked 면(순환·
-      // 다단 참조) 접근 불가로 강등해 무한 추적을 차단한다.
-      const register = async (dbId: string, parentPageId: string): Promise<void> => {
-        const nohyph = dbId.replace(/-/g, "");
-        if (knownIds.has(nohyph) || inaccessibleIds.has(nohyph)) return;
-
-        const registerOriginal = async (origNohyph: string): Promise<void> => {
-          if (knownIds.has(origNohyph) || inaccessibleIds.has(origNohyph)) return;
-          const origId = normalizeNotionId(origNohyph);
-          const outcome = await this.buildDiscoveredDbConfig(origId, parentPageId);
-          knownIds.add(origNohyph);
-          if (outcome.kind === "ok") {
-            claimFolder(outcome.config);
-            dbConfigs.push(outcome.config);
-            registeredNow.add(origNohyph);
-            changed = true;
-          } else if (outcome.kind === "error") {
-            retryLater(origId, parentPageId, outcome.error);
-          } else {
-            degrade(origId);
-          }
-        };
-
-        // 이미 해소된 컨테이너는 재해소하지 않고 원본 등록만 보정한다.
-        const knownOriginal = linkedMap.get(nohyph);
-        if (knownOriginal) {
-          await registerOriginal(knownOriginal);
-          return;
-        }
-
-        const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId);
-        knownIds.add(nohyph);
-        if (outcome.kind === "ok") {
-          claimFolder(outcome.config);
-          dbConfigs.push(outcome.config);
-          registeredNow.add(nohyph);
-          changed = true;
-        } else if (outcome.kind === "linked") {
-          const origNohyph = outcome.originalDbId.replace(/-/g, "");
-          linkedMap.set(nohyph, origNohyph);
-          linkedChanged = true;
-          await registerOriginal(origNohyph);
-        } else if (outcome.kind === "inaccessible") {
-          degrade(dbId);
-        } else if (outcome.kind === "error") {
-          retryLater(dbId, parentPageId, outcome.error);
-        }
-      };
-
-      // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
-      //     한 번도 훑지 않았을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
-      //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
-      //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다. 캐시가 찬 볼트는 이 표시가
-      //     생기기 전에 훑었다 — 다시 훑지 않는다.
-      const scanAll =
-        forceRediscovery ||
-        (dbConfigs.length === 0 && !this.stateDb.getMeta(DISCOVERY_SCANNED_META_KEY));
-      if (signal?.aborted) {
-        // 취소했으면 훑지 않는다 — 페이지마다 요청 1회라 첫 pull 에서는 분 단위다. 다시 볼 것은
-        // 그대로 남긴다(캐시가 비어 있으면 다음 pull 이 처음부터 훑는다).
-        nextRetry.parents.push(...retry.parents);
-        nextRetry.dbs.push(...retry.dbs);
-      } else {
-        const scanIds = scanAll
-          ? [
-              this.config.notion.rootPageId,
-              ...this.stateDb
-                .getAll()
-                .filter((r) => r.notionPageId)
-                .map((r) => r.notionPageId!),
-            ]
-          : retry.parents;
-        if (scanIds.length > 0) {
-          const { found, unread } = await this.discoverChildDatabases(scanIds);
-          for (const { dbId, parentPageId } of found) {
-            await register(dbId, parentPageId);
-          }
-          for (const { pageId, error } of unread) unreadParent(pageId, error);
-        }
-        for (const { dbId, parentPageId } of retry.dbs) {
-          await register(dbId, parentPageId);
-        }
-        // 다 훑었다 — 읽지 못한 페이지는 위에서 다시 볼 것으로 적었다.
-        if (scanAll) this.stateDb.setMeta(DISCOVERY_SCANNED_META_KEY, new Date().toISOString());
-      }
-
-      // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
-      //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
-      //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
-      //     취소했어도 등록한다 — 받은 페이지는 다시 받지 않으니 여기서 놓치면 그 DB 는 페이지를
-      //     다시 고치거나 `--force` 할 때까지 발견되지 않는다. 조회는 아래에서 취소를 따른다.
-      for (const [nohyph, parentPageId] of this._inlineDbRefs) {
-        await register(normalizeNotionId(nohyph), parentPageId);
-      }
-
-      // 동기화 가능한 DB 만 처리하고, 캐시에 잔존하던 접근 불가 DB 는 건너뛴다.
-      // 처리에 성공/일시실패한 DB 만 stillSyncable 로 모아 캐시의 권위적 스냅샷으로 삼는다.
-      // DB row 페이지 본문에도 child DB/linked view 가 중첩될 수 있으므로(만다라트 셀·OKR
-      // 회의록 등 — E2E 실측 140건), 라운드 사이에 이번 라운드가 기록한 row md 를 스캔해
-      // 신규 발견을 등록하고 발견이 마를 때까지 반복한다. 페이지 pull 경로(_inlineDbRefs)만
-      // 스캔하던 기존 구현은 row 내부 DB 를 어떤 pull 에서도 발견하지 못했다.
-      const stillSyncable: typeof dbConfigs = [];
-      let queue = [...dbConfigs];
-      const MAX_DISCOVERY_ROUNDS = 4;
-      // F25: linked view 컨테이너 판정 시 행 소유를 양보할 원본 폴더 탐색. 디스커버리
-      // 캐시(dbConfigs — 이번 라운드 신규 등록 포함)와 사용자 명시 설정을 함께 본다.
-      const resolveDbFolder = (dbId: string): string | null => {
-        const key = dbId.replace(/-/g, "");
-        const hit =
-          dbConfigs.find((c) => c.databaseId.replace(/-/g, "") === key) ??
-          (this.config.notion.databases ?? []).find((c) => c.databaseId.replace(/-/g, "") === key);
-        return hit?.localFolder ?? null;
-      };
-      for (let round = 1; queue.length > 0; round++) {
-        const roundRowPaths: string[] = [];
-        for (const dbConfig of queue) {
-          const nohyph = dbConfig.databaseId.replace(/-/g, "");
-          if (inaccessibleIds.has(nohyph)) continue;
-          // 바뀐 것이 보이지 않은 DB 는 조회하지 않는다(ADR-027) — 목록에는 그대로 둔다.
-          if (ledger && !registeredNow.has(nohyph) && !ledger.selects(dbConfig.databaseId)) {
-            ledger.skip();
-            stillSyncable.push(dbConfig);
-            continue;
-          }
-          if (signal?.aborted) {
-            ledger?.retry(dbConfig.databaseId);
-            stillSyncable.push(dbConfig);
-            continue;
-          }
-          try {
-            const dbResult = await this.databaseSyncer.pullDatabase(dbConfig, {
-              resolveDbFolder,
-              paths,
-              progress,
-            });
-            // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
-            // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
-            // 다음 pull 부터 이중 방문 자체를 없앤다. .base 재지향은 pullDatabase 가 마쳤다.
-            if (dbResult.linkedOriginalDbId) {
-              linkedMap.set(
-                dbConfig.databaseId.replace(/-/g, ""),
-                dbResult.linkedOriginalDbId.replace(/-/g, ""),
-              );
-              linkedChanged = true;
-              changed = true;
-              ledger?.settle(dbConfig.databaseId);
-              getLogger().info(
-                `[Im-Nobsidian] DB ${dbConfig.databaseId}: linked view 컨테이너 감지 → 행은 원본 ${dbResult.linkedOriginalDbId} 폴더가 단일 소유(F25)`,
-              );
-              continue;
-            }
-            created += dbResult.created;
-            updated += dbResult.updated;
-            deleted += dbResult.deleted;
-            restored += dbResult.restored;
-            conflicts.push(...dbResult.conflicts);
-            failed.push(...dbResult.failed);
-            // M3: 슬라이스 추정 대신 실제 기록된 행 경로를 후처리 대상으로 받는다.
-            writtenPaths.push(...dbResult.writtenPaths);
-            roundRowPaths.push(...dbResult.writtenPaths);
-            stillSyncable.push(dbConfig);
-            // 받지 못한 행이 있으면 다음 pull 이 다시 조회한다 — 그 행의 수정 시각은 다음 조회 창 밖이다.
-            if (dbResult.failed.length > 0) ledger?.retry(dbConfig.databaseId);
-            else ledger?.settle(dbConfig.databaseId);
-          } catch (error) {
-            if (isNotionObjectNotFound(error)) {
-              // 캐시에 있었지만 이제 행 조회가 404 — 링크드/미공유/삭제로 강등(스택트레이스 억제).
-              degrade(dbConfig.databaseId);
-              ledger?.settle(dbConfig.databaseId);
-            } else {
-              // 일시적/실제 오류 — 캐시에 유지해 다음 pull 에 재시도한다. 이유는 실패로 싣는다.
-              ledger?.retry(dbConfig.databaseId);
-              getLogger().warn(`[Im-Nobsidian] DB ${dbConfig.databaseId} 동기화 실패:`, error);
-              failed.push({
-                path: dbConfig.localFolder,
-                operation: "update",
-                error: error instanceof Error ? error.message : String(error),
-              });
-              stillSyncable.push(dbConfig);
-            }
-          }
-        }
-
-        const before = dbConfigs.length;
-        for (const ref of await this.collectRowInlineRefs(roundRowPaths)) {
-          await register(ref.dbId, ref.parentPageId);
-        }
-        queue = dbConfigs.slice(before);
-        if (queue.length > 0 && round >= MAX_DISCOVERY_ROUNDS) {
-          // 등록은 이미 캐시(dbConfigs)에 반영됐으므로 다음 pull 의 캐시 루프가 이어받는다.
-          // 대기로 적는다 — 다음 pull 은 바뀐 DB 만 조회하므로 적지 않으면 받지 못한 채로 남는다.
-          getLogger().warn(
-            `[Im-Nobsidian] 중첩 DB 발견 라운드 한도(${MAX_DISCOVERY_ROUNDS}) 도달 — ${queue.length}개는 다음 pull 에서 동기화`,
-          );
-          for (const dbConfig of queue) ledger?.retry(dbConfig.databaseId);
-          stillSyncable.push(...queue);
-          break;
-        }
-        if (queue.length > 0) {
-          getLogger().info(
-            `[Im-Nobsidian] DB row 본문에서 중첩 DB ${queue.length}개 추가 발견(라운드 ${round + 1})`,
-          );
-        }
-      }
-
-      // 대기는 이제 동기화하는 DB 만 — 설정에서 뺐거나 · 접근 불가로 뺀 DB 를 영영 들고 있지 않는다.
-      ledger?.keepOnly([...configuredIds, ...stillSyncable.map((c) => c.databaseId)]);
-
-      // 발견·강등·정리 결과를 캐시에 1회 반영(접근 불가 DB 는 stillSyncable 에서 빠져 제거됨).
-      if (changed || inaccessibleChanged || stillSyncable.length !== dbConfigs.length) {
-        this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(stillSyncable));
-      }
-      if (inaccessibleChanged) {
-        this.stateDb.setMeta(INACCESSIBLE_DBS_META_KEY, JSON.stringify([...inaccessibleIds]));
-      }
-      if (linkedChanged) {
-        this.stateDb.setMeta(LINKED_DBS_META_KEY, JSON.stringify(Object.fromEntries(linkedMap)));
-      }
-      if (
-        retry.parents.length + retry.dbs.length + nextRetry.parents.length + nextRetry.dbs.length >
-        0
-      ) {
-        this.stateDb.setMeta(DISCOVERY_RETRY_META_KEY, JSON.stringify(nextRetry));
-      }
-
-      // 이번 pull 산출 md 의 인라인 DB placeholder 를 .base 임베드로 재작성한다(F22).
-      // .base 생성(위 pullDatabase)이 끝난 뒤여야 임베드가 깨진 링크가 되지 않는다.
-      await this.rewriteDbPlaceholderEmbeds(writtenPaths, stillSyncable, linkedMap);
-    } catch (error) {
-      getLogger().warn("[Im-Nobsidian] child_database 자동 발견 실패:", error);
-      failed.push({
-        path: "",
-        operation: "update",
-        error: `DB 자동 발견이 멈춤: ${error instanceof Error ? error.message : String(error)}`,
-      });
-    }
-
-    return { created, updated, deleted, restored };
-  }
-
-  /**
-   * pull 산출 md 의 인라인 DB placeholder(`**제목** *(Notion DB)*` + 보존 마커)를
-   * `![[<실제 .base 경로>|제목]]` 임베드로 재작성한다(F22) — folder note 본문에서
-   * DB 가 텍스트 한 줄이 아니라 실제 Bases 뷰로 보이게 하는 마지막 조각. linked view
-   * 컨테이너는 linkedMap 을 거쳐 원본 DB 의 .base 로 향한다. .base 경로는 DatabaseSyncer
-   * 가 실제 기록한 경로(baseFileInfo)가 SSOT — 폴더명과 .base 파일명은 새니타이즈 규칙이
-   * 달라(공백→하이픈 vs 공백 보존) localFolder 로 추측하면 깨진 임베드가 된다(E2E 실측
-   * 91/158건). 최종적으로 .base 실존까지 확인해, 없으면 placeholder 를 마커째 보존한다.
-   */
-  private async rewriteDbPlaceholderEmbeds(
-    paths: string[],
-    dbConfigs: Array<{ databaseId: string; localFolder: string }>,
-    linkedMap: Map<string, string>,
-  ): Promise<void> {
-    const targets = new Map<string, DbEmbedTarget>();
-    const addTarget = (databaseId: string, localFolder: string): void => {
-      const nohyph = databaseId.replace(/-/g, "");
-      if (targets.has(nohyph)) return;
-      const info = this.databaseSyncer.baseFileInfo.get(nohyph);
-      if (info) {
-        targets.set(nohyph, { basePath: info.basePath, title: info.title });
-        return;
-      }
-      // 이번 실행에서 .base 를 기록하지 못한 DB(생성 실패 등) — 추측 경로는 아래
-      // 실존 확인을 통과해야만 대상이 된다.
-      const safeName = localFolder.split("/").pop() ?? localFolder;
-      targets.set(nohyph, { basePath: `${localFolder}/${safeName}.base`, title: safeName });
-    };
-    for (const cfg of dbConfigs) addTarget(cfg.databaseId, cfg.localFolder);
-    // 수동 구성 DB 도 대상 — 본문 placeholder 가 이들을 가리킬 수 있다.
-    for (const d of this.config.notion.databases ?? []) addTarget(d.databaseId, d.localFolder);
-    // 깨진 임베드 방지의 최종 방벽: 대상 .base 가 디스크에 실존하는 경우에만 재작성한다.
-    // 탈락한 id 의 placeholder 는 마커째 남아 다음 pull 에서 재시도된다.
-    for (const [key, t] of [...targets]) {
-      if (!(await this.vaultFs.exists(t.basePath))) targets.delete(key);
-    }
-    if (targets.size === 0) return;
-
-    const resolve = (nohyph: string): DbEmbedTarget | null =>
-      targets.get(nohyph) ?? targets.get(linkedMap.get(nohyph) ?? "") ?? null;
-
-    let total = 0;
-    for (const filePath of paths) {
-      if (!filePath.endsWith(".md")) continue;
-      try {
-        const content = await this.vaultFs.readFile(filePath);
-        const { content: next, rewrites } = rewriteDbPlaceholders(content, resolve);
-        if (rewrites === 0) continue;
-        await this.vaultFs.writeFile(filePath, next);
-        total += rewrites;
-        // 디스크 내용이 바뀌었으므로 해시·스냅샷·stat 을 재동기화한다 — 누락하면 저장
-        // 해시(placeholder 형태)와 디스크(임베드 형태)가 영구 불일치해 매 sync 마다
-        // "modified" 로 재감지되는 fixpoint 위반(I5)이 재발한다.
-        const record = this.stateDb.getByPath(filePath);
-        if (record) {
-          const stat = await this.vaultFs.getFileStat(filePath);
-          this.stateDb.transaction(() => {
-            this.stateDb.updateHash(record.id, computeHash(next), Buffer.from(next, "utf-8"));
-            if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
-          });
-        }
-      } catch {
-        // 파일 읽기/쓰기 실패 — 재작성은 best-effort, placeholder 는 마커째 보존돼 다음 pull 재시도
-      }
-    }
-    if (total > 0) {
-      getLogger().info(`[Im-Nobsidian] 인라인 DB 임베드 재작성: ${total}건`);
-    }
-  }
-
+  /** pull 이 쓴 노트의 Notion 링크를 볼트 링크로 푼다 — 푼 링크 수를 돌려준다. */
   private async resolveNotionLinks(paths: string[]): Promise<number> {
-    let totalResolved = 0;
-    let totalDegraded = 0;
-    const allRecords = this.stateDb.getAll();
-    const idToTitle = new Map<string, string>();
-    const idToPath = new Map<string, string>();
-    for (const r of allRecords) {
-      if (r.notionPageId && r.obsidianPath) {
-        // M4: 단일 변환 패스(resolvePageId)와 동일한 규칙으로 위키링크 텍스트를 만든다.
-        const title = wikilinkTitleFromPath(r.obsidianPath);
-        const cleanId = r.notionPageId.replace(/-/g, "");
-        idToTitle.set(cleanId, title);
-        idToTitle.set(r.notionPageId, title);
-        idToPath.set(cleanId, r.obsidianPath);
-      }
-    }
-    if (idToTitle.size === 0) return 0;
-
-    // 두 표기(위키링크형·상대 url 형)가 **같은 역조회**를 봐야 한 표기만 해소되는 일이
-    // 없다. 압축형/하이픈형 어느 쪽으로 들어와도 압축형 키로 맞춘다.
-    const notionIdToPath = (id: string): string | null =>
-      idToPath.get(id.replace(/-/g, "")) ?? null;
-
-    for (const filePath of paths) {
-      if (!filePath.endsWith(".md")) continue;
-      try {
-        let content = await this.vaultFs.readFile(filePath);
-        let changed = false;
-
-        // 변환 시점 패스(resolveNotionIdWikilinks)와 **같은 함수**를 쓴다. 자체 정규식을
-        // 두던 시절엔 별칭 달린 `[[notion:<id>|별칭]]` 을 아예 매치하지 못해, 같은 pull
-        // 안에서 나중에 만들어진 대상을 가리키는 링크가 대상이 볼트에 실재하는데도
-        // 끊긴 채 남았다(실볼트 2건).
-        const idPass = resolveNotionIdWikilinks(content, notionIdToPath);
-        content = idPass.markdown;
-        if (idPass.resolved > 0) {
-          totalResolved += idPass.resolved;
-          changed = true;
-        }
-
-        // 상대 url 표기(`[라벨](/p/<id>?…)`)도 **같은 모듈의 짝 함수**로 해소한다.
-        // 여기 인라인 정규식으로 두던 시절엔 같은 규칙을 두 번 적는 대가를 치렀다 —
-        // 자기별칭 접기를 빠뜨려 `[[X|X]]` 45건이 굳었고(R10-C), 격하도 빠뜨려 볼트
-        // 밖 페이지를 가리키는 상대링크 89건이 끊긴 채 남았다(R10-D).
-        const urlPass = resolveNotionRelativePageLinks(content, notionIdToPath);
-        content = urlPass.markdown;
-        if (urlPass.resolved > 0) {
-          totalResolved += urlPass.resolved;
-          changed = true;
-        }
-
-        // frontmatter 의 relation/people 원시 UUID → `[[제목]]`. 변환 시점에는 대상
-        // 페이지가 미등록이라 UUID 로 남지만, 이 post-pass 시점엔 맵이 완성돼 해소된다.
-        const fm = resolveFrontmatterRelations(content, idToTitle);
-        if (fm.count > 0) {
-          content = fm.content;
-          totalResolved += fm.count;
-          changed = true;
-        }
-
-        // 해소를 전부 시도한 **뒤** 남은 것 = 볼트 밖 페이지다. 끊긴 링크로 두지 않고
-        // 동작하는 Notion URL 링크로 격하한다(순서가 뒤집히면 볼트에 실재하는 대상까지
-        // 외부 링크로 굳는다). **두 표기 모두** 격하한다 — 한쪽만 하면 다른 쪽 표기로
-        // 들어온 볼트 밖 링크가 끊긴 채 남는다(R10-B 는 위키링크형만 고쳐 상대 url 형
-        // 89건이 남았다 → R10-D).
-        for (const degrade of [
-          degradeUnresolvedNotionIdWikilinks,
-          degradeUnresolvedNotionRelativePageLinks,
-        ]) {
-          const degradation = degrade(content);
-          if (degradation.degraded > 0) {
-            content = degradation.markdown;
-            totalDegraded += degradation.degraded;
-            changed = true;
-          }
-        }
-
-        if (changed) {
-          await this.vaultFs.writeFile(filePath, content);
-          // 링크 정규화로 디스크 내용이 바뀌었으므로 해당 sync record 의 해시·스냅샷·stat
-          // 을 새 내용으로 재동기화한다. 이걸 빠뜨리면 디스크(위키링크 형태)와 저장 해시
-          // (`/p/<id>` 형태)가 영구 불일치해 매 sync마다 "modified" 로 재감지되는
-          // fixpoint 위반(I5)이 발생한다. push 가 가능한 파일은 다음 push 로 self-heal
-          // 되지만, child page 를 가진 폴더노트는 push 가 실패해 영영 churn 한다.
-          const record = this.stateDb.getByPath(filePath);
-          if (record) {
-            const stat = await this.vaultFs.getFileStat(filePath);
-            this.stateDb.transaction(() => {
-              this.stateDb.updateHash(
-                record.id,
-                computeHash(content),
-                Buffer.from(content, "utf-8"),
-              );
-              if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
-            });
-          }
-        }
-      } catch {
-        // 파일 읽기/쓰기 실패 무시
-      }
-    }
-    if (totalDegraded > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 볼트 밖 Notion 페이지 링크 ${totalDegraded}건을 URL 링크로 유지`,
-      );
-    }
-    return totalResolved;
-  }
-
-  private async ensureDbSchema(): Promise<void> {
-    if (this.dbSchemaLoaded || !this.isDatabaseMode) return;
-    const schema = await this.notionClient.getDatabaseSchema(this.config.notion.databaseId!);
-    this.propertyMapper.loadSchema(schema);
-    this.dbSchemaLoaded = true;
-  }
-
-  private async pushCreate(path: string): Promise<void> {
-    // 멱등성/원자성: 이전 시도가 페이지 생성까지는 성공해 notionPageId 가 이미
-    // 매핑돼 있으면(이미지 업로드 실패·크래시·인-런 재시도 등) 새 페이지를 또
-    // 만들지 않고 업데이트 경로로 위임한다 → 고아 페이지·중복 생성 방지.
-    const existingRecord = this.stateDb.getByPath(path);
-    if (existingRecord?.notionPageId) {
-      await this.pushUpdate(path);
-      return;
-    }
-
-    const rowDatabaseId = this.newRowDatabaseOf(path);
-    if (rowDatabaseId) {
-      await this.pushCreateRow(path, rowDatabaseId);
-      return;
-    }
-
-    const content = await this.vaultFs.readFile(path);
-    const parentId = await this.resolveNotionParent(path);
-
-    const selectedPath = this.pipeline.selectPath(content);
-    if (selectedPath === "block-api") {
-      getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
-      );
-    }
-
-    const conversionResult = this.pipeline.convertToNotion(content, {
-      direction: "push",
-      path: selectedPath,
-      filePath: path,
-      parentMode: this.config.notion.parentMode,
-    });
-    // 제목은 frontmatter `title` 이 먼저다 — 갱신(changedPageTitle) · 이동(titleAfterMove)과 같은
-    // 규칙이어야 만든 뒤 첫 갱신에서 제목이 뒤집히지 않는다. 행도 같다(pushRowUpdate).
-    const title = noteTitle(conversionResult.properties, path);
-
-    // I12 WAL(쓰기-우선): 페이지를 만들기 전에 자리표시 state(notion_page_id=null) +
-    // pending_operations(create) 를 먼저 기록한다. 생성 요청이 적용됐는데 응답이 유실되거나
-    // (timeout) 프로세스가 죽어 매핑 기록 전에 중단되면, 다음 push 시작 시 recoverInterruptedPushOps
-    // 가 부모에서 제목으로 고아 페이지를 찾아 입양하므로 중복 페이지 생성을 차단한다.
-    const placeholder = this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: null,
-      notionParentId: parentId,
-      contentHash: "",
-      notionLastEdited: null,
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType: isFolderNotePath(path) ? "folder-note" : "file",
-      status: "pending",
-      baseSnapshot: null,
-      localMtime: null,
-      localFileSize: null,
-    });
-    // 인-런 재시도 시 같은 state 에 대한 op 중복 기록을 막는다(기존 미완료 op 재사용).
-    const existingOp = this.stateDb.getIncompleteOpByState(placeholder.id, "create");
-
-    // 미완료 op 가 남아 있다 = 앞선 시도의 생성 요청이 적용됐는지 모른다(S-07 — 클라이언트는
-    // 모호한 실패에서 생성 요청을 다시 보내지 않는다). 다시 만들기 전에 부모에서 제목으로
-    // 찾아 입양한다. 목록을 읽지 못하면 던져서 이 항목만 실패로 남긴다 — 중복보다 낫다.
-    if (existingOp) {
-      const orphan = await this.findChildPageByTitle(parentId, title);
-      if (orphan) {
-        this.adoptOrphanPage(path, orphan.id, parentId, placeholder);
-        this.stateDb.markPendingCompleted(existingOp.id);
-        getLogger().info(`[Im-Nobsidian] 앞선 생성 요청이 적용돼 있었음 — 페이지 입양: ${path}`);
-        await this.pushUpdate(path);
-        return;
-      }
-    }
-
-    const walOpId =
-      existingOp?.id ??
-      this.stateDb.recordPendingOperation({
-        syncStateId: placeholder.id,
-        operation: "create",
-        direction: "push",
-        payload: JSON.stringify({ path, parentId, title }),
-      });
-
-    const created = await this.pushCreatePage(
-      parentId,
-      "page",
-      title,
-      conversionResult.content,
-      conversionResult.properties,
-    );
-    const { page } = created;
-
-    // 페이지 생성 직후 매핑을 먼저 기록(전이 상태 pending). 이후 이미지 업로드 등이
-    // 실패해도 이 레코드 덕에 다음 시도는 pushCreate(중복) 가 아니라 pushUpdate 로
-    // 이어진다. contentHash 를 비워 변경감지가 "미완료 → 재푸시 필요"로 인식하게 한다.
-    this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: page.id,
-      notionParentId: parentId,
-      contentHash: "",
-      ...this.observedFields(page, null),
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType: isFolderNotePath(path) ? "folder-note" : "file",
-      status: "pending",
-      baseSnapshot: null,
-      localMtime: null,
-      localFileSize: null,
-    });
-
-    const settled = await this.finishCreatedPage(created, conversionResult, path);
-
-    const hash = computeHash(content);
-    const fileStat = await this.vaultFs.getFileStat(path);
-
-    this.stateDb.transaction(() => {
-      this.stateDb.upsert({
-        obsidianPath: path,
-        notionPageId: page.id,
-        notionParentId: parentId,
-        contentHash: hash,
-        ...this.observedFields(settled.page, settled.bodyFingerprint),
-        localLastModified: new Date().toISOString(),
-        syncDirection: "both",
-        fileType: isFolderNotePath(path) ? "folder-note" : "file",
-        status: "synced",
-        baseSnapshot: Buffer.from(content, "utf-8"),
-        localMtime: fileStat?.mtime ?? null,
-        localFileSize: fileStat?.size ?? null,
-      });
-
-      const aliases = extractAliases(conversionResult.properties);
-      this.stateDb.upsertWikilink({
-        obsidianPath: path,
-        notionPageId: page.id,
-        title: extractTitle(path),
-        aliases,
-      });
-
-      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
-    });
-
-    // 생성·매핑·이미지·최종 synced 까지 모두 끝났으므로 WAL 을 완료 처리한다.
-    this.stateDb.markPendingCompleted(walOpId);
-  }
-
-  /**
-   * DB 폴더(설정 · 자동 발견)에 새로 생긴 노트, 그리고 DB 모드의 새 노트를 그 DB 의 행으로
-   * 만든다(S-04).
-   *
-   * 갱신(pushRowUpdate)과 같은 규칙이다 — 속성은 DB 스키마의 속성으로, 본문은 본문으로 보내고
-   * 본문에 속성 YAML 을 끼우지 않는다. DB 에 없는 키(`cover` · `aliases` …)는 보내지 않는다.
-   * 예전에는 자동 발견 DB 폴더의 새 노트가 DB 폴더 이름의 빈 페이지 아래 페이지로 만들어졌고,
-   * 설정 DB 의 행은 WAL 없이 따로 만들어졌으며, DB 모드는 조상 폴더를 페이지로 만들었다.
-   *
-   * 생성 요청은 페이지와 같이 WAL 을 먼저 적는다. 요청이 적용됐는지 모르고 끝나면(S-07) 다음
-   * 시도가 DB 에서 같은 제목의 짝 없는 행을 찾아 입양하고 로컬 내용으로 맞춘다.
-   */
-  private async pushCreateRow(path: string, databaseId: string): Promise<void> {
-    const content = await this.vaultFs.readFile(path);
-    const fileType = this.newRowFileType(path);
-    // frontmatter 를 못 읽으면 만들지 않는다 — 파이프라인은 읽지 못한 frontmatter 를 «속성
-    // 없음» 으로 넘겨, 제목만 있는 행이 생기고 속성은 사라진다.
-    let current: ReturnType<typeof parseFrontmatter>;
-    try {
-      current = parseFrontmatter(content);
-    } catch (error) {
-      throw new Error(
-        `frontmatter 를 읽지 못해 행을 만들지 않음 (${path}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-    const title = noteTitle(current.data, path);
-
-    // 보낼 것을 먼저 다 만든다 — WAL 은 생성 요청 바로 앞에 적어야, 스키마를 읽지 못해 요청을
-    // 보내지도 않은 실행이 «적용됐는지 모름» 기록을 남기지 않는다.
-    const mapper = await this.rowSchemas.mapperFor(databaseId);
-    const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(null, current.data),
-      title,
-    );
-    if (skipped.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 새 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `변환 불가): ${path} — ${skipped.join(", ")}`,
-      );
-    }
-    const selectedPath = this.pipeline.selectPath(content);
-    if (selectedPath === "block-api") {
-      getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
-      );
-    }
-    const conversionResult = this.pipeline.convertToNotion(content, {
-      direction: "push",
-      path: selectedPath,
-      filePath: path,
-      parentMode: "database",
-    });
-
-    const placeholder = this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: null,
-      notionParentId: databaseId,
-      contentHash: "",
-      notionLastEdited: null,
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType,
-      status: "pending",
-      baseSnapshot: null,
-      localMtime: null,
-      localFileSize: null,
-    });
-    const existingOp = this.stateDb.getIncompleteOpByState(placeholder.id, "create");
-    if (existingOp) {
-      const orphan = await this.findUntrackedRowByTitle(databaseId, title);
-      if (orphan) {
-        this.adoptOrphanPage(path, orphan.id, databaseId, placeholder);
-        this.stateDb.markPendingCompleted(existingOp.id);
-        getLogger().info(`[Im-Nobsidian] 앞선 생성 요청이 적용돼 있었음 — 행 입양: ${path}`);
-        // 입양한 행은 이 노트가 보낸 요청으로 생긴 것이다. 반쯤 채워졌을 수 있어 원격과 견줘
-        // 다른 속성과 본문을 모두 보낸다.
-        await this.pushUpdate(path, { overwriteRemote: true });
-        return;
-      }
-    }
-
-    const walOpId =
-      existingOp?.id ??
-      this.stateDb.recordPendingOperation({
-        syncStateId: placeholder.id,
-        operation: "create",
-        direction: "push",
-        payload: JSON.stringify({ path, parentId: databaseId, parentType: "database", title }),
-      });
-
-    const created = await this.pushCreatePage(
-      databaseId,
-      "database",
-      title,
-      conversionResult.content,
-      properties,
-    );
-    const { page } = created;
-
-    // 매핑을 먼저 적는다 — 첨부 업로드가 실패해도 다음 시도는 새로 만들지 않고 갱신한다.
-    this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: page.id,
-      notionParentId: databaseId,
-      contentHash: "",
-      ...this.observedFields(page, null),
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType,
-      status: "pending",
-      baseSnapshot: null,
-      localMtime: null,
-      localFileSize: null,
-    });
-
-    const settled = await this.finishCreatedPage(created, conversionResult, path);
-
-    const fileStat = await this.vaultFs.getFileStat(path);
-    this.stateDb.transaction(() => {
-      this.stateDb.upsert({
-        obsidianPath: path,
-        notionPageId: page.id,
-        notionParentId: databaseId,
-        contentHash: computeHash(content),
-        ...this.observedFields(settled.page, settled.bodyFingerprint),
-        localLastModified: new Date().toISOString(),
-        syncDirection: "both",
-        fileType,
-        status: "synced",
-        baseSnapshot: Buffer.from(content, "utf-8"),
-        localMtime: fileStat?.mtime ?? null,
-        localFileSize: fileStat?.size ?? null,
-      });
-      this.stateDb.upsertWikilink({
-        obsidianPath: path,
-        notionPageId: page.id,
-        title,
-        aliases: extractAliases(current.data),
-      });
-      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
-    });
-
-    this.stateDb.markPendingCompleted(walOpId);
-  }
-
-  /**
-   * 노트에 박힌 로컬 미디어를 Notion 에 올린다(R1).
-   *
-   * 먼저 본문 자리표시자를 실제 image/file 블록으로 **제자리** 교체한다. 그러고도 남은
-   * 이미지만 페이지 끝에 덧붙이는 예전 경로로 흘린다 — 자리표시자를 찾지 못했어도
-   * (조회 실패 · 블록 방식 push 등) 이미지 자체는 올라가야 하므로 폴백을 남긴다.
-   *
-   * @returns 페이지 본문을 고쳤을 수 있으면 true — 본문을 보낸 뒤 만든 지문이 더는 맞지 않는다.
-   */
-  private async syncEmbeddedMedia(
-    pageId: string,
-    conversionResult: ConversionResult,
-    path: string,
-  ): Promise<boolean> {
-    const { handledTargets, touched } = await this.imageHandler.materializeLocalMedia(
-      pageId,
-      conversionResult.content,
-      path,
-    );
-    const leftovers = conversionResult.images.filter(
-      (img) => !img.localPath || !handledTargets.has(img.localPath),
-    );
-    let appended = 0;
-    if (leftovers.length > 0) {
-      appended = (await this.imageHandler.uploadAndAppendImages(pageId, leftovers, path)).length;
-    }
-    return touched || appended > 0;
-  }
-
-  /**
-   * 원격이 바뀌었는지 확인하지 않고 로컬로 덮어써도 되는가 — 원격을 로컬로 맞추라는 요청이다.
-   *
-   * - 충돌 해소 결과를 보낼 때 · 입양한 행을 맞출 때(`overwriteRemote`)
-   * - 충돌 전략이 local-first 이거나 push 전용일 때 — 설정이 로컬이 이긴다고 정했다
-   * - 이 노트가 만든 페이지를 아직 한 번도 맞추지 못했을 때(만들다 끊긴 페이지 · 입양한 고아
-   *   페이지) — 견줄 지난 사본이 없고, 페이지는 이 노트가 만든 것이다
-   */
-  private overwritesRemote(record: SyncRecord, overwriteRemote: boolean): boolean {
-    return (
-      overwriteRemote ||
-      this.config.sync.conflictStrategy === "local-first" ||
-      this.config.sync.direction === "push" ||
-      (record.contentHash === "" && record.notionBodyFingerprint === null)
-    );
-  }
-
-  /**
-   * 지난번에 본 뒤로 원격에서 무엇이 바뀌었나(N-05) — push 가 pull 하지 않은 Notion 편집을
-   * 덮어쓰지 않고, 덮어쓰지 않은 원격 변경은 다음 pull 이 받게.
-   *
-   * 수정 시각 · 편집자로 가를 수 있으면 그것으로 가른다. 바뀌었거나 같은 분 안이라 가를 수 없으면
-   * 내용으로 확인한다 — 본문은 지문으로, 본문 밖은 지난 동기화 사본과 견준다. 이 도구가 만든 자식
-   * 페이지는 부모의 수정 시각을 올리지만 부모의 본문 · 제목은 그대로다.
-   *
-   * 본문 밖까지 견주는 이유: 본문만 같다고 수정 시각을 올리지 않으면, 다음 pull 이 방금 올린
-   * 본문을 다시 받아 지난 사본과 견준다. 왕복한 본문은 글자 그대로 같지 않아(줄 끝 개행 등)
-   * 로컬을 다시 쓰고, 그 사이 로컬을 더 고쳤으면 충돌로 올렸다.
-   *
-   * @param remote 지금 원격 페이지.
-   */
-  private async remoteDrift(record: SyncRecord, remote: PageObjectResponse): Promise<RemoteDrift> {
-    if (this.remoteVerdict(record, remote) === "unchanged") return "none";
-    const fingerprint = record.notionBodyFingerprint;
-    if (fingerprint === null) return "unknown";
-    if ((await this.remoteBodyFingerprintOf(record.notionPageId!)) !== fingerprint) return "body";
-    return (await this.outsideBodyUnchanged(record, remote)) ? "none" : "outside-body";
-  }
-
-  /**
-   * 원격의 본문 밖이 지난 동기화 사본 그대로인가 — pull 이 받아 노트에 적는 것 중 본문이 아닌 것.
-   * 페이지는 제목뿐이고, 행은 제목과 보낼 수 있는 속성, 그리고 행 렌더러로 받는 행이면 아이콘 ·
-   * 커버다. 지난 사본을 읽지 못하면 아니다.
-   */
-  private async outsideBodyUnchanged(
-    record: SyncRecord,
-    remote: PageObjectResponse,
-  ): Promise<boolean> {
-    const base = snapshotFrontmatter(record.baseSnapshot);
-    if (base === null) return false;
-    const databaseId = this.rowDatabaseOf(record);
-    if (databaseId === null) {
-      return titleUnchangedSince(base, record.obsidianPath, this.notionClient.extractTitle(remote));
-    }
-    return this.databaseSyncer.rowOutsideBodyUnchanged(
-      await this.rowSchemas.mapperFor(databaseId),
-      remote,
-      base,
-      record.obsidianPath,
-      record.fileType === "db-row",
-    );
-  }
-
-  /**
-   * 받은 원격이 지난 동기화 사본 그대로인가 — {@link remoteDrift} 와 같은 규칙으로, 본문은 지문으로
-   * · 본문 밖은 지난 사본과 견준다. 렌더한 글이 지난 사본과 달라도(이 도구가 만든 자식 페이지의
-   * 링크 · 왕복한 본문) 받을 것이 없다.
-   *
-   * @param fingerprint 받은 원격 본문의 지문. 모르면 null — 그대로라고 보지 않는다.
-   */
-  private async unchangedSinceSync(
-    record: SyncRecord,
-    remote: PageObjectResponse,
-    fingerprint: string | null,
-  ): Promise<boolean> {
-    return (
-      fingerprint !== null &&
-      fingerprint === record.notionBodyFingerprint &&
-      (await this.outsideBodyUnchanged(record, remote))
-    );
-  }
-
-  /** 원격 본문을 지금 받아 만든 지문. */
-  private async remoteBodyFingerprintOf(pageId: string): Promise<string> {
-    return remoteBodyFingerprint((await this.notionClient.getPageMarkdown(pageId)).markdown);
-  }
-
-  /**
-   * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파 · 입양한 행).
-   *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link overwritesRemote}). DB 행은 비교 기준도
-   *   달라진다(pushRowUpdate).
-   */
-  private async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<void> {
-    const content = await this.vaultFs.readFile(path);
-    const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return;
-
-    const rowDatabaseId = this.rowDatabaseOf(record);
-    if (rowDatabaseId) {
-      await this.pushRowUpdate(path, record, rowDatabaseId, content, {
-        overwriteRemote: options?.overwriteRemote === true,
-      });
-      return;
-    }
-
-    const updatePath = this.pipeline.selectPath(content);
-    if (updatePath === "block-api") {
-      getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
-      );
-    }
-
-    const conversionResult = this.pipeline.convertToNotion(content, {
-      direction: "push",
-      path: updatePath,
-      filePath: path,
-      parentMode: this.config.notion.parentMode,
-    });
-
-    // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
-    // 쓰되 수정 시각을 올리지 않는다 — 원격의 제목 변경은 다음 pull 이 받는다.
-    const drift: RemoteDrift = this.overwritesRemote(record, options?.overwriteRemote === true)
-      ? "none"
-      : await this.remoteDrift(record, await this.notionClient.getPage(record.notionPageId));
-    refuseUnpulledBody(drift, path);
-    const settles = drift === "none";
-
-    let bodyFingerprint = await this.pushUpdatePage(
-      record.notionPageId,
-      conversionResult.content,
-      record.baseSnapshot,
-    );
-
-    if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path)) {
-      bodyFingerprint = await this.remoteBodyFingerprintOf(record.notionPageId);
-    }
-
-    // 페이지는 속성이 제목뿐이다 — 나머지 frontmatter 는 본문 첫머리 YAML 블록으로 간다
-    // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
-    const newTitle = this.changedPageTitle(record, content, path);
-    const propsToUpdate = newTitle === null ? undefined : titleProperty(newTitle);
-
-    // notionLastEdited 는 반드시 Notion 서버가 돌려준 값으로 저장한다. 로컬 시각
-    // (new Date())을 쓰면 서버 시각과 클록 스큐·네트워크 지연만큼 어긋나 다음 pull 이
-    // 가짜 modified 로 오인 → 불필요 재조회·집계(false-churn). 속성 갱신이 있으면 그
-    // 응답이 최종 mutation 이라 권위값이고, 없으면(블록/이미지만 변경) 1회 getPage 로
-    // 권위값을 받아 진짜 fixpoint 를 만든다. (I5 — pull 측 content_hash 가드와 이중 차단)
-    let written: RemotePageStamp | null = null;
-    if (propsToUpdate && Object.keys(propsToUpdate).length > 0) {
-      written = await this.notionClient.updatePageProperties(record.notionPageId, propsToUpdate);
-    } else if (settles) {
-      written = await this.notionClient.getPage(record.notionPageId);
-    }
-
-    const hash = computeHash(content);
-    const fileStat = await this.vaultFs.getFileStat(path);
-    const title = extractTitle(path);
-    const aliases = extractAliases(conversionResult.properties);
-    this.stateDb.transaction(() => {
-      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
-      this.stateDb.updateStatus(record.id, "synced");
-      if (written !== null && settles) {
-        this.recordObservation(record.id, written, bodyFingerprint);
-      } else {
-        this.stateDb.setNotionBodyFingerprint(record.id, bodyFingerprint);
-      }
-      if (fileStat) {
-        this.stateDb.updateStatCache(record.id, fileStat.mtime, fileStat.size);
-      }
-      this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
-      this.stateDb.upsertWikilink({
-        obsidianPath: path,
-        notionPageId: record.notionPageId!,
-        title,
-        aliases,
-      });
-    });
-  }
-
-  /**
-   * 페이지 제목을 바꿔야 하면 새 제목, 아니면 null.
-   *
-   * frontmatter `title` 을 고쳤을 때만 보낸다. 예전에는 갱신마다 `title` 을 보내, 파일 이름으로
-   * 만든 페이지는 첫 갱신에서 제목이 뒤집히고, 이름을 바꿔 올린 제목도 다음 갱신이 옛 `title` 로
-   * 되돌렸다(S-11). `title` 을 지웠으면 파일 이름으로 돌아간다. frontmatter 를 읽지 못하면
-   * 제목을 건드리지 않는다 — 못 읽은 것을 «지웠다» 로 보면 제목이 파일 이름으로 바뀐다.
-   */
-  private changedPageTitle(record: SyncRecord, content: string, path: string): string | null {
-    let current: Record<string, unknown>;
-    try {
-      current = parseFrontmatter(content).data;
-    } catch {
-      return null;
-    }
-    const written = explicitTitle(current);
-    const base = snapshotFrontmatter(record.baseSnapshot);
-    if (base === null) return written;
-    if (written === explicitTitle(base)) return null;
-    return written ?? wikilinkTitleFromPath(path);
-  }
-
-  /**
-   * 이 레코드가 DB 행이면 그 DB id, 페이지면 null.
-   *
-   * 행인지는 전역 모드가 아니라 **레코드** 가 정한다. 페이지 모드 볼트에도 자동 발견된 DB 의
-   * 행(`db-row`)이 있다 — 전역 모드로 가르면 그 행이 페이지로 밀려 속성은 제목만 가고
-   * 나머지는 본문 첫머리에 YAML 로 끼워진다(S-01 · S-02).
-   */
-  private rowDatabaseOf(record: SyncRecord): string | null {
-    if (record.fileType === "db-row") {
-      if (!record.notionParentId) {
-        // 행을 페이지처럼 밀면 속성이 본문으로 새므로, 어느 DB 의 행인지 모르면 멈춘다.
-        throw new Error(`DB 행인데 소속 DB 를 알 수 없음: ${record.obsidianPath}`);
-      }
-      return record.notionParentId;
-    }
-    if (this.isDatabaseMode) return this.config.notion.databaseId!;
-    return null;
-  }
-
-  /**
-   * 새 행의 레코드 종류. DB 모드의 노트는 행이어도 페이지 레코드로 적는다 — DB 모드의 pull · 복원 ·
-   * 렌더는 그 볼트의 노트를 모두 페이지 레코드로 다루고, 행인지는 전역 모드로 가른다(rowDatabaseOf).
-   */
-  private newRowFileType(path: string): FileType {
-    if (!this.isDatabaseMode) return "db-row";
-    return isFolderNotePath(path) ? "folder-note" : "file";
-  }
-
-  /**
-   * DB 행 갱신(S-01 · S-02).
-   *
-   * 행은 페이지가 아니다. 속성은 DB 스키마의 속성으로 보내고 본문에 YAML 로 끼우지 않는다.
-   * 무엇을 보낼지는 비교 기준이 정한다 — 보내기 전에 행을 한 번 읽어 고른다.
-   *
-   * - 원격이 지난 동기화 뒤 그대로면 지난 동기화 사본(baseSnapshot)과 견줘 **바뀐 것만**
-   *   보낸다. 통째로 보내면 로컬이 평문으로만 아는 서식(굵게 · 링크 · 멘션)이 매번 지워진다.
-   *   본문도 바뀌었을 때만 보낸다 — 다시 쓰면 블록 ID 와 블록에 달린 댓글이 사라진다.
-   * - 원격도 바뀌었으면 똑같이 로컬에서 바꾼 것만 보내되 notionLastEdited 를 올리지 않는다.
-   *   올리면 다음 pull 이 원격 변경을 «이미 받은 것» 으로 여겨 영영 가져오지 않는다. 본문은
-   *   통째로 바꾸므로 원격 본문이 그대로일 때만 보낸다 — 아니면 pull 을 먼저 하라며 거절한다.
-   *   원격이 바뀌었는지는 같은 분 안의 편집까지 내용으로 가른다(N-05, {@link remoteDrift}).
-   * - 충돌 해소 결과를 보낼 때(`overwriteRemote`)는 원격의 지금 값과 견줘 다른 것을 모두
-   *   보내고 본문도 보낸다 — 로컬이 이긴다(페이지가 본문을 통째로 바꾸는 것과 같다).
-   */
-  private async pushRowUpdate(
-    path: string,
-    record: SyncRecord,
-    databaseId: string,
-    content: string,
-    options: { overwriteRemote: boolean },
-  ): Promise<void> {
-    const pageId = record.notionPageId!;
-    // frontmatter 를 못 읽으면 멈춘다. 파이프라인은 읽지 못한 frontmatter 를 «속성 없음» 으로
-    // 넘기므로, 그대로 견주면 모든 속성을 지우라는 요청이 된다.
-    let current: ReturnType<typeof parseFrontmatter>;
-    try {
-      current = parseFrontmatter(content);
-    } catch (error) {
-      throw new Error(
-        `frontmatter 를 읽지 못해 행을 보내지 않음 (${path}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-
-    const mapper = await this.rowSchemas.mapperFor(databaseId);
-    const remote = await this.notionClient.getPage(pageId);
-    const drift: RemoteDrift = options.overwriteRemote
-      ? "none"
-      : await this.remoteDrift(record, remote);
-    const against = options.overwriteRemote
-      ? this.remoteRowState(mapper, remote)
-      : this.baseRowState(record);
-
-    const title = noteTitle(current.data, path);
-    const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(
-        against?.properties ?? null,
-        options.overwriteRemote ? mapper.pickWritable(current.data) : current.data,
-      ),
-      against?.title === title ? null : title,
-    );
-    if (skipped.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `비울 수 없는 속성 · 변환 불가): ${path} — ${skipped.join(", ")}`,
-      );
-    }
-
-    const bodyChanged = against?.body == null || against.body !== current.body;
-    // 수정 시각을 올려도 되는가 — 원격의 변경을 모두 로컬이 덮었거나 원격이 그대로일 때만.
-    const settles = drift === "none";
-    if (bodyChanged && !this.overwritesRemote(record, options.overwriteRemote)) {
-      refuseUnpulledBody(drift, path);
-    }
-    let conversionResult: ConversionResult | null = null;
-    let bodyFingerprint: string | null | undefined;
-    if (bodyChanged) {
-      const selectedPath = this.pipeline.selectPath(content);
-      if (selectedPath === "block-api") {
-        getLogger().warn(
-          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
-        );
-      }
-      conversionResult = this.pipeline.convertToNotion(content, {
-        direction: "push",
-        path: selectedPath,
-        filePath: path,
-        parentMode: "database",
-      });
-      bodyFingerprint = await this.pushUpdatePage(
-        pageId,
-        conversionResult.content,
-        record.baseSnapshot,
-      );
-      if (await this.syncEmbeddedMedia(pageId, conversionResult, path)) {
-        bodyFingerprint = await this.remoteBodyFingerprintOf(pageId);
-      }
-    }
-
-    // notionLastEdited 는 서버가 돌려준 값으로 적는다(pushUpdate 와 같은 이유 — I5).
-    // 보낸 것이 없으면(스키마에 없는 키만 바뀜) 원격은 그대로이므로 옛 값을 둔다.
-    let written: RemotePageStamp | null = null;
-    if (Object.keys(properties).length > 0) {
-      written = await this.notionClient.updatePageProperties(pageId, properties);
-    } else if (bodyChanged && settles) {
-      written = await this.notionClient.getPage(pageId);
-    }
-    if (!settles) {
-      getLogger().info(
-        `[Im-Nobsidian] Notion 에서도 바뀐 행 — 로컬에서 바꾼 것만 보냈고 Notion 쪽 변경은 ` +
-          `다음 pull 에서 받음: ${path}`,
-      );
-    }
-
-    const hash = computeHash(content);
-    const fileStat = await this.vaultFs.getFileStat(path);
-    this.stateDb.transaction(() => {
-      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
-      this.stateDb.updateStatus(record.id, "synced");
-      if (written !== null && settles) {
-        this.recordObservation(record.id, written, bodyFingerprint);
-      } else if (bodyFingerprint !== undefined) {
-        this.stateDb.setNotionBodyFingerprint(record.id, bodyFingerprint);
-      }
-      if (fileStat) {
-        this.stateDb.updateStatCache(record.id, fileStat.mtime, fileStat.size);
-      }
-      if (conversionResult) {
-        this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
-      }
-      this.stateDb.upsertWikilink({
-        obsidianPath: path,
-        notionPageId: pageId,
-        title,
-        aliases: extractAliases(current.data),
-      });
-    });
-  }
-
-  /**
-   * 지난 동기화 시점의 행. 사본이 없거나 읽지 못하면 null — 호출측은 비교할 기준이 없다고
-   * 보고 비어 있지 않은 속성을 모두 보낸다(지우는 요청은 보내지 않는다).
-   */
-  private baseRowState(record: SyncRecord): RowState | null {
-    if (!record.baseSnapshot) return null;
-    try {
-      const base = parseFrontmatter(record.baseSnapshot.toString("utf-8"));
-      return {
-        properties: base.data,
-        title: noteTitle(base.data, record.obsidianPath),
-        body: base.body,
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  /** 원격의 지금 행 — 보낼 수 있는 속성만. 본문은 읽지 않는다(null: 늘 보낸다). */
-  private remoteRowState(
-    mapper: PropertyMapper,
-    page: Awaited<ReturnType<NotionClient["getPage"]>>,
-  ): RowState {
-    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
-    return {
-      properties: mapper.pickWritable(mapper.fromNotionProperties(raw)),
-      title: this.notionClient.extractTitle(page),
-      body: null,
-    };
+    return resolveNotionLinks(this.stateDb, this.vaultFs, paths);
   }
 
   // ──────────────────────────────────────────────────────────────────────────
-  // 충돌 해소 (I8) — 해소 결과를 로컬에만 쓰지 않고 Notion 으로 재push + notionLastEdited
-  // 재조정까지 한 트랜잭션으로 묶는다. ConflictResolver 단독은 로컬 write + updateHash 만
-  // 수행하므로(merge 결과가 Notion 에 반영되지 않음) 다음 pull 이 원격으로 덮어써 영구
-  // 유실·충돌 루프가 발생한다. 해소 → 전파(propagate)를 오케스트레이터에서 봉합해 무손실
-  // 보장. 변환 파이프라인이 필요한 push 는 기존 엔터프라이즈 경로(pushUpdate)를 재사용한다.
+  // 충돌 해소 · 변경 살펴보기 — 규칙은 ConflictWorkflow · ChangeInspector 가 갖는다. 여기는 공개
+  // API 로 이어 주고, 해소 · 되돌리기는 다른 작업과 겹치지 않게 돌린다(S-09).
   // ──────────────────────────────────────────────────────────────────────────
 
-  /**
-   * 해소 대상 충돌 목록 — 원격 본문을 pull 과 **같은 파이프라인**으로 렌더해 담는다.
-   *
-   * 해소는 실제로 볼트 파일을 덮어쓰므로 `status()` 의 경량 미리보기 렌더를 쓰면 안 된다
-   * (프론트매터·첨부가 빠진 반쪽 본문이 덮인다). 반대로 전체 pull 을 먼저 돌려 목록을
-   * 얻는 것도 안 된다 — 해소하겠다고 볼트를 먼저 원격으로 덮어쓰는 셈이라 순서가 거꾸로다.
-   * 그래서 충돌 레코드만 좁혀 그 페이지들만 읽어 온다.
-   */
+  /** 해소 대상 충돌 목록 — 원격 본문을 pull 과 같은 파이프라인으로 렌더해 담는다. */
   async listConflicts(): Promise<Conflict[]> {
-    const records = this.stateDb.getByStatus("conflict");
-    if (records.length === 0) return [];
-    const files = await this.vaultFs.listMarkdownFiles();
-    const localChanges = this.changeDetector.detectLocalChanges(files, this.localScanOptions());
-    return this.buildConflictsFromRecords(records, localChanges, [], { fullRender: true });
+    return this.conflictWorkflow.listConflicts();
   }
 
   /**
-   * 추적 파일의 **현재 원격 본문**을 pull 과 같은 변환으로 렌더한다 — 표시 전용.
-   *
-   * 첨부는 내려받지 않는다: 비교를 보려다 볼트에 파일이 생기면 안 된다. 그 대가로 아직
-   * 내려받지 않은 미디어는 원격 URL 로 남아 비교 화면에만 차이로 보인다.
-   *
-   * @returns 추적되지 않았거나 원격 페이지가 없으면 null.
+   * 추적 파일의 현재 원격 본문을 pull 과 같은 변환으로 렌더한다 — 표시 전용이라 첨부를 내려받지
+   * 않는다. 추적되지 않았거나 원격 페이지가 없으면 null.
    */
   async renderRemoteSnapshot(path: string): Promise<string | null> {
-    const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return null;
-    return this.renderRemoteRecord(record, record.notionPageId);
+    return this.inspector.renderRemoteSnapshot(path);
   }
 
-  private async renderRemoteRecord(record: SyncRecord, pageId: string): Promise<string> {
-    const page = await this.notionClient.getPage(pageId);
-    const rendered = await this.renderRemotePage(record, pageId, page, { downloadMedia: false });
-    return rendered.content;
-  }
-
-  /**
-   * 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글. 표시 전용이라 잠그지 않는다.
-   *
-   * 변경 목록(`statusLocal`)이 준 변경을 그대로 받고 볼트를 다시 훑지 않는다. 대신 짚은 추적 레코드가 그
-   * 변경이 본 것과 같은지(글 지문) 확인한다 — 그 사이 올리거나 받아 레코드가 바뀌었으면 엉뚱한 옛 글과
-   * 견주지 않게 거절한다.
-   */
+  /** 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글. 표시 전용이라 잠그지 않는다. */
   async localChangeDiff(change: LocalChange): Promise<ChangeDiff> {
-    const before =
-      change.type === "created"
-        ? null
-        : this.syncedText(this.recordOfLocalChange(change), change.path);
-    const after = change.type === "deleted" ? null : await this.vaultFs.readFile(change.path);
-    return {
-      path: change.path,
-      type: change.type,
-      ...(change.movedFrom ? { movedFrom: change.movedFrom } : {}),
-      before,
-      after,
-    };
+    return this.inspector.localChangeDiff(change);
   }
 
-  /**
-   * 원격 변경 하나의 두 글 — 지난 동기화 때의 글과 Notion 의 지금 글(pull 과 같은 변환, 첨부는 내려받지
-   * 않는다). 표시 전용이라 잠그지 않는다.
-   *
-   * 지금 볼트 글이 아니라 지난 동기화 사본과 견준다 — Notion 에서 바뀐 것만 보인다. 로컬 편집은 로컬
-   * 변경이 따로 보인다(Git 이 받을 커밋을 합칠 기준과 견주는 것과 같다). 아직 받지 않은 새 페이지는 견줄
-   * 글이 없어 거절한다.
-   */
+  /** 원격 변경 하나의 두 글 — 지난 동기화 때의 글과 Notion 의 지금 글. 표시 전용이라 잠그지 않는다. */
   async remoteChangeDiff(change: RemoteChange): Promise<ChangeDiff> {
-    const record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) {
-      throw new Error(
-        `아직 받지 않은 새 페이지라 견줄 글이 없습니다 — ${change.title ?? change.pageId}`,
-      );
-    }
-    if (isFolderRecord(record)) {
-      throw new Error(`폴더라 견줄 글이 없습니다 — ${record.obsidianPath}`);
-    }
-    const before = this.syncedText(record, record.obsidianPath);
-    const after =
-      change.type === "deleted" ? null : await this.renderRemoteRecord(record, change.pageId);
-    return { path: record.obsidianPath, type: change.type, before, after };
+    return this.inspector.remoteChangeDiff(change);
   }
 
-  /**
-   * 로컬 변경이 짚는 추적 레코드. 옮긴 노트는 Notion 에 반영하기 전까지 레코드가 옛 자리에 있다 — 다만
-   * 반영하다 멈춘 이동은 이미 새 자리에 있어 새 자리부터 본다.
-   */
-  private recordOfLocalChange(change: LocalChange): SyncRecord {
-    for (const path of [change.path, change.movedFrom]) {
-      if (!path) continue;
-      const record = this.stateDb.getByPath(path);
-      if (record && record.contentHash === change.previousHash) return record;
-    }
-    throw new Error(
-      `지난 동기화 기록이 변경 목록과 맞지 않습니다 — 새로고침한 뒤 다시 보세요 (${change.path})`,
-    );
-  }
-
-  /** 지난 동기화 때의 글 — 사본이 없으면 옛 글을 모르니 거절한다(없는 글로 보이면 모든 줄이 새 줄이다). */
-  private syncedText(record: SyncRecord, path: string): string {
-    if (!record.baseSnapshot) {
-      throw new Error(`지난 동기화 사본이 없어 비교할 수 없습니다 — ${path}`);
-    }
-    return record.baseSnapshot.toString("utf-8");
-  }
-
-  /**
-   * 해소할 게 남지 않은 충돌 레코드를 `synced` 로 되돌리고, 되돌린 경로를 반환한다.
-   *
-   * 충돌로 표시된 파일은 push 대상에서 통째로 빠진다(양쪽 덮어쓰기 방지). 그래서 사용자가
-   * 손으로 양쪽을 맞춰 둬 이미 같은 내용이 됐는데도 레코드만 남으면, 그 파일의 이후 편집이
-   * **영원히 Notion 에 올라가지 않는다** — 아무 경고 없이 정체된다. 내용이 이미 동일한
-   * 건만 골라 상태를 되돌린다(진짜 충돌은 손대지 않는다).
-   */
+  /** 해소할 게 남지 않은 충돌 레코드를 `synced` 로 되돌리고, 되돌린 경로를 반환한다. */
   clearStaleConflicts(conflicts: readonly Conflict[]): string[] {
-    return this.gate.runSync("resolve", () => this.executeClearStaleConflicts(conflicts));
-  }
-
-  private executeClearStaleConflicts(conflicts: readonly Conflict[]): string[] {
-    const cleared: string[] = [];
-    for (const conflict of conflicts) {
-      // 양쪽 다 비었으면 "같다"가 아니라 양쪽 다 사라진 것이다 — 삭제 전파의 몫으로 남긴다.
-      if (conflict.localContent === "" && conflict.remoteContent === "") continue;
-      if (conflict.localContent !== conflict.remoteContent) continue;
-
-      const record = conflict.syncRecord;
-      this.stateDb.transaction(() => {
-        this.stateDb.updateHash(
-          record.id,
-          computeHash(conflict.localContent),
-          Buffer.from(conflict.localContent, "utf-8"),
-        );
-        this.stateDb.updateStatus(record.id, "synced");
-        if (conflict.remoteChange.lastEdited) {
-          this.recordUnverifiedObservation(record.id, conflict.remoteChange.lastEdited);
-        }
-      });
-      cleared.push(record.obsidianPath);
-    }
-    return cleared;
+    return this.gate.runSync("resolve", () => this.conflictWorkflow.clearStaleConflicts(conflicts));
   }
 
   /** 단일 충돌을 사용자가 고른 선택지(local/remote/merge/duplicate)로 해소 + Notion 전파. */
   async resolveConflict(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
-    return this.gate.run("resolve", () => this.executeResolveConflict(conflict, choice));
-  }
-
-  private async executeResolveConflict(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-  ): Promise<ResolutionResult> {
-    const result = await this.conflictResolver.resolve(conflict, choice);
-    await this.propagateOrReopen(conflict, choice, result);
-    return result;
+    return this.gate.run("resolve", () => this.conflictWorkflow.resolveConflict(conflict, choice));
   }
 
   /** 단일 충돌을 전략(manual/local-first/remote-first/duplicate)으로 해소 + Notion 전파. */
@@ -2825,2888 +1094,27 @@ export class SyncOrchestrator {
     return this.resolveConflict(conflict, choiceForStrategy(conflict, strategy));
   }
 
-  /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. */
+  /** 여러 충돌을 동일 전략으로 일괄 해소 + Notion 전파. 하나를 올리지 못해도 나머지를 푼다. */
   async resolveAllConflicts(
     conflicts: Conflict[],
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult[]> {
-    return this.gate.run("resolve", async () => {
-      const results: ResolutionResult[] = [];
-      // 하나를 올리지 못해도 나머지를 푼다 — 올리지 못한 것은 충돌로 되돌려져 있다(N-06).
-      // 예전에는 첫 실패에서 던져, 뒤의 충돌은 손대지 않은 채 무엇이 풀렸는지도 알리지 못했다.
-      for (const conflict of conflicts) {
-        const choice = choiceForStrategy(conflict, strategy);
-        try {
-          results.push(await this.executeResolveConflict(conflict, choice));
-        } catch (error) {
-          results.push({
-            path: conflict.syncRecord.obsidianPath,
-            choice,
-            success: false,
-            error: error instanceof Error ? error.message : String(error),
-          });
-        }
-      }
-      return results;
-    });
+    return this.gate.run("resolve", () =>
+      this.conflictWorkflow.resolveAllConflicts(conflicts, strategy),
+    );
   }
 
   /**
-   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다. 고친 노트 · 지운 노트는
-   * 지난 동기화 사본(`baseSnapshot`)으로 다시 쓴다. Notion 은 건드리지 않는다.
-   *
-   * 되돌릴 원본이 없는 것은 이유와 함께 거절한다 — 추적하지 않는 새 노트(지우는 것은 사용자가 휴지통으로),
-   * 옮긴 노트의 새 자리(파일을 옛 자리로 옮기면 된다), 사본이 없는 노트, 충돌 중인 노트(충돌 해결로 고른다).
+   * 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다. Notion 은 건드리지
+   * 않는다. 되돌릴 원본이 없는 것은 이유와 함께 거절한다.
    */
   async discardLocalChange(path: string): Promise<void> {
-    return this.gate.run("discard", async () => {
-      const record = this.stateDb.getByPath(path);
-      if (!record) {
-        throw new Error(await this.untrackedDiscardReason(path));
-      }
-      if (record.status === "conflict") {
-        throw new Error(`충돌 중인 노트는 충돌 해결에서 고르세요 — ${path}`);
-      }
-      if (!record.baseSnapshot) {
-        throw new Error(`지난 동기화 사본이 없어 되돌릴 수 없습니다 — ${path}`);
-      }
-      await this.vaultFs.writeFile(path, record.baseSnapshot.toString("utf-8"));
-    });
-  }
-
-  /**
-   * 추적하지 않는 경로를 되돌리려 한 이유. 옮긴 노트의 새 자리도 추적 레코드가 없다 — 「새 노트」 라고
-   * 하면 변경 목록에서 «옮김» 으로 본 사용자가 무엇을 해야 할지 모른다. 옛 자리를 알린다.
-   */
-  private async untrackedDiscardReason(path: string): Promise<string> {
-    const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
-    const moved = plan.scan.changes.find((c) => c.type === "moved" && c.path === path);
-    return moved?.movedFrom
-      ? `옮긴 노트는 되돌리기가 제자리로 돌리지 않습니다 — 파일을 ${moved.movedFrom} 로 다시 옮기세요 (${path})`
-      : `추적하지 않는 새 노트라 되돌릴 원본이 없습니다 — ${path}`;
+    return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
   }
 
   /** 충돌 미리보기용 줄 비교(로컬 vs 원격). 해소 없이 표시 전용. */
   generateConflictDiff(conflict: Conflict): string {
-    return this.conflictResolver.generateDiff(conflict);
-  }
-
-  /**
-   * 해소 결과를 Notion 에 올린다. 올리지 못하면 충돌로 되돌리고 오류를 그대로 던진다(N-06).
-   *
-   * 해소는 지난 동기화 사본을 해소 결과로 바꿔 둔다. 그 결과가 Notion 에 없는데 «해결됨» 으로
-   * 남으면, 다음 pull 은 로컬을 바뀌지 않은 것으로 보고 바뀐 원격으로 덮는다 — 고른 로컬 · 병합
-   * 결과가 사라진다. 해소 전의 사본으로 되돌리면 다음 pull 이 다시 충돌로 본다. 볼트 파일(병합
-   * 결과 · `.conflict` 사본)은 그대로 둔다 — 사용자가 고른 것이다.
-   */
-  private async propagateOrReopen(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-    result: ResolutionResult,
-  ): Promise<void> {
-    try {
-      await this.propagateResolution(conflict, choice, result);
-    } catch (error) {
-      // 원격에서 지운 노트를 «로컬 유지» 로 풀면 추적을 놓은 뒤 새 페이지를 만든다 — 만들지 못해도
-      // 파일은 추적하지 않는 새 노트로 남아 다음 push 가 만든다. 되돌릴 충돌이 없다.
-      if (isRemoteDeletion(conflict)) {
-        throw new Error(
-          `Notion 에 다시 만들지 못함 — 파일은 그대로이고 다음 push 가 다시 만든다 (${
-            conflict.syncRecord.obsidianPath
-          }): ${error instanceof Error ? error.message : String(error)}`,
-          { cause: error },
-        );
-      }
-      const record = conflict.syncRecord;
-      this.stateDb.transaction(() => {
-        this.stateDb.updateHash(record.id, record.contentHash, record.baseSnapshot);
-        this.stateDb.updateStatus(record.id, "conflict");
-      });
-      throw error;
-    }
-  }
-
-  /**
-   * 해소 결과를 Notion 으로 전파해 로컬↔원격 일관성을 봉합한다.
-   * - remote 선택: 로컬이 원격으로 갱신됐을 뿐이므로 push 불필요. notionLastEdited 만
-   *   원격 변경의 lastEdited 로 재조정 → 다음 pull 이 같은 변경을 재충돌로 보지 않음.
-   * - merge 실패(충돌 마커 잔존): 사용자가 직접 풀어야 하므로 conflict 상태 유지·push 안 함.
-   * - local / merge(성공) / duplicate: 해소된 로컬 내용을 Notion 에 재push(pushUpdate 가
-   *   변환·이미지·속성·해시·notionLastEdited 를 한 트랜잭션으로 재조정) → 무손실 수렴.
-   * - 원격에서 지운 노트: local 은 새 페이지로 만들고(pushCreate), remote 는 볼트에서 지운 것으로
-   *   끝난다.
-   */
-  private async propagateResolution(
-    conflict: Conflict,
-    choice: ResolutionChoice,
-    result: ResolutionResult,
-  ): Promise<void> {
-    const record = conflict.syncRecord;
-    if (!record.notionPageId) return;
-
-    // 원격에서 지운 노트 — «원격 유지» 는 볼트에서 지운 것으로 끝났다. «로컬 유지» 는 추적을 놓은
-    // 파일을 새 페이지로 만든다(지운 페이지는 휴지통에 그대로 둔다).
-    if (isRemoteDeletion(conflict)) {
-      if (choice === "local") await this.pushCreate(record.obsidianPath);
-      return;
-    }
-
-    if (choice === "remote") {
-      this.recordUnverifiedObservation(record.id, conflict.remoteChange.lastEdited);
-      return;
-    }
-
-    // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
-    if (!result.success) return;
-
-    // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push. 해소가 지난
-    // 동기화 사본을 해소 결과로 바꿔 두었으므로 «사본과 달라진 것» 은 없다 — 원격에 맞춰
-    // 보내도록 알린다(DB 행).
-    await this.pushUpdate(record.obsidianPath, { overwriteRemote: true });
-  }
-
-  // 반환값: 실제로 원격(Notion) 삭제가 전파되었는지 여부.
-  // deleteSync=false 면 로컬 삭제를 pending 으로만 기록하고 Notion 은 보존하므로
-  // false 를 돌려준다 → 호출부가 deleted 카운트를 올리지 않아 보고가 정직해진다.
-  //
-  // 지우기 전에 원격을 본다(F-f) — pull 하지 않은 Notion 편집이 있으면 지우지 않는다. 휴지통으로
-  // 보내면 그 편집은 볼트에도 Notion 에도 보이지 않는다. 이어지는 pull 이 파일을 되살려 받는다
-  // (로컬 파일이 없으면 원격을 쓴다). 원격이 이미 사라졌으면 추적만 놓는다.
-  private async pushDelete(path: string): Promise<boolean> {
-    const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return false;
-
-    if (!this.config.sync.deleteSync) {
-      this.stateDb.updateStatus(record.id, "pending");
-      return false;
-    }
-
-    const presence = await remotePresence(this.notionClient, record.notionPageId);
-    if (presence.kind === "alive") {
-      if (!this.overwritesRemote(record, false)) {
-        refuseUnpulledDeletion(await this.remoteDrift(record, presence.page), path);
-      }
-      try {
-        await this.notionClient.archivePage(record.notionPageId);
-      } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        if (msg.includes("archived ancestor")) {
-          // 부모 페이지가 이미 아카이브됨 → 자식도 자동 아카이브 상태
-        } else {
-          throw error;
-        }
-      }
-    }
-    this.stateDb.transaction(() => {
-      this.stateDb.delete(record.id);
-      this.stateDb.deleteWikilink(record.obsidianPath);
-    });
-    return true;
-  }
-
-  /**
-   * 옮기거나 이름을 바꾼 노트를 Notion 에 반영한다(S-11) — 부모 페이지와 제목을 바꾸고, 내용도
-   * 바뀌었으면 이어서 갱신한다. 예전에는 부모를 바꾸는 요청을 Notion 이 무시했고(pages.update 의
-   * parent), 실패는 로그만 남겼다. 제목은 바꾸지 않았다.
-   *
-   * 무엇을 바꿀지는 이동 WAL 의 옛 경로 — 마지막으로 Notion 에 반영한 자리 — 와 견줘 정한다.
-   * 반영을 마치면 WAL 을 지운다. 도중에 끊기면 다음 push 가 같은 옛 경로로 다시 한다 — 옮기기와
-   * 제목 바꾸기는 다시 해도 결과가 같다. 행은 DB 안에서만 옮긴다(refusedMoves) — 제목만 바뀐다.
-   */
-  private async pushMove(change: LocalChange): Promise<void> {
-    const path = change.path;
-    const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) throw new Error(`옮긴 노트의 추적 기록이 없음: ${path}`);
-    const op = this.stateDb.getIncompleteOpByState(record.id, "move");
-    const from = (op ? moveOrigin(op.payload) : null) ?? change.movedFrom ?? path;
-
-    const rowDatabaseId = this.rowDatabaseOf(record);
-    const base = snapshotFrontmatter(record.baseSnapshot);
-    let current: Record<string, unknown>;
-    try {
-      current = parseFrontmatter(await this.vaultFs.readFile(path)).data;
-    } catch (error) {
-      // 행은 멈춘다 — 이어지는 갱신이 모든 속성을 지우라는 요청이 된다(pushRowUpdate). 페이지는
-      // 제목을 고치지 않은 것으로 본다.
-      if (rowDatabaseId) {
-        throw new Error(
-          `frontmatter 를 읽지 못해 행을 옮기지 않음 (${path}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-      current = base ?? {};
-    }
-
-    await this.relocatePage(record, {
-      parentId: rowDatabaseId ? null : this.moveParentOf(path),
-      title: titleMayChange(base, current, from, path)
-        ? (remoteTitle) => titleAfterMove(base, current, from, path, remoteTitle)
-        : null,
-      opId: op?.id ?? null,
-    });
-
-    if (record.contentHash !== change.currentHash) await this.pushUpdate(path);
-  }
-
-  /**
-   * 옮기거나 이름을 바꾼 폴더의 페이지(push 가 만든 폴더 페이지)를 Notion 에 반영한다 — 얕은
-   * 것부터. 새 부모 폴더에 페이지가 없으면 먼저 만든다. 실패는 폴더마다 이유와 함께 남긴다.
-   *
-   * @returns 반영한 폴더 수.
-   */
-  private async pushFolderMoves(
-    moves: readonly PendingFolderMove[],
-    failed: FailedOperation[],
-    onMove?: (to: string) => void,
-  ): Promise<number> {
-    let moved = 0;
-    for (const { record, from, to } of moves) {
-      onMove?.(to);
-      try {
-        const parentFolder = parentFolderOf(to);
-        let parentId = this.config.notion.rootPageId;
-        if (parentFolder) {
-          await this.ensureFolderPage(parentFolder);
-          const lookup = this.folderLookup();
-          const container = folderContainer(parentFolder, lookup);
-          if (container?.kind !== "page") {
-            throw new Error(
-              this.folderMoveRefusal(to, lookup) ??
-                `폴더(${parentFolder})의 Notion 페이지가 없어 옮기지 않음 — 다음 push 가 폴더부터 만든다`,
-            );
-          }
-          parentId = container.pageId;
-        }
-        await this.relocatePage(record, {
-          parentId,
-          // 폴더 페이지는 폴더 이름으로 만든다 — 이름이 바뀌면 옛 이름을 따르던 제목만 바꾼다.
-          title:
-            wikilinkTitleFromPath(from) === wikilinkTitleFromPath(to)
-              ? null
-              : (remoteTitle) => titleAfterMove(null, {}, from, to, remoteTitle),
-          opId: this.stateDb.getIncompleteOpByState(record.id, "move")?.id ?? null,
-        });
-        moved++;
-      } catch (error) {
-        failed.push({
-          path: to,
-          operation: "move",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
-    return moved;
-  }
-
-  /**
-   * 페이지를 새 부모로 옮기고 제목을 바꾼 뒤 이동 WAL 을 지운다. 바꿀 것이 없으면 요청하지 않는다.
-   *
-   * @param change.parentId 새 부모 페이지. null 이면 부모는 그대로(행).
-   * @param change.title Notion 의 지금 제목을 받아 새 제목을 돌려준다(그대로면 null). 제목이 바뀔
-   *   수 없으면 null — 그러면 페이지를 읽지 않는다.
-   */
-  private async relocatePage(
-    record: SyncRecord,
-    change: {
-      readonly parentId: string | null;
-      readonly title: ((remoteTitle: string) => string | null) | null;
-      readonly opId: string | null;
-    },
-  ): Promise<void> {
-    const pageId = record.notionPageId!;
-    const newParent =
-      change.parentId !== null &&
-      !(record.notionParentId !== null && notionIdsEqual(change.parentId, record.notionParentId))
-        ? change.parentId
-        : null;
-
-    let written: RemotePageStamp | null = null;
-    let remoteChanged = false;
-    if (newParent !== null || change.title) {
-      const remote = await this.notionClient.getPage(pageId);
-      // 같은 분 안의 편집도 «바뀜» 으로 본다(N-05) — 옮기기와 제목은 그래도 반영한다.
-      remoteChanged = this.remoteVerdict(record, remote) !== "unchanged";
-      const title = change.title ? change.title(this.notionClient.extractTitle(remote)) : null;
-      if (newParent !== null) await this.notionClient.movePage(pageId, newParent);
-      if (title !== null) {
-        written = await this.notionClient.updatePageProperties(pageId, titleProperty(title));
-      } else if (newParent !== null) {
-        written = await this.notionClient.getPage(pageId);
-      }
-    }
-
-    this.stateDb.transaction(() => {
-      if (newParent !== null) this.stateDb.setNotionParentId(record.id, newParent);
-      // Notion 에서도 바뀐 페이지는 기준 시각을 올리지 않는다 — 올리면 다음 pull 이 그 변경을
-      // «이미 받은 것» 으로 여긴다. 옮기기와 제목은 본문을 바꾸지 않는다 — 지문은 그대로 둔다.
-      if (written !== null && !remoteChanged) this.recordObservation(record.id, written);
-      if (change.opId !== null) this.stateDb.markPendingCompleted(change.opId);
-    });
-  }
-
-  /**
-   * 이번 실행이 원격을 보는 기준을 정한다(N-05). 본 시각은 실행을 시작한 시각이다 — 이 실행이
-   * 받는 원격은 모두 그 뒤에 본 것이라, 가라앉았다고 서둘러 보지 않는다. 봇 id 는
-   * {@link resolveBotUserId} 가 따로 받는다 — 할 일이 없는 실행은 묻지 않는다.
-   */
-  private beginRemoteObservation(startTime: number): void {
-    this.observation = { seenAt: new Date(startTime).toISOString(), botUserId: null };
-  }
-
-  /** 이 토큰의 봇 id 를 받아 둔다. 받지 못하면 봇 규칙 없이 간다 — 내용으로 한 번 더 확인할 뿐이다. */
-  private async resolveBotUserId(): Promise<void> {
-    if (this.observation.botUserId !== null) return;
-    try {
-      const botUserId = await this.notionClient.getBotUserId();
-      this.observation = { ...this.observation, botUserId };
-    } catch (error) {
-      getLogger().warn(
-        `[Im-Nobsidian] 이 통합의 봇 id 를 받지 못함 — 방금 쓴 페이지도 내용으로 다시 확인한다: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  /** 레코드가 지난번에 본 원격과 지금 원격을 견준다 — 이번 실행의 기준으로. */
-  private remoteVerdict(record: SyncRecord, page: RemotePageStamp): RemoteVerdict {
-    return compareRemote(record, page, this.observation.botUserId);
-  }
-
-  /** 추적 중인 페이지의 원격 변경 — 바뀌지 않았으면 null. 가를 수 없으면 «확인 안 됨» 으로 싣는다. */
-  private remoteModification(
-    record: SyncRecord,
-    page: RemotePageStamp & { readonly id: string },
-  ): RemoteChange | null {
-    const verdict = this.remoteVerdict(record, page);
-    if (verdict === "unchanged") return null;
-    return {
-      pageId: page.id,
-      type: "modified",
-      path: record.obsidianPath,
-      lastEdited: page.last_edited_time,
-      previousEdited: record.notionLastEdited,
-      ...(verdict === "unverified" ? { unverified: true } : {}),
-    };
-  }
-
-  /**
-   * «확인 안 됨» 인 원격 변경 중 지난번 그대로인 것을 뺀다 — 받지 않고 변경을 보여 주는 status 와
-   * dry-run 이 쓴다. pull 은 받아서 견주므로 쓰지 않는다. push 가 덮어쓰기 전에 보는 것과 같게
-   * 견준다({@link remoteDrift}).
-   *
-   * 원격을 읽지 못했으면 그대로 둔다 — 읽지 못한 것을 바뀌지 않았다고 하지 않는다.
-   */
-  private async withoutUnchangedRemotes(changes: RemoteChange[]): Promise<RemoteChange[]> {
-    const kept: RemoteChange[] = [];
-    for (const change of changes) {
-      const record = change.unverified ? this.stateDb.getByNotionId(change.pageId) : null;
-      if (!record) {
-        kept.push(change);
-        continue;
-      }
-      try {
-        const remote = await this.notionClient.getPage(change.pageId);
-        if ((await this.remoteDrift(record, remote)) !== "none") kept.push(change);
-      } catch {
-        kept.push(change);
-      }
-    }
-    return kept;
-  }
-
-  /** 지금 본 원격 페이지를 레코드에 적을 값 — {@link observedRecordFields} 를 이번 실행의 기준으로. */
-  private observedFields(
-    page: RemotePageStamp,
-    bodyFingerprint: string | null,
-  ): ObservedRecordFields {
-    return observedRecordFields(page, this.observation.seenAt, bodyFingerprint);
-  }
-
-  /**
-   * 원격을 언제 · 누가 고쳤는지 모르는 채 수정 시각만 적는다 — 다음 pull 이 내용으로 확인한다.
-   * 충돌 해소처럼 원격 본문을 언제 받았는지 모르는 자리에서 쓴다. 본문 지문도 모른다 — 그 전에
-   * push 하면 원격이 바뀌었는지 확인하지 못해 pull 을 먼저 하라며 거절한다.
-   */
-  private recordUnverifiedObservation(recordId: string, lastEdited: string): void {
-    this.stateDb.setRemoteObservation(recordId, {
-      lastEdited,
-      lastEditedBy: null,
-      seenAt: null,
-      bodyFingerprint: null,
-    });
-  }
-
-  /**
-   * 지금 본 원격 페이지를 레코드에 적는다.
-   *
-   * @param bodyFingerprint 본문 지문. undefined 면 적지 않는다 — 본문을 건드리지 않은 관측.
-   */
-  private recordObservation(
-    recordId: string,
-    page: RemotePageStamp,
-    bodyFingerprint?: string | null,
-  ): void {
-    this.stateDb.setRemoteObservation(recordId, {
-      ...observationOf(page, this.observation.seenAt),
-      ...(bodyFingerprint === undefined ? {} : { bodyFingerprint }),
-    });
-  }
-
-  /**
-   * 전체 대조 — 루트 아래 페이지를 모두 훑고 추적 중인데 목록에 없는 페이지를 원격에 물어 삭제를
-   * 가른다. 취소하면 {@link OperationAbortedError} 를 던진다 — 다 훑지 못한 목록으로 삭제를 가르지
-   * 않는다.
-   */
-  private async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
-    const changes: RemoteChange[] = [];
-    this._childParentIds.clear();
-    const lastPull = this.stateDb.getMeta("last_pull_at");
-    const syncedRecords = this.stateDb.getAll();
-    const trackedPageIds = new Set(
-      syncedRecords.filter((r) => r.notionPageId).map((r) => r.notionPageId!),
-    );
-
-    let remotePages: Array<RemotePageStamp & { readonly id: string }>;
-    // 새 페이지의 제목 — 볼트 경로가 아직 없어 화면이 이름으로 보인다.
-    const titles = new Map<string, string>();
-    if (this.isDatabaseMode) {
-      // R11-A: 전 data source 를 순회하는 SSOT(queryAllDatabasePages)로 열거한다. 1차 data
-      // source 만 페이지네이션하면 2번째+ 소스의 행이 **원격에 없는 것으로 보여**, 미발견에
-      // 그치지 않고 deleteSync 시 로컬 파일이 고아로 판정돼 지워진다(pullDatabase 는 이미
-      // 전 소스를 훑어 그 행들을 정상 기록하므로, 같은 행을 한 경로는 만들고 다른 경로는
-      // 지우는 진동이 된다). 열거 계약을 한 메서드로 모아 경로 간 비대칭을 없앤다.
-      const allPages = await this.notionClient.queryAllDatabasePages(
-        this.config.notion.databaseId!,
-      );
-      for (const page of allPages)
-        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
-      remotePages = allPages.map(remoteStampOf);
-    } else {
-      // 디스커버리 이중 전략(비용 상한 하이브리드):
-      //  1) 기본 — root 서브트리 직접 BFS 순회(getChildPagesRecursive). 비용이 실제 동기화
-      //     대상(서브트리)에 비례해, 작은 볼트가 수천 페이지 워크스페이스에 있어도 빠르다
-      //     (I10: 2-파일 볼트 pull ~12s). 단 비용은 서브트리 **전체 블록 수**에 비례하므로,
-      //  2) 콘텐츠가 많은 대규모 서브트리에서는 시간 예산(DISCOVERY_RECURSIVE_BUDGET_MS)을
-      //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리를 **덧붙인다**(비용이
-      //     워크스페이스 페이지 수에 비례·예측가능·유한).
-      //
-      // 두 경로를 경합시키지 않고 **합집합**을 쓰는 이유(R12-A): 둘은 같은 집합을 낸다고
-      // 가정할 수 없다. search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수 있고,
-      // 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 그런데 어느 쪽이 도는지를 90초
-      // 벽시계가 정한다 — 실제로 같은 볼트에서 첫 pull 은 폴백(search), 재 pull 은 순회로
-      // 돌았고 페이지 수가 회차마다 흔들렸다. 더 나쁜 건 이걸 멱등성 게이트가 못 본다는
-      // 점이다: 두 번째 실행이 더 **적게** 찾아도 created/updated 는 0 이라 churn 0 이다.
-      // 그리고 deleteSync 가 켜져 있으면 아래 orphan 판정이 그 차집합을 **삭제**한다.
-      // 합집합은 이 경합을 없앤다. 순회 부분 결과는 이미 치른 비용이라 추가 요청도 없다.
-      let underRoot: PageObjectResponse[];
-      try {
-        underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
-          deadlineMs: Date.now() + SyncOrchestrator.DISCOVERY_RECURSIVE_BUDGET_MS,
-          signal,
-        });
-      } catch (error) {
-        if (!(error instanceof DiscoveryTooLargeError)) throw error;
-        getLogger().info(
-          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 순회 부분 결과 ${error.partial.length}건에 ` +
-            `워크스페이스 search 기반 디스커버리를 합칩니다`,
-        );
-        const viaSearch = await this.notionClient.getPagesUnderRootViaSearch(
-          this.config.notion.rootPageId,
-          signal,
-        );
-        // id 로 디듀프한다 — 아래 remotePages 차단점도 디듀프하지만, 그 전에 도는
-        // _childParentIds 루프의 extractParentId 가 block 부모마다 API 를 부를 수 있어
-        // 중복을 여기서 먼저 없애야 요청이 두 배로 새지 않는다.
-        const byId = new Map<string, PageObjectResponse>();
-        for (const page of [...error.partial, ...viaSearch]) {
-          byId.set(normalizeNotionId(page.id), page);
-        }
-        underRoot = [...byId.values()];
-        getLogger().info(
-          `[Im-Nobsidian] 디스커버리 합집합: 순회 ${error.partial.length} ∪ search ${viaSearch.length} → ${underRoot.length}건`,
-        );
-      }
-      // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
-      // 부모가 page_id 면 추가 API 호출 없이 즉시 해석(공통 경로), block 중첩만 1회 조회.
-      this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
-      for (const page of underRoot) {
-        throwIfAborted(signal);
-        const parentId = await this.extractParentId(page);
-        if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
-      }
-      for (const page of underRoot)
-        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
-      remotePages = underRoot.map(remoteStampOf);
-    }
-
-    // 원격 페이지 목록을 page_id 로 디듀프한다. search API(페이지 모드)·data source 쿼리
-    // (DB 모드) 모두 페이지네이션 사이 재정렬로 같은 페이지를 중복 반환할 수 있고, 중복이 changes 로
-    // 새면 같은 page_id 가 두 번 create 되어 동일 콘텐츠가 클린·`(1)` 두 경로에 기록(첫 파일
-    // 고아화)된다. 여기가 페이지·DB 양 모드를 함께 막는 단일 차단점이다.
-    const seenRemoteIds = new Set<string>();
-    for (const page of remotePages) {
-      const key = normalizeNotionId(page.id);
-      if (seenRemoteIds.has(key)) continue;
-      seenRemoteIds.add(key);
-
-      const record = this.stateDb.getByNotionId(page.id);
-
-      if (!record) {
-        changes.push({
-          pageId: page.id,
-          type: "created",
-          title: titles.get(key),
-          lastEdited: page.last_edited_time,
-          previousEdited: null,
-        });
-      } else {
-        const modified = this.remoteModification(record, page);
-        if (modified) changes.push(modified);
-      }
-
-      trackedPageIds.delete(page.id);
-    }
-
-    if (this.config.sync.deleteSync && lastPull) {
-      // 조회하는 DB 의 행은 여기서 가르지 않는다 — 페이지 순회는 행을 보지 못해 행은 늘 목록에 없다.
-      // 그 DB 를 조회하는 pull 이 조회 결과로 가른다(DatabaseSyncer). 예전에는 행이 매 pull 마다
-      // «사라진 페이지» 가 돼 파일이 지워졌다가 이어지는 DB pull 이 다시 만들었다 — 올리지 않은
-      // 로컬 편집이 그 사이에 사라졌다(S-12).
-      const queriedDatabases = this.rowQueriedDatabaseIds();
-      const orphans = syncedRecords.filter(
-        (r) =>
-          r.notionPageId !== null &&
-          trackedPageIds.has(r.notionPageId) &&
-          !(
-            r.fileType === "db-row" &&
-            r.notionParentId !== null &&
-            queriedDatabases.has(normalizeNotionId(r.notionParentId))
-          ),
-      );
-      changes.push(...(await this.confirmedDeletions(orphans, seenRemoteIds, signal)));
-    }
-
-    return changes;
-  }
-
-  /**
-   * 행의 삭제를 DB 조회로 가르는 DB — 이번 pull 이 조회하는 DB 다. 설정된 DB 와, 페이지 모드면 자동
-   * 발견된 DB(접근 불가로 뺀 것 제외). {@link pullDiscoveredDatabases} 가 조회하는 목록과 같다.
-   */
-  private rowQueriedDatabaseIds(): Set<string> {
-    const ids = (this.config.notion.databases ?? []).map((d) => d.databaseId);
-    if (!this.isDatabaseMode) {
-      const inaccessible = this.loadInaccessibleDbIds();
-      for (const c of parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))) {
-        if (!inaccessible.has(c.databaseId.replace(/-/g, ""))) ids.push(c.databaseId);
-      }
-    }
-    return new Set(ids.map(normalizeNotionId));
-  }
-
-  /**
-   * 목록에 없던 추적 페이지 가운데 원격에서 정말 사라진 것만 삭제로 낸다(S-12) — {@link remotePresence}.
-   *
-   * - 휴지통 · 보관 · 없음(404) → 삭제.
-   * - 살아 있고 부모가 동기화 범위(루트 · 목록에 있던 페이지 · 이렇게 살아 있다고 확인된 페이지) →
-   *   목록이 빠뜨린 것이다. 둔다.
-   * - 살아 있지만 범위 밖(다른 곳 · 워크스페이스 맨 위)으로 옮겨졌다 → 삭제(예전과 같다).
-   * - 묻지 못했거나 부모를 알 수 없다 → 이번에는 둔다. 다음 전체 대조가 다시 묻는다.
-   *
-   * 부모가 목록에서 빠진 페이지면 그 부모가 살아 있다고 확인돼야 범위 안이다 — 범위가 더 늘지
-   * 않을 때까지 되풀이한다.
-   */
-  private async confirmedDeletions(
-    orphans: readonly SyncRecord[],
-    listed: ReadonlySet<string>,
-    signal?: AbortLike,
-  ): Promise<RemoteChange[]> {
-    const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
-    if (this.isDatabaseMode) scope.add(normalizeNotionId(this.config.notion.databaseId!));
-
-    const deleted: SyncRecord[] = [];
-    const alive = new Map<SyncRecord, string>();
-    for (const record of orphans) {
-      throwIfAborted(signal);
-      const pageId = record.notionPageId!;
-      try {
-        const presence = await remotePresence(this.notionClient, pageId);
-        if (presence.kind === "gone") {
-          deleted.push(record);
-          continue;
-        }
-        const parent = presence.page.parent as { type?: string; database_id?: string };
-        if (parent.type === "workspace") {
-          deleted.push(record);
-          continue;
-        }
-        const parentId = parent.database_id ?? (await this.extractParentId(presence.page));
-        if (parentId) {
-          alive.set(record, normalizeNotionId(parentId));
-        } else {
-          getLogger().warn(
-            `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 부모를 알 수 없어 이번에는 지우지 않음`,
-          );
-        }
-      } catch (error) {
-        getLogger().warn(
-          `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,
-          error,
-        );
-      }
-    }
-
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const [record, parentId] of alive) {
-        if (!scope.has(parentId)) continue;
-        scope.add(normalizeNotionId(record.notionPageId!));
-        alive.delete(record);
-        grew = true;
-        getLogger().info(
-          `[Im-Nobsidian] 목록에 없던 ${record.obsidianPath} 는 Notion 에 그대로 있음 — 지우지 않음`,
-        );
-      }
-    }
-    // 남은 것은 살아 있지만 범위 밖으로 옮겨졌다.
-    deleted.push(...alive.keys());
-
-    return deleted.map((record) => remoteDeletionChange(record));
-  }
-
-  /**
-   * 이번 실행이 원격을 얼마나 훑을지(ADR-027) — pull 과 status 가 같은 규칙을 읽는다: 둘이 갈리면
-   * status 가 「원격 변경 없음」 이라고 한 것을 pull 이 받는다.
-   *
-   * 증분의 기준 시각은 `last_pull_at` 뿐이다. push 도 올리는 `last_sync_at` 은 «그 앞의 원격 변경을
-   * 받았다» 는 뜻이 아니다 — push 만 한 볼트가 그 시각부터 증분으로 조회하면 그 전에 원격에만 있던
-   * 페이지를 영영 받지 못한다.
-   */
-  private remoteScan(options: { readonly force: boolean; readonly deferDue: boolean }): RemoteScan {
-    return chooseRemoteScan(
-      {
-        lastPullAt: this.stateDb.getMeta("last_pull_at"),
-        lastFullPullAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
-        trackedRecords: this.stateDb.getAll().length,
-        databaseMode: this.isDatabaseMode,
-        fullReconcileIntervalSec: this.config.sync.fullReconcileInterval,
-      },
-      { force: options.force, now: Date.now(), deferDue: options.deferDue },
-    );
-  }
-
-  /**
-   * 원격 변경을 찾는다 — 전체 대조면 모두 훑고({@link detectRemoteChanges}), 아니면 바뀐 것만
-   * ({@link detectRemoteChangesIncremental}). 취소하면 {@link OperationAbortedError} 를 던진다.
-   *
-   * @param options.databases 바뀐 DB 도 찾는다(pull · dry-run). 상태 확인은 DB 를 조회하지 않아 찾지 않는다.
-   */
-  private async detectRemote(
-    scan: RemoteScan,
-    options: { readonly signal?: AbortLike; readonly databases: boolean },
-  ): Promise<RemoteDetection> {
-    if (scan.kind === "full") {
-      return { changes: await this.detectRemoteChanges(options.signal), databaseIds: null };
-    }
-    return this.detectRemoteChangesIncremental(scan.since, options);
-  }
-
-  /**
-   * 이번 pull 이 조회할 DB(ADR-027).
-   *
-   * - 전체 대조 · 경로를 좁힌 pull → 모두. 경로를 좁혔으면 범위에 닿는 DB 만 조회된다 — 사용자가 고른
-   *   것이고, 범위가 비용을 묶는다.
-   * - 증분 → 바뀐 것이 보인 DB · 지난번에 받지 못한 DB(대기) · 볼트에서 행이 사라진 DB. 행을 되살리는
-   *   것은 DB 조회다 — deleteSync 가 꺼져 있을 때만: 켜져 있으면 지운 것은 원격에도 지우라는 뜻이라
-   *   되살리지 않는다({@link detectMissingLocalFiles} 와 같다).
-   */
-  private databaseSelection(
-    detection: RemoteDetection,
-    localPlan: LocalPlan | null,
-    pending: ReadonlySet<string>,
-    paths: readonly string[] | undefined,
-  ): DatabaseSelection {
-    if (!detection.databaseIds || paths) return ALL_DATABASES;
-    const ids = new Set([...detection.databaseIds, ...pending]);
-    if (!this.config.sync.deleteSync && localPlan) {
-      for (const change of localPlan.scan.changes) {
-        if (change.type !== "deleted") continue;
-        const record = this.stateDb.getByPath(change.path);
-        if (record?.fileType === "db-row" && record.notionParentId) {
-          ids.add(compactNotionId(record.notionParentId));
-        }
-      }
-    }
-    return { kind: "changed", ids };
-  }
-
-  /** 다음 pull 이 바뀐 것이 없어도 조회할 DB 를 적는다 — 바뀐 때만. */
-  private savePendingDatabases(ledger: DatabasePullLedger): void {
-    const serialized = serializePendingDatabases(ledger.nextPending());
-    const saved = this.stateDb.getMeta(PENDING_DATABASES_META_KEY);
-    if ((saved ?? serializePendingDatabases(new Set())) !== serialized) {
-      this.stateDb.setMeta(PENDING_DATABASES_META_KEY, serialized);
-    }
-  }
-
-  /**
-   * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
-   * 만든다. **삭제는 감지하지 않는다**: search API 는 in_trash/archived 페이지를 반환하지 않아
-   * (=사라진 것을 증분만으로는 구분 불가) 삭제는 전체 대조(`detectRemoteChanges`)가 가른다.
-   * 전체 대조는 주기마다 돈다(ADR-027 — 예전에는 deleteSync 가 켜져 있으면 매번 돌았다. I10).
-   *
-   * 바뀐 행 · 새 행 · 스키마를 고친 DB 도 모은다 — pull 은 그 DB 만 조회한다. 새 행은 페이지로 받지
-   * 않는다: DB 조회가 행 속성과 함께 받는다. 그래서 부모를 묻지 않는다(행마다 요청 1회 이상 아낀다).
-   *
-   * @param options.databases pull · dry-run — 바뀐 DB 를 모으고, 추적 중인 행은 DB 조회에 맡긴다.
-   *   false(상태 확인)면 DB 를 찾지 않고 고친 행도 원격 변경으로 싣는다.
-   */
-  private async detectRemoteChangesIncremental(
-    since: string,
-    options: { readonly signal?: AbortLike; readonly databases: boolean },
-  ): Promise<RemoteDetection> {
-    const changes: RemoteChange[] = [];
-    const databaseIds = new Set<string>();
-    this._childParentIds.clear();
-    // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
-    // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
-    const searchSince = incrementalSearchSince(since);
-    const recentPages = await this.notionClient.searchRecentPages(searchSince, options.signal);
-    const untracked: Array<{
-      page: (typeof recentPages)[number];
-      parentId: string;
-      title: string;
-    }> = [];
-
-    for (const page of recentPages) {
-      const record = this.stateDb.getByNotionId(page.id);
-      if (!record) {
-        if (page.parentDatabaseId) {
-          databaseIds.add(compactNotionId(page.parentDatabaseId));
-          continue;
-        }
-        throwIfAborted(options.signal);
-        try {
-          const fullPage = await this.notionClient.getPage(page.id);
-          const parentId = await this.extractParentId(fullPage);
-          if (parentId) {
-            this._childParentIds.add(normalizeNotionId(parentId));
-            untracked.push({ page, parentId, title: this.notionClient.extractTitle(fullPage) });
-          }
-        } catch {
-          // inaccessible page
-        }
-        continue;
-      }
-      // 조회 창(기준 시각 − 안전창 15분)은 가라앉지 않은 레코드의 수정 시각을 늘 담는다 — 가라앉지
-      // 않았다는 것은 그 시각이 마지막으로 본 때(기준 시각 뒤)보다 2분 안쪽이라는 뜻이다.
-      const modified = this.remoteModification(record, page);
-      // 바뀐 행의 DB 만 조회한다 — 창에 다시 든 그대로인 행으로 조회하면 안전창 동안 pull 마다 같은
-      // DB 를 다시 조회한다.
-      const rowDatabase =
-        page.parentDatabaseId ?? (record.fileType === "db-row" ? record.notionParentId : null);
-      if (modified && rowDatabase) databaseIds.add(compactNotionId(rowDatabase));
-      // pull 은 추적 중인 행도 그 DB 를 조회해 받는다 — 페이지로도 받으면 같은 행을 두 번 받는다(같은
-      // 분 안의 편집은 DB 조회가 한 번 더 받아 견준다). 상태 확인은 DB 를 조회하지 않으니 원격 변경으로 둔다.
-      if (options.databases && record.fileType === "db-row") continue;
-      if (modified) changes.push(modified);
-    }
-
-    // 새 페이지는 부모가 루트 · 추적 중이거나, 이번에 함께 받는 새 페이지일 때 받는다(S-08).
-    // 예전에는 앞의 둘만 봐서, 새 하위 트리는 맨 위 한 장만 오고 그 아래는 빠졌다 — 다음
-    // 실행의 조회 창(마지막 pull − 안전창)은 그 페이지의 수정 시각보다 뒤라 영영 다시 보이지
-    // 않았다. 부모가 받아질 때마다 한 바퀴 더 돌아 여러 층을 받고, 부모가 자식보다 먼저 줄에 선다.
-    const accepted = new Set<string>();
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const { page, parentId, title } of untracked) {
-        const id = normalizeNotionId(page.id);
-        if (accepted.has(id)) continue;
-        if (!this.isTrackedParent(parentId) && !accepted.has(normalizeNotionId(parentId))) continue;
-        accepted.add(id);
-        grew = true;
-        changes.push({
-          pageId: page.id,
-          type: "created",
-          title,
-          lastEdited: page.last_edited_time,
-          previousEdited: null,
-        });
-      }
-    }
-
-    // 스키마를 고친 DB — 행이 그대로여도 `.base` 와 행의 속성을 다시 받아야 한다. 행을 고쳐도 DB 의
-    // 수정 시각은 그대로고, 스키마를 고치면 data source 의 수정 시각이 바뀐다(실측 2026-09-28).
-    if (options.databases) {
-      for (const source of await this.notionClient.searchRecentDataSources(
-        searchSince,
-        options.signal,
-      )) {
-        if (source.databaseId) databaseIds.add(compactNotionId(source.databaseId));
-      }
-    }
-
-    return { changes, databaseIds };
-  }
-
-  private isTrackedParent(parentId: string): boolean {
-    if (notionIdsEqual(parentId, this.config.notion.rootPageId)) return true;
-    return !!this.stateDb.getByNotionId(parentId);
-  }
-
-  /**
-   * 추적 중(sync_state)인데 디스크에서 사라진 파일을 찾는다.
-   *
-   * 원격 변경 감지(detectRemoteChanges*)는 "Notion 에서 바뀐 것"만 본다. 로컬에서 파일이
-   * 지워진 경우는 어느 경로로도 잡히지 않아, 재pull 해도 `--force` 로도 되살아나지 않고
-   * 영구히 발산했다. push 는 deleteSync=false 면 원격을 지우지 않으므로 사용자에겐 복구
-   * 수단이 볼트 전체 초기화밖에 남지 않는다 — 이 스캔이 그 마지막 구멍을 막는다.
-   *
-   * 레코드마다 stat 을 던지면 1000건 규모에서 수 초가 든다. 볼트 워크 1회로 실재 목록을
-   * 만든 뒤 차집합을 취한다(md). md 가 아닌 추적 레코드는 수가 적어 개별 확인으로 남긴다.
-   *
-   * 로컬 이름변경·이동은 "사라짐" 과 구별해야 한다 — 되살리면 원본과 새 이름의 사본이
-   * 둘 다 남는다. push 의 detectMoves 와 같은 기준(내용 해시 일치)을 쓰되, 볼트 전체를
-   * 해시하지 않도록 크기가 같은 미추적 파일만 후보로 좁혀 확인한다.
-   */
-  private async detectMissingLocalFiles(paths?: string[]): Promise<SyncRecord[]> {
-    // deleteSync 가 켜져 있으면 로컬 삭제는 "원격에도 지우라" 는 의사 표시다. sync() 는
-    // pull 을 먼저 돌리므로 여기서 되살리면 뒤이은 push 가 지울 대상을 잃어 삭제 의도가
-    // 통째로 무효화된다. 복원은 삭제를 전파할 수단이 아예 없는 설정(deleteSync=false)
-    // 에서만 유일하게 옳은 해석이다.
-    if (this.config.sync.deleteSync) return [];
-
-    const records = this.stateDb.getAll();
-    if (records.length === 0) return [];
-
-    const scoped = records.filter(
-      (r) =>
-        // folder-only 는 실체가 폴더라 파일 부재가 정상. db-row 를 제외하는 이유는
-        // 여기서 되살리면 행 전용 frontmatter(속성 매핑) 없이 본문만 쓰는 잘못된 경로로
-        // 새기 때문이다 — 복원은 반드시 database-syncer 의 행 경로가 해야 한다.
-        // 다만 그쪽이 실제로 복원하는지는 오래 참이 아니었다: 원격 무변경이면 로컬 존재를
-        // 묻지도 않고 건너뛰어, 지운 행이 어느 경로로도 돌아오지 않았다. R13 에서 그
-        // 존재 확인을 넣어 이 제외가 비로소 근거를 갖는다(tests/sync/db-row-restore-deleted).
-        // push 가 만든 폴더 페이지(폴더 레코드)도 실체가 폴더다 — 안의 노트를 되살리면 폴더도
-        // 생긴다. 예전에는 폴더 경로에 확장자 없는 파일을 썼다(S-17).
-        (r.fileType === "file" || r.fileType === "folder-note") &&
-        !isFolderRecord(r) &&
-        r.notionPageId !== null &&
-        inAnyPathScope(r.obsidianPath, paths),
-    );
-    if (scoped.length === 0) return [];
-
-    const stats = await this.vaultFs.listMarkdownFileStats();
-    const live = new Set(stats.map((f) => f.path));
-
-    const candidates: SyncRecord[] = [];
-    for (const record of scoped) {
-      if (record.obsidianPath.endsWith(".md")) {
-        if (!live.has(record.obsidianPath)) candidates.push(record);
-      } else if (!(await this.vaultFs.exists(record.obsidianPath))) {
-        candidates.push(record);
-      }
-    }
-    if (candidates.length === 0) return [];
-
-    // 이름이 바뀐 파일은 추적 경로에 없다 — 미추적 실재 파일만 크기별로 색인한다.
-    const tracked = new Set(records.map((r) => r.obsidianPath));
-    const untrackedBySize = new Map<number, string[]>();
-    for (const f of stats) {
-      if (tracked.has(f.path)) continue;
-      const bucket = untrackedBySize.get(f.size);
-      if (bucket) bucket.push(f.path);
-      else untrackedBySize.set(f.size, [f.path]);
-    }
-
-    const hashCache = new Map<string, string | null>();
-    const hashOf = async (path: string): Promise<string | null> => {
-      const cached = hashCache.get(path);
-      if (cached !== undefined) return cached;
-      let hash: string | null = null;
-      try {
-        hash = computeHash(await this.vaultFs.readFile(path));
-      } catch {
-        // 못 읽는 파일은 이름변경 판정에서 제외 — 확신 없이 복원을 취소하지 않는다.
-      }
-      hashCache.set(path, hash);
-      return hash;
-    };
-
-    const missing: SyncRecord[] = [];
-    for (const record of candidates) {
-      // localFileSize 는 크기 버킷으로 후보를 좁히는 최적화일 뿐이다. 구버전이 남긴
-      // 레코드처럼 값이 없으면 버킷을 못 고르는데, 여기서 빈 배열로 끝내면 이름변경을
-      // 놓쳐 원본 이름 사본이 되살아난다. 미추적 마크다운은 정상 볼트에서 거의 0건이라
-      // (실측: 추적 1189 / 볼트 md 1189) 전수 대조로 폴백해도 비용이 없다.
-      const sameSize =
-        record.localFileSize !== null
-          ? (untrackedBySize.get(record.localFileSize) ?? [])
-          : [...untrackedBySize.values()].flat();
-      let renamed = false;
-      for (const path of sameSize) {
-        if ((await hashOf(path)) === record.contentHash) {
-          renamed = true;
-          break;
-        }
-      }
-      if (!renamed) missing.push(record);
-    }
-    return missing;
-  }
-
-  private async pullCreate(pageId: string): Promise<string> {
-    const page = await this.notionClient.getPage(pageId);
-    const title = this.notionClient.extractTitle(page);
-    const safeName = sanitizeFileName(title);
-
-    const parentPath = await this.resolveParentPath(page);
-
-    const hasChildPages = await this.pageHasChildContainers(pageId);
-
-    const {
-      content: markdown,
-      compact: exportCompact,
-      fingerprint,
-    } = await this.fetchPageMarkdown(pageId);
-    const hasContent = markdown.trim().length > 0;
-
-    let filePath: string;
-    let fileType: "file" | "folder-note" | "folder-only";
-
-    if (hasChildPages && hasContent) {
-      const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
-      fileType = "folder-note";
-      await this.vaultFs.ensureFolder(folderPath);
-    } else if (hasChildPages && !hasContent) {
-      const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
-      fileType = "folder-only";
-      await this.vaultFs.ensureFolder(folderPath);
-    } else {
-      filePath = await this.resolveUniqueFilePath(parentPath, safeName, pageId);
-      fileType = "file";
-    }
-
-    let properties: Record<string, unknown>;
-    if (this.isDatabaseMode) {
-      await this.ensureDbSchema();
-      properties = this.propertyMapper.fromNotionProperties(
-        (page as unknown as { properties: Record<string, unknown> }).properties,
-      );
-    } else {
-      properties = this.notionClient.extractProperties(page);
-    }
-    // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 —
-    // 원본에 없던 `title:` 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize·`(1)` 접미사로
-    // 파일명이 제목과 달라진 경우만 보존한다(DB 모드 title 은 Name 컬럼 데이터라 항상 유지).
-    if (this.isDatabaseMode || extractTitle(filePath) !== title) {
-      properties.title = title;
-    }
-
-    let processedMarkdown = await this.imageHandler.restoreUploadedMedia(
-      markdown,
-      pageId,
-      filePath,
-    );
-    if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(
-        processedMarkdown,
-        title,
-        pageId,
-      );
-      processedMarkdown = imageResult.content;
-      this._pullImageCount += imageResult.downloads.length;
-    }
-
-    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
-    processedMarkdown = fileResult.content;
-    this._pullFileCount += fileResult.downloads.length;
-
-    const finalContent = this.pipeline.convertToMarkdown(
-      processedMarkdown,
-      {
-        direction: "pull",
-        path: "markdown-api",
-        filePath,
-        parentMode: this.config.notion.parentMode,
-      },
-      { properties, notionExportCompact: exportCompact },
-    );
-
-    // 부모 해소는 파일 기록 전에 끝낸다. parent 가 block 일 때 resolveBlockToPageId 가
-    // API 를 호출(429 가능)하는데, 이를 writeFile 뒤에 두면 기록만 되고 sync_state 등록 전에
-    // throw → 재시도 시 같은 페이지가 `(1)` 로 재생성되며 첫 파일이 고아가 된다. 기록↔등록
-    // 사이에는 throw 가능한 원격 호출을 두지 않는다(원자적 등록 보장).
-    const resolvedParentId = await this.extractParentId(page);
-
-    await this.vaultFs.writeFile(filePath, finalContent);
-
-    const hash = computeHash(finalContent);
-    const pullStat = await this.vaultFs.getFileStat(filePath);
-    this.stateDb.transaction(() => {
-      this.stateDb.upsert({
-        obsidianPath: filePath,
-        notionPageId: pageId,
-        notionParentId: resolvedParentId,
-        contentHash: hash,
-        ...this.observedFields(page, fingerprint),
-        localLastModified: new Date().toISOString(),
-        syncDirection: "both",
-        fileType,
-        status: "synced",
-        baseSnapshot: Buffer.from(finalContent, "utf-8"),
-        localMtime: pullStat?.mtime ?? null,
-        localFileSize: pullStat?.size ?? null,
-      });
-
-      const aliases = extractAliases(properties);
-      this.stateDb.upsertWikilink({
-        obsidianPath: filePath,
-        notionPageId: pageId,
-        title,
-        aliases,
-      });
-    });
-
-    return filePath;
-  }
-
-  /**
-   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 신뢰성 있게 판정한다.
-   *
-   * 결함(폴더노트 본문분리)의 근본 원인은 얕은 판정이었다 — 최상위 블록 첫 페이지에서
-   * child_page 만 검사하면 callout·column·toggle 안에 중첩된 자식 페이지나 child_database 를
-   * 놓쳐 폴더노트가 file 로 오분류되고, 본문이 폴더 밖 최상위로 밀려 resolveUniqueFilePath
-   * 충돌(' (1).md')로 쪼개졌다.
-   *
-   * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
-   *      _childParentIds 집합으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
-   * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
-   *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
-   */
-  private async pageHasChildContainers(pageId: string): Promise<boolean> {
-    if (this._childParentIds.has(normalizeNotionId(pageId))) return true;
-    try {
-      const deep = await this.notionClient.fetchAllChildrenDeep(pageId);
-      return deep.some((b) => b.type === "child_page" || b.type === "child_database");
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * 이 제목을 파일 이름으로 되살릴 수 있는가 — 그러면 frontmatter 에 `title` 을 적지 않는다(D2).
-   *
-   * 옮기고 아직 Notion 에 반영하지 않은 노트는 Notion 제목이 옛 파일 이름을 따른다. 그 제목을
-   * 새 파일의 `title` 로 적으면 push 가 그것을 «사용자가 정한 제목» 으로 보고, 이름 변경을
-   * 제목에 반영하지 않는다(S-11).
-   */
-  private titleFollowsName(record: SyncRecord, title: string): boolean {
-    if (extractTitle(record.obsidianPath) === title) return true;
-    const op = this.stateDb.getIncompleteOpByState(record.id, "move");
-    const origin = moveOrigin(op?.payload ?? null);
-    return origin !== null && followsFileName(title, origin);
-  }
-
-  /**
-   * 원격 페이지를 **pull 과 동일한 파이프라인**으로 볼트에 쓸 수 있는 본문까지 렌더한다.
-   * (본문 변환 → 이미지/첨부 내려받기 → 속성 주입 → preserve marker → 압축형 간격 판정)
-   *
-   * pull 경로와 충돌 해소 경로가 이 한 곳을 공유해야 한다. 예전엔 충돌 목록만
-   * {@link fetchPageMarkdown} 원문을 그대로 담아, `nobsi resolve` 에서 "원격 유지"를 고르면
-   * 프론트매터도 첨부도 없는 반쪽 본문이 볼트에 덮여 썼다 — 해소가 곧 손실이었다.
-   *
-   * @returns 렌더된 본문과 함께, 호출자가 위키링크 레지스트리 등에 쓰는 제목·속성.
-   *          여기서 이미 읽은 값을 되돌려 줘야 호출자가 같은 페이지를 다시 파싱하지 않는다.
-   */
-  private async renderRemotePage(
-    record: SyncRecord,
-    pageId: string,
-    page: Awaited<ReturnType<NotionClient["getPage"]>>,
-    options?: { downloadMedia?: boolean },
-  ): Promise<{
-    content: string;
-    title: string;
-    properties: Record<string, unknown>;
-    /** 받은 원격 본문의 지문 — 모르면 null. */
-    bodyFingerprint: string | null;
-  }> {
-    // 표시 전용 호출(diff)은 첨부를 내려받지 않는다 — 비교를 보려다 볼트에 파일이 생기면
-    // 안 된다. 이때 새 미디어는 원격 URL 그대로 남지만, 비교 화면에서만 보이는 차이다.
-    const downloadMedia = options?.downloadMedia !== false;
-    if (record.fileType === "db-row") {
-      // 행은 pull 과 같은 렌더러로 — 페이지처럼 렌더하면 본문 첫머리의 옛 속성 블록이
-      // 실제 속성 값을 덮는다(S-02). 충돌 «원격 선택» 은 이 렌더를 파일에 그대로 쓴다.
-      return this.databaseSyncer.renderRow(page, record.obsidianPath, { downloadMedia });
-    }
-    const fetched = await this.fetchPageMarkdown(pageId);
-    let markdown = fetched.content;
-
-    const title = this.notionClient.extractTitle(page);
-
-    let properties: Record<string, unknown>;
-    if (this.isDatabaseMode) {
-      await this.ensureDbSchema();
-      properties = this.propertyMapper.fromNotionProperties(
-        (page as unknown as { properties: Record<string, unknown> }).properties,
-      );
-    } else {
-      properties = this.notionClient.extractProperties(page);
-    }
-    // D2: pullCreate 와 동일 — 파일명으로 복원 가능한 제목은 주입하지 않는다.
-    if (this.isDatabaseMode || !this.titleFollowsName(record, title)) {
-      properties.title = title;
-    }
-
-    // 이 노트가 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 표시 전용 렌더도 같다.
-    markdown = await this.imageHandler.restoreUploadedMedia(markdown, pageId, record.obsidianPath);
-
-    if (downloadMedia && this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
-      markdown = imageResult.content;
-      this._pullImageCount += imageResult.downloads.length;
-    }
-
-    if (downloadMedia) {
-      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
-      markdown = fileResult.content;
-      this._pullFileCount += fileResult.downloads.length;
-    }
-
-    const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
-    const content = this.pipeline.convertToMarkdown(
-      markdown,
-      {
-        direction: "pull",
-        path: "markdown-api",
-        filePath: record.obsidianPath,
-        parentMode: this.config.notion.parentMode,
-      },
-      {
-        properties,
-        preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined,
-        notionExportCompact: fetched.compact,
-        localContent: await readLocalNote(this.vaultFs, record.obsidianPath),
-      },
-    );
-    return { content, title, properties, bodyFingerprint: fetched.fingerprint };
-  }
-
-  private async pullUpdate(change: RemoteChange): Promise<PullOutcome> {
-    let record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) return { action: "unchanged" };
-
-    const page = await this.notionClient.getPage(change.pageId);
-
-    // push 가 만든 폴더 페이지에는 볼트 파일이 없다 — 폴더로 받는다(S-17).
-    if (isFolderRecord(record)) {
-      const folderNote = await this.pullFolderRecord(record, page);
-      if (!folderNote) return { action: "unchanged", path: record.obsidianPath };
-      record = folderNote;
-    }
-
-    // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
-    // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
-    // (deleteSync 가 켜져 있으면 전체 스캔이 이 페이지를 deleted 로 따로 처리한다.)
-    const remoteGone =
-      (page as { in_trash?: boolean }).in_trash === true ||
-      (page as { archived?: boolean }).archived === true;
-    if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
-      return { action: "unchanged", path: record.obsidianPath };
-    }
-
-    const rendered = await this.renderRemotePage(record, change.pageId, page);
-    const remoteContent = rendered.content;
-
-    let localContent: string;
-    // 읽기 실패를 곧바로 "파일 없음"으로 단정하지 않는다 — 권한 오류로 못 읽은 파일까지
-    // 복원 대상으로 삼으면 멀쩡한 로컬 편집을 덮어쓴다. 실패 경로에서만 존재 여부를
-    // 한 번 더 물어 '없음'과 '못 읽음'을 가른다.
-    let localExists = true;
-    try {
-      localContent = await this.vaultFs.readFile(record.obsidianPath);
-    } catch {
-      localContent = "";
-      localExists = await this.vaultFs.exists(record.obsidianPath);
-    }
-
-    // 받은 원격이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
-    // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 파일은 되살린다.
-    const remoteUnchanged =
-      localExists && (await this.unchangedSinceSync(record, page, rendered.bodyFingerprint));
-
-    const resolution = resolvePullConflict({
-      record,
-      localContent,
-      localExists,
-      remoteContent,
-      remoteUnchanged,
-      remoteChange: change,
-      strategy: this.config.sync.conflictStrategy,
-    });
-
-    if (resolution.action === "skip") {
-      // 원격이 지난 사본 그대로다 — 본 것만 적는다. 로컬 편집은 이어지는 push 가 올린다.
-      if (resolution.remoteUnchanged) {
-        this.recordObservation(record.id, page, rendered.bodyFingerprint);
-        return { action: "unchanged", path: record.obsidianPath };
-      }
-      // local-first: 로컬을 지키고 원격 변경은 받지 않는다. 본 것도 적지 않는다 — 로컬을 올려
-      // 원격을 맞출 때까지 다음 pull 이 다시 본다.
-      return { action: "skipped", path: record.obsidianPath };
-    }
-    if (resolution.action === "conflict") {
-      this.stateDb.updateStatus(record.id, "conflict");
-      return { action: "conflict", path: record.obsidianPath, conflict: resolution.conflict! };
-    }
-
-    // I5 false-churn 차단: 리모트 변환 결과가 디스크 내용과 바이트 동일하면 Notion 이
-    // last_edited 만 갱신한 '가짜 수정'이다. 파일을 재기록하면 mtime 이 바뀌어 다음 push 가
-    // 로컬 수정으로 오인 → push↔pull 무한 churn. 파일은 건드리지 않고 추적 메타
-    // (notionLastEdited)만 현재 원격값으로 정렬해 재감지를 멈춘다. content_hash 비교로
-    // 진짜 변경과 가짜 변경을 구분하는 핵심 멱등 지점이다.
-    // localExists 를 반드시 함께 본다: 파일이 사라졌고 원격도 빈 페이지면 둘 다 "" 라
-    // 동일 판정이 나면서 파일을 되쓰지 않고 synced 로 마감돼 삭제가 굳는다.
-    // 파일 끝 개행만 다르면 로컬을 그대로 두고 로컬을 사본으로 적는다(sameNoteContent).
-    if (localExists && sameNoteContent(remoteContent, localContent)) {
-      const stat = await this.vaultFs.getFileStat(record.obsidianPath);
-      this.stateDb.upsert({
-        obsidianPath: record.obsidianPath,
-        notionPageId: change.pageId,
-        notionParentId: record.notionParentId,
-        contentHash: computeHash(localContent),
-        ...this.observedFields(page, rendered.bodyFingerprint),
-        localLastModified: record.localLastModified,
-        syncDirection: record.syncDirection,
-        fileType: record.fileType,
-        status: "synced",
-        baseSnapshot: Buffer.from(localContent, "utf-8"),
-        localMtime: stat?.mtime ?? record.localMtime ?? null,
-        localFileSize: stat?.size ?? record.localFileSize ?? null,
-      });
-      return { action: "unchanged", path: record.obsidianPath };
-    }
-
-    await this.vaultFs.writeFile(record.obsidianPath, remoteContent);
-
-    const updateStat = await this.vaultFs.getFileStat(record.obsidianPath);
-    const newHash = computeHash(remoteContent);
-    this.stateDb.transaction(() => {
-      this.stateDb.upsert({
-        obsidianPath: record.obsidianPath,
-        notionPageId: change.pageId,
-        notionParentId: record.notionParentId,
-        contentHash: newHash,
-        ...this.observedFields(page, rendered.bodyFingerprint),
-        localLastModified: new Date().toISOString(),
-        syncDirection: record.syncDirection,
-        fileType: record.fileType,
-        status: "synced",
-        baseSnapshot: Buffer.from(remoteContent, "utf-8"),
-        localMtime: updateStat?.mtime ?? null,
-        localFileSize: updateStat?.size ?? null,
-      });
-
-      const aliases = extractAliases(rendered.properties);
-      this.stateDb.upsertWikilink({
-        obsidianPath: record.obsidianPath,
-        notionPageId: change.pageId,
-        title: rendered.title,
-        aliases,
-      });
-    });
-
-    return { action: "written", path: record.obsidianPath };
-  }
-
-  /**
-   * push 가 만든 폴더 페이지(폴더 레코드)의 원격 변경을 받는다(S-17). 폴더 레코드에는 볼트 파일이
-   * 없다 — 예전에는 폴더 경로를 파일로 읽어 «빈 로컬 파일» 과 원격 본문의 충돌로 남겼다.
-   *
-   * - 자식 말고 본문이 없으면 받을 것이 없다. 그 아래에 페이지가 생겨도 Notion 이 수정 시각을
-   *   올린다 — 시각만 맞춰 다음 pull 이 다시 읽지 않게 한다.
-   * - 본문이 생겼으면 그 페이지는 이제 폴더 노트다(ADR-012) — 레코드를 폴더 노트 경로로 옮겨 적고
-   *   돌려준다. 호출자가 보통 노트처럼 받는다: 로컬 폴더 노트가 없으면 쓰고, 올리지 않은 로컬
-   *   폴더 노트가 있으면 그 노트와의 충돌이 된다.
-   * - 폴더 노트를 둘 자리가 없으면 본문은 Notion 에만 둔다 — 시각만 맞추고 알린다. DB 모드는
-   *   노트가 행이고, v0.3 이 DB 폴더 자리에 만든 폴더 페이지는 그 폴더가 DB 라 행만 든다.
-   *
-   * @returns 폴더 노트로 옮겨 적은 레코드. 받을 것이 없으면 null.
-   * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
-   *         이 변경 앞에 묶인다).
-   */
-  private async pullFolderRecord(
-    record: SyncRecord,
-    page: PageObjectResponse,
-  ): Promise<SyncRecord | null> {
-    const folder = record.obsidianPath;
-    const remoteGone =
-      (page as { in_trash?: boolean }).in_trash === true ||
-      (page as { archived?: boolean }).archived === true;
-    if (remoteGone) return null;
-
-    const { markdown } = await this.notionClient.getPageMarkdown(page.id);
-    if (!hasBodyBesidesChildren(markdown)) {
-      this.recordObservation(record.id, page, remoteBodyFingerprint(markdown));
-      return null;
-    }
-    const noPlace = this.isDatabaseMode
-      ? "DB 모드는 폴더 노트를 받지 않음"
-      : this.folderLookup().databaseAt(folder)
-        ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
-        : null;
-    if (noPlace) {
-      getLogger().warn(
-        `[Im-Nobsidian] 폴더(${folder})의 Notion 페이지에 본문이 있지만 ${noPlace} — Notion 에만 있다`,
-      );
-      this.recordObservation(record.id, page, remoteBodyFingerprint(markdown));
-      return null;
-    }
-
-    if (this.stateDb.getIncompleteOpByState(record.id, "move")) {
-      throw new Error(
-        `폴더(${folder})의 이동을 Notion 에 반영하기 전이라 폴더 페이지의 본문을 받지 않음 — ` +
-          `push 뒤 pull 이 받는다`,
-      );
-    }
-    const notePath = folderNoteOf(folder);
-    if (this.stateDb.getByPath(notePath)) {
-      // 두 겹으로 생긴 폴더(S-15 이전 push) — 폴더 노트가 다른 페이지다.
-      throw new Error(
-        `폴더(${folder})의 Notion 페이지에 본문이 생겼지만 폴더 노트(${notePath})가 다른 ` +
-          `페이지라 받지 않음 — 두 페이지 중 하나를 정리해야 한다`,
-      );
-    }
-
-    this.stateDb.transaction(() => {
-      this.stateDb.updatePath(record.id, notePath);
-      this.stateDb.deleteWikilink(folder);
-    });
-    getLogger().info(
-      `[Im-Nobsidian] 폴더 페이지에 Notion 에서 쓴 본문을 폴더 노트로 받음: ${folder} → ${notePath}`,
-    );
-    return this.stateDb.getByPath(notePath);
-  }
-
-  /**
-   * pull 할 것을 세기만 한다(dry-run) — 볼트 · 상태 DB · Notion 을 바꾸지 않는다. 페이지와 DB 행을
-   * 같이 센다. DB 는 설정한 DB 와 이미 발견해 둔 DB 가운데 실제 pull 이 조회할 것(`ledger`)만 센다 —
-   * 이번 pull 이 새로 발견할 DB 는 받아 봐야 안다. 세지 못한 DB 는 이유와 함께 `failed` 에 싣는다
-   * (세지 못한 것을 없다고 하지 않는다).
-   */
-  private async planPull(
-    filtered: RemoteChange[],
-    restoreChanges: RemoteChange[],
-    localPlan: LocalPlan | null,
-    options: PullOptions,
-    startTime: number,
-    scan: RemoteScan,
-    ledger: DatabasePullLedger,
-  ): Promise<PullResult> {
-    // 받지 않으니 «확인 안 됨» 은 내용으로 가른다 — 같은 분 안에 바뀐 것이 없으면 세지 않는다.
-    const unchangedDropped = await this.withoutUnchangedRemotes(filtered);
-    // 지울 것은 실제 pull 과 같게 가른다 — 폴더 레코드는 추적만 놓고, 올리지 않은 로컬 편집이
-    // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
-    const planned: RemoteChange[] = [];
-    for (const change of unchangedDropped) {
-      if (change.type !== "deleted" || (await this.plannedRemoteDeletion(change))) {
-        planned.push(change);
-      }
-    }
-    const failed: FailedOperation[] = [];
-    // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
-    // pull 은 그 행을 페이지 경로에서 먼저 받고, 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다.
-    const queued = new Set(
-      [...filtered, ...restoreChanges].map((change) => compactNotionId(change.pageId)),
-    );
-    const rows = (await this.planDatabaseRows(options.paths, failed, ledger)).filter(
-      (row) => !queued.has(compactNotionId(row.pageId)),
-    );
-
-    const items: ProgressItem[] = [];
-    // 옮겨 적지 않았으니 레코드는 옛 경로다 — 실제 pull 이 쓸 새 경로로 보인다(S-11).
-    // 새 페이지는 받기 전에는 자리를 모른다(부모 · 자식 페이지가 정한다) — Notion 제목으로 보인다.
-    // 예전에는 내부 id 를 보였다.
-    const plannedPath = this.plannedPaths(localPlan);
-    for (const change of [...planned, ...restoreChanges]) {
-      const record = this.stateDb.getByNotionId(change.pageId);
-      items.push({
-        path:
-          (record && plannedPath.get(record.id)) ??
-          record?.obsidianPath ??
-          change.title ??
-          change.pageId,
-        operation:
-          change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
-      });
-    }
-    for (const row of rows) items.push({ path: row.path, operation: row.operation });
-    items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
-
-    const count = (type: RemoteChange["type"]) => planned.filter((c) => c.type === type).length;
-    const rowCount = (operation: PlannedRow["operation"], restore = false) =>
-      rows.filter((row) => row.operation === operation && (row.restore ?? false) === restore)
-        .length;
-    return {
-      created: count("created") + rowCount("create"),
-      updated: count("modified") + rowCount("update"),
-      deleted: count("deleted") + rowCount("delete"),
-      // 복원은 updated 에 섞지 않는다 — dry-run 이 "수정 N건" 이라고만 말하면
-      // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
-      restored: restoreChanges.length + rowCount("update", true),
-      conflicts: [],
-      writtenPaths: [],
-      failed,
-      duration: Date.now() - startTime,
-      imageCount: 0,
-      fileCount: 0,
-      linkCount: 0,
-      remoteScan: {
-        ...remoteScanInfo(
-          scan,
-          this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
-          this.config.sync.deleteSync,
-        ),
-        skippedDatabases: ledger.skipped,
-      },
-    };
-  }
-
-  /** 원격에서 지운 페이지를 실제 pull 이 볼트에서 지우는가 — {@link pullDelete} 와 같게 가른다. */
-  private async plannedRemoteDeletion(change: RemoteChange): Promise<boolean> {
-    const record = this.stateDb.getByNotionId(change.pageId);
-    if (!record || isFolderRecord(record)) return false;
-    try {
-      const decision = await decideRemoteDeletion(this.vaultFs, record, {
-        deleteFile: this.config.sync.deleteSync,
-        strategy: this.config.sync.conflictStrategy,
-      });
-      return decision.action === "deleted";
-    } catch {
-      // 볼트를 읽지 못하면 실제 pull 도 지우지 않는다(실패로 남긴다).
-      return false;
-    }
-  }
-
-  /**
-   * dry-run 이 셀 DB 행 — 실제 pull 이 받는 DB 와 같다. 설정한 DB(`pullAll`)와 발견해 둔 DB
-   * ({@link pullDiscoveredDatabases})를 같은 규칙으로 고른다. 세지 못한 DB 는 이유와 함께 `failed`
-   * 에 싣는다 — 세지 못한 것을 없다고 하지 않는다.
-   */
-  private async planDatabaseRows(
-    paths: readonly string[] | undefined,
-    failed: FailedOperation[],
-    ledger: DatabasePullLedger,
-  ): Promise<PlannedRow[]> {
-    const configured = this.config.notion.databases ?? [];
-    const rows: PlannedRow[] = [];
-    const plan = async (
-      dbConfig: DiscoveredDbConfig,
-      resolveDbFolder?: (dbId: string) => string | null,
-    ): Promise<void> => {
-      // 실제 pull 이 조회하지 않을 DB 는 세지 않는다 — 조회하지 않으면 받을 것도 없다.
-      if (!ledger.selects(dbConfig.databaseId)) {
-        ledger.skip();
-        return;
-      }
-      try {
-        rows.push(
-          ...(await this.databaseSyncer.planDatabase(dbConfig, { paths, resolveDbFolder })),
-        );
-      } catch (error) {
-        // 발견해 둔 DB 가 사라졌으면(404) 실제 pull 은 대상에서 빼기만 한다 — 실패가 아니다.
-        if (resolveDbFolder && isNotionObjectNotFound(error)) return;
-        failed.push({
-          path: dbConfig.localFolder,
-          operation: "update",
-          error: error instanceof Error ? error.message : String(error),
-        });
-      }
-    };
-
-    for (const dbConfig of configured) await plan(dbConfig);
-    if (this.isDatabaseMode) return rows;
-
-    // 폴더 충돌은 실제 pull 처럼 가른다(F24) — 읽어 온 사본만 고치고 상태에는 쓰지 않는다.
-    const discovered = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    repairDbFolderCollisions(
-      discovered,
-      new Map(configured.map((d) => [d.localFolder, d.databaseId])),
-    );
-    const inaccessible = this.loadInaccessibleDbIds();
-    const resolveDbFolder = (dbId: string): string | null =>
-      [...discovered, ...configured].find((c) => notionIdsEqual(c.databaseId, dbId))?.localFolder ??
-      null;
-    for (const dbConfig of discovered) {
-      if (inaccessible.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
-      await plan(dbConfig, resolveDbFolder);
-    }
-    return rows;
-  }
-
-  /**
-   * Notion 에서 사라진 페이지를 볼트에 반영한다. 올리지 않은 로컬 편집이 있으면 전략을 따른다
-   * ({@link applyRemoteDeletion}) — 지우지 않고 충돌로 남기거나(manual · duplicate) 파일을 둔다
-   * (local-first).
-   *
-   * @returns `path` 는 진행 표시용 — 추적하지 않던 페이지면 없다.
-   */
-  private async pullDelete(
-    change: RemoteChange,
-  ): Promise<(RemoteDeletionOutcome | { readonly action: "untracked" }) & { path?: string }> {
-    const record = this.stateDb.getByNotionId(change.pageId);
-    if (!record) return { action: "untracked" };
-
-    // push 가 만든 폴더 페이지는 추적만 놓는다 — 볼트에서는 폴더다. 안의 노트는 각자의 레코드가
-    // 지운다. 예전에는 폴더 경로를 파일처럼 지워, Obsidian 에서는 올리지 않은 노트까지 폴더째
-    // 휴지통으로 갔다(S-17).
-    if (isFolderRecord(record)) {
-      this.stateDb.transaction(() => {
-        this.stateDb.delete(record.id);
-        this.stateDb.deleteWikilink(record.obsidianPath);
-      });
-      return { action: "untracked", path: record.obsidianPath };
-    }
-
-    const outcome = await applyRemoteDeletion(this.stateDb, this.vaultFs, record, {
-      deleteFile: this.config.sync.deleteSync,
-      strategy: this.config.sync.conflictStrategy,
-      remoteChange: change,
-    });
-    return { ...outcome, path: record.obsidianPath };
-  }
-
-  private async ensureFolderPage(folderPath: string): Promise<void> {
-    // DB 폴더는 DB 다. 폴더 이름과 같은 제목의 행은 폴더 노트가 아니다 — 아래 폴더 노트 규칙을
-    // 타면 그 행을 폴더의 페이지로 여겨 폴더 레코드를 지운다.
-    const lookup = this.folderLookup();
-    if (lookup.databaseAt(folderPath)) return;
-
-    // 이미 자리가 있는 폴더(폴더 노트 · 폴더 페이지 · 페이지 이름의 하위 폴더)는 만들지 않는다.
-    // DB 폴더 안의 다른 하위 폴더는 만들 자리가 없다 — 그 안의 노트가 이유와 함께 실패로 남는다
-    // (resolveNotionParent). 예전에는 DB 폴더와 함께 빈 페이지로 만들었다(S-04).
-    if (folderContainer(folderPath, lookup) || enclosingDatabaseFolder(folderPath, lookup)) {
-      return;
-    }
-
-    // 폴더 노트의 생성 요청이 적용됐는지 모르는 채 남아 있으면 그 페이지가 폴더의 페이지일 수
-    // 있다 — 폴더 페이지를 따로 만들면 같은 이름의 페이지가 둘이 된다(S-15). 폴더 노트의 생성을
-    // 먼저 매듭짓는다(pushCreate 가 부모에서 찾아 이어 쓴다).
-    const notePath = folderNoteOf(folderPath);
-    const note = this.stateDb.getByPath(notePath);
-    if (
-      !this.isDatabaseMode &&
-      note &&
-      !note.notionPageId &&
-      this.stateDb.getIncompleteOpByState(note.id, "create")
-    ) {
-      throw new Error(
-        `폴더 노트(${notePath})의 생성이 아직 끝나지 않아 폴더 페이지를 따로 만들지 않음 — ` +
-          `폴더 노트가 폴더의 페이지다`,
-      );
-    }
-
-    const parts = folderPath.split("/");
-    const folderName = parts[parts.length - 1]!;
-
-    let parentId = this.config.notion.rootPageId;
-    if (parts.length > 1) {
-      const parentPath = parts.slice(0, -1).join("/");
-      await this.ensureFolderPage(parentPath);
-      const parent = folderContainer(parentPath, this.folderLookup());
-      // 부모에 자리가 없으면 만들지 않는다 — 예전에는 루트에 만들어 폴더가 엉뚱한 곳에 생겼다.
-      if (parent?.kind !== "page") throw new Error(this.folderNotReady(parentPath, "만들지"));
-      parentId = parent.pageId;
-    }
-
-    // 폴더 페이지 생성에는 WAL 이 없다. 생성 요청이 적용됐는데 응답을 못 받으면(S-07 —
-    // 클라이언트는 그런 생성 요청을 다시 보내지 않는다) 레코드 없이 페이지만 남고, 다음
-    // push 가 같은 폴더 페이지를 또 만든다. 그래서 만들기 전에 부모에서 먼저 찾는다 —
-    // 새 폴더에서만 드는 목록 조회 1회다.
-    const found = await this.findChildPageByTitle(parentId, folderName);
-    const folderPage =
-      found ??
-      (await this.notionClient.createPage({
-        parentId,
-        parentType: "page",
-        title: folderName,
-      }));
-    // 폴더 페이지의 본문 지문 — 폴더 노트가 이 페이지를 삼으면(S-15) 그 push 가 본문이 그대로임을
-    // 확인한다. 곧 그 아래에 노트가 생겨 수정 시각이 바뀌므로 시각으로는 가를 수 없다.
-    const bodyFingerprint = found
-      ? await this.remoteBodyFingerprintOf(found.id)
-      : remoteBodyFingerprint("");
-
-    this.stateDb.upsert({
-      obsidianPath: folderPath,
-      notionPageId: folderPage.id,
-      notionParentId: parentId,
-      contentHash: "",
-      ...this.observedFields(folderPage, bodyFingerprint),
-      localLastModified: new Date().toISOString(),
-      syncDirection: "both",
-      fileType: "folder-note",
-      status: "synced",
-    });
-  }
-
-  // ──────────────────────────────────────────────────────────────────────────
-  // 로컬 이동 (S-11) — 볼트에서 옮기거나 이름을 바꾼 노트 · 폴더를 추적 레코드와 다시 짝짓고,
-  // 상태 DB 에 옮겨 적은 뒤 Notion 에는 부모와 제목만 바꿔 반영한다. 예전에는 이름을 바꾸면
-  // 옛 페이지를 두고 새 페이지를 만들거나(내용도 바꾼 경우), 짝을 지어도 아무것도 하지 않았다.
-  // ──────────────────────────────────────────────────────────────────────────
-
-  /** 변경 감지 옵션 — 플러그인이 적어 둔 이름 변경 힌트. */
-  private localScanOptions(): LocalScanOptions & { readonly hints: RenameHints } {
-    return { hints: this.renameHints() };
-  }
-
-  private renameHints(): RenameHints {
-    return parseRenameHints(this.stateDb.getMeta(RENAME_HINTS_META_KEY));
-  }
-
-  private writeRenameHints(hints: RenameHints): void {
-    this.stateDb.setMeta(
-      RENAME_HINTS_META_KEY,
-      isEmptyRenameHints(hints) ? "" : JSON.stringify(hints),
-    );
-  }
-
-  /** 이번 실행의 로컬 변경과 옮겨진 폴더. 상태 DB 는 바꾸지 않는다. */
-  private async planLocalChanges(stats: readonly FileStatInfo[]): Promise<LocalPlan> {
-    const options = this.localScanOptions();
-    const scan = await this.changeDetector.scanLocalChangesFast(
-      stats,
-      (path) => this.vaultFs.readFile(path),
-      options,
-    );
-    return {
-      scan,
-      hints: options.hints,
-      settledMoveOps: this.settledMoveOps(scan),
-      ...(await this.planFolderMoves(stats, scan, options.hints)),
-    };
-  }
-
-  /** 이번 실행이 옮겨 적을 레코드 id → 새 경로. dry-run 이 옮겨 적은 뒤의 경로로 보이는 데 쓴다. */
-  private plannedPaths(plan: LocalPlan | null): Map<string, string> {
-    const paths = new Map<string, string>();
-    if (!plan) return paths;
-    for (const { record, to } of plan.scan.adoptions) paths.set(record.id, to);
-    for (const { from, to } of [...plan.folderMoves, ...plan.databaseFolderMoves]) {
-      const record = this.stateDb.getByPath(from);
-      if (record) paths.set(record.id, to);
-    }
-    return paths;
-  }
-
-  /**
-   * 반영할 것이 없는 이동 WAL — 레코드가 마지막으로 Notion 에 반영한 자리에 이미 돌아와 있다.
-   * 옮겨 적기 말고 다른 길로 제자리에 온 경우다. pull 의 DB 동기화는 DB 밖으로 옮겨 거절된 행을
-   * 제 DB 폴더에 다시 쓰고 레코드를 옮긴다 — 그 WAL 은 아무도 닫지 않아 남는다. 이번에 옮겨 적는
-   * 레코드의 WAL 은 옮겨 적을 때 정한다(moveRecord).
-   */
-  private settledMoveOps(scan: LocalScan): string[] {
-    const ops = this.stateDb
-      .getIncompletePendingOperations()
-      .filter((op) => op.direction === "push" && op.operation === "move");
-    if (ops.length === 0) return [];
-    const adopting = new Set(scan.adoptions.map((adoption) => adoption.record.id));
-    const pathOf = new Map(this.stateDb.getAll().map((record) => [record.id, record.obsidianPath]));
-    return ops
-      .filter(
-        (op) =>
-          !adopting.has(op.syncStateId) && moveOrigin(op.payload) === pathOf.get(op.syncStateId),
-      )
-      .map((op) => op.id);
-  }
-
-  /**
-   * 옮겨진 폴더 — push 가 만든 폴더 페이지의 레코드와 자동 발견 DB 폴더. 새 자리는 폴더 힌트가,
-   * 없으면 그 폴더에 있던 노트들의 짝이 정한다({@link deriveFolderMoves}). 새 자리를 이미 다른
-   * 레코드 · DB 가 쓰고 있으면 옮기지 않는다.
-   */
-  private async planFolderMoves(
-    stats: readonly FileStatInfo[],
-    scan: LocalScan,
-    hints: RenameHints,
-  ): Promise<Pick<LocalPlan, "folderMoves" | "databaseFolderMoves">> {
-    const lookup = this.folderLookup();
-    const folderRecords = new Set(
-      this.stateDb
-        .getAll()
-        .filter((r) => isFolderRecord(r) && r.notionPageId && !lookup.databaseAt(r.obsidianPath))
-        .map((r) => r.obsidianPath),
-    );
-    const configured = new Set(
-      (this.config.notion.databases ?? []).map((db) => db.localFolder.replace(/\/+$/, "")),
-    );
-    const databaseFolders = new Set(
-      parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))
-        .map((db) => db.localFolder.replace(/\/+$/, ""))
-        .filter((folder) => folder && !configured.has(folder)),
-    );
-    const tracked = [...folderRecords, ...databaseFolders];
-    if (tracked.length === 0) return { folderMoves: [], databaseFolderMoves: [] };
-
-    // 노트가 없는 폴더(빈 DB 폴더 · 첨부만 든 폴더)도 볼트에 있을 수 있다 — 노트 목록에 없는
-    // 폴더는 디스크에서 확인한다. 그대로 있으면 옮기지 않은 것이다.
-    const live = foldersOf(stats.map((stat) => stat.path));
-    for (const folder of tracked) {
-      if (live.has(folder)) continue;
-      if (await this.vaultFs.exists(folder)) {
-        live.add(folder);
-        continue;
-      }
-      const target = hintedFolderTarget(hints, folder);
-      if (target !== null && !live.has(target) && (await this.vaultFs.exists(target))) {
-        live.add(target);
-      }
-    }
-
-    const pairs = scan.adoptions.map((a) => ({ from: a.record.obsidianPath, to: a.to }));
-    const folderMoves: FolderMove[] = [];
-    const databaseFolderMoves: FolderMove[] = [];
-    for (const move of deriveFolderMoves(tracked, live, pairs, hints)) {
-      if (this.stateDb.getByPath(move.to) || lookup.databaseAt(move.to)) continue;
-      (folderRecords.has(move.from) ? folderMoves : databaseFolderMoves).push(move);
-    }
-    return { folderMoves, databaseFolderMoves };
-  }
-
-  /** 옮겨 적은 뒤의 볼트 — dry-run 도 실제 push 와 같은 판정을 쓰도록 계획을 겹쳐 본다. */
-  private localView(plan: LocalPlan): LocalView {
-    const recorded = this.folderLookup();
-    const moved: Array<{ from: string; to: string; record: SyncRecord | null }> = [
-      ...plan.scan.adoptions.map((a) => ({
-        from: a.record.obsidianPath,
-        to: a.to,
-        record: a.record,
-      })),
-      ...plan.folderMoves.map((m) => ({ ...m, record: this.stateDb.getByPath(m.from) })),
-    ];
-    const recordAt = new Map<string, SyncRecord | null>();
-    for (const m of moved) recordAt.set(m.from, null);
-    for (const m of moved) recordAt.set(m.to, m.record);
-    const databaseAt = new Map<string, string | null>();
-    for (const m of plan.databaseFolderMoves) databaseAt.set(m.from, null);
-    for (const m of plan.databaseFolderMoves) databaseAt.set(m.to, recorded.databaseAt(m.from));
-
-    const at = (path: string): SyncRecord | null =>
-      recordAt.has(path) ? recordAt.get(path)! : this.stateDb.getByPath(path);
-    return {
-      recordAt: at,
-      lookup: {
-        databaseAt: (folder) =>
-          databaseAt.has(folder) ? databaseAt.get(folder)! : recorded.databaseAt(folder),
-        pageIdAt: (path) => at(path)?.notionPageId ?? null,
-      },
-    };
-  }
-
-  /**
-   * 옮긴 노트 · 폴더를 상태 DB 에 옮겨 적는다 — Notion 은 건드리지 않는다.
-   *
-   * 레코드가 새 경로를 추적해야 pull 이 옛 자리에 노트를 되살리지 않고, 원격 변경을 새 경로에
-   * 쓴다. Notion 에 반영할 것은 이동 WAL 이 «마지막으로 반영한 경로» 로 적고, 반영을 마치면
-   * 지운다(pushMove). 반영하기 전에 그 자리로 되돌아오면 반영할 것이 없어 바로 지운다.
-   */
-  private adoptLocalMoves(plan: LocalPlan): void {
-    const { adoptions } = plan.scan;
-    const moved = adoptions.length + plan.folderMoves.length + plan.databaseFolderMoves.length;
-    if (moved === 0 && plan.settledMoveOps.length === 0 && isEmptyRenameHints(plan.hints)) return;
-
-    this.stateDb.transaction(() => {
-      for (const opId of plan.settledMoveOps) this.stateDb.markPendingCompleted(opId);
-      for (const { record, to } of adoptions) {
-        this.moveRecord(record, to);
-        // 폴더 노트인지는 경로가 정한다 — 새로 만들 때(pushCreate)와 같다. 행은 그대로 행이다.
-        const fileType =
-          record.fileType === "db-row" ? "db-row" : isFolderNotePath(to) ? "folder-note" : "file";
-        if (fileType !== record.fileType) {
-          this.stateDb.upsert({
-            obsidianPath: to,
-            notionPageId: record.notionPageId,
-            notionParentId: record.notionParentId,
-            contentHash: record.contentHash,
-            notionLastEdited: record.notionLastEdited,
-            notionLastEditedBy: record.notionLastEditedBy,
-            notionSeenAt: record.notionSeenAt,
-            notionBodyFingerprint: record.notionBodyFingerprint,
-            localLastModified: record.localLastModified,
-            syncDirection: record.syncDirection,
-            fileType,
-            status: record.status,
-            baseSnapshot: record.baseSnapshot,
-            localMtime: record.localMtime,
-            localFileSize: record.localFileSize,
-          });
-        }
-      }
-      for (const move of plan.folderMoves) {
-        const record = this.stateDb.getByPath(move.from);
-        if (record) this.moveRecord(record, move.to);
-      }
-      if (plan.databaseFolderMoves.length > 0) {
-        this.remapDiscoveredDbFolders(plan.databaseFolderMoves);
-      }
-      // 이번 스캔이 쓴 힌트만 지운다 — 그 사이 플러그인이 적은 힌트는 다음 실행이 쓴다.
-      if (!isEmptyRenameHints(plan.hints)) {
-        this.writeRenameHints(pruneRenameHints(this.renameHints(), plan.hints));
-      }
-    });
-
-    if (moved > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 옮긴 노트 ${adoptions.length}건 · 폴더 ${
-          plan.folderMoves.length + plan.databaseFolderMoves.length
-        }건을 상태에 옮겨 적음`,
-      );
-    }
-    for (const move of plan.databaseFolderMoves) {
-      getLogger().info(
-        `[Im-Nobsidian] DB 폴더를 옮김: ${move.from} → ${move.to} — 볼트 쪽 자리만 바뀐다. ` +
-          `Notion 의 DB 는 옮기거나 이름을 바꾸지 않는다`,
-      );
-    }
-  }
-
-  /** 레코드를 새 경로로 옮겨 적는다 — 이동 WAL · 위키링크 · 보존 마커도 함께. */
-  private moveRecord(record: SyncRecord, to: string): void {
-    const from = record.obsidianPath;
-    let op = this.stateDb.getIncompleteOpByState(record.id, "move");
-    if (op && moveOrigin(op.payload) === null) {
-      this.stateDb.markPendingFailed(op.id, "invalid move payload");
-      op = null;
-    }
-    const origin = (op ? moveOrigin(op.payload) : null) ?? from;
-
-    this.stateDb.updatePath(record.id, to);
-    if (origin === to) {
-      if (op) this.stateDb.markPendingCompleted(op.id);
-    } else if (!op) {
-      this.stateDb.recordPendingOperation({
-        syncStateId: record.id,
-        operation: "move",
-        direction: "push",
-        payload: movePayload(from),
-      });
-    }
-
-    const entry = record.notionPageId ? this.stateDb.resolvePageId(record.notionPageId) : null;
-    if (entry && entry.obsidianPath === from) {
-      this.stateDb.deleteWikilink(from);
-      this.stateDb.upsertWikilink({
-        obsidianPath: to,
-        notionPageId: entry.notionPageId,
-        title: wikilinkTitleFromPath(to),
-        aliases: entry.aliases,
-      });
-    }
-    const markers = this.stateDb.getPreserveMarkers(from);
-    if (markers.length > 0) {
-      this.stateDb.storePreserveMarkers(to, markers);
-      this.stateDb.storePreserveMarkers(from, []);
-    }
-  }
-
-  /** 옮겨진 자동 발견 DB 폴더를 설정에 옮겨 적는다 — pull 이 행을 새 폴더에 쓴다. */
-  private remapDiscoveredDbFolders(moves: readonly FolderMove[]): void {
-    const target = new Map(moves.map((move) => [move.from, move.to]));
-    const configs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    let changed = false;
-    for (const config of configs) {
-      const to = target.get(config.localFolder.replace(/\/+$/, ""));
-      if (to === undefined) continue;
-      config.localFolder = to;
-      changed = true;
-    }
-    if (changed) this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(configs));
-  }
-
-  /**
-   * 변경 목록에 보일 폴더 이동 — Notion 에 반영할 폴더 페이지와, 볼트 쪽 자리만 바꿀 DB 폴더.
-   * 옮긴 폴더는 노트가 아니라 {@link LocalChange} 가 없다. 예전에는 목록에 보이지 않고 push 결과의
-   * 수에만 들었다.
-   */
-  private folderMoveChanges(plan: LocalPlan): FolderMoveChange[] {
-    return [...this.pendingFolderMoves(plan), ...plan.databaseFolderMoves].map(({ from, to }) => ({
-      from,
-      to,
-    }));
-  }
-
-  /**
-   * Notion 에 반영할 폴더 이동 — 앞선 실행에서 옮겨 적고 반영하지 못한 것까지, 얕은 것부터.
-   * dry-run 은 이번 실행의 폴더 이동을 옮겨 적지 않았으므로 계획에서 더한다.
-   */
-  private pendingFolderMoves(plan: LocalPlan): PendingFolderMove[] {
-    const origins = pendingMoveOrigins(this.stateDb.getIncompletePendingOperations());
-    const moves = new Map<string, PendingFolderMove>();
-    if (origins.size > 0) {
-      for (const record of this.stateDb.getAll()) {
-        const from = origins.get(record.id);
-        if (from !== undefined && from !== record.obsidianPath && isFolderRecord(record)) {
-          moves.set(record.id, { record, from, to: record.obsidianPath });
-        }
-      }
-    }
-    for (const move of plan.folderMoves) {
-      const record = this.stateDb.getByPath(move.from);
-      if (!record) continue; // 이미 옮겨 적었다 — 위에서 WAL 로 셌다.
-      const from = origins.get(record.id) ?? move.from;
-      if (from === move.to) moves.delete(record.id);
-      else moves.set(record.id, { record, from, to: move.to });
-    }
-    return [...moves.values()].sort((a, b) => a.to.split("/").length - b.to.split("/").length);
-  }
-
-  /**
-   * 변경을 올리기 전에 Notion 에 있어야 하는 폴더 — 새로 만들거나 옮기는 «페이지» 의 조상뿐,
-   * 얕은 것부터. 행은 DB 에 들고, 이미 있는 페이지의 갱신 · 삭제는 부모를 쓰지 않는다. 예전에는
-   * 모든 변경의 조상을 폴더 페이지로 만들어, DB 폴더와 DB 를 품은 폴더가 Notion 에 빈 페이지로
-   * 생겼다(S-04).
-   */
-  private foldersToEnsure(changes: readonly LocalChange[]): string[] {
-    const folders = new Set<string>();
-    for (const change of changes) {
-      if (change.type !== "created" && change.type !== "moved") continue;
-      if (this.newRowDatabaseOf(change.path)) continue;
-      for (const folder of ancestorFolders(change.path)) folders.add(folder);
-    }
-    return [...folders].sort((a, b) => a.split("/").length - b.split("/").length);
-  }
-
-  /**
-   * 새 노트 · 옮긴 노트가 들어갈 폴더의 Notion 자리를 마련한다 — 얕은 것부터.
-   *
-   * 폴더 노트 `F/F.md` 가 폴더 F 의 페이지다(pull 이 그렇게 받는다). 그래서 이번 push 에 새 폴더
-   * 노트가 있으면 폴더 페이지를 따로 만들지 않는다.
-   *
-   * - 폴더에 아직 자리가 없으면 폴더 노트를 먼저 올린다. 폴더가 설 자리(폴더의 부모)에 생기고, 같은
-   *   폴더의 노트 · 하위 폴더는 그 아래로 간다.
-   * - push 가 앞서 만든 폴더 페이지가 있으면 그 페이지를 폴더 노트의 페이지로 삼는다
-   *   ({@link adoptFolderPage}). 새로 만들지 않고 본문을 채워 하위 페이지와 페이지 id 가 그대로다.
-   *
-   * 예전에는 폴더 페이지를 먼저 만들고 폴더 노트를 그 아래에 만들어 같은 이름의 페이지가 두 겹으로
-   * 생기고, 형제 노트는 어느 쪽이 먼저 생겼느냐에 따라 두 부모로 갈렸다(S-15). DB 모드는 모든 노트가
-   * 루트 DB 의 행이라 마련할 폴더가 없다({@link foldersToEnsure}).
-   *
-   * 자리를 마련하지 못한 폴더는 이유를 적어 두고 넘어간다({@link unpreparedFolders}) — 그 안의 노트와
-   * 하위 폴더가 그 이유로 실패한다. 예전 첫 차례는 폴더 하나를 못 만들면 push 전체가 멈췄다.
-   *
-   * @param pushFolderNote 먼저 올릴 폴더 노트를 올린다. 실패는 호출자가 재시도 · 실패로 다룬다.
-   * @returns 여기서 올린 폴더 노트의 경로 — 호출자는 다시 올리지 않는다.
-   */
-  private async prepareFolders(
-    changes: readonly LocalChange[],
-    pushFolderNote: (change: LocalChange) => Promise<void>,
-  ): Promise<Set<string>> {
-    this.unpreparedFolders.clear();
-    const newNotes = new Map(
-      changes.filter((c) => c.type === "created").map((c) => [c.path, c] as const),
-    );
-    const pushed = new Set<string>();
-    for (const folder of this.foldersToEnsure(changes)) {
-      const inherited = ancestorFolders(folder)
-        .map((ancestor) => this.unpreparedFolders.get(ancestor))
-        .find((reason) => reason !== undefined);
-      if (inherited !== undefined) {
-        this.unpreparedFolders.set(folder, inherited);
-        continue;
-      }
-      try {
-        const note = newNotes.get(folderNoteOf(folder));
-        const lookup = this.folderLookup();
-        if (note && !lookup.databaseAt(folder)) {
-          if (this.adoptFolderPage(folder, note.path)) continue;
-          if (!folderContainer(folder, lookup) && !enclosingDatabaseFolder(folder, lookup)) {
-            pushed.add(note.path);
-            await pushFolderNote(note);
-            if (!folderContainer(folder, this.folderLookup())) {
-              throw new Error(`폴더 노트(${note.path})를 올리지 못함`);
-            }
-            continue;
-          }
-        }
-        await this.ensureFolderPage(folder);
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
-        this.unpreparedFolders.set(folder, reason);
-        getLogger().warn(`[Im-Nobsidian] 폴더(${folder})의 Notion 자리를 마련하지 못함: ${reason}`);
-      }
-    }
-    return pushed;
-  }
-
-  /**
-   * push 가 만든 폴더 페이지를 새 폴더 노트의 페이지로 삼는다(S-15) — 폴더 레코드를 폴더 노트의
-   * 경로로 옮겨 적는다. 이어서 pushCreate 가 레코드를 보고 새로 만들지 않고 본문을 보낸다. 제목은
-   * frontmatter `title` 이 있을 때만 보낸다(changedPageTitle) — 폴더 페이지는 폴더 이름으로 만들어
-   * 폴더 노트의 기본 제목과 같다.
-   *
-   * 폴더 노트의 생성 요청이 적용됐는지 모르는 채 남아 있으면(미완료 create WAL) 삼지 않는다 — 그
-   * 요청이 만든 페이지를 찾아 매듭짓는 것이 먼저다. 폴더 이동을 아직 반영하지 못했어도(미완료 move
-   * WAL) 삼지 않는다 — 그 WAL 은 폴더 레코드의 옛 자리를 적은 것이다.
-   *
-   * @returns 삼았으면 true.
-   */
-  private adoptFolderPage(folder: string, notePath: string): boolean {
-    const record = this.stateDb.getByPath(folder);
-    if (!record?.notionPageId || !isFolderRecord(record)) return false;
-    if (this.stateDb.getIncompleteOpByState(record.id, "move")) return false;
-    const placeholder = this.stateDb.getByPath(notePath);
-    if (placeholder?.notionPageId) return false;
-    if (placeholder && this.stateDb.getIncompleteOpByState(placeholder.id, "create")) return false;
-    this.stateDb.transaction(() => {
-      // 생성 요청을 보내기 전에 끊긴 자리표시다 — 지워야 폴더 레코드가 그 경로를 쓴다.
-      if (placeholder) this.stateDb.delete(placeholder.id);
-      this.stateDb.updatePath(record.id, notePath);
-      this.stateDb.deleteWikilink(folder);
-    });
-    getLogger().info(
-      `[Im-Nobsidian] 폴더 페이지를 폴더 노트의 페이지로 삼음: ${folder} → ${notePath}`,
-    );
-    return true;
-  }
-
-  /**
-   * 폴더에 Notion 자리가 없어 그 안에 만들거나 옮기지 않는 이유. 이번 push 가 그 폴더의 자리를
-   * 마련하다 실패했으면 그 이유를 붙인다.
-   */
-  private folderNotReady(folder: string, verb: "만들지" | "옮기지"): string {
-    const reason = this.unpreparedFolders.get(folder);
-    return reason === undefined
-      ? `폴더(${folder})의 Notion 페이지가 아직 없어 ${verb} 않음 — 다음 push 가 폴더부터 만든다`
-      : `폴더(${folder})의 Notion 페이지를 마련하지 못해 ${verb} 않음 — ${reason}`;
-  }
-
-  /**
-   * 둘 자리가 없어 만들지 않을 새 노트 → 이유. 같은 push 에서 생길 새 행도 자리로 센다 —
-   * `DB/행.md` 와 `DB/행/노트.md` 를 함께 만들면 행이 먼저 생기고 노트는 그 아래로 간다.
-   *
-   * @param recorded 옮긴 노트 · 폴더를 옮겨 적은 뒤의 폴더 판정({@link localView}).
-   */
-  private refusedCreates(
-    changes: readonly LocalChange[],
-    recorded: FolderLookup,
-  ): Map<string, string> {
-    const newRows = new Set(
-      changes
-        .filter((c) => c.type === "created" && this.newRowDatabaseOf(c.path, recorded))
-        .map((c) => c.path),
-    );
-    const lookup: FolderLookup = {
-      databaseAt: recorded.databaseAt,
-      // 새 행은 아직 id 가 없다 — 여기서는 자리가 있는지만 본다.
-      pageIdAt: (path) => recorded.pageIdAt(path) ?? (newRows.has(path) ? "(새 행)" : null),
-    };
-    const refused = new Map<string, string>();
-    for (const change of changes) {
-      if (change.type !== "created" || newRows.has(change.path)) continue;
-      const reason = this.placementRefusal(parentFolderOf(change.path), lookup, "create");
-      if (reason) refused.set(change.path, reason);
-    }
-    return refused;
-  }
-
-  /**
-   * Notion 에서 그렇게 옮길 수 없는 노트 → 이유(S-11). DB 모드는 모든 노트가 루트 DB 의 행이라
-   * 폴더가 Notion 의 자리를 정하지 않는다 — 거절할 것이 없다.
-   */
-  private refusedMoves(changes: readonly LocalChange[], view: LocalView): Map<string, string> {
-    const refused = new Map<string, string>();
-    if (this.isDatabaseMode) return refused;
-    for (const change of changes) {
-      if (change.type !== "moved") continue;
-      const record = view.recordAt(change.path);
-      if (!record) continue;
-      const reason = this.moveRefusal(change, record, view.lookup);
-      if (reason) refused.set(change.path, reason);
-    }
-    return refused;
-  }
-
-  /**
-   * 옮긴 노트를 Notion 에서 그 자리로 옮길 수 없는 이유. 옮길 수 있으면 null.
-   *
-   * - 행은 제 DB 폴더 바로 아래에서만 움직인다. Notion 에서 행을 DB 밖으로 옮기면 속성이 보이지
-   *   않게 되고, 다른 DB 로 옮기면 스키마가 달라 속성이 맞지 않는다.
-   * - 페이지는 DB 폴더로 옮길 수 없다 — DB 에는 행만 든다.
-   * - 나머지는 새 노트와 같다 — DB 폴더 안의, 같은 이름의 행이 없는 폴더에는 자리가 없다.
-   */
-  private moveRefusal(
-    change: LocalChange,
-    record: SyncRecord,
-    lookup: FolderLookup,
-  ): string | null {
-    const folder = parentFolderOf(change.path);
-    const databaseId = lookup.databaseAt(folder);
-    if (record.fileType === "db-row") {
-      if (
-        databaseId &&
-        record.notionParentId &&
-        notionIdsEqual(databaseId, record.notionParentId)
-      ) {
-        return null;
-      }
-      const home = change.movedFrom ? `«${parentFolderOf(change.movedFrom)}» ` : "";
-      return (
-        `DB 행은 그 DB 폴더 밖으로 옮기지 않음 — Notion 에서 행을 DB 밖 · 다른 DB 로 옮기면 ` +
-        `속성이 사라진다. 원래 DB 폴더 ${home}바로 아래로 되돌리세요`
-      );
-    }
-    const placement = pagePlacementFolder(change.path);
-    const databaseFolder = databaseId
-      ? folder
-      : placement && lookup.databaseAt(placement)
-        ? placement
-        : null;
-    if (databaseFolder !== null) {
-      return (
-        `페이지를 DB 폴더(${databaseFolder})로 옮기지 않음 — DB 에는 행만 든다. ` +
-        `DB 폴더 밖으로 옮기세요`
-      );
-    }
-    return this.placementRefusal(placement, lookup, "move");
-  }
-
-  /** 옮긴 폴더의 페이지를 Notion 에서 그 자리로 옮길 수 없는 이유. 옮길 수 있으면 null. */
-  private folderMoveRefusal(folder: string, lookup: FolderLookup): string | null {
-    const parent = parentFolderOf(folder);
-    if (!parent) return null;
-    if (lookup.databaseAt(parent)) {
-      return (
-        `폴더를 DB 폴더(${parent}) 안으로 옮기지 않음 — DB 에는 행만 든다. ` +
-        `DB 폴더 밖으로 옮기세요`
-      );
-    }
-    return this.placementRefusal(parent, lookup, "move");
-  }
-
-  /**
-   * 폴더에 페이지를 둘 자리가 없는 이유 — DB 폴더 안의, 같은 이름의 행이 없는 폴더. 자리가 있으면
-   * null. DB 에는 행만 들어 그런 폴더는 Notion 에 같은 것이 없다. 예전에는 그 폴더를 빈 페이지로
-   * 만들어 그 아래에 뒀다(S-04).
-   */
-  private placementRefusal(
-    folder: string,
-    lookup: FolderLookup,
-    action: "create" | "move",
-  ): string | null {
-    if (!folder || folderContainer(folder, lookup)) return null;
-    const databaseFolder = enclosingDatabaseFolder(folder, lookup);
-    if (!databaseFolder) return null;
-    const rowName = folder.slice(databaseFolder.length + 1).split("/")[0];
-    const place = `DB 폴더(${databaseFolder}) 안의 «${rowName}» 폴더는 그 이름의 행 아래 페이지 자리다`;
-    return action === "create"
-      ? `같은 이름의 행이 Notion 에 없는 폴더라 만들지 않음 — ${place}. ` +
-          `행으로 올리려면 DB 폴더 바로 아래로 옮기세요`
-      : `같은 이름의 행이 Notion 에 없는 폴더라 옮기지 않음 — ${place}. ` +
-          `그 이름의 행을 먼저 만들거나 다른 폴더로 옮기세요`;
-  }
-
-  /**
-   * 옮긴 페이지가 놓일 부모 페이지. 폴더 노트는 그 폴더의 페이지라 폴더의 부모 자리에 선다 —
-   * pull 이 폴더 노트를 그렇게 받는다. 새 폴더의 자리는 앞서 마련한다(prepareFolders).
-   */
-  private moveParentOf(path: string): string {
-    const folder = pagePlacementFolder(path);
-    if (!folder) return this.config.notion.rootPageId;
-    const lookup = this.folderLookup();
-    const container = folderContainer(folder, lookup);
-    if (container?.kind === "page") return container.pageId;
-    if (container?.kind === "database") {
-      throw new Error(`페이지를 DB 폴더(${folder})로 옮기지 않음 — DB 에는 행만 든다`);
-    }
-    throw new Error(
-      this.placementRefusal(folder, lookup, "move") ?? this.folderNotReady(folder, "옮기지"),
-    );
-  }
-
-  /**
-   * 새 페이지가 놓일 부모 페이지 — 폴더 노트 · 폴더 페이지 · 페이지 이름의 하위 폴더(DB 를 품은
-   * 페이지 · 행)의 페이지. DB 폴더 직속 노트는 행이라 여기 오지 않는다.
-   *
-   * 자리가 없는 폴더의 폴더 노트는 그 폴더의 자리가 된다 — 폴더가 설 자리(폴더의 부모)에 만든다.
-   * pull 이 폴더 노트를 그렇게 받고, 옮길 때(moveParentOf)도 같다.
-   */
-  private async resolveNotionParent(filePath: string): Promise<string> {
-    const folder = parentFolderOf(filePath);
-    if (!folder) return this.config.notion.rootPageId;
-
-    const lookup = this.folderLookup();
-    const container = folderContainer(folder, lookup);
-    if (container?.kind === "database") {
-      throw new Error("DB 폴더의 노트는 페이지가 아니라 행이다");
-    }
-    if (isFolderNotePath(filePath)) {
-      // push 가 만든 폴더 페이지는 폴더 노트가 삼는다(prepareFolders) — 여기 왔으면 아직 삼지 못한
-      // 것이다. 그 아래에 만들면 같은 이름의 페이지가 두 겹이 된다(S-15).
-      const folderRecord = this.stateDb.getByPath(folder);
-      if (folderRecord?.notionPageId && isFolderRecord(folderRecord)) {
-        throw new Error(
-          `폴더(${folder})의 페이지를 아직 폴더 노트의 페이지로 삼지 못해 만들지 않음 — ` +
-            `폴더 이동 · 앞선 생성 요청이 끝나면 다음 push 가 삼는다`,
-        );
-      }
-      if (!container && !enclosingDatabaseFolder(folder, lookup)) {
-        const placement = parentFolderOf(folder);
-        if (!placement) return this.config.notion.rootPageId;
-        const parent = folderContainer(placement, lookup);
-        if (parent?.kind === "page") return parent.pageId;
-        throw new Error(
-          this.placementRefusal(placement, lookup, "create") ??
-            this.folderNotReady(placement, "만들지"),
-        );
-      }
-    }
-    if (container?.kind === "page") return container.pageId;
-    // 폴더의 자리는 파일보다 먼저 마련한다(prepareFolders). 여기 온 것은 둘 자리가 없는 폴더,
-    // 자리를 마련하지 못한 폴더, 같은 push 에서 새 행이 생겨 그 아래 폴더의 자리가 그제서야 정해진
-    // 경우다 — 루트에 두면 엉뚱한 곳에 생기므로 실패로 남긴다. 재시도가 폴더를 다시 본다.
-    throw new Error(
-      this.placementRefusal(folder, lookup, "create") ?? this.folderNotReady(folder, "만들지"),
-    );
-  }
-
-  /**
-   * 폴더 판정에 쓰는 조회 — DB 폴더(설정 · 자동 발견)와 추적 레코드. DB 폴더 표는 자동 발견
-   * 목록이 바뀔 때만 다시 만든다(pull 이 새 DB 를 발견하면 바뀐다).
-   */
-  private folderLookup(): FolderLookup {
-    const raw = this.stateDb.getMeta(DISCOVERED_DBS_META_KEY);
-    if (!this.dbFolderCache || this.dbFolderCache.raw !== raw) {
-      this.dbFolderCache = {
-        raw,
-        // 설정 DB 를 앞에 둔다 — 같은 폴더를 가리키면 설정이 주인이다.
-        index: databaseFolderIndex([
-          ...(this.config.notion.databases ?? []),
-          ...parseDiscoveredDbs(raw),
-        ]),
-      };
-    }
-    const index = this.dbFolderCache.index;
-    return {
-      databaseAt: (folder) => index.get(folder) ?? null,
-      pageIdAt: (path) => this.stateDb.getByPath(path)?.notionPageId ?? null,
-    };
-  }
-
-  /**
-   * 이 경로에 새로 생긴 노트가 들어갈 DB — DB 폴더(설정 · 자동 발견) 직속이면 그 DB, 아니면
-   * null(페이지). DB 모드는 모든 노트가 루트 DB 의 행이다 — 폴더는 Notion 의 자리를 정하지 않는다.
-   */
-  private newRowDatabaseOf(
-    path: string,
-    lookup: FolderLookup = this.folderLookup(),
-  ): string | null {
-    if (this.isDatabaseMode) return this.config.notion.databaseId!;
-    return lookup.databaseAt(parentFolderOf(path));
-  }
-
-  /**
-   * 587b405 이전 push 가 남긴 잘못된 폴더 레코드를 지운다 — 루트 페이지를 맨 위 폴더의 페이지로
-   * 적은 레코드. 그때 ensureFolderPage 는 폴더 노트의 부모 페이지를 폴더의 페이지로 적었고, 맨 위
-   * 폴더에서는 그것이 루트다. 루트는 어느 폴더의 페이지도 아니다. 더 깊은 폴더는 그 부모 페이지를
-   * 다른 레코드가 이미 가리켜(notion_page_id 고유 색인) 이런 레코드가 생기지 않았다.
-   *
-   * push 가 만든 폴더 페이지 아래에 폴더 노트가 든 두 겹의 폴더(S-15)는 지우지 않는다. 예전에는
-   * 폴더 노트가 페이지를 가지면 폴더 레코드를 지워, Notion 에 그대로 있는 폴더 페이지를 추적에서
-   * 놓았다 — 다음 pull 이 그것을 새 페이지로 받아 `(id)` 이름의 파일로 썼다.
-   */
-  private repairFolderRecords(): void {
-    for (const record of this.stateDb.getAll()) {
-      if (
-        isFolderRecord(record) &&
-        record.notionPageId &&
-        notionIdsEqual(record.notionPageId, this.config.notion.rootPageId)
-      ) {
-        this.stateDb.transaction(() => {
-          this.stateDb.delete(record.id);
-          this.stateDb.deleteWikilink(record.obsidianPath);
-        });
-      }
-    }
-  }
-
-  private async resolveParentPath(page: PageObjectResponse): Promise<string> {
-    const parentId = await this.extractParentId(page);
-    if (!parentId || notionIdsEqual(parentId, this.config.notion.rootPageId)) return "";
-
-    const parentRecord = this.stateDb.getByNotionId(parentId);
-    if (parentRecord) {
-      // push 가 만든 폴더 페이지는 폴더 경로 자체로 추적한다 — 그 폴더가 자식의 자리다. 예전에는
-      // 폴더 노트 파일처럼 마지막 조각을 떼어 한 층 위에 받았다(S-16). v0.3 이 DB 폴더 자리에 만든
-      // 폴더 페이지는 빼고 예전 자리에 둔다 — DB 폴더에는 행만 든다.
-      if (
-        isFolderRecord(parentRecord) &&
-        !this.folderLookup().databaseAt(parentRecord.obsidianPath)
-      ) {
-        return parentRecord.obsidianPath;
-      }
-      if (parentRecord.fileType === "folder-note" || parentRecord.fileType === "folder-only") {
-        const pathParts = parentRecord.obsidianPath.split("/");
-        pathParts.pop();
-        return pathParts.join("/");
-      }
-      const pathParts = parentRecord.obsidianPath.split("/");
-      pathParts.pop();
-      const parentDir = pathParts.join("/");
-      return (
-        parentDir ||
-        sanitizeFileName(this.notionClient.extractTitle(await this.notionClient.getPage(parentId)))
-      );
-    }
-
-    try {
-      const parentPage = await this.notionClient.getPage(parentId);
-      const parentTitle = this.notionClient.extractTitle(parentPage);
-      const grandparentPath = await this.resolveParentPath(parentPage);
-      const safeName = sanitizeFileName(parentTitle);
-      return grandparentPath ? `${grandparentPath}/${safeName}` : safeName;
-    } catch {
-      return "";
-    }
-  }
-
-  /**
-   * 페이지 · 행을 만든다. 본문을 markdown 으로 보냈으면 그 markdown 도 돌려준다 — Notion 이 만들며
-   * 버린 맨 앞 `# H1` 을 호출측이 매핑을 적은 뒤 되살린다({@link restoreCreatedHeading}). 블록으로
-   * 보냈으면 null 이다 — 블록은 보낸 그대로 생긴다.
-   */
-  private async pushCreatePage(
-    parentId: string,
-    parentType: "page" | "database",
-    title: string,
-    markdownContent: string,
-    properties?: Record<string, unknown>,
-  ): Promise<CreatedPage> {
-    if (this.config.conversion.preferMarkdownApi !== false) {
-      const markdown = obsidianToNotionEnhanced(markdownContent);
-      const page = await this.notionClient.createPageWithMarkdown({
-        parentId,
-        parentType,
-        title,
-        markdown,
-        properties,
-      });
-      return { page, markdown };
-    }
-
-    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
-    const page = await this.notionClient.createPage({
-      parentId,
-      parentType,
-      title,
-      properties,
-    });
-    if (blocks.length > 0) {
-      await this.notionClient.appendChildren(page.id, blocks);
-    }
-    return { page, markdown: null };
-  }
-
-  /**
-   * 만든 페이지를 마저 채운다 — 버려진 맨 앞 제목을 되살리고 첨부를 올린다. 호출측이 매핑을 먼저
-   * 적은 뒤 부른다.
-   *
-   * @returns 적을 원격 페이지와 본문 지문. 폴더 노트만 지문을 받는다 — 곧 그 아래에 노트가 생겨
-   *   수정 시각이 바뀌므로, 다음 push 가 본문이 그대로임을 지문으로 확인한다(자식은 지문에 들지
-   *   않는다). 다른 노트의 페이지는 이 도구가 쓰는 한 편집자가 봇으로 남아 지문 없이 가른다.
-   */
-  private async finishCreatedPage(
-    created: CreatedPage,
-    conversionResult: ConversionResult,
-    path: string,
-  ): Promise<{ page: RemotePageStamp; bodyFingerprint: string | null }> {
-    let page = await this.restoreCreatedHeading(created, path);
-    if (await this.syncEmbeddedMedia(created.page.id, conversionResult, path)) {
-      // 첨부가 본문을 고쳤다 — 수정 시각을 다시 받는다(I5). 옛 시각을 적으면 다음 push 가 이
-      // 변경을 원격 편집으로 본다.
-      page = await this.notionClient.getPage(created.page.id);
-    }
-    const bodyFingerprint = isFolderNotePath(path)
-      ? await this.remoteBodyFingerprintOf(created.page.id)
-      : null;
-    return { page, bodyFingerprint };
-  }
-
-  /**
-   * 만들며 버려진 맨 앞 `# H1` 을 되살리고(N-04) 적을 원격 페이지를 돌려준다. 되살렸으면 서버가
-   * 다시 준 페이지다 — 만들 때의 시각을 적으면 다음 pull 이 이 교체를 원격 수정으로 본다(I5).
-   *
-   * 호출측이 매핑을 먼저 적고, 첨부를 올리기 전에 부른다 — 교체가 자리표시자를 첨부로 바꾼 본문을
-   * 되돌리지 않는다. 여기서 던지면 그 항목만 실패하고, 다음 push 는 새로 만들지 않고 갱신으로 본문을
-   * 다시 보낸다(본문 교체는 맨 앞 H1 을 남긴다).
-   */
-  private async restoreCreatedHeading(
-    created: CreatedPage,
-    path: string,
-  ): Promise<RemotePageStamp> {
-    const { page, markdown } = created;
-    if (markdown === null) return page;
-    try {
-      if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
-        return page;
-      }
-      return await this.notionClient.getPage(page.id);
-    } catch (error) {
-      throw new Error(
-        `맨 앞 제목을 Notion 에 되살리지 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  /**
-   * `.base` 가 나타내는 Notion DB id 들 — 옆 사이드카(`<이름>.notion.json`)의 DB 와, 그 DB 를
-   * 원본으로 둔 링크드 뷰 컨테이너(pull 이 `.base` 를 원본 DB 로 몰아 만든다). 사이드카가
-   * 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
-   */
-  private async databaseIdsOfBase(basePath: string): Promise<string[]> {
-    const sidecarPath = basePath.replace(/\.base$/i, ".notion.json");
-    let databaseId: unknown;
-    try {
-      databaseId = (
-        JSON.parse(await this.vaultFs.readFile(sidecarPath)) as { databaseId?: unknown }
-      ).databaseId;
-    } catch {
-      return [];
-    }
-    if (typeof databaseId !== "string") return [];
-    const own = compactNotionId(databaseId);
-    const linked = [...this.loadLinkedDbMap()]
-      .filter(([, original]) => original === own)
-      .map(([container]) => container);
-    return [own, ...linked];
-  }
-
-  /**
-   * 페이지 본문을 로컬 본문으로 바꾼다. 자식 페이지 · 자식 DB 는 지우지 않는다(S-03).
-   *
-   * Markdown API 경로는 {@link replacePageBody} 가 자식을 제자리에 두고 바꾼다. 블록 경로는
-   * 기존 블록을 모두 지우고 새로 붙이므로 자식까지 지우게 된다 — 자식이 있으면 보내지 않고
-   * 실패로 알린다. 예전처럼 조용히 건너뛰면 동기화됨으로 기록돼 편집이 영영 가지 않는다.
-   *
-   * @returns 바꾼 뒤 원격 본문의 지문({@link remoteBodyFingerprint}). 블록 방식으로 보냈으면 null.
-   */
-  private async pushUpdatePage(
-    pageId: string,
-    markdownContent: string,
-    _baseSnapshot?: Buffer | null,
-  ): Promise<string | null> {
-    if (this.config.conversion.preferMarkdownApi !== false) {
-      const enhanced = obsidianToNotionEnhanced(markdownContent);
-      const written = await replacePageBody(this.notionClient, pageId, enhanced, {
-        databaseIdsOfBase: (basePath) => this.databaseIdsOfBase(basePath),
-      });
-      // 응답의 본문은 다시 받은 본문과 같다 — 잘렸으면 온전한 본문을 다시 받는다.
-      return written.truncated || (written.unknown_block_ids ?? []).length > 0
-        ? this.remoteBodyFingerprintOf(pageId)
-        : remoteBodyFingerprint(written.markdown);
-    }
-
-    // 휴지통 자식은 children.list 에 잡히지 않으므로 여기 보이는 자식은 모두 살아 있다.
-    const existingBlocks = await this.notionClient.fetchAllChildren(pageId);
-    if (existingBlocks.some((b) => b.type === "child_page" || b.type === "child_database")) {
-      throw new Error(
-        "자식 페이지 · DB 가 있는 페이지는 블록 방식으로 본문을 보내면 자식까지 지워져 보내지 않음 — " +
-          "설정 conversion.preferMarkdownApi 를 기본값(true)으로 두고 다시 push 하세요",
-      );
-    }
-
-    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
-    if (blocks.length > 0) {
-      await this.notionClient.appendChildren(pageId, blocks);
-    }
-    const deleteSema = new Sema(this.config.advanced.concurrency);
-    await Promise.all(
-      existingBlocks.map(async (block) => {
-        await deleteSema.acquire();
-        try {
-          await this.notionClient.deleteBlock(block.id);
-        } finally {
-          deleteSema.release();
-        }
-      }),
-    );
-    return null;
-  }
-
-  /**
-   * 페이지 본문을 볼트 쪽 markdown 으로 받는다.
-   *
-   * @returns `fingerprint` 는 받은 원격 본문의 지문({@link remoteBodyFingerprint}). 블록 API 로
-   *   받았으면 null — 지문은 Markdown API 의 본문으로만 견준다.
-   */
-  private async fetchPageMarkdown(
-    pageId: string,
-  ): Promise<{ content: string; compact: boolean; fingerprint: string | null }> {
-    if (this.config.conversion.preferMarkdownApi !== false) {
-      try {
-        const result = await this.notionClient.getPageMarkdown(pageId);
-        this.collectInlineDbRefs(pageId, result.markdown);
-        return {
-          content: this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown)),
-          // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
-          // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
-          compact: isCompactExport(result.markdown),
-          fingerprint: remoteBodyFingerprint(result.markdown),
-        };
-      } catch (error) {
-        // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
-        getLogger().warn(
-          `[Im-Nobsidian] Markdown API 로 받지 못해 블록 API 로 받음 (${pageId}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-      }
-    }
-    // blocks-API 폴백 산출물은 이미 표준 간격 — 재간격 불필요.
-    // 폴백 변환기도 child-database 보존 마커를 발행하므로 인라인 DB 수집을 이어간다.
-    const fallback = await this.blockConverter.notionBlocksToMarkdown(pageId);
-    this.collectInlineDbRefs(pageId, fallback);
-    return { content: fallback, compact: false, fingerprint: null };
-  }
-
-  // Markdown API는 인라인 데이터베이스를 <database url="..." ...>Title</database> 로 렌더한다
-  // (컬럼/콜아웃/synced_block 내부 포함). url 의 32자리 hex 가 databaseId 이므로 블록 트리
-  // 재귀 없이 이 신호만으로 깊이 중첩된 child_database 를 발견한다. url 호스트는
-  // www.notion.so / app.notion.com/p 두 형태가 실측돼 고정하지 않는다 — 규칙은
-  // extractInlineDbIds(blocks-API 폴백 마커 겸용) 참조.
-  private collectInlineDbRefs(parentPageId: string, rawMarkdown: string): void {
-    for (const dbId of extractInlineDbIds(rawMarkdown)) {
-      this._inlineDbRefs.set(dbId, parentPageId);
-    }
-  }
-
-  /**
-   * 이번 라운드에 기록된 DB row md 를 읽어 본문의 인라인 DB 참조를 수집한다.
-   * row 페이지는 DatabaseSyncer 자체 파이프라인으로 변환돼 fetchPageMarkdown 의
-   * _inlineDbRefs 수집을 타지 않는다 — 디스크에 남은 보존 마커가 유일한 발견 신호다.
-   * 부모 Notion 페이지 id 는 state DB 역조회(getByPath)로 얻는다(row upsert 직후라 항상 존재).
-   */
-  private async collectRowInlineRefs(
-    rowPaths: string[],
-  ): Promise<Array<{ dbId: string; parentPageId: string }>> {
-    const refs: Array<{ dbId: string; parentPageId: string }> = [];
-    for (const path of rowPaths) {
-      if (!path.endsWith(".md")) continue;
-      try {
-        const ids = extractInlineDbIds(await this.vaultFs.readFile(path));
-        if (ids.length === 0) continue;
-        const record = this.stateDb.getByPath(path);
-        if (!record?.notionPageId) continue;
-        for (const id of ids) {
-          refs.push({ dbId: normalizeNotionId(id), parentPageId: record.notionPageId });
-        }
-      } catch {
-        // 방금 기록한 파일 읽기 실패 — 발견은 best-effort, 다음 pull 재시도
-      }
-    }
-    return refs;
-  }
-
-  // pull 시 url 기반 page mention 은 `[[notion:<id>]]` 로 1차 변환된다(notionEnhancedToObsidian).
-  // 이를 state DB 역조회로 원래 `[[제목]]` 위키링크로 복원해 push↔pull 라운드트립을 수렴시킨다.
-  // 볼트 밖/미추적 페이지면 `[[notion:<id>]]` 를 그대로 두어 정보 손실을 막는다.
-  private resolveNotionIdWikilinks(markdown: string): string {
-    return resolveNotionIdWikilinks(
-      markdown,
-      (id) => this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null,
-    ).markdown;
-  }
-
-  private async extractParentId(page: PageObjectResponse): Promise<string | null> {
-    const parent = page.parent as {
-      type: string;
-      page_id?: string;
-      database_id?: string;
-      block_id?: string;
-    };
-    if (parent.type === "page_id") return parent.page_id ?? null;
-    if (parent.type === "database_id") return parent.database_id ?? null;
-    if (parent.type === "block_id" && parent.block_id) {
-      return this.resolveBlockToPageId(parent.block_id);
-    }
-    return null;
-  }
-
-  private async resolveBlockToPageId(blockId: string): Promise<string | null> {
-    for (let i = 0; i < 10; i++) {
-      try {
-        const block = await this.notionClient.getBlock(blockId);
-        const bp = (
-          block as unknown as { parent: { type: string; page_id?: string; block_id?: string } }
-        ).parent;
-        if (bp.type === "page_id") return bp.page_id ?? null;
-        if (bp.type === "block_id" && bp.block_id) {
-          blockId = bp.block_id;
-          continue;
-        }
-        return null;
-      } catch {
-        return null;
-      }
-    }
-    return null;
-  }
-
-  private cleanupInterruptedSync(): void {
-    const pushInProgress = this.stateDb.getMeta("push_in_progress");
-    const pullInProgress = this.stateDb.getMeta("pull_in_progress");
-
-    if (pushInProgress === "true") {
-      getLogger().warn("[Im-Nobsidian] 이전 push가 비정상 종료됨 — 플래그 정리");
-      this.stateDb.setMeta("push_in_progress", "");
-    }
-    if (pullInProgress === "true") {
-      getLogger().warn("[Im-Nobsidian] 이전 pull이 비정상 종료됨 — 플래그 정리");
-      this.stateDb.setMeta("pull_in_progress", "");
-    }
-  }
-
-  /**
-   * I12 — 중단된 push create 작업 재개.
-   *
-   * pending_operations 에 미완료(create·push) 항목이 있으면:
-   *  - state 에 notion_page_id 가 이미 있으면 → 생성·매핑까지는 끝났고 markCompleted 직전에
-   *    중단된 것 → 완료 처리(잔여 본문/이미지는 다음 변경감지가 pushUpdate 로 마무리).
-   *  - notion_page_id 가 비어 있으면(Window A: 생성 적용됐으나 매핑 기록 전 중단) → 부모에서
-   *    제목으로 child_page 를 검색해 고아 페이지를 입양(중복 생성 차단). 없으면 자리표시
-   *    레코드를 제거(FK CASCADE 로 op 도 삭제)해 다음 push 가 새로 생성하게 한다.
-   *
-   * Notion 은 idempotency key 가 없다. 그래서 생성 요청은 적용됐는지 모르는 실패(타임아웃 ·
-   * 5xx)에서 클라이언트가 다시 보내지 않고(S-07), 같은 실행의 재시도(pushCreate)와 다음
-   * 실행의 재개(여기)가 모두 이 검색-입양을 거친다. 자식 목록을 **읽지 못하면** 자리표시를
-   * 지우지 않는다 — 읽지 못한 것을 "없다" 로 보면 다음 push 가 같은 페이지를 또 만든다.
-   * DB 폴더의 행(`parentType: "database"`)은 자식 목록이 아니라 DB 조회로 같은 제목의 짝 없는
-   * 행을 찾는다. 한계: DB 모드의 행은 부모를 폴더 페이지로 적어 찾지 못하고, 자리표시 제거 후
-   * 재생성으로 폴백한다.
-   *
-   * 이동(move·push) WAL 은 재개가 아니라 «아직 반영하지 않은 이동» 의 기록이라 그대로 둔다 —
-   * 옮긴 노트를 다시 반영하는 것은 변경 감지(`moved`)와 pushMove 가 한다(S-11).
-   */
-  private async recoverInterruptedPushOps(): Promise<void> {
-    const ops = this.stateDb.getIncompletePendingOperations();
-    if (ops.length === 0) return;
-
-    for (const op of ops) {
-      if (op.direction === "push" && op.operation === "move") continue;
-      if (op.direction !== "push" || op.operation !== "create") {
-        // 현재 WAL 재개는 create·push 만 대상. 그 외는 정리만 한다.
-        this.stateDb.markPendingFailed(op.id, "unsupported resume op");
-        continue;
-      }
-
-      let payload: {
-        path?: string;
-        parentId?: string;
-        parentType?: "page" | "database";
-        title?: string;
-      } = {};
-      try {
-        payload = JSON.parse(op.payload ?? "{}") as typeof payload;
-      } catch {
-        this.stateDb.markPendingFailed(op.id, "invalid payload json");
-        continue;
-      }
-      const path = payload.path;
-      if (!path) {
-        this.stateDb.markPendingFailed(op.id, "missing payload.path");
-        continue;
-      }
-
-      const state = this.stateDb.getByPath(path);
-      if (state?.notionPageId) {
-        // 매핑 존재 → 안전. 완료 처리하고 잔여는 변경감지(contentHash="")가 pushUpdate 로 마무리.
-        this.stateDb.markPendingCompleted(op.id);
-        continue;
-      }
-
-      const parentId = payload.parentId ?? state?.notionParentId ?? undefined;
-      const title = payload.title;
-      let adopted: string | null = null;
-      if (parentId && title) {
-        try {
-          const orphan =
-            payload.parentType === "database"
-              ? await this.findUntrackedRowByTitle(parentId, title)
-              : await this.findChildPageByTitle(parentId, title);
-          adopted = orphan?.id ?? null;
-        } catch (error) {
-          // 읽지 못함 ≠ 없음. op 와 자리표시를 그대로 두면 이번 push 의 pushCreate 가 다시
-          // 확인하고, 그래도 못 읽으면 그 항목만 실패로 남는다 — 중복 생성은 없다.
-          getLogger().warn(
-            `[Im-Nobsidian] 중단된 create 재개 보류 — 부모 자식 목록을 읽지 못함 (${path}): ${
-              error instanceof Error ? error.message : String(error)
-            }`,
-          );
-          continue;
-        }
-      }
-
-      if (adopted) {
-        this.adoptOrphanPage(path, adopted, parentId ?? null, state);
-        this.stateDb.markPendingCompleted(op.id);
-        getLogger().info(`[Im-Nobsidian] 중단된 create 재개 — 고아 페이지 입양: ${path}`);
-      } else if (state) {
-        // 생성된 페이지를 못 찾음 → 자리표시 제거(CASCADE 로 op 삭제) → 다음 push 가 새로 생성.
-        this.stateDb.delete(state.id);
-        getLogger().info(`[Im-Nobsidian] 중단된 create 재개 — 미생성 확인, 자리표시 제거: ${path}`);
-      } else {
-        this.stateDb.markPendingCompleted(op.id);
-      }
-    }
-  }
-
-  /**
-   * 부모 페이지의 직속 자식 중 제목이 일치하고 아직 아무 레코드도 짝으로 삼지 않은
-   * (보관/휴지통 제외) child_page 를 찾는다 — 앞선 생성 요청이 남긴 고아 후보다.
-   *
-   * 이미 추적 중인 페이지는 제외한다. `A/x.md` 의 페이지와 폴더 `A/x/` 의 페이지는 제목이
-   * 같은 형제라서, 제목만 보면 남의 짝을 가로챈다.
-   *
-   * `null` 은 «끝까지 읽었고 없었다» 일 때만 돌려준다. 목록이나 후보 페이지를 읽지 못하면
-   * 던진다 — 호출측이 "없다" 로 오해하면 이미 만들어진 페이지를 두고 하나를 더 만든다.
-   * 후보가 404 면 그 사이 지워졌거나 접근이 끊긴 것이라 건너뛴다.
-   */
-  private async findChildPageByTitle(
-    parentId: string,
-    title: string,
-  ): Promise<PageObjectResponse | null> {
-    const children = await this.notionClient.fetchAllChildren(parentId);
-    for (const b of children) {
-      if (b.type !== "child_page") continue;
-      const childTitle = (b as { child_page?: { title?: string } }).child_page?.title;
-      if (childTitle !== title) continue;
-      if (this.stateDb.getByNotionId(b.id)) continue;
-      let page: PageObjectResponse;
-      try {
-        page = await this.notionClient.getPage(b.id);
-      } catch (error) {
-        if (isNotionObjectNotFound(error)) continue;
-        throw error;
-      }
-      const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-      if (inTrash || page.archived) continue;
-      return page;
-    }
-    return null;
-  }
-
-  /**
-   * DB 에서 제목이 같고 아직 아무 레코드도 짝으로 삼지 않은(휴지통 제외) 행을 찾는다 — 앞선
-   * 행 생성 요청이 남긴 고아 후보다. 제목 속성은 이름이 DB 마다 달라 속성 id(`title`)로 거른다.
-   *
-   * `null` 은 «끝까지 조회했고 없었다» 일 때만이다. 조회에 실패하면 던진다({@link findChildPageByTitle}
-   * 와 같은 이유 — 읽지 못한 것을 «없다» 로 보면 같은 행을 하나 더 만든다).
-   */
-  private async findUntrackedRowByTitle(
-    databaseId: string,
-    title: string,
-  ): Promise<PageObjectResponse | null> {
-    const rows = await this.notionClient.queryAllDatabasePages(databaseId, {
-      property: "title",
-      title: { equals: title },
-    });
-    for (const row of rows) {
-      if (this.stateDb.getByNotionId(row.id)) continue;
-      const inTrash = (row as { in_trash?: boolean }).in_trash === true;
-      if (inTrash || row.archived) continue;
-      return row;
-    }
-    return null;
-  }
-
-  /**
-   * 앞선 생성 요청이 서버에 적용돼 있던 페이지를 이 노트의 짝으로 삼는다 — 매핑만 채운다.
-   * contentHash 를 비우고 pending 으로 두어, 본문 · 이미지는 다음 갱신(pushUpdate)이 마무리한다.
-   */
-  private adoptOrphanPage(
-    path: string,
-    pageId: string,
-    parentId: string | null,
-    state: SyncRecord | null,
-  ): void {
-    this.stateDb.upsert({
-      obsidianPath: path,
-      notionPageId: pageId,
-      notionParentId: parentId,
-      contentHash: "",
-      notionLastEdited: state?.notionLastEdited ?? null,
-      notionLastEditedBy: state?.notionLastEditedBy ?? null,
-      notionSeenAt: state?.notionSeenAt ?? null,
-      notionBodyFingerprint: state?.notionBodyFingerprint ?? null,
-      localLastModified: new Date().toISOString(),
-      syncDirection: state?.syncDirection ?? "both",
-      fileType: state?.fileType ?? (isFolderNotePath(path) ? "folder-note" : "file"),
-      status: "pending",
-      baseSnapshot: null,
-      localMtime: null,
-      localFileSize: null,
-    });
-  }
-
-  /**
-   * 신규 pull 페이지가 쓸 파일 경로를 충돌 없이 결정하고 **그 자리에서 선점**한다.
-   *
-   * DB 행과 **같은 규칙**({@link pagePathCandidates})을 쓴다. 예전에는 `(1)`, `(2)` …
-   * 순번을 99 까지 훑고 고갈되면 **원본 경로를 그대로 돌려줬는데**, 그러면 남의 노트를
-   * 조용히 덮어써 내용이 사라진다. 순번은 그때의 볼트 상태로 정해져 실행마다 페이지끼리
-   * 접미사가 뒤바뀔 수도 있었다(pull 마다 파일이 갈아엎히는 churn).
-   *
-   * 점유 판정은 세 가지를 모두 본다:
-   *   · 이번 실행의 선점 장부 — 아래 참조.
-   *   · 추적 레코드 — 다른 페이지가 소유한 경로면 피하고, 자기 소유면 그대로 재사용한다.
-   *   · 볼트 파일 — 추적되지 않는 사용자 노트가 놓여 있으면 피한다.
-   *
-   * 선점 장부가 필요한 이유는 pull 이 워커 풀로 **동시 실행**되기 때문이다. 조회와 기록
-   * 사이에 await 가 끼면 동명 페이지 여럿이 나란히 "비어 있음"을 보고 같은 경로를 고른다.
-   * 그러면 마지막에 쓴 페이지만 남고 나머지 본문이 사라진다(실측 재현: 동명 3페이지 →
-   * 파일 1개·레코드 1건). 그래서 마지막 확인과 등록을 **await 없는 동기 구간**에 묶는다 —
-   * 그 사이에는 다른 작업이 끼어들 수 없으므로 두 페이지가 같은 경로를 얻는 일이 없다.
-   */
-  private async resolveUniqueFilePath(
-    dir: string,
-    safeName: string,
-    pageId: string,
-  ): Promise<string> {
-    const candidates = pagePathCandidates(dir, safeName, pageId);
-
-    for (const candidate of candidates) {
-      if (this.claimedPaths.has(candidate)) continue;
-
-      const owner = this.stateDb.getByPath(candidate);
-      if (owner) {
-        // 자기 소유면 재사용해야 멱등하다(레코드가 남은 채 파일만 지워진 복원 시나리오).
-        if (owner.notionPageId != null && notionIdsEqual(owner.notionPageId, pageId)) {
-          this.claimedPaths.add(candidate);
-          return candidate;
-        }
-        continue;
-      }
-
-      if (await this.vaultFs.exists(candidate)) continue;
-
-      // ── 여기부터 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
-      if (this.claimedPaths.has(candidate)) continue;
-      this.claimedPaths.add(candidate);
-      return candidate;
-    }
-
-    // 전체 ID(32 글자) 후보는 전역 유일하므로 위 루프에서 반드시 반환된다.
-    // 도달 불가 경로이나 방어적으로 가장 유일한 후보를 돌려준다.
-    const fallback = candidates[candidates.length - 1]!;
-    this.claimedPaths.add(fallback);
-    return fallback;
+    return this.conflictWorkflow.generateConflictDiff(conflict);
   }
 }
 
@@ -5722,70 +1130,4 @@ function pushOperationOf(change: LocalChange): ProgressItem["operation"] {
     case "modified":
       return "update";
   }
-}
-
-function extractTitle(filePath: string): string {
-  const parts = filePath.split("/");
-  const filename = parts[parts.length - 1] ?? "";
-  return filename.replace(/\.md$/, "");
-}
-
-/** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
-function titleProperty(title: string): Record<string, unknown> {
-  return { title: { title: [{ text: { content: title } }] } };
-}
-
-/**
- * 원격 본문을 로컬 본문으로 바꿀 수 없으면 던진다 — pull 하지 않은 Notion 편집을 덮어쓰지 않는다
- * (N-05, {@link RemoteDrift}). 예전에는 원격을 보지 않고 바꿨다.
- */
-function refuseUnpulledBody(drift: RemoteDrift, path: string): void {
-  if (drift === "body") {
-    throw new Error(
-      `Notion 에서도 본문이 바뀐 페이지라 올리지 않음 — pull 로 먼저 받은 뒤 다시 push 하세요: ${path}`,
-    );
-  }
-  if (drift === "unknown") {
-    throw new Error(
-      `Notion 에서 바뀌었는지 확인하지 못한 페이지라 올리지 않음 — pull 로 먼저 받은 뒤 다시 ` +
-        `push 하세요: ${path}`,
-    );
-  }
-}
-
-/**
- * 로컬에서 지운 노트의 원격을 지울 수 없으면 던진다 — pull 하지 않은 Notion 편집(본문 · 제목 ·
- * 속성)을 휴지통으로 보내지 않는다(F-f). 본문만 보는 {@link refuseUnpulledBody} 와 달리 본문 밖의
- * 편집도 지키고, 바뀌었는지 모르면 지우지 않는다.
- */
-function refuseUnpulledDeletion(drift: RemoteDrift, path: string): void {
-  if (drift === "none") return;
-  const reason =
-    drift === "unknown"
-      ? "Notion 에서 바뀌었는지 확인하지 못한 페이지"
-      : "Notion 에서도 바뀐 페이지";
-  throw new Error(
-    `${reason}라 지우지 않음 — pull 이 되살려 받습니다. 받은 뒤에도 필요 없으면 다시 지우세요: ${path}`,
-  );
-}
-
-/**
- * 이 노트의 Notion 페이지가 놓일 폴더. 폴더 노트(`A/B/B.md`)는 폴더 `A/B` 의 페이지라
- * 그 폴더의 부모(`A`)에 놓인다.
- */
-function pagePlacementFolder(path: string): string {
-  const folder = parentFolderOf(path);
-  return isFolderNotePath(path) ? parentFolderOf(folder) : folder;
-}
-
-function extractAliases(properties: Record<string, unknown>): string[] {
-  const raw = properties.aliases ?? properties.alias;
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.filter((a): a is string => typeof a === "string");
-  if (typeof raw === "string")
-    return raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  return [];
 }

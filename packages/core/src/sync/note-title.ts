@@ -107,3 +107,31 @@ export function titleMayChange(
   const written = explicitTitle(current);
   return base === null ? written !== null : written !== explicitTitle(base);
 }
+
+/** 경로의 파일 이름 — 확장자 `.md` 를 뗀다. */
+export function extractTitle(filePath: string): string {
+  const parts = filePath.split("/");
+  const filename = parts[parts.length - 1] ?? "";
+  return filename.replace(/\.md$/, "");
+}
+
+/** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
+export function titleProperty(title: string): Record<string, unknown> {
+  return { title: { title: [{ text: { content: title } }] } };
+}
+
+/**
+ * 노트의 별칭 — frontmatter `aliases`(없으면 `alias`)의 목록, 또는 쉼표로 가른 글. 위키링크
+ * 레지스트리에 제목과 함께 적는다.
+ */
+export function extractAliases(properties: Record<string, unknown>): string[] {
+  const raw = properties.aliases ?? properties.alias;
+  if (!raw) return [];
+  if (Array.isArray(raw)) return raw.filter((a): a is string => typeof a === "string");
+  if (typeof raw === "string")
+    return raw
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  return [];
+}
