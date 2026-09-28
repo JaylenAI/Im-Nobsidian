@@ -22,7 +22,7 @@ import type { Config } from "../types/config.js";
 import type { ConversionResult } from "../types/convert.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
-import { isNotionObjectNotFound, DiscoveryTooLargeError } from "../notion/client.js";
+import { isNotionObjectNotFound } from "../notion/client.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { ChangeDetector, type LocalScan, type LocalScanOptions } from "./change-detector.js";
@@ -72,26 +72,17 @@ import {
 import { repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { pagePathCandidates } from "../utils/db-row-path.js";
 import { replacePageBody } from "./page-body.js";
+import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
+import { nextPullWatermark } from "./pull-watermark.js";
 import {
-  remoteBodyFingerprint,
-  remoteStampOf,
-  type RemotePageStamp,
-} from "./remote-observation.js";
-import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
-import {
-  ALL_DATABASES,
-  chooseRemoteScan,
   DatabasePullLedger,
   LAST_FULL_PULL_META_KEY,
   parsePendingDatabases,
   PENDING_DATABASES_META_KEY,
   remoteScanInfo,
-  serializePendingDatabases,
-  type DatabaseSelection,
   type RemoteScan,
 } from "./remote-scan.js";
-import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
-import type { AbortLike } from "../utils/pool.js";
+import { OperationAbortedError } from "../utils/abort.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties } from "./row-properties.js";
 import { OperationGate } from "./operation-gate.js";
@@ -100,6 +91,8 @@ import { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
 import { extractParentId } from "./notion-parent.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
+import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
+import { detectMissingLocalFiles } from "./missing-local-files.js";
 import {
   refuseUnpulledBody,
   refuseUnpulledDeletion,
@@ -174,15 +167,6 @@ interface LocalPlan {
   readonly settledMoveOps: readonly string[];
 }
 
-/**
- * 원격에서 찾은 변경. 증분이면 바뀐 것이 보인 DB 도 함께 — 행을 고쳤거나 · 새 행이 생겼거나 · 스키마를
- * 고친 DB(id 는 {@link compactNotionId}). 전체 대조면 null 이다 — 모든 DB 를 조회한다(ADR-027).
- */
-interface RemoteDetection {
-  readonly changes: RemoteChange[];
-  readonly databaseIds: ReadonlySet<string> | null;
-}
-
 /** 옮겨 적은 뒤의 볼트 — 경로의 레코드와 폴더 판정. */
 interface LocalView {
   recordAt(path: string): SyncRecord | null;
@@ -222,11 +206,6 @@ export class SyncOrchestrator {
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
   private _pullFileCount = 0;
-  // pull 발견 단계에서 모든 페이지의 부모를 해소하며 채우는 "자식을 가진 페이지" 집합
-  // (정규화된 page id). 폴더노트/폴더 판정의 단일 신뢰 원천 — 얕은 블록 검사로 callout·
-  // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
-  // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
-  private _childParentIds = new Set<string>();
 
   // 이번 pull 실행에서 이미 배정된 파일 경로. 워커 풀이 동시에 도는 동안 동명 페이지가
   // 같은 경로를 골라 서로를 덮어쓰는 것을 막는다({@link resolveUniqueFilePath}).
@@ -241,6 +220,9 @@ export class SyncOrchestrator {
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
 
+  // 원격에서 바뀐 것 — 전체 대조 · 증분 감지(ADR-027).
+  private readonly detector: RemoteDetector;
+
   // 지난번에 본 뒤로 원격이 바뀌었나(N-05) — 덮어쓰기 · 지우기 전에, 변경을 보이기 전에 본다.
   private readonly drift: RemoteDriftChecker;
 
@@ -253,12 +235,6 @@ export class SyncOrchestrator {
   // 작업은 한 번에 하나만 돈다(S-09) — 위의 실행별 상태를 두 실행이 함께 쓰지 않도록.
   private readonly gate = new OperationGate();
 
-  // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
-  // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
-  // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
-  // 이 예산 안에서 순회가 끝나 폴백 없이 빠르게 완료된다. (단위: ms)
-  private static readonly DISCOVERY_RECURSIVE_BUDGET_MS = 90_000;
-
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -268,6 +244,7 @@ export class SyncOrchestrator {
   ) {
     this.observation = new RunObservation(stateDb, notionClient);
     this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
+    this.detector = new RemoteDetector(config, stateDb, notionClient, this.observation);
     this.changeDetector = new ChangeDetector(stateDb);
     this.pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
@@ -645,10 +622,16 @@ export class SyncOrchestrator {
     await this.observation.resolveBotUserId();
     // 원격을 얼마나 훑을지(ADR-027). 경로를 좁힌 pull 은 볼트 전체를 받지 않으므로 주기가 됐어도
     // 전체 대조하지 않는다 — 전체 대조를 마친 것으로 적을 수 없다.
-    const scan = this.remoteScan({ force: options?.force === true, deferDue: !!options?.paths });
+    const scan = this.detector.remoteScan({
+      force: options?.force === true,
+      deferDue: !!options?.paths,
+    });
     let detection: RemoteDetection;
     try {
-      detection = await this.detectRemote(scan, { signal: options?.signal, databases: true });
+      detection = await this.detector.detectRemote(scan, {
+        signal: options?.signal,
+        databases: true,
+      });
     } catch (error) {
       // 취소 — 받은 것이 없다. 기준 시각 · 전체 대조 시각을 옮기지 않고 끝낸다.
       if (error instanceof OperationAbortedError) {
@@ -662,7 +645,12 @@ export class SyncOrchestrator {
       this.stateDb.getMeta(PENDING_DATABASES_META_KEY),
     );
     const ledger = new DatabasePullLedger(
-      this.databaseSelection(detection, localPlan, pendingDatabases, options?.paths),
+      this.detector.databaseSelection(
+        detection,
+        localPlan?.scan.changes ?? null,
+        pendingDatabases,
+        options?.paths,
+      ),
       pendingDatabases,
     );
 
@@ -694,7 +682,7 @@ export class SyncOrchestrator {
         if (scan.kind === "full" && !options?.signal?.aborted) {
           this.stateDb.setMeta(LAST_FULL_PULL_META_KEY, startedAt);
         }
-        this.savePendingDatabases(ledger);
+        this.detector.savePendingDatabases(ledger);
       }
       this.stateDb.setMeta("last_sync_at", new Date().toISOString());
       this.stateDb.setMeta("pull_in_progress", "");
@@ -733,7 +721,9 @@ export class SyncOrchestrator {
     // 영구히 발산했다(실측 0/4). 상태 DB 와 실제 볼트의 차집합으로 직접 잡아 복원 대상으로
     // 밀어 넣는다. 이미 원격 변경으로 큐에 오른 페이지는 중복 처리하지 않는다.
     const queuedIds = new Set(filtered.map((c) => c.pageId));
-    const missingLocal = localPlan ? await this.detectMissingLocalFiles(options?.paths) : [];
+    const missingLocal = localPlan
+      ? await detectMissingLocalFiles(this.config, this.stateDb, this.vaultFs, options?.paths)
+      : [];
     const restoreChanges: RemoteChange[] = missingLocal
       .filter(
         (r) => r.notionPageId !== null && !queuedIds.has(r.notionPageId) && !adopting.has(r.id),
@@ -979,8 +969,8 @@ export class SyncOrchestrator {
     await this.observation.resolveBotUserId();
     // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
-    const scan = this.remoteScan({ force: false, deferDue: true });
-    const detection = await this.detectRemote(scan, { databases: false });
+    const scan = this.detector.remoteScan({ force: false, deferDue: true });
+    const detection = await this.detector.detectRemote(scan, { databases: false });
     const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes);
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
@@ -1099,7 +1089,7 @@ export class SyncOrchestrator {
     duration: number;
   }> {
     const startTime = Date.now();
-    const changes = await this.detectRemoteChanges();
+    const changes = await this.detector.detectRemoteChanges();
     this.stateDb.setMeta("last_fetch_at", new Date().toISOString());
     return {
       newPages: changes.filter((c) => c.type === "created").length,
@@ -2419,511 +2409,6 @@ export class SyncOrchestrator {
     });
   }
 
-  /**
-   * 전체 대조 — 루트 아래 페이지를 모두 훑고 추적 중인데 목록에 없는 페이지를 원격에 물어 삭제를
-   * 가른다. 취소하면 {@link OperationAbortedError} 를 던진다 — 다 훑지 못한 목록으로 삭제를 가르지
-   * 않는다.
-   */
-  private async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
-    const changes: RemoteChange[] = [];
-    this._childParentIds.clear();
-    const lastPull = this.stateDb.getMeta("last_pull_at");
-    const syncedRecords = this.stateDb.getAll();
-    const trackedPageIds = new Set(
-      syncedRecords.filter((r) => r.notionPageId).map((r) => r.notionPageId!),
-    );
-
-    let remotePages: Array<RemotePageStamp & { readonly id: string }>;
-    // 새 페이지의 제목 — 볼트 경로가 아직 없어 화면이 이름으로 보인다.
-    const titles = new Map<string, string>();
-    if (isDatabaseMode(this.config)) {
-      // R11-A: 전 data source 를 순회하는 SSOT(queryAllDatabasePages)로 열거한다. 1차 data
-      // source 만 페이지네이션하면 2번째+ 소스의 행이 **원격에 없는 것으로 보여**, 미발견에
-      // 그치지 않고 deleteSync 시 로컬 파일이 고아로 판정돼 지워진다(pullDatabase 는 이미
-      // 전 소스를 훑어 그 행들을 정상 기록하므로, 같은 행을 한 경로는 만들고 다른 경로는
-      // 지우는 진동이 된다). 열거 계약을 한 메서드로 모아 경로 간 비대칭을 없앤다.
-      const allPages = await this.notionClient.queryAllDatabasePages(
-        this.config.notion.databaseId!,
-      );
-      for (const page of allPages)
-        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
-      remotePages = allPages.map(remoteStampOf);
-    } else {
-      // 디스커버리 이중 전략(비용 상한 하이브리드):
-      //  1) 기본 — root 서브트리 직접 BFS 순회(getChildPagesRecursive). 비용이 실제 동기화
-      //     대상(서브트리)에 비례해, 작은 볼트가 수천 페이지 워크스페이스에 있어도 빠르다
-      //     (I10: 2-파일 볼트 pull ~12s). 단 비용은 서브트리 **전체 블록 수**에 비례하므로,
-      //  2) 콘텐츠가 많은 대규모 서브트리에서는 시간 예산(DISCOVERY_RECURSIVE_BUDGET_MS)을
-      //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리를 **덧붙인다**(비용이
-      //     워크스페이스 페이지 수에 비례·예측가능·유한).
-      //
-      // 두 경로를 경합시키지 않고 **합집합**을 쓰는 이유(R12-A): 둘은 같은 집합을 낸다고
-      // 가정할 수 없다. search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수 있고,
-      // 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 그런데 어느 쪽이 도는지를 90초
-      // 벽시계가 정한다 — 실제로 같은 볼트에서 첫 pull 은 폴백(search), 재 pull 은 순회로
-      // 돌았고 페이지 수가 회차마다 흔들렸다. 더 나쁜 건 이걸 멱등성 게이트가 못 본다는
-      // 점이다: 두 번째 실행이 더 **적게** 찾아도 created/updated 는 0 이라 churn 0 이다.
-      // 그리고 deleteSync 가 켜져 있으면 아래 orphan 판정이 그 차집합을 **삭제**한다.
-      // 합집합은 이 경합을 없앤다. 순회 부분 결과는 이미 치른 비용이라 추가 요청도 없다.
-      let underRoot: PageObjectResponse[];
-      try {
-        underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
-          deadlineMs: Date.now() + SyncOrchestrator.DISCOVERY_RECURSIVE_BUDGET_MS,
-          signal,
-        });
-      } catch (error) {
-        if (!(error instanceof DiscoveryTooLargeError)) throw error;
-        getLogger().info(
-          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 순회 부분 결과 ${error.partial.length}건에 ` +
-            `워크스페이스 search 기반 디스커버리를 합칩니다`,
-        );
-        const viaSearch = await this.notionClient.getPagesUnderRootViaSearch(
-          this.config.notion.rootPageId,
-          signal,
-        );
-        // id 로 디듀프한다 — 아래 remotePages 차단점도 디듀프하지만, 그 전에 도는
-        // _childParentIds 루프의 extractParentId 가 block 부모마다 API 를 부를 수 있어
-        // 중복을 여기서 먼저 없애야 요청이 두 배로 새지 않는다.
-        const byId = new Map<string, PageObjectResponse>();
-        for (const page of [...error.partial, ...viaSearch]) {
-          byId.set(normalizeNotionId(page.id), page);
-        }
-        underRoot = [...byId.values()];
-        getLogger().info(
-          `[Im-Nobsidian] 디스커버리 합집합: 순회 ${error.partial.length} ∪ search ${viaSearch.length} → ${underRoot.length}건`,
-        );
-      }
-      // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
-      // 부모가 page_id 면 추가 API 호출 없이 즉시 해석(공통 경로), block 중첩만 1회 조회.
-      this._childParentIds.add(normalizeNotionId(this.config.notion.rootPageId));
-      for (const page of underRoot) {
-        throwIfAborted(signal);
-        const parentId = await extractParentId(this.notionClient, page);
-        if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
-      }
-      for (const page of underRoot)
-        titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
-      remotePages = underRoot.map(remoteStampOf);
-    }
-
-    // 원격 페이지 목록을 page_id 로 디듀프한다. search API(페이지 모드)·data source 쿼리
-    // (DB 모드) 모두 페이지네이션 사이 재정렬로 같은 페이지를 중복 반환할 수 있고, 중복이 changes 로
-    // 새면 같은 page_id 가 두 번 create 되어 동일 콘텐츠가 클린·`(1)` 두 경로에 기록(첫 파일
-    // 고아화)된다. 여기가 페이지·DB 양 모드를 함께 막는 단일 차단점이다.
-    const seenRemoteIds = new Set<string>();
-    for (const page of remotePages) {
-      const key = normalizeNotionId(page.id);
-      if (seenRemoteIds.has(key)) continue;
-      seenRemoteIds.add(key);
-
-      const record = this.stateDb.getByNotionId(page.id);
-
-      if (!record) {
-        changes.push({
-          pageId: page.id,
-          type: "created",
-          title: titles.get(key),
-          lastEdited: page.last_edited_time,
-          previousEdited: null,
-        });
-      } else {
-        const modified = this.observation.modification(record, page);
-        if (modified) changes.push(modified);
-      }
-
-      trackedPageIds.delete(page.id);
-    }
-
-    if (this.config.sync.deleteSync && lastPull) {
-      // 조회하는 DB 의 행은 여기서 가르지 않는다 — 페이지 순회는 행을 보지 못해 행은 늘 목록에 없다.
-      // 그 DB 를 조회하는 pull 이 조회 결과로 가른다(DatabaseSyncer). 예전에는 행이 매 pull 마다
-      // «사라진 페이지» 가 돼 파일이 지워졌다가 이어지는 DB pull 이 다시 만들었다 — 올리지 않은
-      // 로컬 편집이 그 사이에 사라졌다(S-12).
-      const queriedDatabases = this.rowQueriedDatabaseIds();
-      const orphans = syncedRecords.filter(
-        (r) =>
-          r.notionPageId !== null &&
-          trackedPageIds.has(r.notionPageId) &&
-          !(
-            r.fileType === "db-row" &&
-            r.notionParentId !== null &&
-            queriedDatabases.has(normalizeNotionId(r.notionParentId))
-          ),
-      );
-      changes.push(...(await this.confirmedDeletions(orphans, seenRemoteIds, signal)));
-    }
-
-    return changes;
-  }
-
-  /**
-   * 행의 삭제를 DB 조회로 가르는 DB — 이번 pull 이 조회하는 DB 다. 설정된 DB 와, 페이지 모드면 자동
-   * 발견된 DB(접근 불가로 뺀 것 제외). {@link DatabaseDiscovery.pullDiscoveredDatabases} 가 조회하는 목록과 같다.
-   */
-  private rowQueriedDatabaseIds(): Set<string> {
-    const ids = (this.config.notion.databases ?? []).map((d) => d.databaseId);
-    if (!isDatabaseMode(this.config)) {
-      const inaccessible = loadInaccessibleDbIds(this.stateDb);
-      for (const c of parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY))) {
-        if (!inaccessible.has(c.databaseId.replace(/-/g, ""))) ids.push(c.databaseId);
-      }
-    }
-    return new Set(ids.map(normalizeNotionId));
-  }
-
-  /**
-   * 목록에 없던 추적 페이지 가운데 원격에서 정말 사라진 것만 삭제로 낸다(S-12) — {@link remotePresence}.
-   *
-   * - 휴지통 · 보관 · 없음(404) → 삭제.
-   * - 살아 있고 부모가 동기화 범위(루트 · 목록에 있던 페이지 · 이렇게 살아 있다고 확인된 페이지) →
-   *   목록이 빠뜨린 것이다. 둔다.
-   * - 살아 있지만 범위 밖(다른 곳 · 워크스페이스 맨 위)으로 옮겨졌다 → 삭제(예전과 같다).
-   * - 묻지 못했거나 부모를 알 수 없다 → 이번에는 둔다. 다음 전체 대조가 다시 묻는다.
-   *
-   * 부모가 목록에서 빠진 페이지면 그 부모가 살아 있다고 확인돼야 범위 안이다 — 범위가 더 늘지
-   * 않을 때까지 되풀이한다.
-   */
-  private async confirmedDeletions(
-    orphans: readonly SyncRecord[],
-    listed: ReadonlySet<string>,
-    signal?: AbortLike,
-  ): Promise<RemoteChange[]> {
-    const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
-    if (isDatabaseMode(this.config)) scope.add(normalizeNotionId(this.config.notion.databaseId!));
-
-    const deleted: SyncRecord[] = [];
-    const alive = new Map<SyncRecord, string>();
-    for (const record of orphans) {
-      throwIfAborted(signal);
-      const pageId = record.notionPageId!;
-      try {
-        const presence = await remotePresence(this.notionClient, pageId);
-        if (presence.kind === "gone") {
-          deleted.push(record);
-          continue;
-        }
-        const parent = presence.page.parent as { type?: string; database_id?: string };
-        if (parent.type === "workspace") {
-          deleted.push(record);
-          continue;
-        }
-        const parentId =
-          parent.database_id ?? (await extractParentId(this.notionClient, presence.page));
-        if (parentId) {
-          alive.set(record, normalizeNotionId(parentId));
-        } else {
-          getLogger().warn(
-            `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 부모를 알 수 없어 이번에는 지우지 않음`,
-          );
-        }
-      } catch (error) {
-        getLogger().warn(
-          `[Im-Nobsidian] 목록에 없는 ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 지우지 않음:`,
-          error,
-        );
-      }
-    }
-
-    for (let grew = true; grew;) {
-      grew = false;
-      for (const [record, parentId] of alive) {
-        if (!scope.has(parentId)) continue;
-        scope.add(normalizeNotionId(record.notionPageId!));
-        alive.delete(record);
-        grew = true;
-        getLogger().info(
-          `[Im-Nobsidian] 목록에 없던 ${record.obsidianPath} 는 Notion 에 그대로 있음 — 지우지 않음`,
-        );
-      }
-    }
-    // 남은 것은 살아 있지만 범위 밖으로 옮겨졌다.
-    deleted.push(...alive.keys());
-
-    return deleted.map((record) => remoteDeletionChange(record));
-  }
-
-  /**
-   * 이번 실행이 원격을 얼마나 훑을지(ADR-027) — pull 과 status 가 같은 규칙을 읽는다: 둘이 갈리면
-   * status 가 「원격 변경 없음」 이라고 한 것을 pull 이 받는다.
-   *
-   * 증분의 기준 시각은 `last_pull_at` 뿐이다. push 도 올리는 `last_sync_at` 은 «그 앞의 원격 변경을
-   * 받았다» 는 뜻이 아니다 — push 만 한 볼트가 그 시각부터 증분으로 조회하면 그 전에 원격에만 있던
-   * 페이지를 영영 받지 못한다.
-   */
-  private remoteScan(options: { readonly force: boolean; readonly deferDue: boolean }): RemoteScan {
-    return chooseRemoteScan(
-      {
-        lastPullAt: this.stateDb.getMeta("last_pull_at"),
-        lastFullPullAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
-        trackedRecords: this.stateDb.getAll().length,
-        databaseMode: isDatabaseMode(this.config),
-        fullReconcileIntervalSec: this.config.sync.fullReconcileInterval,
-      },
-      { force: options.force, now: Date.now(), deferDue: options.deferDue },
-    );
-  }
-
-  /**
-   * 원격 변경을 찾는다 — 전체 대조면 모두 훑고({@link detectRemoteChanges}), 아니면 바뀐 것만
-   * ({@link detectRemoteChangesIncremental}). 취소하면 {@link OperationAbortedError} 를 던진다.
-   *
-   * @param options.databases 바뀐 DB 도 찾는다(pull · dry-run). 상태 확인은 DB 를 조회하지 않아 찾지 않는다.
-   */
-  private async detectRemote(
-    scan: RemoteScan,
-    options: { readonly signal?: AbortLike; readonly databases: boolean },
-  ): Promise<RemoteDetection> {
-    if (scan.kind === "full") {
-      return { changes: await this.detectRemoteChanges(options.signal), databaseIds: null };
-    }
-    return this.detectRemoteChangesIncremental(scan.since, options);
-  }
-
-  /**
-   * 이번 pull 이 조회할 DB(ADR-027).
-   *
-   * - 전체 대조 · 경로를 좁힌 pull → 모두. 경로를 좁혔으면 범위에 닿는 DB 만 조회된다 — 사용자가 고른
-   *   것이고, 범위가 비용을 묶는다.
-   * - 증분 → 바뀐 것이 보인 DB · 지난번에 받지 못한 DB(대기) · 볼트에서 행이 사라진 DB. 행을 되살리는
-   *   것은 DB 조회다 — deleteSync 가 꺼져 있을 때만: 켜져 있으면 지운 것은 원격에도 지우라는 뜻이라
-   *   되살리지 않는다({@link detectMissingLocalFiles} 와 같다).
-   */
-  private databaseSelection(
-    detection: RemoteDetection,
-    localPlan: LocalPlan | null,
-    pending: ReadonlySet<string>,
-    paths: readonly string[] | undefined,
-  ): DatabaseSelection {
-    if (!detection.databaseIds || paths) return ALL_DATABASES;
-    const ids = new Set([...detection.databaseIds, ...pending]);
-    if (!this.config.sync.deleteSync && localPlan) {
-      for (const change of localPlan.scan.changes) {
-        if (change.type !== "deleted") continue;
-        const record = this.stateDb.getByPath(change.path);
-        if (record?.fileType === "db-row" && record.notionParentId) {
-          ids.add(compactNotionId(record.notionParentId));
-        }
-      }
-    }
-    return { kind: "changed", ids };
-  }
-
-  /** 다음 pull 이 바뀐 것이 없어도 조회할 DB 를 적는다 — 바뀐 때만. */
-  private savePendingDatabases(ledger: DatabasePullLedger): void {
-    const serialized = serializePendingDatabases(ledger.nextPending());
-    const saved = this.stateDb.getMeta(PENDING_DATABASES_META_KEY);
-    if ((saved ?? serializePendingDatabases(new Set())) !== serialized) {
-      this.stateDb.setMeta(PENDING_DATABASES_META_KEY, serialized);
-    }
-  }
-
-  /**
-   * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
-   * 만든다. **삭제는 감지하지 않는다**: search API 는 in_trash/archived 페이지를 반환하지 않아
-   * (=사라진 것을 증분만으로는 구분 불가) 삭제는 전체 대조(`detectRemoteChanges`)가 가른다.
-   * 전체 대조는 주기마다 돈다(ADR-027 — 예전에는 deleteSync 가 켜져 있으면 매번 돌았다. I10).
-   *
-   * 바뀐 행 · 새 행 · 스키마를 고친 DB 도 모은다 — pull 은 그 DB 만 조회한다. 새 행은 페이지로 받지
-   * 않는다: DB 조회가 행 속성과 함께 받는다. 그래서 부모를 묻지 않는다(행마다 요청 1회 이상 아낀다).
-   *
-   * @param options.databases pull · dry-run — 바뀐 DB 를 모으고, 추적 중인 행은 DB 조회에 맡긴다.
-   *   false(상태 확인)면 DB 를 찾지 않고 고친 행도 원격 변경으로 싣는다.
-   */
-  private async detectRemoteChangesIncremental(
-    since: string,
-    options: { readonly signal?: AbortLike; readonly databases: boolean },
-  ): Promise<RemoteDetection> {
-    const changes: RemoteChange[] = [];
-    const databaseIds = new Set<string>();
-    this._childParentIds.clear();
-    // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
-    // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
-    const searchSince = incrementalSearchSince(since);
-    const recentPages = await this.notionClient.searchRecentPages(searchSince, options.signal);
-    const untracked: Array<{
-      page: (typeof recentPages)[number];
-      parentId: string;
-      title: string;
-    }> = [];
-
-    for (const page of recentPages) {
-      const record = this.stateDb.getByNotionId(page.id);
-      if (!record) {
-        if (page.parentDatabaseId) {
-          databaseIds.add(compactNotionId(page.parentDatabaseId));
-          continue;
-        }
-        throwIfAborted(options.signal);
-        try {
-          const fullPage = await this.notionClient.getPage(page.id);
-          const parentId = await extractParentId(this.notionClient, fullPage);
-          if (parentId) {
-            this._childParentIds.add(normalizeNotionId(parentId));
-            untracked.push({ page, parentId, title: this.notionClient.extractTitle(fullPage) });
-          }
-        } catch {
-          // inaccessible page
-        }
-        continue;
-      }
-      // 조회 창(기준 시각 − 안전창 15분)은 가라앉지 않은 레코드의 수정 시각을 늘 담는다 — 가라앉지
-      // 않았다는 것은 그 시각이 마지막으로 본 때(기준 시각 뒤)보다 2분 안쪽이라는 뜻이다.
-      const modified = this.observation.modification(record, page);
-      // 바뀐 행의 DB 만 조회한다 — 창에 다시 든 그대로인 행으로 조회하면 안전창 동안 pull 마다 같은
-      // DB 를 다시 조회한다.
-      const rowDatabase =
-        page.parentDatabaseId ?? (record.fileType === "db-row" ? record.notionParentId : null);
-      if (modified && rowDatabase) databaseIds.add(compactNotionId(rowDatabase));
-      // pull 은 추적 중인 행도 그 DB 를 조회해 받는다 — 페이지로도 받으면 같은 행을 두 번 받는다(같은
-      // 분 안의 편집은 DB 조회가 한 번 더 받아 견준다). 상태 확인은 DB 를 조회하지 않으니 원격 변경으로 둔다.
-      if (options.databases && record.fileType === "db-row") continue;
-      if (modified) changes.push(modified);
-    }
-
-    // 새 페이지는 부모가 루트 · 추적 중이거나, 이번에 함께 받는 새 페이지일 때 받는다(S-08).
-    // 예전에는 앞의 둘만 봐서, 새 하위 트리는 맨 위 한 장만 오고 그 아래는 빠졌다 — 다음
-    // 실행의 조회 창(마지막 pull − 안전창)은 그 페이지의 수정 시각보다 뒤라 영영 다시 보이지
-    // 않았다. 부모가 받아질 때마다 한 바퀴 더 돌아 여러 층을 받고, 부모가 자식보다 먼저 줄에 선다.
-    const accepted = new Set<string>();
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const { page, parentId, title } of untracked) {
-        const id = normalizeNotionId(page.id);
-        if (accepted.has(id)) continue;
-        if (!this.isTrackedParent(parentId) && !accepted.has(normalizeNotionId(parentId))) continue;
-        accepted.add(id);
-        grew = true;
-        changes.push({
-          pageId: page.id,
-          type: "created",
-          title,
-          lastEdited: page.last_edited_time,
-          previousEdited: null,
-        });
-      }
-    }
-
-    // 스키마를 고친 DB — 행이 그대로여도 `.base` 와 행의 속성을 다시 받아야 한다. 행을 고쳐도 DB 의
-    // 수정 시각은 그대로고, 스키마를 고치면 data source 의 수정 시각이 바뀐다(실측 2026-09-28).
-    if (options.databases) {
-      for (const source of await this.notionClient.searchRecentDataSources(
-        searchSince,
-        options.signal,
-      )) {
-        if (source.databaseId) databaseIds.add(compactNotionId(source.databaseId));
-      }
-    }
-
-    return { changes, databaseIds };
-  }
-
-  private isTrackedParent(parentId: string): boolean {
-    if (notionIdsEqual(parentId, this.config.notion.rootPageId)) return true;
-    return !!this.stateDb.getByNotionId(parentId);
-  }
-
-  /**
-   * 추적 중(sync_state)인데 디스크에서 사라진 파일을 찾는다.
-   *
-   * 원격 변경 감지(detectRemoteChanges*)는 "Notion 에서 바뀐 것"만 본다. 로컬에서 파일이
-   * 지워진 경우는 어느 경로로도 잡히지 않아, 재pull 해도 `--force` 로도 되살아나지 않고
-   * 영구히 발산했다. push 는 deleteSync=false 면 원격을 지우지 않으므로 사용자에겐 복구
-   * 수단이 볼트 전체 초기화밖에 남지 않는다 — 이 스캔이 그 마지막 구멍을 막는다.
-   *
-   * 레코드마다 stat 을 던지면 1000건 규모에서 수 초가 든다. 볼트 워크 1회로 실재 목록을
-   * 만든 뒤 차집합을 취한다(md). md 가 아닌 추적 레코드는 수가 적어 개별 확인으로 남긴다.
-   *
-   * 로컬 이름변경·이동은 "사라짐" 과 구별해야 한다 — 되살리면 원본과 새 이름의 사본이
-   * 둘 다 남는다. push 의 detectMoves 와 같은 기준(내용 해시 일치)을 쓰되, 볼트 전체를
-   * 해시하지 않도록 크기가 같은 미추적 파일만 후보로 좁혀 확인한다.
-   */
-  private async detectMissingLocalFiles(paths?: string[]): Promise<SyncRecord[]> {
-    // deleteSync 가 켜져 있으면 로컬 삭제는 "원격에도 지우라" 는 의사 표시다. sync() 는
-    // pull 을 먼저 돌리므로 여기서 되살리면 뒤이은 push 가 지울 대상을 잃어 삭제 의도가
-    // 통째로 무효화된다. 복원은 삭제를 전파할 수단이 아예 없는 설정(deleteSync=false)
-    // 에서만 유일하게 옳은 해석이다.
-    if (this.config.sync.deleteSync) return [];
-
-    const records = this.stateDb.getAll();
-    if (records.length === 0) return [];
-
-    const scoped = records.filter(
-      (r) =>
-        // folder-only 는 실체가 폴더라 파일 부재가 정상. db-row 를 제외하는 이유는
-        // 여기서 되살리면 행 전용 frontmatter(속성 매핑) 없이 본문만 쓰는 잘못된 경로로
-        // 새기 때문이다 — 복원은 반드시 database-syncer 의 행 경로가 해야 한다.
-        // 다만 그쪽이 실제로 복원하는지는 오래 참이 아니었다: 원격 무변경이면 로컬 존재를
-        // 묻지도 않고 건너뛰어, 지운 행이 어느 경로로도 돌아오지 않았다. R13 에서 그
-        // 존재 확인을 넣어 이 제외가 비로소 근거를 갖는다(tests/sync/db-row-restore-deleted).
-        // push 가 만든 폴더 페이지(폴더 레코드)도 실체가 폴더다 — 안의 노트를 되살리면 폴더도
-        // 생긴다. 예전에는 폴더 경로에 확장자 없는 파일을 썼다(S-17).
-        (r.fileType === "file" || r.fileType === "folder-note") &&
-        !isFolderRecord(r) &&
-        r.notionPageId !== null &&
-        inAnyPathScope(r.obsidianPath, paths),
-    );
-    if (scoped.length === 0) return [];
-
-    const stats = await this.vaultFs.listMarkdownFileStats();
-    const live = new Set(stats.map((f) => f.path));
-
-    const candidates: SyncRecord[] = [];
-    for (const record of scoped) {
-      if (record.obsidianPath.endsWith(".md")) {
-        if (!live.has(record.obsidianPath)) candidates.push(record);
-      } else if (!(await this.vaultFs.exists(record.obsidianPath))) {
-        candidates.push(record);
-      }
-    }
-    if (candidates.length === 0) return [];
-
-    // 이름이 바뀐 파일은 추적 경로에 없다 — 미추적 실재 파일만 크기별로 색인한다.
-    const tracked = new Set(records.map((r) => r.obsidianPath));
-    const untrackedBySize = new Map<number, string[]>();
-    for (const f of stats) {
-      if (tracked.has(f.path)) continue;
-      const bucket = untrackedBySize.get(f.size);
-      if (bucket) bucket.push(f.path);
-      else untrackedBySize.set(f.size, [f.path]);
-    }
-
-    const hashCache = new Map<string, string | null>();
-    const hashOf = async (path: string): Promise<string | null> => {
-      const cached = hashCache.get(path);
-      if (cached !== undefined) return cached;
-      let hash: string | null = null;
-      try {
-        hash = computeHash(await this.vaultFs.readFile(path));
-      } catch {
-        // 못 읽는 파일은 이름변경 판정에서 제외 — 확신 없이 복원을 취소하지 않는다.
-      }
-      hashCache.set(path, hash);
-      return hash;
-    };
-
-    const missing: SyncRecord[] = [];
-    for (const record of candidates) {
-      // localFileSize 는 크기 버킷으로 후보를 좁히는 최적화일 뿐이다. 구버전이 남긴
-      // 레코드처럼 값이 없으면 버킷을 못 고르는데, 여기서 빈 배열로 끝내면 이름변경을
-      // 놓쳐 원본 이름 사본이 되살아난다. 미추적 마크다운은 정상 볼트에서 거의 0건이라
-      // (실측: 추적 1189 / 볼트 md 1189) 전수 대조로 폴백해도 비용이 없다.
-      const sameSize =
-        record.localFileSize !== null
-          ? (untrackedBySize.get(record.localFileSize) ?? [])
-          : [...untrackedBySize.values()].flat();
-      let renamed = false;
-      for (const path of sameSize) {
-        if ((await hashOf(path)) === record.contentHash) {
-          renamed = true;
-          break;
-        }
-      }
-      if (!renamed) missing.push(record);
-    }
-    return missing;
-  }
-
   private async pullCreate(pageId: string): Promise<string> {
     const page = await this.notionClient.getPage(pageId);
     const title = this.notionClient.extractTitle(page);
@@ -3051,12 +2536,12 @@ export class SyncOrchestrator {
    * 충돌(' (1).md')로 쪼개졌다.
    *
    * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
-   *      _childParentIds 집합으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
+   *      집합({@link RemoteDetector.hasChildPages})으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
    * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
    *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
    */
   private async pageHasChildContainers(pageId: string): Promise<boolean> {
-    if (this._childParentIds.has(normalizeNotionId(pageId))) return true;
+    if (this.detector.hasChildPages(pageId)) return true;
     try {
       const deep = await this.notionClient.fetchAllChildrenDeep(pageId);
       return deep.some((b) => b.type === "child_page" || b.type === "child_database");
