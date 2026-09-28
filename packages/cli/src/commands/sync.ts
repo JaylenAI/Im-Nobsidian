@@ -116,8 +116,8 @@ export const syncCommand = new Command("sync")
 
       if (pullFailed + pushFailed > 0) {
         console.log("");
-        for (const f of pullResult.failed) failedItem(`▼ ${f.path}`, f.error);
-        for (const f of pushResult.failed) failedItem(`▲ ${f.path}`, f.error);
+        for (const f of pullResult.failed) failedItem(f.path, f.error, "▼");
+        for (const f of pushResult.failed) failedItem(f.path, f.error, "▲");
         process.exitCode = 1;
       }
     } finally {

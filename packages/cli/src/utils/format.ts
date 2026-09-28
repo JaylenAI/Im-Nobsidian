@@ -75,6 +75,11 @@ export function dimText(text: string): string {
   return chalk.dim(text);
 }
 
-export function failedItem(path: string, error: string): void {
-  console.log(`  ${icons.fail} ${path}: ${chalk.red(error)}`);
+/**
+ * 실패 한 줄. 볼트 최상위의 실패(DB 자동 발견 등)는 빈 경로로 오므로 `/` 로 보인다. `direction` 은
+ * sync 가 받기(▼) · 올리기(▲)를 가를 때 쓴다.
+ */
+export function failedItem(path: string, error: string, direction?: string): void {
+  const where = `${direction ? `${direction} ` : ""}${path || "/"}`;
+  console.log(`  ${icons.fail} ${where}: ${chalk.red(error)}`);
 }
