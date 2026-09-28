@@ -14,10 +14,11 @@ import type {
   RemoteChange,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
+import { STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
-import { SqlJsStateDB } from "./state/sqljs-state-db.js";
+import { SavedStateDbError, SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
+import { writeFileAtomically } from "./state/atomic-write.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
@@ -95,6 +96,14 @@ const DEFAULT_SETTINGS: ImNobsidianSettings = {
   conflictStrategy: "manual",
   attachments: "attachments",
 };
+
+/**
+ * 저장된 상태 DB 파일이 깨졌을 때 할 일 — 초기화 실패 이유 뒤에 붙인다. 폴더 이름이 점으로 시작해 Obsidian 의
+ * 파일 탐색기에는 보이지 않으므로 볼트 폴더에서 찾으라고 적는다.
+ */
+const DAMAGED_STATE_DB_GUIDANCE =
+  `볼트 폴더의 ${STATE_DB_PATH} 를 사본으로 바꾸거나 다른 곳으로 옮긴 뒤 동기화 사이드바에서 새로고침을 누르세요. ` +
+  "옮기면 처음부터 시작합니다 — 노트와 Notion 페이지의 짝을 잃어 다음 push 가 페이지를 새로 만듭니다.";
 
 export default class ImNobsidianPlugin extends Plugin {
   settings: ImNobsidianSettings = DEFAULT_SETTINGS;
@@ -280,15 +289,11 @@ export default class ImNobsidianPlugin extends Plugin {
       const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
+      const stateDbFile = nodePath.join(basePath, STATE_DB_PATH);
       this.stateDb = await SqlJsStateDB.open(
         await this.readStateDbFile(),
-        async (data: Uint8Array) => {
-          const adapter = this.app.vault.adapter;
-          if (!(await adapter.exists(INTERNAL_DIR))) {
-            await adapter.mkdir(INTERNAL_DIR);
-          }
-          await adapter.writeBinary(STATE_DB_PATH, data.buffer as ArrayBuffer);
-        },
+        // 한 번에 갈아 끼운다 — 쓰는 도중에 Obsidian 이 죽어도 파일이 잘리지 않는다.
+        (data: Uint8Array) => writeFileAtomically(stateDbFile, data),
         wasmBinary,
       );
 
@@ -336,7 +341,9 @@ export default class ImNobsidianPlugin extends Plugin {
       await this.refreshSidebarStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      this.initFailure = `초기화 실패: ${message}`;
+      // 파일이 깨졌을 때만 치우는 법을 알린다 — 엔진을 띄우지 못한 것 같은 다른 실패에 붙이면 멀쩡한 기록을 치우게 된다.
+      const guidance = error instanceof SavedStateDbError ? ` — ${DAMAGED_STATE_DB_GUIDANCE}` : "";
+      this.initFailure = `초기화 실패: ${message}${guidance}`;
       new Notice(`Im-Nobsidian ${this.initFailure}`);
       this.updateStatusBar("error");
       this.updateSidebar({ syncState: "error", errorMessage: this.initFailure });

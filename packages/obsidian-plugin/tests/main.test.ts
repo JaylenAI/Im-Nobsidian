@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, onTestFinished } from "vitest";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Notice } from "obsidian";
@@ -28,7 +28,8 @@ vi.mock("../src/discard-confirm-modal.js", () => ({
 }));
 vi.mock("../src/views/ViewContainer.svelte", () => ({ default: {} }));
 
-vi.mock("../src/state/sqljs-state-db.js", () => ({
+vi.mock("../src/state/sqljs-state-db.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/state/sqljs-state-db.js")>()),
   SqlJsStateDB: {
     open: vi.fn().mockResolvedValue({
       close: vi.fn(),
@@ -83,8 +84,8 @@ vi.mock("@im-nobsidian/core", () => ({
   EntryEditor: class {
     constructor() {}
   },
-  /** 상태 DB 파일 자리 — 시험은 읽으려 했는지만 본다. */
-  STATE_DB_PATH: "<state-db>",
+  /** 상태 DB 파일 자리 — 볼트 폴더 안의 상대 경로. 시험은 읽기 · 쓰기가 이 자리를 쓰는지 본다. */
+  STATE_DB_PATH: ".state/sync.db",
   DEFAULT_CONFIG: {
     notion: { token: "", rootPageId: "", parentMode: "page", databases: [] },
     sync: { direction: "both", conflictStrategy: "manual", deleteSync: true },
@@ -93,7 +94,7 @@ vi.mock("@im-nobsidian/core", () => ({
 }));
 
 import ImNobsidianPlugin from "../src/main.js";
-import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { SavedStateDbError, SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { WASM_FILE } from "../src/constants.js";
 
 /** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
@@ -132,7 +133,7 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
       getLeavesOfType: () => [{ view: { updateState: (patch: unknown) => patches.push(patch) } }],
     },
   };
-  return { plugin, internals, patches, reads: () => reads };
+  return { plugin, internals, patches, vaultPath, reads: () => reads };
 }
 
 /** 상태 DB 파일을 쥔 다른 프로그램(백신 · 클라우드 동기화)이 있을 때 읽기가 내는 오류. */
@@ -141,7 +142,7 @@ function busy(): Promise<ArrayBuffer> {
 }
 
 const READ_FAILURE =
-  "초기화 실패: 상태 DB 를 읽지 못함 (<state-db>): EBUSY: resource busy or locked";
+  "초기화 실패: 상태 DB 를 읽지 못함 (.state/sync.db): EBUSY: resource busy or locked";
 
 describe("ImNobsidianPlugin", () => {
   it("인스턴스 생성", () => {
@@ -330,6 +331,39 @@ describe("ImNobsidianPlugin", () => {
     expect(vi.mocked(SqlJsStateDB.open).mock.calls.map((call) => call[0])).toEqual([saved]);
     expect(internals.syncController).not.toBeNull();
     expect(internals.initFailure).toBeNull();
+  });
+
+  it("상태 DB 는 볼트 폴더의 제자리에 한 번에 갈아 끼워 쓴다 — 옆 임시 파일을 남기지 않는다", async () => {
+    const { plugin, vaultPath } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    vi.mocked(SqlJsStateDB.open).mockClear();
+    await plugin.initOrchestrator();
+    const write = vi.mocked(SqlJsStateDB.open).mock.calls[0]![1]!;
+
+    await write(new Uint8Array([1, 2, 3]));
+
+    expect([...readFileSync(join(vaultPath, ".state", "sync.db"))]).toEqual([1, 2, 3]);
+    expect(readdirSync(join(vaultPath, ".state"))).toEqual(["sync.db"]);
+  });
+
+  it("저장된 상태 DB 파일이 깨졌으면 치우는 법을 알린다 — 다른 실패에는 붙이지 않는다", async () => {
+    const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    const open = vi.mocked(SqlJsStateDB.open);
+    open.mockRejectedValueOnce(
+      new SavedStateDbError("저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트)"),
+    );
+    await plugin.initOrchestrator();
+    const damaged = internals.initFailure;
+
+    // 엔진을 띄우지 못한 것 같은 실패에 치우라고 하면 멀쩡한 기록을 치운다
+    open.mockRejectedValueOnce(new Error("wasm 을 띄우지 못함"));
+    await plugin.initOrchestrator();
+
+    expect(damaged).toBe(
+      "초기화 실패: 저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .state/sync.db 를 " +
+        "사본으로 바꾸거나 다른 곳으로 옮긴 뒤 동기화 사이드바에서 새로고침을 누르세요. 옮기면 처음부터 " +
+        "시작합니다 — 노트와 Notion 페이지의 짝을 잃어 다음 push 가 페이지를 새로 만듭니다.",
+    );
+    expect(internals.initFailure).toBe("초기화 실패: wasm 을 띄우지 못함");
   });
 
   it("동기화할 수 없는 까닭을 가린다 — 설정이 비었으면 설정, 초기화 중이면 준비 중", async () => {
