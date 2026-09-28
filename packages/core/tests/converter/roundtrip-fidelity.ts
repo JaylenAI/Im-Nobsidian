@@ -88,9 +88,11 @@ export function roundtrip(input: string, options?: PipelineOptions): RoundtripRe
   const push = pipeline.convertToNotion(input, PUSH_CTX);
   // 프로덕션 배선 재현: push 가 수집한 preserve marker 는 sync.db 에 저장됐다가
   // pull 변환의 초기 metadata 로 주입된다(orchestrator storePreserveMarkers→convertToMarkdown).
+  // 받기 직전의 로컬 노트(= 올린 노트)도 함께 넘어간다(readLocalNote → localContent, S-20).
   const output = pipeline.convertToMarkdown(push.content, PULL_CTX, {
     properties: push.properties,
     preserveMarkers: push.preserveMarkers.length > 0 ? push.preserveMarkers : undefined,
+    localContent: input,
   });
 
   const inParsed = matter(input);

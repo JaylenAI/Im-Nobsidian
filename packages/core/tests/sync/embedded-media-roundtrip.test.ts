@@ -379,7 +379,8 @@ describe("임베드 미디어 왕복(S-05 · S-19)", () => {
     const body = notion.pages.get(codePageId)!.body;
     expect(uploaded.slice(before)).toEqual([]);
     expect(body).toContain("형식은 `![[assets/a.png]]` 처럼 쓴다");
-    expect(body).toContain("```md\n![[docs/계약서.pdf]]\n```");
+    // 펜스 언어는 Notion 이름으로 올라가고, 받을 때 로컬 노트의 `md` 로 돌아온다(S-20).
+    expect(body).toContain("```markdown\n![[docs/계약서.pdf]]\n```");
 
     notion.edit(codePageId, (page) => {
       page.body = page.body.replace("끝 문단", "끝 문단 — Notion 에서 고침");

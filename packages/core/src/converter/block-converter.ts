@@ -6,6 +6,8 @@ import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
 import { richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
 import type { RichTextItem } from "./rich-text-converter.js";
+import { codeFingerprint, scanCodeFences } from "./code-fence.js";
+import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js";
 import {
   MARKER_BRAND,
   compactMarker,
@@ -436,7 +438,9 @@ export class BlockConverter {
     const preprocessed = this.preProcessMarkdown(markdown);
     const blocks = markdownToBlocks(preprocessed) as Array<Record<string, unknown>>;
     const processed = this.postProcessBlocks(blocks);
-    return normalizeBlocksForNotion(processed as Array<Record<string, unknown>>);
+    const normalized = normalizeBlocksForNotion(processed as Array<Record<string, unknown>>);
+    applyFenceLanguages(normalized, markdown);
+    return normalized;
   }
 
   private toggleContents: Map<number, string> = new Map();
@@ -886,6 +890,43 @@ export class BlockConverter {
 
 const NOTION_MAX_TABLE_ROWS = 100;
 const NOTION_MAX_LIST_DEPTH = 3;
+
+/**
+ * 코드 블록 언어를 펜스 언어로 바로잡는다(S-20) — markdown 으로 보낼 때와 같은 이름이 되게.
+ *
+ * martian 은 정보 문자열의 첫 낱말만 제 표로 옮긴다. 그래서 `plain text` · `llvm ir` 같은 여러 낱말
+ * 이름을 잃고, 표에 없는 `toml` 은 plain text 로, `text` 는 vb.net 으로 보낸다. 같은 코드(공백 무시)의
+ * 펜스를 찾아 그 언어로 덮는다. 줄을 고치지 않고 언어만 정하므로 닫히지 않은 펜스(문서 끝까지 코드)도
+ * 본다. 블록은 이 변환이 방금 만든 것이라 제자리에서 고친다.
+ */
+function applyFenceLanguages(
+  blocks: ReadonlyArray<Record<string, unknown>>,
+  markdown: string,
+): void {
+  const byCode = new Map<string, NotionCodeLanguage[]>();
+  for (const fence of scanCodeFences(markdown)) {
+    const print = codeFingerprint(fence);
+    byCode.set(print, [...(byCode.get(print) ?? []), notionCodeLanguage(fence.info)]);
+  }
+  if (byCode.size === 0) return;
+
+  const visit = (block: Record<string, unknown>): void => {
+    const body = block[block.type as string] as
+      | {
+          children?: Array<Record<string, unknown>>;
+          language?: string;
+          rich_text?: Array<{ text?: { content?: string }; plain_text?: string }>;
+        }
+      | undefined;
+    if (block.type === "code" && body) {
+      const text = (body.rich_text ?? []).map((r) => r.text?.content ?? r.plain_text ?? "");
+      const language = byCode.get(text.join("").replace(/\s+/g, ""))?.shift();
+      if (language) body.language = language;
+    }
+    for (const child of body?.children ?? []) visit(child);
+  };
+  blocks.forEach(visit);
+}
 
 function normalizeBlocksForNotion(
   blocks: Array<Record<string, unknown>>,
