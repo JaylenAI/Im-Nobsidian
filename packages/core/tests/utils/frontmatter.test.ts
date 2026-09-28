@@ -37,6 +37,56 @@ describe("stringifyFrontmatter", () => {
     const out = stringifyFrontmatter("본문", { at: "2026-07-14T09:00:00" });
     expect(out).toContain("'2026-07-14T09:00:00'");
   });
+
+  describe("BMP 밖 문자(이모지)를 이스케이프하지 않고 그대로 적는다(F-i)", () => {
+    it("값 · 키 · 목록 · 중첩 객체의 이모지를 Obsidian 처럼 적는다", () => {
+      const out = stringifyFrontmatter("본문", {
+        icon: "🚀",
+        "실천 ✅": "매일 🏃 달리기",
+        "🧘 명상": "매일",
+        tags: ["🌱", "a🌱b"],
+        nested: { mood: "😀" },
+      });
+      expect(out).not.toMatch(/\\U|\\u[dD]/);
+      expect(out).toContain("icon: 🚀\n");
+      expect(out).toContain("실천 ✅: 매일 🏃 달리기\n");
+      expect(out).toContain("🧘 명상: 매일\n");
+      expect(out).toContain("  - 🌱\n");
+      expect(out).toContain("  mood: 😀\n");
+    });
+
+    it("따옴표가 필요한 값은 이모지가 있어도 따옴표를 둔다 — 읽으면 같은 값이다", () => {
+      const data = {
+        colon: "🚀: 발사",
+        hash: "# 🚀",
+        lead: " 🚀",
+        number: "12",
+        mixed: "🚀\n둘째 줄",
+      };
+      const out = stringifyFrontmatter("본문", data);
+      expect(out).not.toMatch(/\\U|\\u[dD]/);
+      expect(parseFrontmatter(out).data).toEqual(data);
+    });
+
+    it("사용 영역 문자가 이미 있어도 섞지 않는다 · 본문은 건드리지 않는다", () => {
+      const pua = String.fromCharCode(0xe000);
+      const body = `본문 ${pua} 🚀 \\U0001F680`;
+      const data = { a: `${pua}🚀`, b: "🚀🎉", c: String.fromCharCode(0xe001) };
+      const out = stringifyFrontmatter(body, data);
+      expect(parseFrontmatter(out).data).toEqual(data);
+      expect(out.endsWith(`${body}\n`)).toBe(true);
+
+      // 바꿀 문자로 고른 사용 영역 문자가 본문에만 있다 — 본문의 것은 되돌리지 않는다
+      const onlyInBody = stringifyFrontmatter(`본문 ${pua}`, { icon: "🚀" });
+      expect(onlyInBody).toBe(`---\nicon: 🚀\n---\n본문 ${pua}\n`);
+    });
+
+    it("적은 글을 다시 읽어 다시 적으면 같은 글이다", () => {
+      const once = stringifyFrontmatter("본문", { icon: "🚀", 설명문구: "✨ 새로 🚀" });
+      const { data, body } = parseFrontmatter(once);
+      expect(stringifyFrontmatter(body, data)).toBe(once);
+    });
+  });
 });
 
 describe("plainFrontmatterValue — YAML 이 만든 Date 를 pull 이 적는 평문으로", () => {
