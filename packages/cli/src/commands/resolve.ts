@@ -125,7 +125,10 @@ export const resolveCommand = new Command("resolve")
         for (const [index, result] of results.entries()) {
           if (!result.success) failed++;
           const icon = result.success ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
-          console.log(`  ${icon} ${result.path} → ${choiceName(pending[index]!, result.choice)}`);
+          const reason = result.error ? ` — ${result.error}` : "";
+          console.log(
+            `  ${icon} ${result.path} → ${choiceName(pending[index]!, result.choice)}${reason}`,
+          );
         }
         report(results.length - failed, failed);
         return;

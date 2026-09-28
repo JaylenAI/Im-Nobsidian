@@ -108,6 +108,21 @@ describe("resolve command", () => {
     spy.mockRestore();
   });
 
+  it("일괄 해결에서 못 푼 것은 이유와 함께 보이고 나머지는 푼 것으로 센다 · exitCode 1", async () => {
+    mockListConflicts.mockResolvedValueOnce([conflict("a.md"), conflict("b.md")]);
+    mockResolveAll.mockResolvedValueOnce([
+      { path: "a.md", choice: "local", success: false, error: "Notion 502 bad gateway" },
+      { path: "b.md", choice: "local", success: true },
+    ]);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runResolve("--strategy", "local-first", "--yes");
+    expect(spy).toHaveBeenCalledWith(expect.stringMatching(/a\.md → .* — Notion 502 bad gateway$/));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("충돌 1건 해결 · 1건 미해결"));
+    expect(process.exitCode).toBe(1);
+    spy.mockRestore();
+    process.exitCode = undefined;
+  });
+
   it("충돌 발견 시 건수 출력", async () => {
     mockListConflicts.mockResolvedValueOnce([conflict("a.md"), conflict("b.md")]);
     mockResolveAll.mockResolvedValueOnce([

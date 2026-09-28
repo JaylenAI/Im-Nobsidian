@@ -146,6 +146,40 @@ describe("N-06 충돌 해결은 Notion 에 닿아야 해결이다", () => {
     expect(notion.pages.get(pageId)!.body).toContain("첫 줄 로컬");
   });
 
+  it("일괄 해결은 하나를 올리지 못해도 나머지를 푼다 — 못 푼 것은 이유와 함께 충돌로 남는다", async () => {
+    // 두 번째 충돌을 만든다.
+    at("10:03:10");
+    vault.write("Other.md", BASE);
+    await orchestrator.push();
+    at("10:03:30");
+    await orchestrator.pull();
+    const otherId = db.getByPath("Other.md")!.notionPageId!;
+    at("10:04:00");
+    vault.write("Other.md", LOCAL);
+    notion.edit(otherId, (page) => {
+      page.body = REMOTE;
+    });
+    at("10:04:30");
+    await orchestrator.pull();
+    const conflicts = await orchestrator.listConflicts();
+    const paths = conflicts.map((c) => c.syncRecord.obsidianPath);
+    expect([...paths].sort()).toEqual(["Note.md", "Other.md"]);
+
+    notion.client.replacePageMarkdown.mockRejectedValueOnce(badGateway());
+    const results = await orchestrator.resolveAllConflicts(conflicts, "local-first");
+
+    expect(results.map((r) => [r.path, r.success])).toEqual([
+      [paths[0], false],
+      [paths[1], true],
+    ]);
+    expect(results[0]!.error).toContain("bad gateway");
+    expect(db.getByPath(paths[0]!)!.status).toBe("conflict");
+    expect(db.getByPath(paths[1]!)!.status).toBe("synced");
+    const solvedId = db.getByPath(paths[1]!)!.notionPageId!;
+    expect(notion.pages.get(solvedId)!.body).toContain("첫 줄 로컬");
+    expect(orchestrator.runningOperation).toBeNull();
+  });
+
   it("병합 결과를 올리지 못하면 충돌로 남고, 병합한 파일은 다음 sync 가 덮지 않는다", async () => {
     notion.client.replacePageMarkdown.mockRejectedValueOnce(badGateway());
 

@@ -54,6 +54,8 @@ export interface ResolutionResult {
   readonly choice: ResolutionChoice;
   readonly success: boolean;
   readonly mergeHadConflicts?: boolean;
+  /** 풀지 못한 이유 — 일괄 해결(`resolveAllConflicts`)이 실패를 던지지 않고 싣는다. */
+  readonly error?: string;
 }
 
 /**
