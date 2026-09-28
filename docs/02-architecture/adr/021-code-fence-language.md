@@ -30,8 +30,8 @@ Obsidian 코드 펜스의 정보 문자열은 자유다 — `ts` · `py` 같은 
 
 1. **push 는 Notion 이름만 보낸다**(`CodeLanguageGuard`, 전처리 46). 별칭은 Notion 이 옮기는 것과
    같게 옮기고, Notion 이 놓치는 흔한 별칭(`zsh` → shell · `golang` → go …)도 옮긴다. 모르는 것 · 빈
-   정보 · 펜스로 보낼 수 없는 두 이름은 `plain text` 로 보낸다. 코드에 ``줄이 없으면 `~~~` · 긴
-펜스를`` 로 바꾼다. 닫히지 않은 펜스는 어디까지가 코드인지 확신할 수 없어 건드리지 않는다.
+   정보 · 펜스로 보낼 수 없는 두 이름은 `plain text` 로 보낸다. 코드에 백틱 세 개 줄이 없으면 `~~~` ·
+   긴 펜스를 백틱 세 개 펜스로 바꾼다. 닫히지 않은 펜스는 어디까지가 코드인지 확신할 수 없어 건드리지 않는다.
 2. **언어 목록의 주인은 SDK 타입이다**(`LanguageRequest`). 펜스로 보낼 수 있는지를
    `Record<NotionCodeLanguage, boolean>` 로 적어, SDK 에 언어가 늘거나 줄면 타입 오류가 난다.
 3. **pull 은 받기 직전의 로컬 노트에서 원래 표기를 찾는다**(`CodeLanguageRestorer`, 후처리 36 ·
