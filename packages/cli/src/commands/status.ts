@@ -8,7 +8,15 @@ import {
   isRemoteDeletion,
 } from "@im-nobsidian/core";
 import chalk from "chalk";
-import { header, separator, icons, dimText } from "../utils/format.js";
+import {
+  header,
+  separator,
+  icons,
+  dimText,
+  localDateTime,
+  lastFullScanText,
+  remoteDeletionHint,
+} from "../utils/format.js";
 
 export const statusCommand = new Command("status")
   .description("동기화 상태 확인 (--full: 원격 변경 포함)")
@@ -34,23 +42,12 @@ export const statusCommand = new Command("status")
       console.log(`  ${dimText("Root page:")}  ${rootId.slice(0, 8)}...`);
       console.log(`  ${dimText("Direction:")}  ${direction}`);
       if (status.lastSyncAt) {
-        const date = new Date(status.lastSyncAt);
-        const iso =
-          date.getFullYear() +
-          "-" +
-          String(date.getMonth() + 1).padStart(2, "0") +
-          "-" +
-          String(date.getDate()).padStart(2, "0") +
-          " " +
-          String(date.getHours()).padStart(2, "0") +
-          ":" +
-          String(date.getMinutes()).padStart(2, "0") +
-          ":" +
-          String(date.getSeconds()).padStart(2, "0");
-        console.log(`  ${dimText("Last sync:")}  ${iso}`);
+        console.log(`  ${dimText("Last sync:")}  ${localDateTime(status.lastSyncAt)}`);
       } else {
         console.log(`  ${dimText("Last sync:")}  ${chalk.yellow("never")}`);
       }
+      // Notion 에서 지운 노트는 전체 대조 때 볼트에 반영된다 — 그때를 함께 보인다.
+      console.log(`  ${dimText("Full scan:")}  ${lastFullScanText(status.lastFullScanAt)}`);
 
       // Tracked files summary
       const allRecords = stateDb.getAll();
@@ -233,6 +230,9 @@ export const statusCommand = new Command("status")
         console.log(
           `\n  ${dimText("Run")} ${chalk.cyan("nobsi status --full")} ${dimText("to check Notion remote changes")}`,
         );
+      } else if (status.remoteScan?.deletionsDeferred) {
+        // 바뀐 것만 찾았다 — 위 원격 변경에는 Notion 에서 지운 것이 아직 없다.
+        console.log(`\n  ${remoteDeletionHint(status.remoteScan)}`);
       }
     } finally {
       stateDb.close();

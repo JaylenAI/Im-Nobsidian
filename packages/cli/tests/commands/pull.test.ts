@@ -140,6 +140,66 @@ describe("pull command", () => {
     process.exitCode = undefined;
   });
 
+  it("바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 적는다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 1,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: ["a.md"],
+      failed: [],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+      remoteScan: {
+        kind: "incremental",
+        lastFullAt: "2026-09-28T01:05:00.000Z",
+        nextFullAt: "2026-09-28T02:05:00.000Z",
+        deletionsDeferred: true,
+        skippedDatabases: 4,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith("  Changes-only scan · 4 unchanged databases skipped");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^ {2}Deletions in Notion apply at the next full scan \(.+\) — or run nobsi pull --force$/,
+      ),
+    );
+    spy.mockRestore();
+  });
+
+  it("전체 대조는 이유만 한 줄 — 원격 삭제 안내는 없다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 1,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+      remoteScan: {
+        kind: "full",
+        reason: "due",
+        lastFullAt: "2026-09-28T02:05:00.000Z",
+        nextFullAt: null,
+        deletionsDeferred: false,
+        skippedDatabases: 0,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+    expect(lines).toContain("  Full scan (scheduled)");
+    expect(lines.join("\n")).not.toContain("Deletions in Notion");
+  });
+
   it("이미지/파일/링크 카운트 출력", async () => {
     mockPull.mockResolvedValueOnce({
       created: 1,

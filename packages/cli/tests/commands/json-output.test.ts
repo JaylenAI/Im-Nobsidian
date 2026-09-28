@@ -90,6 +90,23 @@ describe("--json 출력 계약", () => {
     expect(mockPull).toHaveBeenCalledWith(expect.objectContaining({ onProgress: undefined }));
   });
 
+  it("pull: 원격을 얼마나 훑었는지 싣는다 — 없으면 null", async () => {
+    const remoteScan = {
+      kind: "incremental",
+      lastFullAt: "2026-09-28T01:05:00.000Z",
+      nextFullAt: "2026-09-28T02:05:00.000Z",
+      deletionsDeferred: true,
+      skippedDatabases: 2,
+    };
+    mockPull.mockResolvedValueOnce({ ...pullResult, remoteScan });
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ remoteScan });
+
+    write.mockClear();
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ remoteScan: null });
+  });
+
   it("push --dry-run: churn 은 생성·수정·삭제·옮김의 합", async () => {
     mockPush.mockResolvedValueOnce({ ...pushResult, created: 1, deleted: 1, moved: 2 });
     await run(pushCommand, "push", "--dry-run", "--json");

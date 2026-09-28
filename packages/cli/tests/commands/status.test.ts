@@ -228,6 +228,90 @@ describe("status command", () => {
     expect(lines.join("\n")).not.toContain("11111111");
   });
 
+  it("--full 이 바뀐 것만 찾았으면 원격 삭제가 반영되는 때를 적는다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+      lastFullScanAt: null,
+      remoteScan: {
+        kind: "incremental",
+        lastFullAt: null,
+        nextFullAt: null,
+        deletionsDeferred: true,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus("--full");
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContain("  Full scan:  never");
+    // 바뀐 것만 찾았다 — «Everything up to date» 만 남기면 Notion 에서 지운 노트가 없는 것으로 읽힌다.
+    expect(lines).toContain(
+      "\n  Deletions in Notion apply at the next pull (full scan due) — or run nobsi pull --force",
+    );
+  });
+
+  it.each([
+    [
+      "원격을 모두 대조했으면",
+      {
+        kind: "full",
+        reason: "every-pull",
+        lastFullAt: null,
+        nextFullAt: null,
+        deletionsDeferred: false,
+      },
+    ],
+    [
+      "원격 삭제를 반영하지 않는 설정이면(deleteSync 꺼짐)",
+      { kind: "incremental", lastFullAt: null, nextFullAt: null, deletionsDeferred: false },
+    ],
+  ])("%s 원격 삭제 안내를 붙이지 않는다", async (_label, remoteScan) => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+      lastFullScanAt: null,
+      remoteScan,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus("--full");
+    const text = spy.mock.calls.map(([line]) => String(line)).join("\n");
+    spy.mockRestore();
+
+    expect(text).not.toContain("Deletions in Notion");
+  });
+
+  it("로컬만 본 상태 확인도 마지막 전체 대조 시각을 보인다 — 원격 삭제 안내는 없다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+      lastFullScanAt: new Date(2026, 8, 28, 10, 5, 0).toISOString(),
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus();
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContain("  Full scan:  2026-09-28 10:05:00");
+    expect(lines.join("\n")).not.toContain("Deletions in Notion");
+  });
+
   it("--full 은 Notion 에서 지운 노트의 충돌을 따로 적는다", async () => {
     mockStatus.mockResolvedValueOnce({
       localChanges: [],
