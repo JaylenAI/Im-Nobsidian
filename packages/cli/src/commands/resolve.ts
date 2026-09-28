@@ -10,6 +10,7 @@ import {
   isRemoteDeletion,
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { printUnifiedDiff } from "../utils/diff-output.js";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
@@ -185,19 +186,7 @@ async function resolveInteractive(
       "\x1b[33mNotion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.\x1b[0m",
     );
   } else {
-    const diff = orchestrator.generateConflictDiff(conflict);
-    const diffLines = diff.split("\n");
-    for (const line of diffLines) {
-      if (line.startsWith("- ")) {
-        console.log(`\x1b[31m${line}\x1b[0m`);
-      } else if (line.startsWith("+ ")) {
-        console.log(`\x1b[32m${line}\x1b[0m`);
-      } else if (line.startsWith("---") || line.startsWith("+++")) {
-        console.log(`\x1b[1m${line}\x1b[0m`);
-      } else {
-        console.log(line);
-      }
-    }
+    printUnifiedDiff(orchestrator.generateConflictDiff(conflict).split("\n"), true);
   }
 
   const choice = await select<ResolutionChoice>({
