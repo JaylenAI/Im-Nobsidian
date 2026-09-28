@@ -17,6 +17,8 @@ import type {
   PullResult,
   RenameKind,
   ResolutionChoice,
+  StatusResult,
+  SyncRecord,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
 
@@ -31,7 +33,12 @@ export interface SyncDashboardState {
   /** 옮긴 폴더 — 그 안의 노트는 `localChanges` 에 옮김으로 따로 있다. */
   folderMoves: FolderMoveChange[];
   remoteChanges: RemoteChange[];
-  conflicts: Conflict[];
+  /**
+   * 충돌로 표시된 노트 — 상태 DB 의 충돌 기록이다. 원격을 읽지 않아도 알므로 로컬 새로고침도 싣는다
+   * (CLI `status` 와 같다). 예전에는 원격까지 본 `Conflict` 를 실어, 로컬 새로고침이 늘 빈 목록으로
+   * 덮었다 — 패널이 「충돌 0건」 을 보이고 충돌 해결 단추가 사라졌다.
+   */
+  conflictRecords: SyncRecord[];
   syncState: SyncPhase;
   operationType: SyncOperation | null;
   progress: { current: number; total: number; currentPath: string } | null;
@@ -40,6 +47,12 @@ export interface SyncDashboardState {
 }
 
 export type SyncStatePatch = Partial<SyncDashboardState>;
+
+/** 패널이 지금 보이는 단계 · 진행 · 오류 — 도는 작업이나 끝난 작업이 정한다. */
+type ShownPhase = Pick<
+  SyncDashboardState,
+  "syncState" | "operationType" | "progress" | "errorMessage"
+>;
 
 /**
  * 컨트롤러가 바깥(플러그인 셸)으로 내보내는 부수효과 훅.
@@ -92,6 +105,13 @@ export class SyncController {
   private closed = false;
   /** 마지막 원격 확인이 본 원격 변경 — 받은 것을 목록에서 빼려고 둔다({@link dropPulled}). */
   private remoteChanges: RemoteChange[] = [];
+  /** 패널에 보낸 단계 — 목록만 다시 읽는 새로고침은 이것을 덮지 않고 다시 싣는다({@link refreshLocal}). */
+  private shown: ShownPhase = {
+    syncState: "ready",
+    operationType: null,
+    progress: null,
+    errorMessage: null,
+  };
 
   constructor(
     private readonly orchestrator: SyncOrchestrator,
@@ -106,11 +126,18 @@ export class SyncController {
   /** 진행률 콜백 — core 의 진행 신호를 사이드바 상태 패치로 변환한다. */
   private progressCallback(): ProgressCallback {
     return (current, total, item) => {
-      this.hooks.onState?.({
+      this.emitState({
         syncState: "syncing",
         progress: { current, total, currentPath: item.path },
       });
     };
+  }
+
+  /** 패널에 상태를 보낸다. 단계 · 진행 · 오류는 {@link shown} 에도 적는다. */
+  private emitState(patch: SyncStatePatch): void {
+    const { syncState, operationType, progress, errorMessage } = { ...this.shown, ...patch };
+    this.shown = { syncState, operationType, progress, errorMessage };
+    this.hooks.onState?.(patch);
   }
 
   /**
@@ -150,7 +177,7 @@ export class SyncController {
   /** 실행 직전 공통 상태 진입(시작 표시). */
   private begin(operation: SyncOperation, label: string): void {
     this.hooks.onStatusBar?.("syncing");
-    this.hooks.onState?.({
+    this.emitState({
       syncState: "syncing",
       operationType: operation,
       progress: null,
@@ -165,7 +192,7 @@ export class SyncController {
     const msg = error instanceof Error ? error.message : String(error);
     this.hooks.onNotice?.(`Im-Nobsidian ${label} 실패: ${msg}`);
     this.hooks.onStatusBar?.("error");
-    this.hooks.onState?.({
+    this.emitState({
       syncState: "error",
       operationType: null,
       progress: null,
@@ -177,7 +204,7 @@ export class SyncController {
   private cancelled(): void {
     this.hooks.onNotice?.("Im-Nobsidian: 동기화 취소됨");
     this.hooks.onStatusBar?.("ready");
-    this.hooks.onState?.({
+    this.emitState({
       syncState: "ready",
       operationType: null,
       progress: null,
@@ -210,10 +237,16 @@ export class SyncController {
             `Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
           );
           this.hooks.onStatusBar?.(phase);
-          this.hooks.onState?.({ completionSummary: summary, operationType: null });
+          // 패널도 상태바와 같은 단계로 둔다 — 아래 새로고침이 실패해도 「동기화 중」 에 남지 않는다.
+          this.emitState({
+            completionSummary: summary,
+            syncState: phase,
+            operationType: null,
+            progress: null,
+          });
           completed?.(result);
         }
-        await this.refreshLocal();
+        await this.refreshLocal(true);
       } catch (error) {
         this.fail(label, error);
       }
@@ -279,7 +312,7 @@ export class SyncController {
     const kept = this.remoteChanges.filter((change) => !pulled(change) || pending(change));
     if (kept.length === this.remoteChanges.length) return;
     this.remoteChanges = kept;
-    this.hooks.onState?.({ remoteChanges: kept });
+    this.emitState({ remoteChanges: kept });
   }
 
   /**
@@ -300,7 +333,7 @@ export class SyncController {
       try {
         await this.orchestrator.discardLocalChange(path);
         this.hooks.onNotice?.(`Im-Nobsidian: 되돌림 — ${path}`);
-        await this.refreshLocal();
+        await this.refreshLocal(true);
       } catch (error) {
         this.fail("되돌리기", error);
       }
@@ -321,9 +354,10 @@ export class SyncController {
   }
 
   /**
-   * Vault 이벤트 기반 자동 동기화. UI 트리거(push/pull/sync)와 달리 사이드바/알림은 건드리지
-   * 않고 상태바만 갱신한다. 도는 작업이 있으면 끝난 뒤 한 번 돈다 — 그 사이의 편집을 버리지
-   * 않는다. 충돌을 푸는 동안 병합 결과를 쓴 파일이 부른 것도 푼 뒤에 돈다.
+   * Vault 이벤트 기반 자동 동기화. UI 트리거(push/pull/sync)와 달리 알림 · 진행 표시 없이 상태바만
+   * 「동기화 중」 으로 둔다. 끝나면 패널의 목록을 새로고친다 — 예전에는 새로고치지 않아, 올린 노트가
+   * 다음 새로고침까지 변경으로 남았다. 도는 작업이 있으면 끝난 뒤 한 번 돈다 — 그 사이의 편집을
+   * 버리지 않는다. 충돌을 푸는 동안 병합 결과를 쓴 파일이 부른 것도 푼 뒤에 돈다.
    */
   async vaultSync(): Promise<void> {
     if (this.closed) return;
@@ -336,12 +370,15 @@ export class SyncController {
       try {
         const result = await this.orchestrator.sync({ signal });
         this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
-        if (!signal.aborted) this.dropPulled(result.pull);
+        if (!signal.aborted) {
+          this.dropPulled(result.pull);
+          await this.refreshLocal(true);
+        }
       } catch (error) {
         // 알림은 띄우지 않는다(자동이다). 대신 이유를 사이드바에 남긴다 — 예전에는 상태바만 「오류」
         // 로 바꾸고 이유를 버려, 무엇을 고쳐야 하는지 알 수 없었다.
         this.hooks.onStatusBar?.("error");
-        this.hooks.onState?.({
+        this.emitState({
           syncState: "error",
           operationType: null,
           progress: null,
@@ -358,12 +395,12 @@ export class SyncController {
    */
   async refreshStatus(fullCheck = false): Promise<void> {
     if (!fullCheck || !this.admit("status")) {
-      await this.refreshLocal();
+      await this.refreshLocal(false);
       return;
     }
     await this.exclusive("status", async () => {
       try {
-        this.hooks.onState?.({
+        this.emitState({
           syncState: "syncing",
           operationType: null,
           progress: null,
@@ -371,17 +408,7 @@ export class SyncController {
         });
         const status = await this.orchestrator.status();
         this.remoteChanges = status.remoteChanges;
-        const syncState: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
-        this.hooks.onState?.({
-          lastSyncAt: status.lastSyncAt,
-          localChanges: status.localChanges,
-          folderMoves: [...status.folderMoves],
-          remoteChanges: status.remoteChanges,
-          conflicts: status.conflicts,
-          syncState,
-          progress: null,
-          errorMessage: null,
-        });
+        this.settle(status, { remoteChanges: status.remoteChanges });
       } catch (error) {
         // 사용자가 누른 새로고침이다. 예전에는 무시해 사이드바가 「동기화 중」 에 남았다.
         this.fail("상태 확인", error);
@@ -389,23 +416,42 @@ export class SyncController {
     });
   }
 
-  /** 로컬만 보는 새로고침 — 도는 작업과 함께 부를 수 있다. */
-  private async refreshLocal(): Promise<void> {
+  /**
+   * 로컬만 보는 새로고침 — 목록(로컬 변경 · 옮긴 폴더 · 충돌 · 마지막 동기화)을 다시 읽는다. 도는 작업과
+   * 함께 부를 수 있다.
+   *
+   * @param settle 방금 끝난 작업의 단계를 정한다({@link settle}). 아니면(볼트 편집 · 패널 열기) 도는
+   *   작업의 진행과 지난 작업의 실패 이유를 덮지 않는다 — 예전에는 pull 이 쓴 노트의 볼트 이벤트가 이
+   *   새로고침을 불러, 도는 동안 패널이 「준비됨」 으로 돌아가고 진행 막대가 사라졌다.
+   */
+  private async refreshLocal(settle: boolean): Promise<void> {
+    let status: StatusResult;
     try {
-      const status = await this.orchestrator.statusLocal();
-      const syncState: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
-      this.hooks.onState?.({
-        lastSyncAt: status.lastSyncAt,
-        localChanges: status.localChanges,
-        folderMoves: [...status.folderMoves],
-        conflicts: status.conflicts,
-        syncState,
-        progress: null,
-        errorMessage: null,
-      });
+      status = await this.orchestrator.statusLocal();
     } catch {
       // 사이드바 새로고침은 best-effort — 실패해도 무시.
+      return;
     }
+    if (settle || (!this.active && this.shown.syncState !== "error")) {
+      this.settle(status);
+      return;
+    }
+    // 단계는 그대로 다시 싣는다 — 작업 중에 새로 연 패널도 진행 · 오류를 받는다.
+    this.emitState({ ...listsOf(status), ...this.shown });
+  }
+
+  /** 끝났다 — 충돌이 남았으면 충돌, 아니면 준비됨. 패널과 상태바가 같은 단계를 보인다. */
+  private settle(status: StatusResult, patch: SyncStatePatch = {}): void {
+    const phase: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
+    this.hooks.onStatusBar?.(phase);
+    this.emitState({
+      ...listsOf(status),
+      ...patch,
+      syncState: phase,
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+    });
   }
 
   /**
@@ -512,7 +558,7 @@ export class SyncController {
     if (!this.admit("resolve")) return;
     await this.exclusive("resolve", async (signal) => {
       await this.resolveEach(choose, signal);
-      await this.refreshLocal();
+      await this.refreshLocal(true);
     });
   }
 
@@ -579,4 +625,14 @@ export class SyncController {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/** 상태 조회가 준 목록 — 로컬 변경 · 옮긴 폴더 · 충돌 · 마지막 동기화. */
+function listsOf(status: StatusResult): SyncStatePatch {
+  return {
+    lastSyncAt: status.lastSyncAt,
+    localChanges: status.localChanges,
+    folderMoves: [...status.folderMoves],
+    conflictRecords: status.conflictRecords,
+  };
 }

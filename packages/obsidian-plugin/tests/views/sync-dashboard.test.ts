@@ -15,7 +15,7 @@ interface SyncStateUpdate {
   lastSyncAt: string | null;
   localChanges: unknown[];
   remoteChanges?: unknown[];
-  conflicts: unknown[];
+  conflictRecords: unknown[];
   syncState: "ready" | "syncing" | "error" | "conflict";
   operationType: "pull" | "push" | "sync" | null;
   progress: { current: number; total: number; currentPath: string } | null;
@@ -37,7 +37,7 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     lastSyncAt: null,
     localChanges: [],
     remoteChanges: [],
-    conflicts: [],
+    conflictRecords: [],
     syncState: "ready",
     operationType: null,
     progress: null,
@@ -95,17 +95,48 @@ describe("SyncDashboard (I9 마운트)", () => {
     expect(progressText).toContain("감자"); // fileName() 이 .md 확장자를 제거
   });
 
-  it("conflict 상태: 충돌 건수 라벨 + 충돌 파일 목록 렌더", () => {
-    const conflicts = [
-      { syncRecord: { id: "r1" }, localChange: { path: "채소/감자.md" } },
-      { syncRecord: { id: "r2" }, localChange: { path: "채소/당근.md" } },
+  it("conflict 상태: 충돌 건수 라벨 + 충돌 기록의 노트 목록 + 해결 단추", () => {
+    const conflictRecords = [
+      { id: "r1", obsidianPath: "채소/감자.md" },
+      { id: "r2", obsidianPath: "채소/당근.md" },
     ];
-    m = renderComponent(SyncDashboard, baseProps({ syncState: "conflict", conflicts }));
+    const props = baseProps({ syncState: "conflict", conflictRecords });
+    m = renderComponent(SyncDashboard, props);
     expect(normText(m.target.querySelector(".im-sync-status-label"))).toBe("충돌 2건");
-    const items = m.target.querySelectorAll(".im-sync-conflict-item");
-    expect(items).toHaveLength(2);
-    expect(normText(m.target)).toContain("감자");
-    expect(normText(m.target)).toContain("당근");
+    expect(normText(m.target.querySelector(".im-sync-badge-warn"))).toBe("2");
+    const items = [...m.target.querySelectorAll(".im-sync-conflict-item")];
+    expect(items.map((item) => normText(item))).toEqual(["C 감자", "C 당근"]);
+    expect(
+      items.map((item) => item.querySelector(".im-sync-file-name")?.getAttribute("title")),
+    ).toEqual(["채소/감자.md", "채소/당근.md"]);
+    m.target.querySelector<HTMLElement>(".im-sync-resolve-btn")!.click();
+    expect(props.onResolveConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("충돌 기록이 비면 목록과 해결 단추가 사라진다", () => {
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "conflict",
+        conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      }),
+    );
+    expect(m.target.querySelector(".im-sync-resolve-btn")).not.toBeNull();
+
+    updater!({
+      lastSyncAt: null,
+      localChanges: [],
+      conflictRecords: [],
+      syncState: "ready",
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+    });
+    m.flush();
+
+    expect(m.target.querySelector(".im-sync-section-conflict")).toBeNull();
+    expect(normText(m.target.querySelector(".im-sync-status-label"))).toBe("준비됨");
   });
 
   it("onReady 업데이터로 완료 요약을 동적 갱신하면 완료 배너가 보인다", () => {
@@ -117,7 +148,7 @@ describe("SyncDashboard (I9 마운트)", () => {
       lastSyncAt: "2026-05-30T00:00:00.000Z",
       localChanges: [],
       remoteChanges: [],
-      conflicts: [],
+      conflictRecords: [],
       syncState: "ready",
       operationType: "pull",
       progress: null,
