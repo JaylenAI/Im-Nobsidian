@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   computeAnchor,
+  indentWidth,
   mapOutsideCode,
   mapOutsideCodeFences,
   mapOutsideInlineCode,
@@ -64,10 +65,70 @@ describe("mapOutsideCodeFences", () => {
     expect(result).toBe("밖\n```\n안1\n안2");
   });
 
+  // S-25 — 마크다운 예제를 담은 코드의 ```bash 줄에서 구간을 닫으면 그 뒤 코드가 치환된다.
+  it("코드 속 정보 문자열이 붙은 펜스 줄에서 닫지 않는다", () => {
+    const content = "밖\n```md\n```bash\n안\n```\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "X\n```md\n```bash\n안\n```\nX",
+    );
+  });
+
+  it("여는 것보다 짧은 펜스에서 닫지 않는다", () => {
+    const content = "밖\n````md\n```\n안\n```\n````\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "X\n````md\n```\n안\n```\n````\nX",
+    );
+  });
+
+  it("여는 쪽보다 3칸 넘게 들여쓴 펜스에서 닫지 않는다", () => {
+    const content = "```\n    ```\n안\n```\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "```\n    ```\n안\n```\nX",
+    );
+  });
+
+  it("여는 쪽보다 3칸까지 들여쓴 펜스는 닫는다", () => {
+    const content = "```\n안\n   ```\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "```\n안\n   ```\nX",
+    );
+  });
+
+  it("탭은 4칸이다 — 탭으로 들여쓴 펜스는 열 0 펜스를 닫지 않는다", () => {
+    const content = "```\n\t```\n안\n```\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "```\n\t```\n안\n```\nX",
+    );
+  });
+
+  it("CRLF 노트의 닫는 펜스도 닫는다", () => {
+    const content = "```js\r\n안\r\n```\r\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "```js\r\n안\r\n```\r\nX",
+    );
+  });
+
+  it("정보 문자열에 백틱이 있는 줄은 펜스가 아니다 — 인라인 코드", () => {
+    expect(mapOutsideCodeFences("```js``` 밖\n밖", (seg) => seg.replace(/밖/g, "X"))).toBe(
+      "```js``` X\nX",
+    );
+  });
+
   it("들여쓰기된 펜스도 인식", () => {
     const content = "밖\n  ```\n  안\n  ```\n밖";
     const result = mapOutsideCodeFences(content, (seg) => seg.replace(/안/g, "X"));
     expect(result).toContain("안");
+  });
+});
+
+describe("indentWidth", () => {
+  it("탭은 다음 4칸 경계까지 민다", () => {
+    expect(indentWidth("")).toBe(0);
+    expect(indentWidth("    ")).toBe(4);
+    expect(indentWidth("\t")).toBe(4);
+    expect(indentWidth("  \t")).toBe(4);
+    expect(indentWidth(" \t ")).toBe(5);
+    expect(indentWidth("\t\t")).toBe(8);
   });
 });
 
