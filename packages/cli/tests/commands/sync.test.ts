@@ -120,4 +120,33 @@ describe("sync command", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("nobsi resolve"));
     spy.mockRestore();
   });
+
+  it("실패는 받기 ▼ · 올리기 ▲ 로 갈라 보이고, 볼트 최상위는 / 로 보인다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [{ path: "", operation: "update", error: "발견 멈춤" }],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+    });
+    mockPush.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      failed: [{ path: "a.md", operation: "update", error: "timeout" }],
+      duration: 100,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runSync();
+    const lines = spy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => line.includes("▼ /: ") && line.includes("발견 멈춤"))).toBe(true);
+    expect(lines.some((line) => line.includes("▲ a.md: ") && line.includes("timeout"))).toBe(true);
+    spy.mockRestore();
+    process.exitCode = undefined;
+  });
 });

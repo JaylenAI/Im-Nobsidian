@@ -119,6 +119,27 @@ describe("pull command", () => {
     spy.mockRestore();
   });
 
+  it("볼트 최상위의 실패는 빈 경로 대신 / 로 보인다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [{ path: "", operation: "update", error: "DB 자동 발견이 멈춤" }],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    const lines = spy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => / \/: .*DB 자동 발견이 멈춤/.test(line))).toBe(true);
+    spy.mockRestore();
+    process.exitCode = undefined;
+  });
+
   it("이미지/파일/링크 카운트 출력", async () => {
     mockPull.mockResolvedValueOnce({
       created: 1,
