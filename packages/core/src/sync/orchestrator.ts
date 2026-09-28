@@ -79,16 +79,9 @@ import { pagePathCandidates } from "../utils/db-row-path.js";
 import { rewriteDbPlaceholders, type DbEmbedTarget } from "./db-placeholder-rewriter.js";
 import { replacePageBody } from "./page-body.js";
 import {
-  compareRemote,
-  NO_OBSERVATION,
-  observationOf,
-  observedRecordFields,
   remoteBodyFingerprint,
   remoteStampOf,
-  type ObservationContext,
-  type ObservedRecordFields,
   type RemotePageStamp,
-  type RemoteVerdict,
 } from "./remote-observation.js";
 import { incrementalSearchSince, nextPullWatermark } from "./pull-watermark.js";
 import {
@@ -108,6 +101,7 @@ import type { AbortLike } from "../utils/pool.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { diffRowProperties } from "./row-properties.js";
 import { OperationGate } from "./operation-gate.js";
+import { RunObservation } from "./run-observation.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   explicitTitle,
@@ -320,8 +314,8 @@ export class SyncOrchestrator {
   private readonly unpreparedFolders = new Map<string, string>();
 
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
-  // ({@link beginRemoteObservation}). 원격 판정과 관측 기록이 같은 값을 쓴다.
-  private observation: ObservationContext = NO_OBSERVATION;
+  // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
+  private readonly observation: RunObservation;
 
   // 작업은 한 번에 하나만 돈다(S-09) — 위의 실행별 상태를 두 실행이 함께 쓰지 않도록.
   private readonly gate = new OperationGate();
@@ -339,6 +333,7 @@ export class SyncOrchestrator {
     private readonly vaultFs: VaultFS,
     customFetch?: typeof globalThis.fetch,
   ) {
+    this.observation = new RunObservation(stateDb, notionClient);
     this.changeDetector = new ChangeDetector(stateDb);
     this.pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
@@ -377,7 +372,7 @@ export class SyncOrchestrator {
       vaultFs,
       this.pipeline,
       this.imageHandler,
-      () => this.observation,
+      () => this.observation.context,
     );
     // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 위키링크
     // 텍스트를 만든다. 원시 제목(.title)을 쓰면 슬래시·콜론 등 파일명 금지문자
@@ -426,7 +421,7 @@ export class SyncOrchestrator {
       };
     }
 
-    this.beginRemoteObservation(startTime);
+    this.observation.begin(startTime);
     // dry-run 은 상태를 바꾸지 않는다 — 끊긴 실행의 표시 · 폴더 레코드 · 끊긴 생성은 실제 push 가
     // 정리한다(N-03). 끊긴 생성을 되살려 입양할 노트도 dry-run 은 새로 만들 것으로 센다.
     if (!options?.dryRun) {
@@ -514,7 +509,7 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("push_in_progress", "true");
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
@@ -666,7 +661,7 @@ export class SyncOrchestrator {
       return emptyResult;
     }
 
-    this.beginRemoteObservation(startTime);
+    this.observation.begin(startTime);
     if (!options?.dryRun) this.cleanupInterruptedSync();
 
     // 옮긴 노트를 먼저 옮겨 적는다 — 아니면 옛 자리의 노트를 되살리고 원격 변경을 옛 경로에
@@ -697,7 +692,7 @@ export class SyncOrchestrator {
     let detected: readonly RemoteChange[] = [];
     const applied = new Set<RemoteChange>();
 
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
     // 원격을 얼마나 훑을지(ADR-027). 경로를 좁힌 pull 은 볼트 전체를 받지 않으므로 주기가 됐어도
     // 전체 대조하지 않는다 — 전체 대조를 마친 것으로 적을 수 없다.
     const scan = this.remoteScan({ force: options?.force === true, deferDue: !!options?.paths });
@@ -1022,11 +1017,11 @@ export class SyncOrchestrator {
   }
 
   private async executeStatus(): Promise<StatusResult> {
-    this.beginRemoteObservation(Date.now());
+    this.observation.begin(Date.now());
     const plan = await this.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
     const lastSyncAt = this.stateDb.getMeta("last_sync_at");
-    await this.resolveBotUserId();
+    await this.observation.resolveBotUserId();
     // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
     const scan = this.remoteScan({ force: false, deferDue: true });
@@ -2040,7 +2035,7 @@ export class SyncOrchestrator {
       notionPageId: page.id,
       notionParentId: parentId,
       contentHash: "",
-      ...this.observedFields(page, null),
+      ...this.observation.fieldsOf(page, null),
       localLastModified: new Date().toISOString(),
       syncDirection: "both",
       fileType: isFolderNotePath(path) ? "folder-note" : "file",
@@ -2061,7 +2056,7 @@ export class SyncOrchestrator {
         notionPageId: page.id,
         notionParentId: parentId,
         contentHash: hash,
-        ...this.observedFields(settled.page, settled.bodyFingerprint),
+        ...this.observation.fieldsOf(settled.page, settled.bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType: isFolderNotePath(path) ? "folder-note" : "file",
@@ -2193,7 +2188,7 @@ export class SyncOrchestrator {
       notionPageId: page.id,
       notionParentId: databaseId,
       contentHash: "",
-      ...this.observedFields(page, null),
+      ...this.observation.fieldsOf(page, null),
       localLastModified: new Date().toISOString(),
       syncDirection: "both",
       fileType,
@@ -2212,7 +2207,7 @@ export class SyncOrchestrator {
         notionPageId: page.id,
         notionParentId: databaseId,
         contentHash: computeHash(content),
-        ...this.observedFields(settled.page, settled.bodyFingerprint),
+        ...this.observation.fieldsOf(settled.page, settled.bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType,
@@ -2294,7 +2289,7 @@ export class SyncOrchestrator {
    * @param remote 지금 원격 페이지.
    */
   private async remoteDrift(record: SyncRecord, remote: PageObjectResponse): Promise<RemoteDrift> {
-    if (this.remoteVerdict(record, remote) === "unchanged") return "none";
+    if (this.observation.verdict(record, remote) === "unchanged") return "none";
     const fingerprint = record.notionBodyFingerprint;
     if (fingerprint === null) return "unknown";
     if ((await this.remoteBodyFingerprintOf(record.notionPageId!)) !== fingerprint) return "body";
@@ -2424,7 +2419,7 @@ export class SyncOrchestrator {
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
-        this.recordObservation(record.id, written, bodyFingerprint);
+        this.observation.record(record.id, written, bodyFingerprint);
       } else {
         this.stateDb.setNotionBodyFingerprint(record.id, bodyFingerprint);
       }
@@ -2604,7 +2599,7 @@ export class SyncOrchestrator {
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
-        this.recordObservation(record.id, written, bodyFingerprint);
+        this.observation.record(record.id, written, bodyFingerprint);
       } else if (bodyFingerprint !== undefined) {
         this.stateDb.setNotionBodyFingerprint(record.id, bodyFingerprint);
       }
@@ -2795,7 +2790,7 @@ export class SyncOrchestrator {
         );
         this.stateDb.updateStatus(record.id, "synced");
         if (conflict.remoteChange.lastEdited) {
-          this.recordUnverifiedObservation(record.id, conflict.remoteChange.lastEdited);
+          this.observation.recordUnverified(record.id, conflict.remoteChange.lastEdited);
         }
       });
       cleared.push(record.obsidianPath);
@@ -2952,7 +2947,7 @@ export class SyncOrchestrator {
     }
 
     if (choice === "remote") {
-      this.recordUnverifiedObservation(record.id, conflict.remoteChange.lastEdited);
+      this.observation.recordUnverified(record.id, conflict.remoteChange.lastEdited);
       return;
     }
 
@@ -3126,7 +3121,7 @@ export class SyncOrchestrator {
     if (newParent !== null || change.title) {
       const remote = await this.notionClient.getPage(pageId);
       // 같은 분 안의 편집도 «바뀜» 으로 본다(N-05) — 옮기기와 제목은 그래도 반영한다.
-      remoteChanged = this.remoteVerdict(record, remote) !== "unchanged";
+      remoteChanged = this.observation.verdict(record, remote) !== "unchanged";
       const title = change.title ? change.title(this.notionClient.extractTitle(remote)) : null;
       if (newParent !== null) await this.notionClient.movePage(pageId, newParent);
       if (title !== null) {
@@ -3140,55 +3135,9 @@ export class SyncOrchestrator {
       if (newParent !== null) this.stateDb.setNotionParentId(record.id, newParent);
       // Notion 에서도 바뀐 페이지는 기준 시각을 올리지 않는다 — 올리면 다음 pull 이 그 변경을
       // «이미 받은 것» 으로 여긴다. 옮기기와 제목은 본문을 바꾸지 않는다 — 지문은 그대로 둔다.
-      if (written !== null && !remoteChanged) this.recordObservation(record.id, written);
+      if (written !== null && !remoteChanged) this.observation.record(record.id, written);
       if (change.opId !== null) this.stateDb.markPendingCompleted(change.opId);
     });
-  }
-
-  /**
-   * 이번 실행이 원격을 보는 기준을 정한다(N-05). 본 시각은 실행을 시작한 시각이다 — 이 실행이
-   * 받는 원격은 모두 그 뒤에 본 것이라, 가라앉았다고 서둘러 보지 않는다. 봇 id 는
-   * {@link resolveBotUserId} 가 따로 받는다 — 할 일이 없는 실행은 묻지 않는다.
-   */
-  private beginRemoteObservation(startTime: number): void {
-    this.observation = { seenAt: new Date(startTime).toISOString(), botUserId: null };
-  }
-
-  /** 이 토큰의 봇 id 를 받아 둔다. 받지 못하면 봇 규칙 없이 간다 — 내용으로 한 번 더 확인할 뿐이다. */
-  private async resolveBotUserId(): Promise<void> {
-    if (this.observation.botUserId !== null) return;
-    try {
-      const botUserId = await this.notionClient.getBotUserId();
-      this.observation = { ...this.observation, botUserId };
-    } catch (error) {
-      getLogger().warn(
-        `[Im-Nobsidian] 이 통합의 봇 id 를 받지 못함 — 방금 쓴 페이지도 내용으로 다시 확인한다: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-    }
-  }
-
-  /** 레코드가 지난번에 본 원격과 지금 원격을 견준다 — 이번 실행의 기준으로. */
-  private remoteVerdict(record: SyncRecord, page: RemotePageStamp): RemoteVerdict {
-    return compareRemote(record, page, this.observation.botUserId);
-  }
-
-  /** 추적 중인 페이지의 원격 변경 — 바뀌지 않았으면 null. 가를 수 없으면 «확인 안 됨» 으로 싣는다. */
-  private remoteModification(
-    record: SyncRecord,
-    page: RemotePageStamp & { readonly id: string },
-  ): RemoteChange | null {
-    const verdict = this.remoteVerdict(record, page);
-    if (verdict === "unchanged") return null;
-    return {
-      pageId: page.id,
-      type: "modified",
-      path: record.obsidianPath,
-      lastEdited: page.last_edited_time,
-      previousEdited: record.notionLastEdited,
-      ...(verdict === "unverified" ? { unverified: true } : {}),
-    };
   }
 
   /**
@@ -3214,44 +3163,6 @@ export class SyncOrchestrator {
       }
     }
     return kept;
-  }
-
-  /** 지금 본 원격 페이지를 레코드에 적을 값 — {@link observedRecordFields} 를 이번 실행의 기준으로. */
-  private observedFields(
-    page: RemotePageStamp,
-    bodyFingerprint: string | null,
-  ): ObservedRecordFields {
-    return observedRecordFields(page, this.observation.seenAt, bodyFingerprint);
-  }
-
-  /**
-   * 원격을 언제 · 누가 고쳤는지 모르는 채 수정 시각만 적는다 — 다음 pull 이 내용으로 확인한다.
-   * 충돌 해소처럼 원격 본문을 언제 받았는지 모르는 자리에서 쓴다. 본문 지문도 모른다 — 그 전에
-   * push 하면 원격이 바뀌었는지 확인하지 못해 pull 을 먼저 하라며 거절한다.
-   */
-  private recordUnverifiedObservation(recordId: string, lastEdited: string): void {
-    this.stateDb.setRemoteObservation(recordId, {
-      lastEdited,
-      lastEditedBy: null,
-      seenAt: null,
-      bodyFingerprint: null,
-    });
-  }
-
-  /**
-   * 지금 본 원격 페이지를 레코드에 적는다.
-   *
-   * @param bodyFingerprint 본문 지문. undefined 면 적지 않는다 — 본문을 건드리지 않은 관측.
-   */
-  private recordObservation(
-    recordId: string,
-    page: RemotePageStamp,
-    bodyFingerprint?: string | null,
-  ): void {
-    this.stateDb.setRemoteObservation(recordId, {
-      ...observationOf(page, this.observation.seenAt),
-      ...(bodyFingerprint === undefined ? {} : { bodyFingerprint }),
-    });
   }
 
   /**
@@ -3362,7 +3273,7 @@ export class SyncOrchestrator {
           previousEdited: null,
         });
       } else {
-        const modified = this.remoteModification(record, page);
+        const modified = this.observation.modification(record, page);
         if (modified) changes.push(modified);
       }
 
@@ -3602,7 +3513,7 @@ export class SyncOrchestrator {
       }
       // 조회 창(기준 시각 − 안전창 15분)은 가라앉지 않은 레코드의 수정 시각을 늘 담는다 — 가라앉지
       // 않았다는 것은 그 시각이 마지막으로 본 때(기준 시각 뒤)보다 2분 안쪽이라는 뜻이다.
-      const modified = this.remoteModification(record, page);
+      const modified = this.observation.modification(record, page);
       // 바뀐 행의 DB 만 조회한다 — 창에 다시 든 그대로인 행으로 조회하면 안전창 동안 pull 마다 같은
       // DB 를 다시 조회한다.
       const rowDatabase =
@@ -3854,7 +3765,7 @@ export class SyncOrchestrator {
         notionPageId: pageId,
         notionParentId: resolvedParentId,
         contentHash: hash,
-        ...this.observedFields(page, fingerprint),
+        ...this.observation.fieldsOf(page, fingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType,
@@ -4053,7 +3964,7 @@ export class SyncOrchestrator {
     if (resolution.action === "skip") {
       // 원격이 지난 사본 그대로다 — 본 것만 적는다. 로컬 편집은 이어지는 push 가 올린다.
       if (resolution.remoteUnchanged) {
-        this.recordObservation(record.id, page, rendered.bodyFingerprint);
+        this.observation.record(record.id, page, rendered.bodyFingerprint);
         return { action: "unchanged", path: record.obsidianPath };
       }
       // local-first: 로컬을 지키고 원격 변경은 받지 않는다. 본 것도 적지 않는다 — 로컬을 올려
@@ -4080,7 +3991,7 @@ export class SyncOrchestrator {
         notionPageId: change.pageId,
         notionParentId: record.notionParentId,
         contentHash: computeHash(localContent),
-        ...this.observedFields(page, rendered.bodyFingerprint),
+        ...this.observation.fieldsOf(page, rendered.bodyFingerprint),
         localLastModified: record.localLastModified,
         syncDirection: record.syncDirection,
         fileType: record.fileType,
@@ -4102,7 +4013,7 @@ export class SyncOrchestrator {
         notionPageId: change.pageId,
         notionParentId: record.notionParentId,
         contentHash: newHash,
-        ...this.observedFields(page, rendered.bodyFingerprint),
+        ...this.observation.fieldsOf(page, rendered.bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: record.syncDirection,
         fileType: record.fileType,
@@ -4152,7 +4063,7 @@ export class SyncOrchestrator {
 
     const { markdown } = await this.notionClient.getPageMarkdown(page.id);
     if (!hasBodyBesidesChildren(markdown)) {
-      this.recordObservation(record.id, page, remoteBodyFingerprint(markdown));
+      this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
     const noPlace = this.isDatabaseMode
@@ -4164,7 +4075,7 @@ export class SyncOrchestrator {
       getLogger().warn(
         `[Im-Nobsidian] 폴더(${folder})의 Notion 페이지에 본문이 있지만 ${noPlace} — Notion 에만 있다`,
       );
-      this.recordObservation(record.id, page, remoteBodyFingerprint(markdown));
+      this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
 
@@ -4447,7 +4358,7 @@ export class SyncOrchestrator {
       notionPageId: folderPage.id,
       notionParentId: parentId,
       contentHash: "",
-      ...this.observedFields(folderPage, bodyFingerprint),
+      ...this.observation.fieldsOf(folderPage, bodyFingerprint),
       localLastModified: new Date().toISOString(),
       syncDirection: "both",
       fileType: "folder-note",
