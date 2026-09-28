@@ -167,7 +167,7 @@ That's it. Your vault and Notion workspace are now linked.
 | `nobsi resolve`           | Resolve sync conflicts                                                          |
 | `nobsi watch`             | Watch for changes + auto-sync                                                   |
 
-`push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` skips incremental detection for a full rescan (recovers pages missed by Notion's search indexing lag).
+`push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` runs a full scan now instead of fetching only what changed — it applies deletions made in Notion and recovers pages missed by Notion's search indexing lag (see [Pull](#pull-notion--obsidian)).
 
 `verify` answers a different question from `status`: not "is anything out of date?" but **"is anything
 missing?"**. It compares _sets_ of ids, not counts, on two axes — database rows (per database) and pages
@@ -214,10 +214,19 @@ Obsidian Vault                        Notion Workspace
 
 ### Pull (Notion → Obsidian)
 
-1. Recursively reads pages under your root page
-2. Detects changes by `last_edited_time`
-3. Converts Notion blocks → markdown, properties → frontmatter
-4. Downloads images to your attachments folder (deduplicated)
+1. Finds what changed in Notion since the last pull — pages, database rows, and databases whose schema
+   changed — and queries only those databases. Unchanged databases cost no requests
+2. Once an hour (`sync.fullReconcileInterval`) it runs a **full scan** instead: reads every page under
+   your root page and every database. Only the full scan notices pages deleted in Notion or moved out of
+   scope — Notion's search doesn't return trashed pages
+3. Detects changes by `last_edited_time`
+4. Converts Notion blocks → markdown, properties → frontmatter
+5. Downloads images to your attachments folder (deduplicated)
+
+The first pull, `pull --force` and database mode always run a full scan. `pull`, `sync` and `status`
+say which scan ran and when the last full scan was; after a changes-only scan with `sync.deleteSync` on,
+they also say when deletions in Notion will be applied. In the plugin, the sidebar shows the last full
+scan (hover for details) and the command **Pull from Notion (전체 확인)** runs one now.
 
 ### Conflict Resolution
 
@@ -285,6 +294,8 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "deleteSync": false, // true: deleting a note deletes it on the other side too (the plugin always does)
+    "fullReconcileInterval": 3600, // seconds between full scans of Notion — 0 = every pull
   },
   "paths": {
     "include": ["**/*"], // glob patterns to include
@@ -372,6 +383,7 @@ normalization.
 | Note embeds (`![[note]]`)        | Notion has no note-transclusion concept, and drops custom-scheme links        | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                     |
 | First-push wikilinks             | Cross-references between new pages may not resolve on first sync              | Resolved automatically on subsequent syncs                                                                                                                                                                                                                         |
 | Links to pages outside the vault | The target isn't shared with your integration, or isn't part of what you pull | Kept as a **clickable `https://www.notion.so/…` link** instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
+| Deletions/DB renames arrive late | Search skips trash, and a DB rename keeps its edit time — full scan only      | `nobsi pull --force`, or **Pull from Notion (전체 확인)** in the plugin, runs a full scan now. Set the interval to `0` to scan fully on every pull                                                                                                                 |
 
 ### One-time normalizations
 
