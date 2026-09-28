@@ -10,7 +10,12 @@ import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
-import { applyRemoteDeletion, remoteDeletionChange, remotePresence } from "./remote-deletion.js";
+import {
+  applyRemoteDeletion,
+  decideRemoteDeletion,
+  remoteDeletionChange,
+  remotePresence,
+} from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
 import { noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
@@ -69,6 +74,14 @@ export interface DatabaseSyncResult {
    * 를 제거하고 linked 매핑을 기록해야 다음 pull 부터 이중 방문 자체가 사라진다.
    */
   linkedOriginalDbId?: string;
+}
+
+/** dry-run 이 센 행 하나 — 경로와 할 일. `restore` 는 볼트에서 사라진 행을 되살리는 것이다. */
+export interface PlannedRow {
+  readonly pageId: string;
+  readonly path: string;
+  readonly operation: "create" | "update" | "delete";
+  readonly restore?: boolean;
 }
 
 function emptyDatabaseSyncResult(): DatabaseSyncResult {
@@ -173,36 +186,16 @@ export class DatabaseSyncer {
     },
   ): Promise<DatabaseSyncResult> {
     const scope = opts?.paths;
-    // 이 DB 폴더 전체가 범위인가 · 범위가 이 폴더 안의 행만 가리키는가. 둘 다 아니면 이 DB 는
-    // 범위 밖이다 — 조회도 하지 않는다. 예전에는 범위와 상관없이 모든 행을 만들고 고쳤다.
-    const wholeDbInScope = inAnyPathScope(dbConfig.localFolder, scope);
-    if (!wholeDbInScope && !scope!.some((path) => matchesPathScope(path, dbConfig.localFolder))) {
-      return emptyDatabaseSyncResult();
-    }
-
-    const pages = await this.notionClient.queryAllDatabasePages(
-      dbConfig.databaseId,
-      dbConfig.pullFilter,
-    );
-
-    // F25: 행 parent 로 data source 의 원본 database 를 검증한다(추가 API 0회). 신 모델에선
-    // linked view 컨테이너도 data_sources 가 채워져 retrieve 만으론 원본과 구분되지 않아
-    // 캐시에 오등록될 수 있는데, 그대로 두면 같은 행 집합을 여러 config 가 각자 자기 폴더로
-    // 릴레이 재배치해 원격 무변경에도 매 pull 재작성이 쌓인다(실측 66건/pull, 행당 최대 4중).
-    // 컨테이너로 판정되면 행은 원본에 양보하고 .base 만 원본 폴더 필터로 재지향해
-    // "같은 데이터의 다른 뷰"라는 Notion 의미를 보존한다.
-    const parent = pages[0]?.parent as { type?: string; database_id?: string } | undefined;
-    const ownerDbId = parent?.database_id;
-    if (ownerDbId && !notionIdsEqual(ownerDbId, dbConfig.databaseId)) {
-      const ownerFolder = opts?.resolveDbFolder?.(ownerDbId) ?? null;
-      if (ownerFolder !== null) {
-        if (wholeDbInScope) {
-          const viewsConfig = await this.pullDatabaseViews(dbConfig);
-          await this.generateBaseFile(dbConfig, viewsConfig, ownerFolder);
-        }
-        return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: ownerDbId };
+    const target = await this.queryRows(dbConfig, opts);
+    if (target.kind === "out-of-scope") return emptyDatabaseSyncResult();
+    if (target.kind === "linked") {
+      if (target.wholeDbInScope) {
+        const viewsConfig = await this.pullDatabaseViews(dbConfig);
+        await this.generateBaseFile(dbConfig, viewsConfig, target.ownerFolder);
       }
+      return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: target.ownerDbId };
     }
+    const { pages, wholeDbInScope } = target;
 
     const schema = await this.notionClient.getDatabaseSchema(dbConfig.databaseId);
     this.propertyMapper.loadSchema(schema);
@@ -227,28 +220,10 @@ export class DatabaseSyncer {
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
-        if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) continue;
+        const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
+        if (action === "skip") continue;
         // 원격 무변경인데도 되살리려고 내려온 행인가 — 아래 집계에서 updated 와 가른다.
-        let restoring = false;
-
-        if (record) {
-          // 리모트가 지난번에 본 그대로면 건너뜀. 수정 시각이 같아도 같은 분 안의 편집일 수
-          // 있으면(«확인 안 됨», N-05) 받아서 견준다 — 같으면 파일을 쓰지 않는다. 단 두 가지
-          // 예외가 있다.
-          //  · 레코드 경로가 현재 DB 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유
-          //    폴더 잔류) 원격 무변경이어도 재처리해 현 폴더로 재배치한다.
-          //  · 로컬 파일이 사라졌으면 되살린다(R13). 이 확인이 없으면 pullDatabasePage
-          //    안의 복원 판정(localExists → resolvePullConflict)에 영영 도달하지 못해
-          //    지운 행이 조용히 영구 소실된다. 페이지 경로는 R0 으로 이미 마감한 계약인데
-          //    행 경로만 빠져 있었다 — 오케스트레이터의 detectMissingLocalFiles 가 "행은
-          //    여기서 이미 같은 판정을 거친다"는 (틀린) 전제로 db-row 를 제외해 두었기에
-          //    양쪽 어디에도 복원 경로가 없는 상태였다.
-          const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
-          if (!misplaced && this.remoteVerdict(record, page) === "unchanged") {
-            if (await this.vaultFs.exists(record.obsidianPath)) continue;
-            restoring = true;
-          }
-        }
+        const restoring = action === "restore";
 
         // R9e: 행 1건 처리도 합성 경로다 — 블록 조회·첨부 다운로드·변환·파일 IO 가 얽혀
         // 있어 호출 단위 상한만으로는 덮이지 않는다. R9b 가 오케스트레이터의 페이지 루프
@@ -292,6 +267,178 @@ export class DatabaseSyncer {
   }
 
   /**
+   * 받을 행을 세기만 한다(dry-run) — 볼트 · 상태 DB · Notion 을 바꾸지 않는다. 조회 · 범위 · 받을
+   * 행 판정 · 삭제 확인은 {@link pullDatabase} 와 같다.
+   *
+   * 행 본문은 읽지 않는다. 그래서 같은 분 안의 편집(«확인 안 됨»)은 고침으로 세고, 받아 보고 같으면
+   * 쓰지 않을 행 · local-first 로 지킬 행 · 충돌로 남길 행도 고침으로 센다. 새 행의 경로는 지금 상태
+   * 기준이다 — 같은 pull 에서 먼저 만든 행과 이름이 겹치면 실제 경로에는 id 가 붙는다.
+   */
+  async planDatabase(
+    dbConfig: DatabaseSyncConfig,
+    opts?: {
+      resolveDbFolder?: (databaseId: string) => string | null;
+      paths?: readonly string[];
+    },
+  ): Promise<PlannedRow[]> {
+    const target = await this.queryRows(dbConfig, opts);
+    if (target.kind !== "rows") return [];
+
+    const planned: PlannedRow[] = [];
+    for (const page of target.pages) {
+      const record = this.stateDb.getByNotionId(page.id);
+      const action = await this.rowAction(
+        dbConfig,
+        page,
+        record,
+        target.wholeDbInScope,
+        opts?.paths,
+      );
+      if (action === "skip") continue;
+      if (!record) {
+        const name = sanitizeFileName(this.notionClient.extractTitle(page));
+        planned.push({
+          pageId: page.id,
+          path: resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) =>
+            this.stateDb.getByPath(p),
+          ),
+          operation: "create",
+        });
+      } else {
+        planned.push({
+          pageId: page.id,
+          path: record.obsidianPath,
+          operation: "update",
+          restore: action === "restore",
+        });
+      }
+    }
+
+    if (this.config.sync.deleteSync && !dbConfig.pullFilter) {
+      for (const record of this.unlistedRows(dbConfig, target.pages, opts?.paths)) {
+        try {
+          const presence = await remotePresence(this.notionClient, record.notionPageId!);
+          if (presence.kind === "alive") continue;
+          const decision = await decideRemoteDeletion(this.vaultFs, record, {
+            deleteFile: this.config.sync.deleteSync,
+            strategy: this.config.sync.conflictStrategy,
+          });
+          if (decision.action === "deleted") {
+            planned.push({
+              pageId: record.notionPageId!,
+              path: record.obsidianPath,
+              operation: "delete",
+            });
+          }
+        } catch {
+          // 확인하지 못한 행은 실제 pull 도 이번에는 지우지 않는다.
+        }
+      }
+    }
+    return planned;
+  }
+
+  /**
+   * 이 DB 에서 볼 행을 조회한다. 범위(`paths`)가 이 DB 폴더에 닿지 않으면 조회하지 않는다 — 예전에는
+   * 범위와 상관없이 모든 행을 만들고 고쳤다.
+   *
+   * F25: 행 parent 로 data source 의 원본 database 를 검증한다(추가 API 0회). 신 모델에선
+   * linked view 컨테이너도 data_sources 가 채워져 retrieve 만으론 원본과 구분되지 않아
+   * 캐시에 오등록될 수 있는데, 그대로 두면 같은 행 집합을 여러 config 가 각자 자기 폴더로
+   * 릴레이 재배치해 원격 무변경에도 매 pull 재작성이 쌓인다(실측 66건/pull, 행당 최대 4중).
+   * 컨테이너로 판정되면 행은 원본에 양보하고 .base 만 원본 폴더 필터로 재지향해
+   * "같은 데이터의 다른 뷰"라는 Notion 의미를 보존한다.
+   */
+  private async queryRows(
+    dbConfig: DatabaseSyncConfig,
+    opts?: {
+      resolveDbFolder?: (databaseId: string) => string | null;
+      paths?: readonly string[];
+    },
+  ): Promise<
+    | { readonly kind: "out-of-scope" }
+    | {
+        readonly kind: "linked";
+        readonly ownerDbId: string;
+        readonly ownerFolder: string;
+        readonly wholeDbInScope: boolean;
+      }
+    | {
+        readonly kind: "rows";
+        readonly pages: PageObjectResponse[];
+        readonly wholeDbInScope: boolean;
+      }
+  > {
+    const scope = opts?.paths;
+    // 이 DB 폴더 전체가 범위인가 · 범위가 이 폴더 안의 행만 가리키는가. 둘 다 아니면 범위 밖이다.
+    const wholeDbInScope = inAnyPathScope(dbConfig.localFolder, scope);
+    if (!wholeDbInScope && !scope!.some((path) => matchesPathScope(path, dbConfig.localFolder))) {
+      return { kind: "out-of-scope" };
+    }
+
+    const pages = await this.notionClient.queryAllDatabasePages(
+      dbConfig.databaseId,
+      dbConfig.pullFilter,
+    );
+
+    const parent = pages[0]?.parent as { type?: string; database_id?: string } | undefined;
+    const ownerDbId = parent?.database_id;
+    if (ownerDbId && !notionIdsEqual(ownerDbId, dbConfig.databaseId)) {
+      const ownerFolder = opts?.resolveDbFolder?.(ownerDbId) ?? null;
+      if (ownerFolder !== null) return { kind: "linked", ownerDbId, ownerFolder, wholeDbInScope };
+    }
+    return { kind: "rows", pages, wholeDbInScope };
+  }
+
+  /**
+   * 조회한 행 하나에 할 일 — 건너뜀 · 되살림 · 받음. 범위가 행 몇 개면 그 행만 받고 새 행은
+   * 만들지 않는다(어느 경로에 쓸지 받기 전에는 모른다).
+   *
+   * 리모트가 지난번에 본 그대로면 건너뜀. 수정 시각이 같아도 같은 분 안의 편집일 수 있으면
+   * («확인 안 됨», N-05) 받아서 견준다 — 같으면 파일을 쓰지 않는다. 단 두 가지 예외가 있다.
+   *  · 레코드 경로가 현재 DB 폴더 직속이 아니면(F24 동명 DB 폴더 분리 후 옛 공유 폴더 잔류)
+   *    원격 무변경이어도 재처리해 현 폴더로 재배치한다.
+   *  · 로컬 파일이 사라졌으면 되살린다(R13). 이 확인이 없으면 pullDatabasePage 안의 복원
+   *    판정(localExists → resolvePullConflict)에 영영 도달하지 못해 지운 행이 조용히 영구
+   *    소실된다. 페이지 경로는 R0 으로 이미 마감한 계약인데 행 경로만 빠져 있었다 —
+   *    오케스트레이터의 detectMissingLocalFiles 가 "행은 여기서 이미 같은 판정을 거친다"는
+   *    (틀린) 전제로 db-row 를 제외해 두었기에 양쪽 어디에도 복원 경로가 없는 상태였다.
+   */
+  private async rowAction(
+    dbConfig: DatabaseSyncConfig,
+    page: PageObjectResponse,
+    record: SyncRecord | null,
+    wholeDbInScope: boolean,
+    scope: readonly string[] | undefined,
+  ): Promise<"skip" | "restore" | "pull"> {
+    if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) return "skip";
+    if (!record) return "pull";
+    const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
+    if (misplaced || this.remoteVerdict(record, page) !== "unchanged") return "pull";
+    return (await this.vaultFs.exists(record.obsidianPath)) ? "skip" : "restore";
+  }
+
+  /** 이 DB 의 추적 행 가운데 이번 조회에 없던 것 — 지워졌는지는 아직 모른다. */
+  private unlistedRows(
+    dbConfig: DatabaseSyncConfig,
+    pages: readonly PageObjectResponse[],
+    paths: readonly string[] | undefined,
+  ): SyncRecord[] {
+    const listed = new Set(pages.map((page) => normalizeNotionId(page.id)));
+    return this.stateDb
+      .getAll()
+      .filter(
+        (record) =>
+          record.fileType === "db-row" &&
+          record.notionPageId !== null &&
+          record.notionParentId !== null &&
+          notionIdsEqual(record.notionParentId, dbConfig.databaseId) &&
+          !listed.has(normalizeNotionId(record.notionPageId)) &&
+          inAnyPathScope(record.obsidianPath, paths),
+      );
+  }
+
+  /**
    * 조회에 없던 이 DB 의 추적 행 가운데 Notion 에서 정말 지워진 것만 볼트에서 지운다(deleteSync, S-12).
    *
    * 행은 DB 조회로만 보인다 — 전체 대조(페이지 순회)는 행을 보지 못해 행의 삭제는 여기서 가른다.
@@ -313,21 +460,8 @@ export class DatabaseSyncer {
     const conflicts: Conflict[] = [];
     if (!this.config.sync.deleteSync || dbConfig.pullFilter) return { deleted: 0, conflicts };
 
-    const listed = new Set(pages.map((page) => normalizeNotionId(page.id)));
-    const missing = this.stateDb
-      .getAll()
-      .filter(
-        (record) =>
-          record.fileType === "db-row" &&
-          record.notionPageId !== null &&
-          record.notionParentId !== null &&
-          notionIdsEqual(record.notionParentId, dbConfig.databaseId) &&
-          !listed.has(normalizeNotionId(record.notionPageId)) &&
-          inAnyPathScope(record.obsidianPath, paths),
-      );
-
     let deleted = 0;
-    for (const record of missing) {
+    for (const record of this.unlistedRows(dbConfig, pages, paths)) {
       try {
         const presence = await remotePresence(this.notionClient, record.notionPageId!);
         if (presence.kind === "alive") continue;
