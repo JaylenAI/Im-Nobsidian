@@ -2891,6 +2891,7 @@ export class SyncOrchestrator {
     return {
       pageId: page.id,
       type: "modified",
+      path: record.obsidianPath,
       lastEdited: page.last_edited_time,
       previousEdited: record.notionLastEdited,
       ...(verdict === "unverified" ? { unverified: true } : {}),
