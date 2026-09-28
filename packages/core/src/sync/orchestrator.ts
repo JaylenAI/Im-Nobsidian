@@ -2553,10 +2553,20 @@ export class SyncOrchestrator {
   ): Promise<ResolutionResult[]> {
     return this.gate.run("resolve", async () => {
       const results: ResolutionResult[] = [];
+      // 하나를 올리지 못해도 나머지를 푼다 — 올리지 못한 것은 충돌로 되돌려져 있다(N-06).
+      // 예전에는 첫 실패에서 던져, 뒤의 충돌은 손대지 않은 채 무엇이 풀렸는지도 알리지 못했다.
       for (const conflict of conflicts) {
-        results.push(
-          await this.executeResolveConflict(conflict, choiceForStrategy(conflict, strategy)),
-        );
+        const choice = choiceForStrategy(conflict, strategy);
+        try {
+          results.push(await this.executeResolveConflict(conflict, choice));
+        } catch (error) {
+          results.push({
+            path: conflict.syncRecord.obsidianPath,
+            choice,
+            success: false,
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
       }
       return results;
     });
