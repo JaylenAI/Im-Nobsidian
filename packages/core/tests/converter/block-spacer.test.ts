@@ -85,6 +85,37 @@ describe("respace — Notion 압축형 export 블록 간격 복원 (D1/D4)", () 
     expect(respace(`앞\n${math}\n`)).toBe(`앞\n\n${math}\n`);
   });
 
+  // S-21 — Notion 은 목록 자식 수식을 $$ · 식 줄 모두 탭으로 내보낸다(실측). 떼어 내면 앞에 빈 줄이
+  // 들어가 목록이 느슨한 목록이 되고 탭이 남았다. 자식 코드블록(S-24)과 같게 항목에 붙이고 편다.
+  describe("목록 자식 수식은 항목에 붙고 구조 탭만 편다", () => {
+    it("Notion 이 내보낸 모양 — 4칸으로 펴 항목에 붙인다", () => {
+      expect(respace("- 항목\n\t$$\n\ty^2\n\t$$\n- 다음", true)).toBe(
+        "- 항목\n    $$\n    y^2\n    $$\n- 다음",
+      );
+    });
+
+    it("두 단계 중첩 — 부모 항목의 깊이만큼", () => {
+      expect(respace("- a\n\t- b\n\t\t$$\n\t\tx\n\t\t$$", true)).toBe(
+        "- a\n    - b\n        $$\n        x\n        $$",
+      );
+    });
+
+    it("식 속 탭은 식이다 — 구조 탭 한 겹만 편다", () => {
+      expect(respace("- 항목\n\t$$\n\t\t\\alpha\n\t$$", true)).toBe(
+        "- 항목\n    $$\n    \t\\alpha\n    $$",
+      );
+    });
+
+    it("식 줄이 구조 탭을 입지 않았으면 펴지 않는다", () => {
+      const md = "- 항목\n\t$$\nx\n\t$$";
+      expect(respace(md, true)).toBe(md);
+    });
+
+    it("들여쓰지 않은 수식은 목록 뒤 새 블록이다", () => {
+      expect(respace("- 항목\n$$\nx\n$$", true)).toBe("- 항목\n\n$$\nx\n$$");
+    });
+  });
+
   it("브랜드 보존 마커 줄은 직전 블록(앵커)에 붙인다", () => {
     const input = "앵커 문단\n%% im-nobsidian:wikilink:text=Note %%\n다음 문단\n";
     expect(respace(input)).toBe("앵커 문단\n%% im-nobsidian:wikilink:text=Note %%\n\n다음 문단\n");
