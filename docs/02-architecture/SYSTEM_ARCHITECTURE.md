@@ -89,17 +89,35 @@ flowchart TD
 
 ## 패키지 구조
 
+> `sync/` 는 v0.4.0 의 실제 구성이다([ADR-028](adr/028-sync-engine-modules.md)). 나머지 가지는 설계 당시
+> (2026-05-08)의 그림이라 실제 폴더와 이름이 다르다 — 예: `convert/` → `converter/`, `data/` → `state/` · `config/`,
+> `io/` → `notion/` · `sync/`.
+
 ```
 packages/
 ├── core/                           ← @im-nobsidian/core (핵심 엔진)
 │   └── src/
 │       ├── index.ts                ← 공개 API export
 │       │
-│       ├── sync/                   ← 동기화 엔진
-│       │   ├── orchestrator.ts     ← 동기화 총괄 (init/push/pull/sync)
-│       │   ├── change-detector.ts  ← SHA-256 기반 변경 감지
-│       │   ├── executor.ts         ← Push/Pull 실행
-│       │   └── merger.ts           ← Three-Way Merge
+│       ├── sync/                      ← 동기화 엔진 (ADR-028)
+│       │   ├── orchestrator.ts        ← 공개 API · 실행 순서 · 작업 잠금
+│       │   ├── operation-gate.ts      ← 작업은 한 번에 하나 (S-09)
+│       │   ├── run-observation.ts     ← 이번 실행이 원격을 보는 기준 (N-05)
+│       │   ├── interrupted-sync.ts    ← 중단된 실행 정리 · 고아 페이지 입양
+│       │   ├── remote-detector.ts     ← 원격 변경 감지 — 전체 대조 · 증분 (ADR-027)
+│       │   ├── remote-drift.ts        ← 지난번 본 뒤로 원격이 바뀌었나
+│       │   ├── page-puller.ts         ← 원격 페이지 받기
+│       │   ├── pull-planner.ts        ← pull dry-run 세기
+│       │   ├── notion-link-pass.ts    ← pull 뒤 Notion 링크 → 볼트 링크
+│       │   ├── database-discovery.ts  ← 페이지 안 DB 자동 발견
+│       │   ├── database-syncer.ts     ← DB ↔ 폴더 · .base
+│       │   ├── local-planner.ts       ← 로컬 변경 계획 — 옮김 짝짓기
+│       │   ├── folder-placement.ts    ← 볼트 폴더의 Notion 자리
+│       │   ├── page-pusher.ts         ← 로컬 변경 올리기
+│       │   ├── conflict-workflow.ts   ← 충돌 목록 · 해소 · Notion 전파
+│       │   ├── change-inspector.ts    ← 변경 견주기 · 되돌리기
+│       │   ├── change-detector.ts     ← SHA-256 기반 로컬 변경 감지
+│       │   └── …                      ← 그 밖의 도우미 — 첨부 · 제목 · 로컬 이동 등
 │       │
 │       ├── convert/                ← 변환 엔진
 │       │   ├── pipeline.ts         ← 변환 파이프라인 오케스트레이션
