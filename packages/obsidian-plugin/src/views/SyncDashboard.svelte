@@ -42,6 +42,8 @@
     onPushPath: (path: string) => void;
     onDiscardPath: (path: string) => void;
     onPullPath: (path: string) => void;
+    onShowLocalDiff: (change: LocalChange) => void;
+    onShowRemoteDiff: (change: RemoteChange) => void;
     onResolveConflict: () => void;
   }
 
@@ -66,6 +68,8 @@
     onPushPath,
     onDiscardPath,
     onPullPath,
+    onShowLocalDiff,
+    onShowRemoteDiff,
     onResolveConflict,
   }: Props = $props();
 
@@ -252,6 +256,19 @@
       : "이 노트만 Notion 에서 받기";
   }
 
+  /*
+   * 항목을 누르면 줄 비교 창을 연다(Obsidian Git 처럼) — 노트는 ↗ 로 연다. 컴포넌트 밖(core)으로 나가는
+   * 값이라 반응 프록시가 아닌 평범한 사본을 넘긴다 — 프록시는 복제(structuredClone)하면 깨진다.
+   */
+  function showLocalDiff(change: LocalChange): void {
+    onShowLocalDiff($state.snapshot(change));
+  }
+
+  /** 아직 받지 않은 새 페이지는 견줄 지난 글이 없다 — 받은 뒤에 견준다. */
+  function showRemoteDiff(change: RemoteChange): void {
+    if (change.path) onShowRemoteDiff($state.snapshot(change));
+  }
+
   let changesExpanded = $state(true);
   let remoteExpanded = $state(true);
   let conflictsExpanded = $state(true);
@@ -370,7 +387,7 @@
             <div class="im-sync-file-row">
               <button
                 class="im-sync-file-item"
-                onclick={() => change.type !== "deleted" && onOpenFile(change.path)}
+                onclick={() => showLocalDiff(change)}
                 type="button"
               >
                 <span class="im-sync-file-type {typeClass(change.type)}"
@@ -384,6 +401,15 @@
                 >
               </button>
               <span class="im-sync-file-actions">
+                {#if change.type !== "deleted"}
+                  <button
+                    class="im-sync-file-action"
+                    aria-label="노트 열기"
+                    title="노트 열기"
+                    onclick={() => onOpenFile(change.path)}
+                    type="button">↗</button
+                  >
+                {/if}
                 <button
                   class="im-sync-file-action"
                   aria-label="이 노트만 Notion 에 올리기"
@@ -430,7 +456,9 @@
             <div class="im-sync-file-row">
               <button
                 class="im-sync-file-item"
-                onclick={() => change.path && onOpenFile(change.path)}
+                class:im-sync-file-item-static={!change.path}
+                title={change.path ? undefined : "아직 받지 않은 새 페이지 — 받은 뒤에 견줄 수 있습니다"}
+                onclick={() => showRemoteDiff(change)}
                 type="button"
               >
                 <span class="im-sync-file-type {typeClass(change.type)}"
@@ -450,6 +478,13 @@
               {#if change.path}
                 {@const path = change.path}
                 <span class="im-sync-file-actions">
+                  <button
+                    class="im-sync-file-action"
+                    aria-label="노트 열기"
+                    title="노트 열기"
+                    onclick={() => onOpenFile(path)}
+                    type="button">↗</button
+                  >
                   <button
                     class="im-sync-file-action"
                     aria-label={remotePullLabel(change)}
@@ -764,6 +799,9 @@
   }
   .im-sync-file-item:hover {
     background: var(--background-modifier-hover);
+  }
+  .im-sync-file-item-static {
+    cursor: default;
   }
   .im-sync-file-type {
     font-family: var(--font-monospace);

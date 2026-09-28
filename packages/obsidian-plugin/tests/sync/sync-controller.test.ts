@@ -21,6 +21,9 @@ interface MockOrchestrator {
   listConflicts: ReturnType<typeof vi.fn>;
   clearStaleConflicts: ReturnType<typeof vi.fn>;
   resolveConflict: ReturnType<typeof vi.fn>;
+  discardLocalChange: ReturnType<typeof vi.fn>;
+  localChangeDiff: ReturnType<typeof vi.fn>;
+  remoteChangeDiff: ReturnType<typeof vi.fn>;
 }
 
 function createMockOrchestrator(): MockOrchestrator {
@@ -53,6 +56,8 @@ function createMockOrchestrator(): MockOrchestrator {
       pendingOperations: 0,
     }),
     discardLocalChange: vi.fn().mockResolvedValue(undefined),
+    localChangeDiff: vi.fn(),
+    remoteChangeDiff: vi.fn(),
     statusLocal: vi.fn().mockResolvedValue({
       lastSyncAt: null,
       localChanges: [],
@@ -832,6 +837,52 @@ describe("SyncController", () => {
       await pulling;
       await controller.push();
       expect(mock.push).toHaveBeenCalledTimes(1);
+    });
+
+    it("줄 비교는 보기만 하므로 Pull 이 도는 동안에도 두 글을 내준다 — 거절하지 않는다", async () => {
+      const release = hold(mock.pull, PULL_RESULT);
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      const local = {
+        path: "a.md",
+        type: "modified",
+        currentHash: "h2",
+        previousHash: "h1",
+      } as const;
+      const remote = { pageId: "p1", type: "modified", path: "b.md", lastEdited: "t2" } as const;
+      const localDiff = { path: "a.md", type: "modified", before: "옛\n", after: "새\n" };
+      const remoteDiff = { path: "b.md", type: "modified", before: "옛\n", after: "Notion\n" };
+      mock.localChangeDiff.mockResolvedValue(localDiff);
+      mock.remoteChangeDiff.mockResolvedValue(remoteDiff);
+
+      const pulling = controller.pull();
+      onNotice.mockClear();
+      await expect(controller.localChangeDiff(local)).resolves.toBe(localDiff);
+      await expect(controller.remoteChangeDiff(remote)).resolves.toBe(remoteDiff);
+
+      expect(mock.localChangeDiff).toHaveBeenCalledWith(local);
+      expect(mock.remoteChangeDiff).toHaveBeenCalledWith(remote);
+      expect(onNotice).not.toHaveBeenCalled();
+      release();
+      await pulling;
+    });
+
+    it("줄 비교를 못 하면 이유를 담은 거절을 그대로 돌려준다 — 창이 그 이유를 보인다", async () => {
+      const { hooks, onState } = createHooks();
+      mock.localChangeDiff.mockRejectedValue(
+        new Error("지난 동기화 사본이 없어 비교할 수 없습니다 — a.md"),
+      );
+
+      await expect(
+        makeController(mock, hooks).localChangeDiff({
+          path: "a.md",
+          type: "modified",
+          currentHash: "h2",
+          previousHash: "h1",
+        }),
+      ).rejects.toThrow("지난 동기화 사본이 없어 비교할 수 없습니다 — a.md");
+      // 보기만 하는 것이라 사이드바를 「오류」 로 바꾸지 않는다
+      expect(onState).not.toHaveBeenCalled();
     });
 
     it("자동 주기 sync 는 도는 작업이 있으면 알리지 않고 건너뛴다", async () => {

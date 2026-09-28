@@ -55,6 +55,8 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     onPushPath: vi.fn(),
     onDiscardPath: vi.fn(),
     onPullPath: vi.fn(),
+    onShowLocalDiff: vi.fn(),
+    onShowRemoteDiff: vi.fn(),
     onResolveConflict: vi.fn(),
     ...overrides,
   };
@@ -142,6 +144,7 @@ describe("변경 패널 — 항목별 동작", () => {
   const PULL_DELETION = 'button[aria-label="Notion 에서 지운 대로 이 노트도 지우기"]';
   const PUSH = 'button[aria-label="이 노트만 Notion 에 올리기"]';
   const DISCARD = 'button[aria-label="지난 동기화 때의 글로 되돌리기"]';
+  const OPEN = 'button[aria-label="노트 열기"]';
 
   const remoteChanges = [
     { pageId: "3e813b18-d382-8127-a761-c5dc986d858a", type: "modified", path: "채소/감자.md" },
@@ -170,25 +173,72 @@ describe("변경 패널 — 항목별 동작", () => {
     expect(props.onPullPath.mock.calls).toEqual([["채소/감자.md"], ["과일/사과.md"]]);
   });
 
-  it("원격 항목을 누르면 볼트의 그 노트를 연다 — 아직 없는 새 페이지는 열지 않는다", () => {
+  it("원격 항목을 누르면 그 노트의 줄 비교를 연다 — 아직 받지 않은 새 페이지는 견줄 글이 없어 열지 않는다", () => {
     const props = baseProps({ remoteChanges });
     m = renderComponent(SyncDashboard, props);
     const rows = m.target.querySelectorAll<HTMLElement>(".im-sync-file-item");
 
     rows[0]!.click();
     rows[1]!.click();
-    expect(props.onOpenFile.mock.calls).toEqual([["채소/감자.md"]]);
+    rows[2]!.click();
+    expect(props.onShowRemoteDiff.mock.calls).toEqual([[remoteChanges[0]], [remoteChanges[2]]]);
+    // 반응 프록시가 아닌 평범한 사본이다 — 프록시는 복제하면 깨진다.
+    expect(() => structuredClone(props.onShowRemoteDiff.mock.calls[0]![0])).not.toThrow();
+    expect(props.onOpenFile).not.toHaveBeenCalled();
+    expect(rows[1]!.classList.contains("im-sync-file-item-static")).toBe(true);
   });
 
-  it("동기화 중에는 항목 동작을 누를 수 없다", () => {
+  it("↗ 는 볼트의 그 노트를 연다 — 원격 항목도 볼트에 있는 노트만", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    const opens = m.target.querySelectorAll<HTMLElement>(OPEN);
+    expect(opens).toHaveLength(2);
+    opens[0]!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["채소/감자.md"]]);
+    expect(props.onShowRemoteDiff).not.toHaveBeenCalled();
+  });
+
+  it("로컬 항목을 누르면 줄 비교를 연다 — 지운 노트도 무엇을 지웠는지 보이고, ↗ 는 볼트에 있는 노트에만 있다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" },
+      { path: "지운.md", type: "deleted", currentHash: "", previousHash: "h3" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+    const rows = m.target.querySelectorAll<HTMLElement>(".im-sync-file-item");
+
+    rows[0]!.click();
+    rows[1]!.click();
+    expect(props.onShowLocalDiff.mock.calls).toEqual([[localChanges[0]], [localChanges[1]]]);
+    expect(() => structuredClone(props.onShowLocalDiff.mock.calls[0]![0])).not.toThrow();
+    expect(props.onOpenFile).not.toHaveBeenCalled();
+
+    const opens = m.target.querySelectorAll<HTMLElement>(OPEN);
+    expect(opens).toHaveLength(1);
+    opens[0]!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["a/고친.md"]]);
+  });
+
+  it("동기화 중에는 올리기 · 받기 · 되돌리기를 누를 수 없다 — 노트 열기와 줄 비교는 보기만 해 된다", () => {
     const localChanges = [{ path: "노트.md", type: "modified" }];
-    m = renderComponent(
-      SyncDashboard,
-      baseProps({ remoteChanges, localChanges, syncState: "syncing", operationType: "pull" }),
-    );
+    const props = baseProps({
+      remoteChanges,
+      localChanges,
+      syncState: "syncing",
+      operationType: "pull",
+    });
+    m = renderComponent(SyncDashboard, props);
     const actions = [...m.target.querySelectorAll<HTMLButtonElement>(".im-sync-file-action")];
-    expect(actions).toHaveLength(4);
-    expect(actions.every((button) => button.disabled)).toBe(true);
+    const opens = actions.filter((button) => button.matches(OPEN));
+    const writes = actions.filter((button) => !button.matches(OPEN));
+
+    expect(writes).toHaveLength(4);
+    expect(writes.every((button) => button.disabled)).toBe(true);
+    expect(opens).toHaveLength(3);
+    expect(opens.every((button) => !button.disabled)).toBe(true);
+    m.target.querySelector<HTMLElement>(".im-sync-file-item")!.click();
+    expect(props.onShowLocalDiff).toHaveBeenCalledTimes(1);
   });
 
   it("↑ 는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 ↺ 가 없다", () => {

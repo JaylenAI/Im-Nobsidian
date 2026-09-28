@@ -1,6 +1,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import SyncDashboard from "./SyncDashboard.svelte";
+import type { LocalChange, RemoteChange } from "@im-nobsidian/core";
 import type { SyncDashboardState, SyncStatePatch } from "../sync/sync-controller.js";
 
 export const SYNC_SIDEBAR_TYPE = "im-notion-sync-sidebar";
@@ -16,6 +17,9 @@ interface SyncActions {
   onPushPath: (path: string) => Promise<void>;
   onDiscardPath: (path: string) => Promise<void>;
   onPullPath: (path: string) => Promise<void>;
+  /** 변경 하나의 줄 비교 창을 연다 — 보기만 한다. */
+  onShowLocalDiff: (change: LocalChange) => void;
+  onShowRemoteDiff: (change: RemoteChange) => void;
 }
 
 // 동기화 상태 형태는 SyncController(SSOT)에서 가져온다. 사이드바는 상태를 표시·전달만 한다.
@@ -89,6 +93,8 @@ export class SyncSidebarView extends ItemView {
         onPushPath: (path: string) => void this.actions!.onPushPath(path),
         onDiscardPath: (path: string) => void this.actions!.onDiscardPath(path),
         onPullPath: (path: string) => void this.actions!.onPullPath(path),
+        onShowLocalDiff: (change: LocalChange) => this.actions!.onShowLocalDiff(change),
+        onShowRemoteDiff: (change: RemoteChange) => this.actions!.onShowRemoteDiff(change),
         onResolveConflict: () => this.actions!.onResolveConflict(),
       },
     });

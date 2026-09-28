@@ -9,6 +9,7 @@ import type {
   SyncOrchestrator,
   GatedOperation,
   ProgressCallback,
+  ChangeDiff,
   LocalChange,
   FolderMoveChange,
   RemoteChange,
@@ -304,6 +305,19 @@ export class SyncController {
         this.fail("되돌리기", error);
       }
     });
+  }
+
+  /**
+   * 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글(변경 패널의 줄 비교 창). 읽기만
+   * 하므로 줄에 서지 않는다 — 긴 pull 이 도는 동안에도 볼 수 있다. 못 견주면 이유를 담아 거절한다.
+   */
+  localChangeDiff(change: LocalChange): Promise<ChangeDiff> {
+    return this.orchestrator.localChangeDiff(change);
+  }
+
+  /** 원격 변경 하나의 두 글 — 지난 동기화 때의 글과 Notion 의 지금 글. Notion 을 읽기만 한다. */
+  remoteChangeDiff(change: RemoteChange): Promise<ChangeDiff> {
+    return this.orchestrator.remoteChangeDiff(change);
   }
 
   /**

@@ -131,6 +131,33 @@ describe("SyncSidebarView", () => {
     expect(actions.onPullPath).toHaveBeenCalledWith("c.md");
   });
 
+  it("변경 패널에서 누른 변경을 그대로 줄 비교로 넘긴다", () => {
+    const actions = {
+      onPull: vi.fn(),
+      onPush: vi.fn(),
+      onSync: vi.fn(),
+      onRefresh: vi.fn(),
+      onResolveConflict: vi.fn(),
+      onCancel: vi.fn(),
+      onOpenFile: vi.fn(),
+      onPushPath: vi.fn(),
+      onDiscardPath: vi.fn(),
+      onPullPath: vi.fn(),
+      onShowLocalDiff: vi.fn(),
+      onShowRemoteDiff: vi.fn(),
+    };
+    view.setActions(actions);
+    view.updateState({ lastSyncAt: null });
+
+    const local = { path: "a.md", type: "modified", currentHash: "h2", previousHash: "h1" };
+    const remote = { pageId: "p1", type: "modified", path: "b.md", lastEdited: "t" };
+    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (c: unknown) => void>;
+    props.onShowLocalDiff!(local);
+    props.onShowRemoteDiff!(remote);
+    expect(actions.onShowLocalDiff).toHaveBeenCalledWith(local);
+    expect(actions.onShowRemoteDiff).toHaveBeenCalledWith(remote);
+  });
+
   it("actions 없으면 mount 안 함", () => {
     view.updateState({});
     expect(mount).not.toHaveBeenCalled();
