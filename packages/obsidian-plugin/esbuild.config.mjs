@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import builtins from "builtin-modules";
 import sveltePlugin from "esbuild-svelte";
 import { copyFileSync } from "node:fs";
+import { svelteCompilerOptions } from "./svelte-options.mjs";
 
 const prod = process.argv[2] === "production";
 
@@ -30,7 +31,7 @@ esbuild
     ],
     plugins: [
       sveltePlugin({
-        compilerOptions: { css: "injected" },
+        compilerOptions: svelteCompilerOptions,
       }),
     ],
     alias: {
