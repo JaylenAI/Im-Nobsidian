@@ -1211,7 +1211,10 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       createMockVaultFs(),
     );
 
-    await (orchestrator as unknown as PushPage).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "leaf-page",
+      "# Leaf\n\n본문.\n",
+    );
 
     expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(1);
     expect(notion.fetchAllChildren).not.toHaveBeenCalled();
@@ -1240,7 +1243,10 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       vaultFs,
     );
 
-    await (orchestrator as unknown as PushPage).pushUpdatePage("hub-page", LOCAL);
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "hub-page",
+      LOCAL,
+    );
 
     expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(2);
     const sent = notion.replacePageMarkdown.mock.calls[1]![1] as string;
@@ -1316,7 +1322,10 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
     );
 
     await expect(
-      (orchestrator as unknown as PushPage).pushUpdatePage("hub-page", "# Hub\n\n수정.\n"),
+      (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+        "hub-page",
+        "# Hub\n\n수정.\n",
+      ),
     ).rejects.toThrow(/자식까지 지워져 보내지 않음/);
     expect(notion.deleteBlock).not.toHaveBeenCalled();
     expect(notion.appendChildren).not.toHaveBeenCalled();
@@ -1336,7 +1345,10 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       createMockVaultFs(),
     );
 
-    await (orchestrator as unknown as PushPage).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "leaf-page",
+      "# Leaf\n\n본문.\n",
+    );
 
     expect(notion.appendChildren).toHaveBeenCalledTimes(1);
     expect(notion.deleteBlock).toHaveBeenCalledWith("para-1");
