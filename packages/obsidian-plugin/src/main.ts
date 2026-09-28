@@ -8,7 +8,6 @@ import {
   getLogger,
 } from "@im-nobsidian/core";
 import type {
-  IStateDB,
   Config,
   Conflict,
   LocalChange,
@@ -18,6 +17,7 @@ import type {
 import { INTERNAL_DIR, STATE_DB_PATH, MARKER_BRAND } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
+import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ObsidianVaultAdapter } from "./vault-adapter.js";
 import { ConflictModal } from "./conflict-modal.js";
@@ -99,7 +99,7 @@ const DEFAULT_SETTINGS: ImNobsidianSettings = {
 export default class ImNobsidianPlugin extends Plugin {
   settings: ImNobsidianSettings = DEFAULT_SETTINGS;
   private syncController: SyncController | null = null;
-  private stateDb: IStateDB | null = null;
+  private stateDb: SqlJsStateDB | null = null;
   private statusBarEl: HTMLElement | null = null;
   private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
   private initializing: Promise<void> = Promise.resolve();
@@ -209,8 +209,9 @@ export default class ImNobsidianPlugin extends Plugin {
   onunload(): void {
     this.stopAutoSync();
     this.clearVaultDebounce();
-    // 도는 초기화가 있으면 그것이 연 DB 까지 닫는다.
+    // 도는 초기화가 있으면 그것이 연 DB 까지 닫는다. 다시 불러온 플러그인은 이 닫기가 끝난 뒤에 DB 를 연다.
     this.initializing = this.initializing.then(() => this.closeStateDb());
+    announceStateDbClose(this.initializing);
     void this.initializing.catch((error: unknown) => {
       const message = error instanceof Error ? error.message : String(error);
       getLogger().warn(`[Im-Nobsidian] 상태 DB 를 닫지 못함: ${message}`);
@@ -218,8 +219,9 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   /**
-   * 도는 작업을 멈추고 끝나기를 기다린 뒤 상태 DB 를 닫는다(S-09). 예전에는 도는 sync 아래에서
-   * 닫아, 그 sync 가 닫힌 DB 에 쓰다 실패했다.
+   * 도는 작업을 멈추고 끝나기를 기다린 뒤, 상태 DB 의 남은 쓰기를 마치고 닫는다(S-09). 예전에는 도는 sync
+   * 아래에서 닫아, 그 sync 가 닫힌 DB 에 쓰다 실패했다. 쓰기도 기다리지 않아, 같은 파일을 다시 여는 쪽이 옛
+   * 기록을 읽을 수 있었다. 못 쓰면 DB 를 쥔 채 이유를 던진다 — 다음 초기화가 다시 닫는다.
    */
   private async closeStateDb(): Promise<void> {
     const controller = this.syncController;
@@ -227,10 +229,12 @@ export default class ImNobsidianPlugin extends Plugin {
     this.syncController = null;
     this.stateDb = null;
     await controller?.shutdown();
-    if (stateDb && "flush" in stateDb) {
-      void (stateDb as SqlJsStateDB).flush();
+    try {
+      await stateDb?.close();
+    } catch (error) {
+      this.stateDb = stateDb;
+      throw error;
     }
-    stateDb?.close();
   }
 
   async loadSettings(): Promise<void> {
@@ -265,19 +269,8 @@ export default class ImNobsidianPlugin extends Plugin {
       const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
       const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
 
-      let existingData: Uint8Array | null = null;
-      try {
-        const adapter = this.app.vault.adapter;
-        if (await adapter.exists(STATE_DB_PATH)) {
-          const buf = await adapter.readBinary(STATE_DB_PATH);
-          existingData = new Uint8Array(buf);
-        }
-      } catch {
-        // first run — no DB yet
-      }
-
       this.stateDb = await SqlJsStateDB.open(
-        existingData,
+        await this.readStateDbFile(),
         async (data: Uint8Array) => {
           const adapter = this.app.vault.adapter;
           if (!(await adapter.exists(INTERNAL_DIR))) {
@@ -335,6 +328,23 @@ export default class ImNobsidianPlugin extends Plugin {
       new Notice(`Im-Nobsidian 초기화 실패: ${message}`);
       this.updateStatusBar("error");
     }
+  }
+
+  /**
+   * 상태 DB 파일을 읽는다 — 처음이면 null. 플러그인을 다시 불러왔으면 옛 인스턴스가 DB 를 다 닫은 뒤에
+   * 읽는다 — 먼저 읽으면 옛 인스턴스의 마지막 기록이 빠진 DB 를 연다.
+   */
+  private async readStateDbFile(): Promise<Uint8Array | null> {
+    await previousStateDbClosed();
+    try {
+      const adapter = this.app.vault.adapter;
+      if (await adapter.exists(STATE_DB_PATH)) {
+        return new Uint8Array(await adapter.readBinary(STATE_DB_PATH));
+      }
+    } catch {
+      // first run — no DB yet
+    }
+    return null;
   }
 
   private getSidebarView(): SyncSidebarView | null {

@@ -76,6 +76,8 @@ vi.mock("@im-nobsidian/core", () => ({
   EntryEditor: class {
     constructor() {}
   },
+  /** 상태 DB 파일 자리 — 시험은 읽으려 했는지만 본다. */
+  STATE_DB_PATH: "<state-db>",
   DEFAULT_CONFIG: {
     notion: { token: "", rootPageId: "", parentMode: "page", databases: [] },
     sync: { direction: "both", conflictStrategy: "manual", deleteSync: true },
@@ -140,6 +142,86 @@ describe("ImNobsidianPlugin", () => {
 
     finish();
     await vi.waitFor(() => expect(order).toEqual(["shutdown", "close"]));
+  });
+
+  it("상태 DB 는 남은 쓰기를 마친 뒤에야 닫힌 것으로 본다 — 그 뒤에 같은 파일을 다시 연다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    let finishWrite!: () => void;
+    const internals = plugin as unknown as { stateDb: unknown; closeStateDb: () => Promise<void> };
+    internals.stateDb = { close: () => new Promise<void>((resolve) => (finishWrite = resolve)) };
+
+    let closed = false;
+    const closing = internals.closeStateDb().then(() => (closed = true));
+    await vi.waitFor(() => expect(finishWrite).toBeDefined());
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(closed).toBe(false);
+
+    finishWrite();
+    await closing;
+    expect(closed).toBe(true);
+  });
+
+  it("상태 DB 를 닫다가 못 쓰면 DB 를 쥔 채 이유를 던진다 — 다음 초기화가 다시 닫는다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const stateDb = {
+      close: vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("권한 없음"))
+        .mockResolvedValueOnce(undefined),
+    };
+    const internals = plugin as unknown as { stateDb: unknown; closeStateDb: () => Promise<void> };
+    internals.stateDb = stateDb;
+
+    await expect(internals.closeStateDb()).rejects.toThrow("권한 없음");
+    expect(internals.stateDb).toBe(stateDb);
+
+    await internals.closeStateDb();
+    expect(stateDb.close).toHaveBeenCalledTimes(2);
+    expect(internals.stateDb).toBeNull();
+  });
+
+  it("다시 불러온 플러그인은 옛 인스턴스가 상태 DB 를 다 닫은 뒤에 파일을 읽는다", async () => {
+    const events: string[] = [];
+    const old = new ImNobsidianPlugin({} as never, {} as never);
+    let finishOld!: () => void;
+    (old as unknown as { stateDb: unknown }).stateDb = {
+      close: () =>
+        new Promise<void>((resolve) => {
+          finishOld = () => {
+            events.push("옛 인스턴스가 닫음");
+            resolve();
+          };
+        }),
+    };
+    const fresh = new ImNobsidianPlugin({} as never, {} as never);
+    const internals = fresh as unknown as {
+      app: unknown;
+      readStateDbFile: () => Promise<Uint8Array | null>;
+    };
+    internals.app = {
+      vault: {
+        adapter: {
+          exists: async () => {
+            events.push("새 인스턴스가 읽음");
+            return false;
+          },
+        },
+      },
+    };
+
+    try {
+      old.onunload();
+      const reading = internals.readStateDbFile();
+      await vi.waitFor(() => expect(finishOld).toBeDefined());
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      expect(events).toEqual([]);
+
+      finishOld();
+      await expect(reading).resolves.toBeNull();
+      expect(events).toEqual(["옛 인스턴스가 닫음", "새 인스턴스가 읽음"]);
+    } finally {
+      delete (globalThis as Record<symbol, unknown>)[Symbol.for("im-nobsidian/state-db-closing")];
+    }
   });
 
   it("충돌 창은 플러그인을 내리면(신호 취소) 닫히고 고르지 않은 것으로 끝난다 (S-09)", async () => {
