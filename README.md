@@ -229,6 +229,19 @@ When both sides change the same file, `pull`/`sync` flags it as a conflict inste
 
 Interactive mode adds a **merge** option (3-way auto-merge with conflict markers). The default `sync.conflictStrategy` is `manual` — conflicts are flagged and left for you to resolve.
 
+### CLI and Plugin on the Same Vault
+
+The CLI and the Obsidian plugin share one sync-state database per vault (`.im-nobsidian/sync.db`),
+so only one of them can have it open at a time. While one holds it, the other stops and says who
+holds it — for example, close Obsidian or disable the plugin for that vault before running CLI
+commands on it. A lock left behind by a process that crashed on the same machine is taken over
+automatically. If the message persists while nothing is running, delete `.im-nobsidian/sync.db.lock`.
+
+If a CLI run was killed before it finished, run any CLI command in the vault once (for example
+`nobsi status`) to merge its last records, then refresh the plugin.
+
+Update the CLI and the plugin together — older versions don't take the lock.
+
 ## Supported Conversions
 
 | Feature                                         |        Push         |     Pull      |

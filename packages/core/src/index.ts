@@ -58,11 +58,18 @@ export { ConfigManager } from "./config/index.js";
 // State
 export {
   StateDB,
+  StateDbUnavailableError,
   SavedStateDbError,
   SAVED_STATE_TABLES_QUERY,
-  damagedStateDbGuidance,
+  StateLock,
+  StateDbLockedError,
+  stateDbLockPath,
+  PendingWalError,
+  assertNoPendingWal,
+  pendingWalBytes,
+  stateDbWalPath,
 } from "./state/index.js";
-export type { IStateDB } from "./state/index.js";
+export type { IStateDB, StateDbTool, StateLockClaim, StateLockOwner } from "./state/index.js";
 export type {
   UpsertSyncRecord,
   FileRegistryEntry,

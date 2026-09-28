@@ -14,21 +14,36 @@ import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
 import { REMOTE_OBSERVATION_MIGRATION } from "./migrations/004-remote-observation.js";
 import type { IStateDB } from "./state-db-interface.js";
 import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
+import { StateLock, stateDbLockPath } from "./state-lock.js";
 
 export class StateDB implements IStateDB {
   private readonly db: Database.Database;
 
-  private constructor(db: Database.Database) {
+  private constructor(
+    db: Database.Database,
+    private readonly lock: StateLock,
+  ) {
     this.db = db;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
   }
 
   /**
-   * 상태 DB 파일을 연다 — 없으면 새로 만든다. 저장된 파일이 비었거나 잘렸으면 빈 DB 로 열지 않고
+   * 상태 DB 파일을 연다 — 없으면 새로 만든다. 한 볼트의 상태 DB 는 한 곳만 연다 — 플러그인이나 다른 CLI 가 쓰는
+   * 중이면 {@link StateDbLockedError} 를 던진다(ADR-026). 저장된 파일이 비었거나 잘렸으면 빈 DB 로 열지 않고
    * {@link SavedStateDbError} 를 던진다. 예전에는 0 · 1바이트 파일을 빈 DB 로 열고 닫을 때 빈 DB 로 덮었다.
    */
   static open(dbPath: string): StateDB {
+    const lock = StateLock.acquire(stateDbLockPath(dbPath), { tool: "cli" });
+    try {
+      return StateDB.openLocked(dbPath, lock);
+    } catch (error) {
+      lock.release();
+      throw error;
+    }
+  }
+
+  private static openLocked(dbPath: string, lock: StateLock): StateDB {
     const savedBytes = existsSync(dbPath) ? statSync(dbPath).size : null;
     // 비었으면 열지도 않는다 — SQLite 는 0바이트 파일을 읽을 때 옆 WAL 파일을 지운다.
     if (savedBytes === 0) throw SavedStateDbError.noTables(0);
@@ -38,7 +53,7 @@ export class StateDB implements IStateDB {
       if (savedBytes !== null && db.prepare(SAVED_STATE_TABLES_QUERY).get() === undefined) {
         throw SavedStateDbError.noTables(savedBytes);
       }
-      const stateDb = new StateDB(db);
+      const stateDb = new StateDB(db, lock);
       stateDb.migrate();
       return stateDb;
     } catch (error) {
@@ -75,8 +90,13 @@ export class StateDB implements IStateDB {
     }
   }
 
+  /** 닫고 잠금을 푼다 — 닫는 사이 다른 곳이 열지 않게 닫은 뒤에 푼다. */
   close(): void {
-    this.db.close();
+    try {
+      this.db.close();
+    } finally {
+      this.lock.release();
+    }
   }
 
   // --- sync_state ---

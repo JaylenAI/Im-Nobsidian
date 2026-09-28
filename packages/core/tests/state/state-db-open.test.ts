@@ -7,11 +7,20 @@
  */
 import { describe, it, expect, afterEach, onTestFinished, vi } from "vitest";
 import Database from "better-sqlite3";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { StateDB } from "../../src/state/state-db.js";
 import { SavedStateDbError } from "../../src/state/saved-state-db-error.js";
+import { StateDbLockedError, stateDbLockPath } from "../../src/state/state-lock.js";
 
 const dirs: string[] = [];
 function tempDir(): string {
@@ -156,6 +165,30 @@ describe("저장된 상태 DB 파일로 열기 (CLI)", () => {
     const error = openFailure(path);
 
     expect(error).not.toBeInstanceOf(SavedStateDbError);
+  });
+
+  it("열린 동안 다른 곳이 같은 상태 DB 를 열지 못한다 — 닫으면 연다(ADR-026)", () => {
+    const path = savedFile();
+    const first = StateDB.open(path);
+
+    const error = openFailure(path);
+    expect(error).toBeInstanceOf(StateDbLockedError);
+    expect(error.message).toContain("이 볼트의 상태 DB 를 다른 곳이 쓰는 중 — CLI (pid ");
+
+    first.close();
+    expect(existsSync(stateDbLockPath(path))).toBe(false);
+    StateDB.open(path).close();
+  });
+
+  it("열다 실패하면 잠금을 푼다 — 깨진 파일을 치운 뒤 바로 다시 열 수 있다", () => {
+    const path = join(tempDir(), "sync.db");
+    writeFileSync(path, "");
+
+    expect(openFailure(path)).toBeInstanceOf(SavedStateDbError);
+
+    expect(existsSync(stateDbLockPath(path))).toBe(false);
+    rmSync(path);
+    StateDB.open(path).close();
   });
 
   it("체크포인트 전에 끝난 CLI 의 기록은 WAL 에서 읽는다 — 깨진 파일로 보지 않는다", () => {
