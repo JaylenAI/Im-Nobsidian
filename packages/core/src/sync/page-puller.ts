@@ -562,7 +562,8 @@ export class PagePuller {
    * 충돌(' (1).md')로 쪼개졌다.
    *
    * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
-   *      집합({@link RemoteDetector.hasChildPages})으로 O(1) 판정(추가 API 호출 0, 처리 순서 무관) — 전체 pull 경로.
+   *      집합({@link RemoteDetector.hasChildPages})으로 O(1) 판정(추가 API 호출 0, 처리 순서
+   *      무관) — 전체 pull 경로.
    * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
    *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
    */

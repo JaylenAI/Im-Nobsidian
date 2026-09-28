@@ -226,8 +226,8 @@ export class PagePusher {
 
   /**
    * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파 · 입양한 행).
-   *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link RemoteDriftChecker.overwritesRemote}). DB 행은 비교 기준도
-   *   달라진다(pushRowUpdate).
+   *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link RemoteDriftChecker.overwritesRemote}). DB 행은
+   *   비교 기준도 달라진다(pushRowUpdate).
    */
   async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<void> {
     const content = await this.vaultFs.readFile(path);
@@ -672,7 +672,8 @@ export class PagePusher {
    * - 원격도 바뀌었으면 똑같이 로컬에서 바꾼 것만 보내되 notionLastEdited 를 올리지 않는다.
    *   올리면 다음 pull 이 원격 변경을 «이미 받은 것» 으로 여겨 영영 가져오지 않는다. 본문은
    *   통째로 바꾸므로 원격 본문이 그대로일 때만 보낸다 — 아니면 pull 을 먼저 하라며 거절한다.
-   *   원격이 바뀌었는지는 같은 분 안의 편집까지 내용으로 가른다(N-05, {@link RemoteDriftChecker.remoteDrift}).
+   *   원격이 바뀌었는지는 같은 분 안의 편집까지 내용으로 가른다(N-05,
+   *   {@link RemoteDriftChecker.remoteDrift}).
    * - 충돌 해소 결과를 보낼 때(`overwriteRemote`)는 원격의 지금 값과 견줘 다른 것을 모두
    *   보내고 본문도 보낸다 — 로컬이 이긴다(페이지가 본문을 통째로 바꾸는 것과 같다).
    */

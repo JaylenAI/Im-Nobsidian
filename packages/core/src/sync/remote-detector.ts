@@ -385,7 +385,8 @@ export class RemoteDetector {
 
   /**
    * 행의 삭제를 DB 조회로 가르는 DB — 이번 pull 이 조회하는 DB 다. 설정된 DB 와, 페이지 모드면 자동
-   * 발견된 DB(접근 불가로 뺀 것 제외). {@link DatabaseDiscovery.pullDiscoveredDatabases} 가 조회하는 목록과 같다.
+   * 발견된 DB(접근 불가로 뺀 것 제외). {@link DatabaseDiscovery.pullDiscoveredDatabases} 가 조회하는
+   * 목록과 같다.
    */
   private rowQueriedDatabaseIds(): Set<string> {
     const ids = (this.config.notion.databases ?? []).map((d) => d.databaseId);

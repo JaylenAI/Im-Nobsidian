@@ -143,8 +143,8 @@ export class PullPlanner {
 
   /**
    * dry-run 이 셀 DB 행 — 실제 pull 이 받는 DB 와 같다. 설정한 DB(`pullAll`)와 발견해 둔 DB
-   * (`DatabaseDiscovery.pullDiscoveredDatabases`)를 같은 규칙으로 고른다. 세지 못한 DB 는 이유와 함께 `failed`
-   * 에 싣는다 — 세지 못한 것을 없다고 하지 않는다.
+   * (`DatabaseDiscovery.pullDiscoveredDatabases`)를 같은 규칙으로 고른다. 세지 못한 DB 는 이유와
+   * 함께 `failed` 에 싣는다 — 세지 못한 것을 없다고 하지 않는다.
    */
   private async planDatabaseRows(
     paths: readonly string[] | undefined,
