@@ -14,6 +14,7 @@ import {
   UNOBSERVED,
 } from "../helpers/mock-orchestrator.js";
 import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
+import type { DbBaseFiles } from "../../src/sync/db-base-files.js";
 
 /**
  * upsert 한 레코드를 getByPath 가 돌려주게 한다. push 는 폴더 페이지를 먼저 만들고 그 기록으로
@@ -1621,7 +1622,7 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
       parentPageId: string,
     ): Promise<{ kind: string; config?: { localFolder: string } }>;
     databaseSyncer: {
-      baseFileInfo: Map<string, { basePath: string; title: string }>;
+      baseFileInfo: Pick<DbBaseFiles, "get" | "set">;
       pullDatabase: (cfg: unknown) => Promise<unknown>;
     };
   };
