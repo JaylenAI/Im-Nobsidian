@@ -12,6 +12,7 @@ const COMPONENT_TESTS = [
   "tests/views/gallery-view.test.ts",
   "tests/views/list-view.test.ts",
   "tests/views/sync-dashboard.test.ts",
+  "tests/views/change-diff-view.test.ts",
 ];
 
 export default defineWorkspace([
