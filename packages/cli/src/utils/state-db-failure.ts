@@ -1,8 +1,9 @@
 /**
  * 상태 DB 를 쓸 수 없을 때의 CLI 출력 — 이유 뒤에 할 일을 붙인다.
  *
- * 명령은 처음에 상태 DB 를 연다(`StateDB.open`). 파일이 비었거나 잘렸으면(`SavedStateDbError`) 던지는데, 명령
- * 밖으로 나오면 Node 가 코드 위치(스택)와 함께 이유만 보였다 — 사용자가 할 일은 어디에도 없었다.
+ * 명령은 처음에 상태 DB 를 연다(`StateDB.open`). 파일이 비었거나 잘렸거나(`SavedStateDbError`), 플러그인이 같은
+ * 볼트를 쓰는 중이면(`StateDbLockedError`) 던지는데, 명령 밖으로 나오면 Node 가 코드 위치(스택)와 함께 이유만
+ * 보였다 — 사용자가 할 일은 어디에도 없었다.
  */
 import { StateDbUnavailableError } from "@im-nobsidian/core";
 import type { ExitableProcess } from "./exit.js";
