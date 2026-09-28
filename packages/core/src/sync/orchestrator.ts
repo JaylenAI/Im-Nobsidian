@@ -1617,9 +1617,7 @@ export class SyncOrchestrator {
       failed.push({
         path: "",
         operation: "update",
-        error: `DB 자동 발견이 멈춤 — 다음 pull 이 다시 한다: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        error: `DB 자동 발견이 멈춤: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
 
