@@ -17,7 +17,7 @@ import {
   remotePresence,
 } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
-import { noteTitle } from "./note-title.js";
+import { extractAliases, noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { resolveDbRowPath } from "../utils/db-row-path.js";
@@ -1081,18 +1081,6 @@ export class DatabaseSyncer {
 
     return { action: "written", path: filePath };
   }
-}
-
-function extractAliases(properties: Record<string, unknown>): string[] {
-  const raw = properties.aliases ?? properties.alias;
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.filter((a): a is string => typeof a === "string");
-  if (typeof raw === "string")
-    return raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  return [];
 }
 
 /**

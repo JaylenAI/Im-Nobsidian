@@ -110,10 +110,13 @@ import {
 import type { GatedOperation } from "./operation-gate.js";
 import {
   explicitTitle,
+  extractAliases,
+  extractTitle,
   followsFileName,
   noteTitle,
   titleAfterMove,
   titleMayChange,
+  titleProperty,
 } from "./note-title.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import {
@@ -3317,27 +3320,4 @@ function pushOperationOf(change: LocalChange): ProgressItem["operation"] {
     case "modified":
       return "update";
   }
-}
-
-function extractTitle(filePath: string): string {
-  const parts = filePath.split("/");
-  const filename = parts[parts.length - 1] ?? "";
-  return filename.replace(/\.md$/, "");
-}
-
-/** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
-function titleProperty(title: string): Record<string, unknown> {
-  return { title: { title: [{ text: { content: title } }] } };
-}
-
-function extractAliases(properties: Record<string, unknown>): string[] {
-  const raw = properties.aliases ?? properties.alias;
-  if (!raw) return [];
-  if (Array.isArray(raw)) return raw.filter((a): a is string => typeof a === "string");
-  if (typeof raw === "string")
-    return raw
-      .split(",")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  return [];
 }
