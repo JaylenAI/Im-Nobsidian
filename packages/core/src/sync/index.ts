@@ -15,6 +15,6 @@ export type {
 export type { RenameHints, RenameKind } from "./local-moves.js";
 export type { ImageDownloadResult } from "./image-handler.js";
 export type { FileUploadResult, FileDownloadResult } from "./file-handler.js";
-export type { DatabaseSyncResult } from "./database-syncer.js";
+export type { DatabaseSyncResult, PlannedRow } from "./database-syncer.js";
 export type { GatedOperation } from "./operation-gate.js";
 export type { PathFilterConfig } from "./node-vault-fs.js";

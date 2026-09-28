@@ -79,24 +79,44 @@ export async function applyRemoteDeletion(
   record: SyncRecord,
   options: RemoteDeletionOptions,
 ): Promise<RemoteDeletionOutcome> {
-  const local = options.deleteFile ? await unsyncedLocalEdit(vaultFs, record) : null;
-  if (local !== null && options.strategy !== "remote-first") {
-    if (options.strategy === "local-first") {
-      untrack(stateDb, record);
-      getLogger().info(
-        `[Im-Nobsidian] Notion 에서 지운 ${record.obsidianPath} 에 올리지 않은 로컬 편집이 있어 파일을 둠 — ` +
-          `다음 push 가 새 페이지로 만든다(local-first)`,
-      );
-      return { action: "kept" };
-    }
+  const decision = await decideRemoteDeletion(vaultFs, record, options);
+  if (decision.action === "kept") {
+    untrack(stateDb, record);
+    getLogger().info(
+      `[Im-Nobsidian] Notion 에서 지운 ${record.obsidianPath} 에 올리지 않은 로컬 편집이 있어 파일을 둠 — ` +
+        `다음 push 가 새 페이지로 만든다(local-first)`,
+    );
+    return { action: "kept" };
+  }
+  if (decision.action === "conflict") {
     stateDb.updateStatus(record.id, "conflict");
     return {
       action: "conflict",
-      conflict: remoteDeletionConflict(record, local, options.remoteChange),
+      conflict: remoteDeletionConflict(record, decision.local, options.remoteChange),
     };
   }
   await removeTrackedNote(stateDb, vaultFs, record, options.deleteFile);
   return { action: "deleted" };
+}
+
+/** {@link applyRemoteDeletion} 이 할 일 — 가르기만 하고 바꾸지 않는다. 충돌이면 그 로컬 본문을 싣는다. */
+export type RemoteDeletionDecision =
+  | { readonly action: "deleted" }
+  | { readonly action: "kept" }
+  | { readonly action: "conflict"; readonly local: string };
+
+/**
+ * 원격에서 사라진 노트를 어떻게 반영할지 가른다 — 볼트 · 상태 DB 를 바꾸지 않는다. 받는 pull 과
+ * 세기만 하는 dry-run 이 같은 판정을 쓴다. 파일을 읽지 못하면 던진다.
+ */
+export async function decideRemoteDeletion(
+  vaultFs: VaultFS,
+  record: SyncRecord,
+  options: Pick<RemoteDeletionOptions, "deleteFile" | "strategy">,
+): Promise<RemoteDeletionDecision> {
+  const local = options.deleteFile ? await unsyncedLocalEdit(vaultFs, record) : null;
+  if (local === null || options.strategy === "remote-first") return { action: "deleted" };
+  return options.strategy === "local-first" ? { action: "kept" } : { action: "conflict", local };
 }
 
 /**
