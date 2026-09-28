@@ -101,6 +101,12 @@ import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
 import { extractParentId } from "./notion-parent.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import {
+  refuseUnpulledBody,
+  refuseUnpulledDeletion,
+  RemoteDriftChecker,
+  type RemoteDrift,
+} from "./remote-drift.js";
+import {
   DISCOVERED_DBS_META_KEY,
   loadInaccessibleDbIds,
   loadLinkedDbMap,
@@ -114,7 +120,6 @@ import {
   noteTitle,
   titleAfterMove,
   titleMayChange,
-  titleUnchangedSince,
 } from "./note-title.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import {
@@ -152,18 +157,6 @@ interface RowState {
   readonly title: string;
   readonly body: string | null;
 }
-
-/**
- * 지난번에 본 뒤로 원격에서 바뀐 것(N-05).
- *
- * - `none` — 지난번 그대로다. 쓴 뒤 수정 시각을 올려도 된다.
- * - `outside-body` — 본문은 그대로지만 본문 밖(제목 · 행 속성 · 아이콘 · 커버)이 바뀌었다. 본문은
- *   써도 되지만 수정 시각은 올리지 않는다 — 올리면 다음 pull 이 그 변경을 «이미 받은 것» 으로
- *   여긴다.
- * - `body` — 본문이 바뀌었다.
- * - `unknown` — 지난번 본문의 지문을 몰라 확인하지 못했다.
- */
-type RemoteDrift = "none" | "outside-body" | "body" | "unknown";
 
 /**
  * 이번 실행의 로컬 스캔 — 옮긴 노트 · 폴더를 상태 DB 에 옮겨 적기 전의 결과(S-11).
@@ -247,6 +240,9 @@ export class SyncOrchestrator {
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
+
+  // 지난번에 본 뒤로 원격이 바뀌었나(N-05) — 덮어쓰기 · 지우기 전에, 변경을 보이기 전에 본다.
+  private readonly drift: RemoteDriftChecker;
 
   // 페이지 모드의 DB 자동 발견 — 페이지 안의 DB 를 찾아 등록하고 받는다.
   private readonly discovery: DatabaseDiscovery;
@@ -337,6 +333,15 @@ export class SyncOrchestrator {
     this.rowSchemas = new RowSchemaCache(
       (databaseId) => notionClient.getDatabaseSchema(databaseId),
       wikilinkResolver,
+    );
+
+    this.drift = new RemoteDriftChecker(
+      config,
+      stateDb,
+      notionClient,
+      this.databaseSyncer,
+      this.rowSchemas,
+      this.observation,
     );
 
     this.blockConverter.initNotionToMd(this.notionClient.getInternalClient());
@@ -976,7 +981,7 @@ export class SyncOrchestrator {
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
     const scan = this.remoteScan({ force: false, deferDue: true });
     const detection = await this.detectRemote(scan, { databases: false });
-    const remoteChanges = await this.withoutUnchangedRemotes(detection.changes);
+    const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes);
     const conflictRecords = this.stateDb.getByStatus("conflict");
 
     const conflicts: Conflict[] = await this.buildConflictsFromRecords(
@@ -1635,95 +1640,8 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 원격이 바뀌었는지 확인하지 않고 로컬로 덮어써도 되는가 — 원격을 로컬로 맞추라는 요청이다.
-   *
-   * - 충돌 해소 결과를 보낼 때 · 입양한 행을 맞출 때(`overwriteRemote`)
-   * - 충돌 전략이 local-first 이거나 push 전용일 때 — 설정이 로컬이 이긴다고 정했다
-   * - 이 노트가 만든 페이지를 아직 한 번도 맞추지 못했을 때(만들다 끊긴 페이지 · 입양한 고아
-   *   페이지) — 견줄 지난 사본이 없고, 페이지는 이 노트가 만든 것이다
-   */
-  private overwritesRemote(record: SyncRecord, overwriteRemote: boolean): boolean {
-    return (
-      overwriteRemote ||
-      this.config.sync.conflictStrategy === "local-first" ||
-      this.config.sync.direction === "push" ||
-      (record.contentHash === "" && record.notionBodyFingerprint === null)
-    );
-  }
-
-  /**
-   * 지난번에 본 뒤로 원격에서 무엇이 바뀌었나(N-05) — push 가 pull 하지 않은 Notion 편집을
-   * 덮어쓰지 않고, 덮어쓰지 않은 원격 변경은 다음 pull 이 받게.
-   *
-   * 수정 시각 · 편집자로 가를 수 있으면 그것으로 가른다. 바뀌었거나 같은 분 안이라 가를 수 없으면
-   * 내용으로 확인한다 — 본문은 지문으로, 본문 밖은 지난 동기화 사본과 견준다. 이 도구가 만든 자식
-   * 페이지는 부모의 수정 시각을 올리지만 부모의 본문 · 제목은 그대로다.
-   *
-   * 본문 밖까지 견주는 이유: 본문만 같다고 수정 시각을 올리지 않으면, 다음 pull 이 방금 올린
-   * 본문을 다시 받아 지난 사본과 견준다. 왕복한 본문은 글자 그대로 같지 않아(줄 끝 개행 등)
-   * 로컬을 다시 쓰고, 그 사이 로컬을 더 고쳤으면 충돌로 올렸다.
-   *
-   * @param remote 지금 원격 페이지.
-   */
-  private async remoteDrift(record: SyncRecord, remote: PageObjectResponse): Promise<RemoteDrift> {
-    if (this.observation.verdict(record, remote) === "unchanged") return "none";
-    const fingerprint = record.notionBodyFingerprint;
-    if (fingerprint === null) return "unknown";
-    if ((await this.remoteBodyFingerprintOf(record.notionPageId!)) !== fingerprint) return "body";
-    return (await this.outsideBodyUnchanged(record, remote)) ? "none" : "outside-body";
-  }
-
-  /**
-   * 원격의 본문 밖이 지난 동기화 사본 그대로인가 — pull 이 받아 노트에 적는 것 중 본문이 아닌 것.
-   * 페이지는 제목뿐이고, 행은 제목과 보낼 수 있는 속성, 그리고 행 렌더러로 받는 행이면 아이콘 ·
-   * 커버다. 지난 사본을 읽지 못하면 아니다.
-   */
-  private async outsideBodyUnchanged(
-    record: SyncRecord,
-    remote: PageObjectResponse,
-  ): Promise<boolean> {
-    const base = snapshotFrontmatter(record.baseSnapshot);
-    if (base === null) return false;
-    const databaseId = rowDatabaseOf(this.config, record);
-    if (databaseId === null) {
-      return titleUnchangedSince(base, record.obsidianPath, this.notionClient.extractTitle(remote));
-    }
-    return this.databaseSyncer.rowOutsideBodyUnchanged(
-      await this.rowSchemas.mapperFor(databaseId),
-      remote,
-      base,
-      record.obsidianPath,
-      record.fileType === "db-row",
-    );
-  }
-
-  /**
-   * 받은 원격이 지난 동기화 사본 그대로인가 — {@link remoteDrift} 와 같은 규칙으로, 본문은 지문으로
-   * · 본문 밖은 지난 사본과 견준다. 렌더한 글이 지난 사본과 달라도(이 도구가 만든 자식 페이지의
-   * 링크 · 왕복한 본문) 받을 것이 없다.
-   *
-   * @param fingerprint 받은 원격 본문의 지문. 모르면 null — 그대로라고 보지 않는다.
-   */
-  private async unchangedSinceSync(
-    record: SyncRecord,
-    remote: PageObjectResponse,
-    fingerprint: string | null,
-  ): Promise<boolean> {
-    return (
-      fingerprint !== null &&
-      fingerprint === record.notionBodyFingerprint &&
-      (await this.outsideBodyUnchanged(record, remote))
-    );
-  }
-
-  /** 원격 본문을 지금 받아 만든 지문. */
-  private async remoteBodyFingerprintOf(pageId: string): Promise<string> {
-    return remoteBodyFingerprint((await this.notionClient.getPageMarkdown(pageId)).markdown);
-  }
-
-  /**
    * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파 · 입양한 행).
-   *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link overwritesRemote}). DB 행은 비교 기준도
+   *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link RemoteDriftChecker.overwritesRemote}). DB 행은 비교 기준도
    *   달라진다(pushRowUpdate).
    */
   private async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<void> {
@@ -1755,9 +1673,12 @@ export class SyncOrchestrator {
 
     // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
     // 쓰되 수정 시각을 올리지 않는다 — 원격의 제목 변경은 다음 pull 이 받는다.
-    const drift: RemoteDrift = this.overwritesRemote(record, options?.overwriteRemote === true)
+    const drift: RemoteDrift = this.drift.overwritesRemote(
+      record,
+      options?.overwriteRemote === true,
+    )
       ? "none"
-      : await this.remoteDrift(record, await this.notionClient.getPage(record.notionPageId));
+      : await this.drift.remoteDrift(record, await this.notionClient.getPage(record.notionPageId));
     refuseUnpulledBody(drift, path);
     const settles = drift === "none";
 
@@ -1768,7 +1689,7 @@ export class SyncOrchestrator {
     );
 
     if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path)) {
-      bodyFingerprint = await this.remoteBodyFingerprintOf(record.notionPageId);
+      bodyFingerprint = await this.drift.remoteBodyFingerprintOf(record.notionPageId);
     }
 
     // 페이지는 속성이 제목뿐이다 — 나머지 frontmatter 는 본문 첫머리 YAML 블록으로 간다
@@ -1856,7 +1777,7 @@ export class SyncOrchestrator {
    * - 원격도 바뀌었으면 똑같이 로컬에서 바꾼 것만 보내되 notionLastEdited 를 올리지 않는다.
    *   올리면 다음 pull 이 원격 변경을 «이미 받은 것» 으로 여겨 영영 가져오지 않는다. 본문은
    *   통째로 바꾸므로 원격 본문이 그대로일 때만 보낸다 — 아니면 pull 을 먼저 하라며 거절한다.
-   *   원격이 바뀌었는지는 같은 분 안의 편집까지 내용으로 가른다(N-05, {@link remoteDrift}).
+   *   원격이 바뀌었는지는 같은 분 안의 편집까지 내용으로 가른다(N-05, {@link RemoteDriftChecker.remoteDrift}).
    * - 충돌 해소 결과를 보낼 때(`overwriteRemote`)는 원격의 지금 값과 견줘 다른 것을 모두
    *   보내고 본문도 보낸다 — 로컬이 이긴다(페이지가 본문을 통째로 바꾸는 것과 같다).
    */
@@ -1885,7 +1806,7 @@ export class SyncOrchestrator {
     const remote = await this.notionClient.getPage(pageId);
     const drift: RemoteDrift = options.overwriteRemote
       ? "none"
-      : await this.remoteDrift(record, remote);
+      : await this.drift.remoteDrift(record, remote);
     const against = options.overwriteRemote
       ? this.remoteRowState(mapper, remote)
       : this.baseRowState(record);
@@ -1908,7 +1829,7 @@ export class SyncOrchestrator {
     const bodyChanged = against?.body == null || against.body !== current.body;
     // 수정 시각을 올려도 되는가 — 원격의 변경을 모두 로컬이 덮었거나 원격이 그대로일 때만.
     const settles = drift === "none";
-    if (bodyChanged && !this.overwritesRemote(record, options.overwriteRemote)) {
+    if (bodyChanged && !this.drift.overwritesRemote(record, options.overwriteRemote)) {
       refuseUnpulledBody(drift, path);
     }
     let conversionResult: ConversionResult | null = null;
@@ -1932,7 +1853,7 @@ export class SyncOrchestrator {
         record.baseSnapshot,
       );
       if (await this.syncEmbeddedMedia(pageId, conversionResult, path)) {
-        bodyFingerprint = await this.remoteBodyFingerprintOf(pageId);
+        bodyFingerprint = await this.drift.remoteBodyFingerprintOf(pageId);
       }
     }
 
@@ -2336,8 +2257,8 @@ export class SyncOrchestrator {
 
     const presence = await remotePresence(this.notionClient, record.notionPageId);
     if (presence.kind === "alive") {
-      if (!this.overwritesRemote(record, false)) {
-        refuseUnpulledDeletion(await this.remoteDrift(record, presence.page), path);
+      if (!this.drift.overwritesRemote(record, false)) {
+        refuseUnpulledDeletion(await this.drift.remoteDrift(record, presence.page), path);
       }
       try {
         await this.notionClient.archivePage(record.notionPageId);
@@ -2496,31 +2417,6 @@ export class SyncOrchestrator {
       if (written !== null && !remoteChanged) this.observation.record(record.id, written);
       if (change.opId !== null) this.stateDb.markPendingCompleted(change.opId);
     });
-  }
-
-  /**
-   * «확인 안 됨» 인 원격 변경 중 지난번 그대로인 것을 뺀다 — 받지 않고 변경을 보여 주는 status 와
-   * dry-run 이 쓴다. pull 은 받아서 견주므로 쓰지 않는다. push 가 덮어쓰기 전에 보는 것과 같게
-   * 견준다({@link remoteDrift}).
-   *
-   * 원격을 읽지 못했으면 그대로 둔다 — 읽지 못한 것을 바뀌지 않았다고 하지 않는다.
-   */
-  private async withoutUnchangedRemotes(changes: RemoteChange[]): Promise<RemoteChange[]> {
-    const kept: RemoteChange[] = [];
-    for (const change of changes) {
-      const record = change.unverified ? this.stateDb.getByNotionId(change.pageId) : null;
-      if (!record) {
-        kept.push(change);
-        continue;
-      }
-      try {
-        const remote = await this.notionClient.getPage(change.pageId);
-        if ((await this.remoteDrift(record, remote)) !== "none") kept.push(change);
-      } catch {
-        kept.push(change);
-      }
-    }
-    return kept;
   }
 
   /**
@@ -3308,7 +3204,7 @@ export class SyncOrchestrator {
     // 받은 원격이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
     // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 파일은 되살린다.
     const remoteUnchanged =
-      localExists && (await this.unchangedSinceSync(record, page, rendered.bodyFingerprint));
+      localExists && (await this.drift.unchangedSinceSync(record, page, rendered.bodyFingerprint));
 
     const resolution = resolvePullConflict({
       record,
@@ -3479,7 +3375,7 @@ export class SyncOrchestrator {
     ledger: DatabasePullLedger,
   ): Promise<PullResult> {
     // 받지 않으니 «확인 안 됨» 은 내용으로 가른다 — 같은 분 안에 바뀐 것이 없으면 세지 않는다.
-    const unchangedDropped = await this.withoutUnchangedRemotes(filtered);
+    const unchangedDropped = await this.drift.withoutUnchangedRemotes(filtered);
     // 지울 것은 실제 pull 과 같게 가른다 — 폴더 레코드는 추적만 놓고, 올리지 않은 로컬 편집이
     // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
     const planned: RemoteChange[] = [];
@@ -3709,7 +3605,7 @@ export class SyncOrchestrator {
     // 폴더 페이지의 본문 지문 — 폴더 노트가 이 페이지를 삼으면(S-15) 그 push 가 본문이 그대로임을
     // 확인한다. 곧 그 아래에 노트가 생겨 수정 시각이 바뀌므로 시각으로는 가를 수 없다.
     const bodyFingerprint = found
-      ? await this.remoteBodyFingerprintOf(found.id)
+      ? await this.drift.remoteBodyFingerprintOf(found.id)
       : remoteBodyFingerprint("");
 
     this.stateDb.upsert({
@@ -4502,7 +4398,7 @@ export class SyncOrchestrator {
       page = await this.notionClient.getPage(created.page.id);
     }
     const bodyFingerprint = isFolderNotePath(path)
-      ? await this.remoteBodyFingerprintOf(created.page.id)
+      ? await this.drift.remoteBodyFingerprintOf(created.page.id)
       : null;
     return { page, bodyFingerprint };
   }
@@ -4579,7 +4475,7 @@ export class SyncOrchestrator {
       });
       // 응답의 본문은 다시 받은 본문과 같다 — 잘렸으면 온전한 본문을 다시 받는다.
       return written.truncated || (written.unknown_block_ids ?? []).length > 0
-        ? this.remoteBodyFingerprintOf(pageId)
+        ? this.drift.remoteBodyFingerprintOf(pageId)
         : remoteBodyFingerprint(written.markdown);
     }
 
@@ -4734,40 +4630,6 @@ function extractTitle(filePath: string): string {
 /** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
 function titleProperty(title: string): Record<string, unknown> {
   return { title: { title: [{ text: { content: title } }] } };
-}
-
-/**
- * 원격 본문을 로컬 본문으로 바꿀 수 없으면 던진다 — pull 하지 않은 Notion 편집을 덮어쓰지 않는다
- * (N-05, {@link RemoteDrift}). 예전에는 원격을 보지 않고 바꿨다.
- */
-function refuseUnpulledBody(drift: RemoteDrift, path: string): void {
-  if (drift === "body") {
-    throw new Error(
-      `Notion 에서도 본문이 바뀐 페이지라 올리지 않음 — pull 로 먼저 받은 뒤 다시 push 하세요: ${path}`,
-    );
-  }
-  if (drift === "unknown") {
-    throw new Error(
-      `Notion 에서 바뀌었는지 확인하지 못한 페이지라 올리지 않음 — pull 로 먼저 받은 뒤 다시 ` +
-        `push 하세요: ${path}`,
-    );
-  }
-}
-
-/**
- * 로컬에서 지운 노트의 원격을 지울 수 없으면 던진다 — pull 하지 않은 Notion 편집(본문 · 제목 ·
- * 속성)을 휴지통으로 보내지 않는다(F-f). 본문만 보는 {@link refuseUnpulledBody} 와 달리 본문 밖의
- * 편집도 지키고, 바뀌었는지 모르면 지우지 않는다.
- */
-function refuseUnpulledDeletion(drift: RemoteDrift, path: string): void {
-  if (drift === "none") return;
-  const reason =
-    drift === "unknown"
-      ? "Notion 에서 바뀌었는지 확인하지 못한 페이지"
-      : "Notion 에서도 바뀐 페이지";
-  throw new Error(
-    `${reason}라 지우지 않음 — pull 이 되살려 받습니다. 받은 뒤에도 필요 없으면 다시 지우세요: ${path}`,
-  );
 }
 
 /**
