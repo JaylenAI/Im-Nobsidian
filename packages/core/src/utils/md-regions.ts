@@ -78,25 +78,34 @@ export function openCodeFence(line: string): CodeFenceOpening | null {
  * 더 깊이 들여쓴 펜스는 코드다 — 이것들에서 닫으면 코드 뒷부분을 본문으로 다룬다(S-25).
  */
 export function closesCodeFence(line: string, open: CodeFenceOpening): boolean {
+  return closingFence(line, open) !== null;
+}
+
+/** {@link closesCodeFence} 의 판정 — 닫는 줄이면 펜스 앞 들여쓰기와 펜스 기호를 돌려준다. */
+function closingFence(line: string, open: CodeFenceOpening): { lead: string; bar: string } | null {
   const m = FENCE_CLOSE_RE.exec(line);
-  return (
-    m !== null &&
-    m[2]![0] === open.char &&
-    m[2]!.length >= open.length &&
-    indentWidth(m[1]!) <= open.indent + 3
-  );
+  if (
+    m === null ||
+    m[2]![0] !== open.char ||
+    m[2]!.length < open.length ||
+    indentWidth(m[1]!) > open.indent + 3
+  ) {
+    return null;
+  }
+  return { lead: m[1]!, bar: m[2]! };
 }
 
 /**
  * Obsidian 노트의 코드 펜스 — push 가 언어를 Notion 이름으로 바꿔 보내고 pull 이 원래 표기로
- * 되살리는 단위(S-20).
+ * 되살리는 단위(S-20)이자, 텍스트 치환이 비켜 가는 코드 구간({@link mapOutsideCodeFences}, S-26).
  *
  * 줄머리의 인용(`>`) · 들여쓰기 · 목록 표시를 떼고 판정한다 — 콜아웃 · 목록 안의 펜스가 흔하다.
  * push 는 이 판정으로 **줄을 고치므로** 확신이 없는 곳은 펜스로 보지 않는다(CommonMark):
  *  - 백틱 펜스의 정보 문자열에 백틱이 있으면 펜스가 아니라 인라인 코드다.
- *  - 닫는 펜스는 같은 문자 · 여는 것 이상 길이 · 뒤에 공백만 · 같은 인용 깊이 · 여는 쪽보다
- *    3칸 넘게 들여쓰지 않은 줄이다. 코드 속 들여쓴 ``` 줄이 블록을 닫지 않는다.
+ *  - 닫는 펜스는 같은 인용 깊이에서 {@link closesCodeFence} 인 줄이다. 코드 속 들여쓴 ``` 줄이
+ *    블록을 닫지 않는다.
  *  - 인용 깊이가 얕아지면 컨테이너가 끝난 것이다 — 그 펜스는 닫히지 않은 채 끝나고, 고치지 않는다.
+ *    목록 표시로 연 펜스는 항목 글 자리보다 덜 들여쓴 줄(빈 줄 빼고)에서 항목과 함께 끝난다.
  */
 export interface CodeFence {
   /** 여는 줄 번호(0부터). */
@@ -117,12 +126,11 @@ export interface CodeFence {
   readonly code: readonly string[];
 }
 
-/** 여는 펜스 — 인용 표시 · 들여쓰기(+목록 표시) · 펜스 · 정보 문자열. */
+/** 여는 펜스 — 인용 표시 · 들여쓰기 · 목록 표시 · 펜스 · 정보 문자열(줄 끝 `\r` 앞까지). */
 const QUOTED_FENCE_OPEN_RE =
-  /^((?:[\t ]*>)*)([\t ]*(?:(?:[-*+]|\d{1,9}[.)])[\t ]+)?)(`{3,}|~{3,})(.*)$/;
-/** 인용 표시를 뗀 뒤의 닫는 펜스 — 들여쓰기 · 펜스 · 뒤 공백. */
-const CLOSE_BODY_RE = /^([\t ]*)(`{3,}|~{3,})[\t ]*$/;
+  /^((?:[\t ]*>)*)([\t ]*)((?:[-*+]|\d{1,9}[.)])[\t ]+)?(`{3,}|~{3,})(.*)\r?$/;
 const QUOTE_MARK_RE = /^[\t ]*>/;
+const LEADING_SPACE_RE = /^[\t ]*/;
 
 /** 인용 표시를 `depth` 개 뗀다. 모자라면 null — 그 줄에서 컨테이너가 끝났다. */
 function stripQuoteMarks(line: string, depth: number): { marks: string; rest: string } | null {
@@ -143,15 +151,24 @@ export function scanCodeFences(text: string): CodeFence[] {
   for (let i = 0; i < lines.length; i++) {
     const open = QUOTED_FENCE_OPEN_RE.exec(lines[i]!);
     if (!open) continue;
-    const [, quotes, indent, bar, info] = open as unknown as [
+    const [, quotes, pad, marker, bar, info] = open as unknown as [
       string,
       string,
       string,
+      string | undefined,
       string,
       string,
     ];
     if (bar[0] === "`" && info.includes("`")) continue;
 
+    const indent = pad + (marker ?? "");
+    const opening: CodeFenceOpening = {
+      char: bar[0]!,
+      length: bar.length,
+      indent: indentWidth(indent),
+    };
+    // 목록 항목의 글 자리 — 이보다 덜 들여쓴 줄에서 항목이 끝난다(CommonMark).
+    const itemWidth = marker === undefined ? null : opening.indent;
     const depth = (quotes.match(/>/g) ?? []).length;
     const code: string[] = [];
     let close: number | null = null;
@@ -161,20 +178,20 @@ export function scanCodeFences(text: string): CodeFence[] {
 
     for (let j = i + 1; j < lines.length; j++) {
       const stripped = stripQuoteMarks(lines[j]!, depth);
-      if (!stripped) {
+      if (
+        !stripped ||
+        (itemWidth !== null &&
+          stripped.rest.trim() !== "" &&
+          indentWidth(LEADING_SPACE_RE.exec(stripped.rest)![0]) < itemWidth)
+      ) {
         end = j;
         break;
       }
-      const shut = CLOSE_BODY_RE.exec(stripped.rest);
-      if (
-        shut &&
-        shut[2]![0] === bar[0] &&
-        shut[2]!.length >= bar.length &&
-        shut[1]!.length <= indent.length + 3
-      ) {
+      const shut = closingFence(stripped.rest, opening);
+      if (shut) {
         close = j;
-        closeLead = stripped.marks + shut[1]!;
-        closeBar = shut[2]!;
+        closeLead = stripped.marks + shut.lead;
+        closeBar = shut.bar;
         end = j + 1;
         break;
       }
@@ -202,16 +219,24 @@ export function scanCodeFences(text: string): CodeFence[] {
  * 펜스 코드블록(``` / ~~~) 바깥 영역에만 변환 함수를 적용한다.
  *
  * 주석 제거·각주 이스케이프·이스케이프 정규화 같은 텍스트 치환이 코드블록
- * 내부 리터럴을 오염시키지 않도록 하는 공용 가드. 닫는 줄은 {@link closesCodeFence} 로
- * 가린다 — 마크다운 예제를 담은 코드의 ```bash 줄에서 구간을 닫으면 그 뒤 코드가 치환된다.
+ * 내부 리터럴을 오염시키지 않도록 하는 공용 가드. 코드 구간은 {@link scanCodeFences} 로 찾는다 —
+ * 콜아웃 · 인용 · 목록 안의 펜스도 코드다. 예전에는 줄머리 공백 뒤의 펜스만 보아, push 가 콜아웃
+ * 속 코드의 HTML 주석을 지우고 pull 이 그 주석을 `>` 없이 되살려 콜아웃을 끊었다(S-26). 닫는 줄은
+ * {@link closesCodeFence} 로 가린다 — 마크다운 예제를 담은 코드의 ```bash 줄에서 구간을 닫으면 그
+ * 뒤 코드가 치환된다(S-25). 닫히지 않은 펜스는 그 컨테이너가 끝날 때까지 코드다.
  */
 export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string {
   const lines = content.split("\n");
+  const inCode = new Array<boolean>(lines.length).fill(false);
+  for (const fence of scanCodeFences(content)) {
+    const last = fence.close ?? fence.open + fence.code.length;
+    for (let i = fence.open; i <= last; i++) inCode[i] = true;
+  }
+
   const out: string[] = [];
   let buffer: string[] = [];
   let bufferStart = 0;
   let pos = 0;
-  let fence: CodeFenceOpening | null = null;
 
   const flush = () => {
     if (buffer.length > 0) {
@@ -220,15 +245,10 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
     }
   };
 
-  for (const line of lines) {
-    const opening: CodeFenceOpening | null = fence === null ? openCodeFence(line) : null;
-    if (opening) {
+  for (const [i, line] of lines.entries()) {
+    if (inCode[i]) {
       flush();
-      fence = opening;
       out.push(line);
-    } else if (fence !== null) {
-      out.push(line);
-      if (closesCodeFence(line, fence)) fence = null;
     } else {
       // 펜스가 끊기면 flush 되므로 버퍼는 항상 연속 구간 — 조각 내 offset 이 원문과 1:1.
       if (buffer.length === 0) bufferStart = pos;

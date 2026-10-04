@@ -224,6 +224,22 @@ describe("scanCodeFences — 펜스 찾기", () => {
     expect(scanCodeFences("```ts\nx")[0]).toMatchObject({ close: null, closeBar: null });
   });
 
+  it("CRLF 노트 — 정보 문자열에 \\r 이 붙지 않고, 닫는 펜스도 찾는다", () => {
+    const [found] = scanCodeFences("> ```py\r\n> x\r\n> ```\r\n뒤");
+    expect(found).toMatchObject({ open: 0, close: 2, info: "py", closeBar: "```" });
+  });
+
+  it("탭은 4칸이다 — 탭으로 들여쓴 ``` 는 열 0 펜스를 닫지 않는다", () => {
+    expect(scanCodeFences("```\n\t```\n```")[0]).toMatchObject({ close: 2, code: ["\t```"] });
+  });
+
+  it("목록 표시로 연 펜스는 항목 글 자리보다 덜 들여쓴 줄에서 항목과 함께 끝난다", () => {
+    const fences = scanCodeFences("- ```py\n  x\n\n  y\n```\nz");
+    expect(fences).toHaveLength(2);
+    expect(fences[0]).toMatchObject({ open: 0, close: null, code: ["  x", "", "  y"] });
+    expect(fences[1]).toMatchObject({ open: 4, close: null, code: ["z"] });
+  });
+
   it("코드 줄 머리 — 인용 표시는 두고 목록 표시는 같은 폭의 공백으로", () => {
     const [quoted, listed, nested] = scanCodeFences(
       "> - ```py\n>   x\n>   ```\n\n1. ```py\n   y\n   ```\n\n> > ```py\n> > z\n> > ```",
