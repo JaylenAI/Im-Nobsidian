@@ -12,8 +12,8 @@ import {
   codeLineLead,
   fenceCodeText,
   hasBacktickFenceLine,
-  scanCodeFences,
 } from "../../src/converter/code-fence.js";
+import { scanCodeFences } from "../../src/utils/md-regions.js";
 import { deferredCodeMarker } from "../../src/constants/markers.js";
 import { RICH_TEXT_ARRAY_MAX, RICH_TEXT_CONTENT_MAX } from "../../src/constants/notion-limits.js";
 import { CodeLanguageGuard } from "../../src/converter/pre-processors/code-language-guard.js";

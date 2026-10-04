@@ -6,7 +6,7 @@ import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
 import { richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
 import type { RichTextItem } from "./rich-text-converter.js";
-import { codeFingerprint, scanCodeFences } from "./code-fence.js";
+import { codeFingerprint } from "./code-fence.js";
 import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js";
 import { stripMentionMarkers } from "./mention.js";
 import { fenceBarAbove } from "./nested-code-fence.js";
@@ -23,6 +23,7 @@ import {
   TOC_MARKER,
   BREADCRUMB_MARKER,
 } from "../constants/markers.js";
+import { scanCodeFences } from "../utils/md-regions.js";
 
 /**
  * 색을 실은 목차 마커 — `%%im-nobsidian:toc:color=gray%%`.

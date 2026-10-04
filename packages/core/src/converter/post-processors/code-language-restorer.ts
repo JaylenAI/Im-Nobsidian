@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
-import { codeFingerprint, scanCodeFences, type CodeFence } from "../code-fence.js";
+import { codeFingerprint } from "../code-fence.js";
+import { scanCodeFences, type CodeFence } from "../../utils/md-regions.js";
 import { isNotionLanguageInfo, notionCodeLanguage } from "../code-language.js";
 
 /**

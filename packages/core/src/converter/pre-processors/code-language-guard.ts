@@ -6,13 +6,9 @@ import type {
   ProcessorInput,
   ProcessorOutput,
 } from "../../types/convert.js";
-import {
-  codeLineLead,
-  fenceCodeText,
-  hasBacktickFenceLine,
-  scanCodeFences,
-} from "../code-fence.js";
+import { codeLineLead, fenceCodeText, hasBacktickFenceLine } from "../code-fence.js";
 import { notionCodeLanguage } from "../code-language.js";
+import { scanCodeFences } from "../../utils/md-regions.js";
 
 /**
  * 코드 펜스를 Notion 이 그대로 받는 모양으로 보낸다(S-20) — 언어는 Notion 이름으로, 펜스는 ``` 로.
