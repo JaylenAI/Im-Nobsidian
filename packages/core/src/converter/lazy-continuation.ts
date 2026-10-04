@@ -7,6 +7,10 @@
  * 인용 안에 그린다(Obsidian 1.13.7 실측: 읽기 보기 · Live Preview 모두). 그래서 pull 은 그 사이에
  * 빈 인용 줄을 끼운다. push 는 그대로 보낸다 — Notion 은 콜아웃 · 토글 안의 빈 줄을 버린다(실측).
  *
+ * 콜아웃 · 토글이 아닌 인용은 띄우지 않는다. Notion 은 인용의 `>` 한 줄을 인용 블록 하나로 읽어,
+ * 빈 인용 줄은 빈 인용 블록이 된다(2026-10-04 실측). Notion 인용의 여러 줄 글은 `<br>` 로, 자식은 인용
+ * 밖에 들여써서 오므로 인용 줄 사이에는 이어 붙을 목록 · 안쪽 인용이 없다.
+ *
  * 표 · 빈 블록(`<br>`) 앞은 각 변환(`table.ts` · `empty-block.ts`)이 띄운다. 제목 · 구분선 · 인용 ·
  * 코드처럼 문단을 끊는 줄은 앞 문단에 이어 붙지 않는다.
  *
@@ -55,7 +59,18 @@ function continuesLazily(previous: QuotedLine, line: QuotedLine): boolean {
   return depth(previous.quote) > depth(line.quote) && previous.quote.startsWith(line.quote);
 }
 
-/** pull: 인용 안에서 앞 블록 문단에 이어 붙는 글 줄 앞에 빈 인용 줄을 끼운다. */
+/**
+ * 그 인용이 콜아웃 · 토글인지 — 같은 인용(또는 그 안쪽)으로 이어진 줄을 거슬러 올라가, 맨 첫 줄이
+ * 그 깊이의 콜아웃 머리(`[!…]`)면 그렇다.
+ */
+function inCallout(lines: readonly string[], at: number, quote: string): boolean {
+  let start = at;
+  while (start > 0 && splitQuoted(lines[start - 1]!).quote.startsWith(quote)) start--;
+  const first = splitQuoted(lines[start]!);
+  return first.quote === quote && first.body.startsWith("[!");
+}
+
+/** pull: 콜아웃 · 토글 안에서 앞 블록 문단에 이어 붙는 글 줄 앞에 빈 인용 줄을 끼운다. */
 export function separateLazyContinuations(content: string): string {
   const lines = content.split("\n");
   const kinds = classifyContainerLines(lines.map((line) => splitContainerPrefix(line).body));
@@ -63,7 +78,12 @@ export function separateLazyContinuations(content: string): string {
   lines.forEach((line, i) => {
     if (i > 0 && kinds[i] === "prose" && kinds[i - 1] === "prose") {
       const current = splitQuoted(line);
-      if (continuesLazily(splitQuoted(lines[i - 1]!), current)) out.push(current.quote);
+      if (
+        continuesLazily(splitQuoted(lines[i - 1]!), current) &&
+        inCallout(lines, i, current.quote)
+      ) {
+        out.push(current.quote);
+      }
     }
     out.push(line);
   });
