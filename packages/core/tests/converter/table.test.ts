@@ -257,6 +257,190 @@ describe("변환 전체 왕복", () => {
   });
 });
 
+describe("붙은 표 — 인용 안에서 글 바로 뒤에 온 표", () => {
+  const plain = (cells: string[][]) => nfm('<table header-row="true">', cells);
+  const quoted = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => (line.startsWith("<table") || line === "</table>" ? `> ${line}` : line))
+      .join("\n");
+
+  it("pull — 문단 · 목록 항목 · 표 뒤에는 빈 인용 줄을 끼운다", () => {
+    const raw = [
+      "> [!tip] 콜아웃",
+      "> 문단",
+      quoted(plain([["a"]])),
+      "> - 항목",
+      quoted(plain([["b"]])),
+      quoted(plain([["c"]])),
+    ].join("\n");
+    expect(nfmTablesToPipeTables(raw)).toBe(
+      [
+        "> [!tip] 콜아웃",
+        "> 문단",
+        ">",
+        "> | a |",
+        "> | --- |",
+        "> - 항목",
+        ">",
+        "> | b |",
+        "> | --- |",
+        ">",
+        "> | c |",
+        "> | --- |",
+      ].join("\n"),
+    );
+  });
+
+  it("pull — 콜아웃 머리 줄 · 제목 · 빈 인용 줄 뒤에는 끼우지 않는다", () => {
+    const raw = [
+      "> [!tip] 콜아웃",
+      quoted(plain([["a"]])),
+      "> ### 제목",
+      quoted(plain([["b"]])),
+      ">",
+      quoted(plain([["c"]])),
+    ].join("\n");
+    expect(nfmTablesToPipeTables(raw).split("\n")).toEqual([
+      "> [!tip] 콜아웃",
+      "> | a |",
+      "> | --- |",
+      "> ### 제목",
+      "> | b |",
+      "> | --- |",
+      ">",
+      "> | c |",
+      "> | --- |",
+    ]);
+  });
+
+  it("pull — 중첩 인용 · 목록 안 콜아웃은 그 접두의 빈 인용 줄로", () => {
+    expect(
+      nfmTablesToPipeTables(
+        ["> > 안쪽 글", '> <table header-row="true">', "<tr><td>a</td></tr>", "> </table>"].join(
+          "\n",
+        ),
+      ),
+    ).toBe(["> > 안쪽 글", ">", "> | a |", "> | --- |"].join("\n"));
+    expect(
+      nfmTablesToPipeTables(
+        ["\t> 글", '\t> <table header-row="true">', "<tr><td>a</td></tr>", "\t> </table>"].join(
+          "\n",
+        ),
+      ),
+    ).toBe(["\t> 글", "\t>", "\t> | a |", "\t> | --- |"].join("\n"));
+  });
+
+  it("pull — 맨 바깥은 빈 줄로 띄운다 — BlockSpacer 는 이어진 표 줄을 한 표로 묶는다", () => {
+    const raw = ["문단", plain([["a"]]), plain([["b"]])].join("\n");
+    expect(nfmTablesToPipeTables(raw)).toBe(
+      ["문단", "", "| a |", "| --- |", "", "| b |", "| --- |"].join("\n"),
+    );
+  });
+
+  it("pull — 다른 인용 뒤의 표 · 목록 자식 표는 그대로", () => {
+    const afterOther = ["바깥 글", quoted(plain([["a"]]))].join("\n");
+    expect(nfmTablesToPipeTables(afterOther)).toBe(["바깥 글", "> | a |", "> | --- |"].join("\n"));
+    const listChild = [
+      "- 항목",
+      '\t<table header-row="true">',
+      "<tr><td>a</td></tr>",
+      "\t</table>",
+    ];
+    expect(nfmTablesToPipeTables(listChild.join("\n"))).toBe(
+      ["- 항목", "\t| a |", "\t| --- |"].join("\n"),
+    );
+  });
+
+  it("push — 붙은 두 표는 둘째 표를 NFM 표로 보내 가른다 — 마커가 없어도", () => {
+    const glued = [
+      "> | a | b |",
+      "> | --- | --- |",
+      "> | 1 | 2 |",
+      "> | c | d |",
+      "> | --- | --- |",
+      "> | 3 | 4 |",
+    ];
+    expect(pipeTablesToNfmTables(glued.join("\n")).split("\n")).toEqual([
+      ...glued.slice(0, 3),
+      '> <table header-row="true">',
+      "> <tr>",
+      "> <td>c</td>",
+      "> <td>d</td>",
+      "> </tr>",
+      "> <tr>",
+      "> <td>3</td>",
+      "> <td>4</td>",
+      "> </tr>",
+      "> </table>",
+    ]);
+  });
+
+  it("push — 빈 줄만 사이에 둔 표도 NFM 표로 — Notion 이 콜아웃 안 빈 줄을 버려 합친다", () => {
+    const separated = ["> | a |", "> | --- |", ">", "> | b |", "> | --- |"].join("\n");
+    expect(pipeTablesToNfmTables(separated).split("\n")).toEqual([
+      "> | a |",
+      "> | --- |",
+      ">",
+      '> <table header-row="true">',
+      "> <tr>",
+      "> <td>b</td>",
+      "> </tr>",
+      "> </table>",
+    ]);
+    // 글이 사이에 있으면 따로 선 표다
+    const apart = ["| a |", "| --- |", "", "글", "", "| b |", "| --- |"].join("\n");
+    expect(pipeTablesToNfmTables(apart)).toBe(apart);
+  });
+
+  it("push — 붙은 마커 표는 NFM 표 둘이 된다", () => {
+    const glued = [
+      `> | ${M("table", "header-row=false")}a | b |`,
+      "> | --- | --- |",
+      `> | ${M("table", "header-row=false")}c | d |`,
+      "> | --- | --- |",
+    ].join("\n");
+    const lines = pipeTablesToNfmTables(glued).split("\n");
+    expect(lines.filter((l) => l === "> <table>")).toHaveLength(2);
+    expect(lines).not.toContain("> <td>---</td>");
+  });
+
+  it("push — 표 안의 구분행 모양 행 하나로는 떼지 않는다", () => {
+    const one = ["| a |", "| --- |", "| --- |", "| b |"].join("\n");
+    expect(pipeTablesToNfmTables(one)).toBe(one);
+  });
+
+  it("변환 전체 왕복 — 콜아웃 안 붙은 표가 NFM 그대로 돌아간다", () => {
+    const raw = [
+      '<callout icon="💡">',
+      "\t콜아웃 글",
+      "\t둘째 줄",
+      '\t<table header-row="true" header-column="true">',
+      "<tr>",
+      "<td>a</td>",
+      "</tr>",
+      "\t</table>",
+      '\t<table header-column="true">',
+      "<tr>",
+      "<td>b</td>",
+      "</tr>",
+      "\t</table>",
+      "\t- 항목",
+      '\t<table header-row="true" header-column="true">',
+      "<tr>",
+      "<td>c</td>",
+      "</tr>",
+      "\t</table>",
+      "</callout>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+    // 빈 인용 줄은 콜아웃 본문의 빈 줄이 되고, Notion 은 빈 줄을 버린다(실측)
+    const pushed = obsidianToNotionEnhanced(pulled);
+    expect(pushed.split("\n").filter((l) => l.trim() !== "")).toEqual(raw.split("\n"));
+    expect(notionEnhancedToObsidian(pushed)).toBe(pulled);
+  });
+});
+
 describe("stripTableMarkers — 블록 방식 push", () => {
   it("표 마커 네 종류만 걷는다", () => {
     expect(stripTableMarkers(ATTR_PIPE)).not.toContain("%%im-nobsidian:table");
