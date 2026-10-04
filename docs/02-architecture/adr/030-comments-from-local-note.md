@@ -76,8 +76,9 @@ Obsidian 주석(`%%…%%`)과 HTML 주석(`<!--…-->`)은 Notion 에 올리지 
 - Notion 은 콜아웃 속 줄을 줄마다 문단 블록으로 두고 압축형으로 내보낸다(실측). 원격 편집 뒤에 받으면 콜아웃 속
   문단 경계(`>` 빈 줄)를 잃는다. 주석과 무관한 간격 복원의 한계이고(주석이 없는 노트도 같다), 주석은 콜아웃
   안에 남는다(`comment-roundtrip.test.ts`).
-- 주석 속 하이라이트 · 밑줄은 서식 보존(`InlineAnnotationPreserver`, order 5)이 주석 제거(order 11)보다 먼저 돌아
-  Notion 으로 샌다 — 다음 브랜치에서 고친다.
+- ~~주석 속 하이라이트 · 밑줄은 서식 보존(`InlineAnnotationPreserver`, order 5)이 주석 제거(order 11)보다 먼저 돌아
+  Notion 으로 샌다.~~ S-31 에서 고쳤다 — 서식 보존을 frontmatter 분리 · 주석 제거 뒤(order 13)로 옮겼다. 마커가
+  든 주석은 `%%` 가 짝짓지 않아 주석이 통째로 올라갔고, frontmatter 값 속 `==` · `<u>` 도 마커 글자로 바뀌었다.
 
 ## 트레이드오프
 
