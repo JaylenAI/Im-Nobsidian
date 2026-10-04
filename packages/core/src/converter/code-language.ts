@@ -233,8 +233,11 @@ const ALIASES: ReadonlyMap<string, NotionCodeLanguage> = new Map<string, NotionC
   } satisfies Record<string, NotionCodeLanguage>),
 );
 
-// 객체 원형의 이름(`constructor` · `__proto__`)을 언어로 잡지 않도록 자기 속성만 본다.
-function isNotionLanguage(name: string): name is NotionCodeLanguage {
+/**
+ * Notion 언어 이름 그 자체인가(대소문자까지) — Notion 이 내보내는 코드 펜스의 정보 문자열이 이 모양이다.
+ * 객체 원형의 이름(`constructor` · `__proto__`)을 언어로 잡지 않도록 자기 속성만 본다.
+ */
+export function isNotionLanguage(name: string): name is NotionCodeLanguage {
   return Object.prototype.hasOwnProperty.call(FENCE_SENDABLE, name);
 }
 

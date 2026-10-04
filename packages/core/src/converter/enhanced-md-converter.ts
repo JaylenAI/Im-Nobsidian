@@ -22,6 +22,7 @@ import {
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
+import { widenNestedCodeFences } from "./nested-code-fence.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
@@ -67,6 +68,11 @@ const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
 export interface EnhancedToObsidianOptions {
   /** 사용자 멘션에 보일 이름 — 사용자 id → 이름(`NotionClient.getUserNames`). */
   readonly userNames?: ReadonlyMap<string, string>;
+  /**
+   * 페이지 코드 블록의 글(블록 API) — 코드 속 ``` 줄 때문에 코드 범위를 markdown 만으로 가를 수
+   * 없을 때만(S-22, `needsCodeBlockTexts`).
+   */
+  readonly codeTexts?: ReadonlySet<string>;
 }
 
 export function notionEnhancedToObsidian(
@@ -75,7 +81,10 @@ export function notionEnhancedToObsidian(
 ): string {
   let result = enhanced;
 
-  // 토글 헤딩이 가장 먼저 — 자식을 열 0 으로 내려야 아래 컨테이너 변환이 들여쓰기를
+  // 코드 속 ``` 줄이 있는 코드의 범위를 맨 먼저 정한다 — 경계 펜스의 탭 들여쓰기가 남아 있어야
+  // 코드 줄과 가를 수 있다. 넓힌 펜스는 아래 변환이 모두 CommonMark 대로 읽는다(S-22).
+  result = widenNestedCodeFences(result, options?.codeTexts);
+  // 토글 헤딩이 그다음 — 자식을 열 0 으로 내려야 아래 컨테이너 변환이 들여쓰기를
   // 재적용하지 않는다. NFM raw 형태에만 의존하므로 어떤 변환보다 앞서도 안전하다.
   result = convertToggleHeadings(result);
   result = convertSyncedBlockRef(result);

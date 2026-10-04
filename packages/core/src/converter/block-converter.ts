@@ -9,6 +9,7 @@ import type { RichTextItem } from "./rich-text-converter.js";
 import { codeFingerprint, scanCodeFences } from "./code-fence.js";
 import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js";
 import { stripMentionMarkers } from "./mention.js";
+import { fenceBarAbove } from "./nested-code-fence.js";
 import { stripTableMarkers } from "./table.js";
 import {
   MARKER_BRAND,
@@ -99,6 +100,26 @@ export class BlockConverter {
     this.registerCalloutTransformer();
     this.registerToggleHeadingTransformers();
     this.registerNumberedListTransformer();
+    this.registerCodeTransformer();
+  }
+
+  /**
+   * 코드에 ``` 로 시작하는 줄이 있으면 그 줄보다 긴 펜스로 감싼다(S-22) — 기본 렌더는 늘 ``` 로 감싸
+   * 코드 속 첫 ``` 줄에서 블록이 닫힌다. 그런 줄이 없으면 기본 렌더에 맡긴다(false). 언어 표기는
+   * 기본 렌더와 같게 소문자로, 없으면 `plaintext` 로 둔다.
+   */
+  private registerCodeTransformer(): void {
+    if (!this.n2m) return;
+    this.n2m.setCustomTransformer("code", (block) => {
+      const { code } = block as unknown as {
+        code: { rich_text: RichTextItem[]; language?: string };
+      };
+      const text = code.rich_text.map((t) => t.plain_text).join("");
+      const bar = fenceBarAbove(text.split("\n"));
+      if (bar === null) return false;
+      const language = code.language?.trim() ? code.language.toLowerCase() : "plaintext";
+      return `${bar}${language}\n${text}\n${bar}`;
+    });
   }
 
   /**
