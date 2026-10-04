@@ -1,5 +1,5 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
-import { codeFingerprint } from "../code-fence.js";
+import { codeFingerprint, fenceCodeText } from "../code-fence.js";
 import { scanCodeFences, type CodeFence } from "../../utils/md-regions.js";
 import { isNotionLanguageInfo, notionCodeLanguage } from "../code-language.js";
 
@@ -17,6 +17,8 @@ import { isNotionLanguageInfo, notionCodeLanguage } from "../code-language.js";
  *     남은 수가 같으면 순서대로, 다르면(Notion 에서 블록을 더하거나 뺐다) 같은 줄이 있는 것끼리만 —
  *     같은 줄이 많은 짝부터 정한다.
  * 언어가 맞지 않으면 짝짓지 않는다 — Notion 에서 언어를 바꾼 것이니 그쪽을 따른다.
+ *
+ * 코드가 같은 짝은 옛 push 가 줄인 코드 속 빈 줄도 되살린다(S-27, {@link restoredBlankLines}).
  */
 export class CodeLanguageRestorer implements Processor {
   readonly name = "CodeLanguageRestorer";
@@ -35,10 +37,22 @@ export class CodeLanguageRestorer implements Processor {
     }
 
     const lines = input.content.split("\n");
-    for (const { fence, original, exact } of pairFences(pulled, originals)) {
+    const localLines = local.split("\n");
+    // 아래 펜스부터 — 빈 줄을 되살리면 그 뒤 줄 번호가 밀린다.
+    const pairs = pairFences(pulled, originals).sort((a, b) => b.fence.open - a.fence.open);
+    for (const { fence, original, exact } of pairs) {
       const bar = exact ? original.bar : fence.bar;
       lines[fence.open] = fence.lead + bar + original.info;
-      if (exact) lines[fence.close!] = fence.closeLead! + original.closeBar!;
+      if (!exact) continue;
+      const close = fence.close!;
+      lines[close] = fence.closeLead! + original.closeBar!;
+      const body = restoredBlankLines(
+        fence,
+        lines.slice(fence.open + 1, close),
+        original,
+        localLines.slice(original.open + 1, original.close!),
+      );
+      if (body) lines.splice(fence.open + 1, close - fence.open - 1, ...body);
     }
 
     return { content: lines.join("\n"), metadata: input.metadata };
@@ -50,6 +64,48 @@ interface FencePair {
   readonly original: CodeFence;
   /** 코드까지 같은 짝인가 — 펜스 기호까지 되돌려도 안전하다. */
   readonly exact: boolean;
+}
+
+/**
+ * 옛 push 가 줄인 코드 속 빈 줄을 되살린 코드 줄 — 되살릴 것이 없으면 null.
+ *
+ * v0.4.0 전의 push 는 노트 전체에서 이어진 빈 줄(`\n{3,}`)을 한 줄로 줄여 코드 속 빈 줄까지 줄였다
+ * (S-27). 그때 올린 코드는 Notion 에 그렇게 남아, 원격의 다른 곳이 바뀌어 받으면 로컬 코드의 빈 줄을
+ * 지웠다(실측). 받은 코드가 로컬 코드를 그렇게 줄인 것과 같을 때만, 그리고 옛 push 가 줄일 수 있던
+ * 자리 — 원문이 아무것도 없는 줄인 곳(인용의 `>` 줄 · CRLF 노트의 줄은 줄지 않았다)만 되살린다.
+ * Notion 에서 그 빈 줄만 줄인 편집도 같아 보여 되살아난다 — 둘은 가를 수 없다.
+ *
+ * @param pulledRaw 받은 코드 줄 원문 — 되살리는 빈 줄은 이 모양(인용 표시 · 들여쓰기)을 따른다.
+ * @param localRaw 로컬 코드 줄 원문.
+ */
+function restoredBlankLines(
+  fence: CodeFence,
+  pulledRaw: readonly string[],
+  original: CodeFence,
+  localRaw: readonly string[],
+): string[] | null {
+  const pulled = fenceCodeText(fence);
+  const local = fenceCodeText(original);
+  if (pulled === local || collapsedByOldPush(local) !== pulled) return null;
+
+  const pulledLines = pulled.split("\n");
+  const out: string[] = [];
+  let i = 0;
+  for (const [j, line] of local.split("\n").entries()) {
+    if (i < pulledLines.length && line === pulledLines[i]) {
+      out.push(pulledRaw[i++]!);
+    } else if (localRaw[j] === "" && localRaw[j - 1] === "" && pulledLines[i - 1] === "") {
+      out.push(pulledRaw[i - 1]!);
+    } else {
+      return null;
+    }
+  }
+  return i === pulledLines.length ? out : null;
+}
+
+/** v0.4.0 전의 push 가 코드에 한 일 — 펜스 줄의 줄바꿈까지 넣어, 이어진 빈 줄을 한 줄로. */
+function collapsedByOldPush(code: string): string {
+  return `\n${code}\n`.replace(/\n{3,}/g, "\n\n").slice(1, -1);
 }
 
 /** 받은 펜스의 언어 — Notion 이 돌려준 이름. */
