@@ -281,6 +281,8 @@ interface PlaceholderHit {
   readonly kind: "image" | "file";
   /** `![[...]]` 안에 있던 원본 대상 문자열. `경로|별칭` 형태일 수 있다. */
   readonly target: string;
+  /** 자리표시자 아래에 다른 블록이 묶였는가 — Notion 이 깊이 들여쓴 뒷줄을 자식으로 묶는다(S-33). */
+  readonly hasChildren: boolean;
 }
 
 /** 제자리 교체 결과 — 어떤 임베드 대상이 처리됐는지 호출자가 알아야 중복 업로드를 막는다. */
@@ -770,10 +772,17 @@ export class ImageHandler {
     const handledTargets = new Set<string>();
     const remembered: UploadedMedia[] = [];
     const unsupported: string[] = [];
+    const holding: string[] = [];
     let attempted = false;
 
     for (const hit of hits) {
       const vaultTarget = stripAlias(hit.target);
+      // 자리표시자를 지우면 그 아래 묶인 블록도 함께 지워진다 — 바꾸지 않고 남긴다. push 는
+      // 자리표시자를 뒷줄 깊이로 들여 이 모양을 만들지 않는다(converter/placeholder-indent).
+      if (hit.hasChildren) {
+        holding.push(vaultTarget);
+        continue;
+      }
       // Notion 이 받지 않는 형식은 올리지 않는다(S-14). 업로드를 만들 때 400 으로 거절되는데,
       // 자리표시자가 그대로 남으니 push 할 때마다 같은 요청이 같은 이유로 실패했다. 자리표시자는
       // 두어야 pull 이 임베드를 되살린다.
@@ -815,6 +824,12 @@ export class ImageHandler {
       }
     }
 
+    if (holding.length > 0) {
+      getLogger().warn(
+        `[Im-Nobsidian] 자리표시자 아래에 다른 블록이 묶여 이미지로 바꾸지 않은 임베드 (${notePath ?? pageId}): ` +
+          `${holding.join(", ")} — 바꾸면 그 블록이 함께 지워진다. Notion 에는 파일 이름 자리표시자로 남는다`,
+      );
+    }
     if (unsupported.length > 0) {
       getLogger().info(
         `[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 임베드 (${notePath ?? pageId}): ` +
@@ -856,6 +871,7 @@ export class ImageHandler {
           kind: marker[1] === "image" ? "image" : "file",
           // 마커에 실린 경로는 퍼센트 인코딩돼 있다 — 볼트 조회·캡션 모두 원문이어야 한다.
           target: decodeMarkerTarget(marker[2]!),
+          hasChildren: block.has_children === true,
         });
         continue;
       }
