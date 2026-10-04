@@ -1,4 +1,4 @@
-import { RICH_TEXT_ARRAY_MAX, RICH_TEXT_CONTENT_MAX } from "../constants/notion-limits.js";
+import { richTextChunks } from "./rich-text.js";
 import type { RowPropertyChanges } from "../types/sync.js";
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
 import { isNotionId } from "../utils/id.js";
@@ -418,22 +418,12 @@ export class PropertyMapper {
 }
 
 /**
- * 글 속성 값. rich text 객체 하나는 2,000자까지라 긴 글은 나눠 담는다 — 한 덩어리로 보내면
+ * 글 속성 값. 긴 글은 rich text 객체 여럿에 나눠 담는다({@link richTextChunks}) — 한 덩어리로 보내면
  * Notion 이 행의 속성 갱신 전체를 거부한다. 나눠도 담을 수 없을 만큼 길면 null(보내지 않음).
- * 서로게이트 쌍(이모지 등)은 가르지 않는다.
  */
 function richTextValue(text: string): NotionPropertyValue | null {
-  const chunks: string[] = [];
-  let chunk = "";
-  for (const char of text) {
-    if (chunk.length + char.length > RICH_TEXT_CONTENT_MAX) {
-      chunks.push(chunk);
-      chunk = "";
-    }
-    chunk += char;
-  }
-  if (chunk) chunks.push(chunk);
-  if (chunks.length > RICH_TEXT_ARRAY_MAX) return null;
+  const chunks = richTextChunks(text);
+  if (chunks === null) return null;
   return { rich_text: chunks.map((content) => ({ text: { content } })) };
 }
 
