@@ -34,6 +34,7 @@ export type {
   ConversionContext,
   ConversionResult,
   DeferredCode,
+  BookmarkTarget,
   PreserveMarker,
   ImageReference,
   WikilinkEntry,

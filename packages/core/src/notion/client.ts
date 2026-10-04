@@ -22,6 +22,7 @@ import type {
   BaseStatusGroup,
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
+import type { BookmarkTarget } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
@@ -764,6 +765,35 @@ export class NotionClient {
     } catch {
       return null;
     }
+  }
+
+  /**
+   * 북마크 블록의 주소와 캡션(F-09). Markdown API 는 북마크를 주소 없는 자리 태그로만 보낸다
+   * (`converter/bookmark.ts`) — 블록마다 한 번 읽는다.
+   *
+   * 읽지 못한 블록은 이유를 남기고 맵에서 뺀다. 그 북마크는 Notion 의 블록을 가리키는 링크로 보이고,
+   * 블록 자체는 마커로 보존된다. 북마크가 아닌 블록도 뺀다.
+   */
+  async getBookmarks(blockIds: readonly string[]): Promise<Map<string, BookmarkTarget>> {
+    const bookmarks = new Map<string, BookmarkTarget>();
+    for (const id of new Set(blockIds)) {
+      try {
+        const block = await this.withRateLimit(() => this.client.blocks.retrieve({ block_id: id }));
+        if ("type" in block && block.type === "bookmark") {
+          bookmarks.set(id, {
+            url: block.bookmark.url,
+            caption: block.bookmark.caption.map((t) => t.plain_text).join(""),
+          });
+        }
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 북마크 블록을 읽지 못해 Notion 블록 링크로 둠 (${id}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return bookmarks;
   }
 
   async getBlock(blockId: string): Promise<BlockObjectResponse> {

@@ -65,6 +65,16 @@ export interface DeferredCode {
   readonly code: string;
 }
 
+/**
+ * 북마크 블록의 주소와 캡션(F-09). Markdown API 는 북마크를 주소 · 캡션 없는 자리 태그로만 보내,
+ * 블록으로 따로 읽는다(`NotionClient.getBookmarks`).
+ */
+export interface BookmarkTarget {
+  readonly url: string;
+  /** 캡션의 글 — 없으면 빈 문자열. */
+  readonly caption: string;
+}
+
 export interface PreserveMarker {
   readonly type: string;
   readonly params: Record<string, string>;

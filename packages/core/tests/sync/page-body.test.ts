@@ -228,3 +228,33 @@ describe("notionBodyToObsidian — 코드 속 펜스 줄 (S-22)", () => {
     );
   });
 });
+
+describe("notionBodyToObsidian — 북마크 (F-09)", () => {
+  const BLOCK = "3ef13b1800014000800000000071c0e0";
+  const TAG = `<unknown url="https://app.notion.com/p/${PAGE_ID}#${BLOCK}" alt="bookmark"/>`;
+
+  function reader(bookmarks: Map<string, { url: string; caption: string }>) {
+    return {
+      getUserNames: vi.fn(),
+      getCodeBlockTexts: vi.fn(),
+      getBookmarks: vi.fn(async () => bookmarks),
+    };
+  }
+
+  it("북마크가 없으면 블록을 읽지 않는다", async () => {
+    const client = reader(new Map());
+
+    await notionBodyToObsidian(client as never, "앞\n\n뒤", PAGE_ID);
+
+    expect(client.getBookmarks).not.toHaveBeenCalled();
+  });
+
+  it("북마크 블록을 읽어 가시 링크에 그 주소를 넣는다", async () => {
+    const client = reader(new Map([[BLOCK, { url: "https://example.com/", caption: "" }]]));
+
+    const md = await notionBodyToObsidian(client as never, `앞\n\n${TAG}`, PAGE_ID);
+
+    expect(client.getBookmarks).toHaveBeenCalledWith([BLOCK]);
+    expect(md).toContain("[🔖 https://example.com/](https://example.com/)%%im-nobsidian:unknown:");
+  });
+});
