@@ -47,6 +47,12 @@ const FENCE_OPEN_RE = /^([\t ]*)(`{3,}|~{3,})(.*)\r?$/;
 /** 닫는 펜스 — 뒤에는 공백만. CRLF 노트의 줄 끝 `\r` 도 공백이다. */
 const FENCE_CLOSE_RE = /^([\t ]*)(`{3,}|~{3,})[\t ]*\r?$/;
 
+/** 수식 블록(`$$`)을 여닫는 줄 — 그 사이는 식이라 마크다운 구조로 읽지 않는다. */
+export const MATH_FENCE_RE = /^[ \t]*\$\$\s*$/;
+
+/** 각주 정의 줄(`[^이름]:`) — 열 0 에서만. */
+export const FOOTNOTE_DEF_RE = /^\[\^[^\]]+\]:/;
+
 /** 줄머리 들여쓰기의 폭 — 탭은 다음 4칸 경계까지 민다(CommonMark). */
 export function indentWidth(indent: string): number {
   let width = 0;
