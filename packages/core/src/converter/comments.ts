@@ -554,8 +554,10 @@ const EDITED_LINE_SEARCH_LIMIT = 400;
  *    엉뚱한 문단으로 간다.
  * 2. 맞춘 줄 사이에서 비슷한 줄을 차례로 고친 줄로 맞춘다 — 원격에서 고친 문단의 주석이 그 문단에 남는다.
  * 3. 맞춘 줄 사이의 나머지(빈 줄)를 맞춘다.
+ *
+ * 로컬 표기 되살리기(`restoreLocalForm`)도 이것으로 Notion 에서 고친 줄을 짝짓는다.
  */
-function alignNoteLines(
+export function alignNoteLines(
   before: readonly string[],
   after: readonly string[],
 ): { match: number[]; edited: boolean[] } {

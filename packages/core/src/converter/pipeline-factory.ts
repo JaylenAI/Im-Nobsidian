@@ -26,6 +26,8 @@ import { LocalImageRestorer } from "./post-processors/local-image-restorer.js";
 import { PropertiesTableRestorer } from "./post-processors/properties-table-restorer.js";
 import { BlockSpacer } from "./post-processors/block-spacer.js";
 import { CommentRestorer } from "./post-processors/comment-restorer.js";
+import { LocalFormRestorer } from "./post-processors/local-form-restorer.js";
+import { sentForm } from "./sent-form.js";
 
 export interface PipelineOptions {
   readonly wikilinkResolver?: WikilinkResolverFn;
@@ -62,6 +64,9 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPostProcessor(new FrontmatterGenerator());
   pipeline.registerPostProcessor(new BlockSpacer());
   pipeline.registerPostProcessor(new CommentRestorer());
+  pipeline.registerPostProcessor(
+    new LocalFormRestorer((note, context) => sentForm(pipeline, note, context)),
+  );
 
   return pipeline;
 }
