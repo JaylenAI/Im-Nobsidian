@@ -11,6 +11,11 @@
  * 실측). 마커가 셀과 함께 움직이므로 Obsidian 에서 행 · 열을 옮기거나 끼워도 속성이 제 자리에 남는다.
  *
  * push 는 마커가 하나라도 있는 표만 NFM 표로 되돌린다. 마커가 없는 표는 지금처럼 파이프 표로 보낸다.
+ *
+ * 인용(콜아웃 · 토글) 안에서 글 바로 뒤에 붙은 파이프 표는 표가 아니다 — 앞 문단 · 목록 항목 · 표에
+ * 이어지는 글이 된다(Obsidian 1.13.7 실측). 그래서 pull 은 그 자리에 빈 인용 줄을 끼운다. push 는 앞
+ * 표 바로 뒤의 표를 NFM 표로 보낸다 — 파이프 표 둘을 보내면 Notion 이 콜아웃 안에서는 사이의 빈 줄을
+ * 버리고 한 표로 합쳐, 둘째 표의 구분행을 `---` 글 행으로 넣는다(2026-10-04 실측).
  */
 import {
   MARKER_BRAND_RE,
@@ -156,6 +161,28 @@ function toPipeTable(prefix: string, attrs: NfmAttrs, cols: NfmAttrs[], rows: Nf
   return lines.map((line) => prefix + line).join("\n");
 }
 
+/** 바로 뒤에 표가 와도 되는 줄 — 제목 · 콜아웃 머리 줄. 표가 이어 붙지 않는다(1.13.7 실측). */
+const TABLE_MAY_FOLLOW_RE = /^(?:#{1,6}\s|\[!)/;
+
+/**
+ * 표 앞에 끼울 빈 줄 — 앞 줄이 같은 인용의 글이면 그 인용의 빈 인용 줄(`>`)을, 맨 바깥이면 빈 줄을,
+ * 아니면 빈 글을 돌려준다.
+ *
+ * 붙은 표는 앞 문단 · 목록 항목 · 표에 이어지는 글이 된다(실볼트 인용 안 38개 · 6노트). 붙은 두 표는
+ * 한 표로 합쳐 보인다. 맨 바깥에서는 BlockSpacer 가 이어진 표 줄을 한 블록으로 묶어 두 표 사이를
+ * 띄우지 못한다 — 빈 줄이 그 경계를 알린다. 목록 자식 표는 띄우지 않는다 — 빈 줄 뒤 4칸 들여쓴 표는
+ * 첫 칸이 빈 다른 표로 그려진다(1.13.7 실측).
+ */
+function separatorBefore(content: string, offset: number, prefix: string): string {
+  const quoteEnd = prefix.lastIndexOf(">");
+  if (offset === 0 || (quoteEnd === -1 && prefix !== "")) return "";
+  const quote = prefix.slice(0, quoteEnd + 1);
+  const previous = content.slice(content.lastIndexOf("\n", offset - 2) + 1, offset - 1);
+  if (!previous.startsWith(quote)) return "";
+  const text = previous.slice(quote.length).trim();
+  return text !== "" && !TABLE_MAY_FOLLOW_RE.test(text) ? `${quote}\n` : "";
+}
+
 /** NFM 표를 파이프 표로 — 속성은 셀 머리의 마커로 싣는다. */
 export function nfmTablesToPipeTables(content: string): string {
   // 코드블록 안의 `<table>` 은 사용자가 적어 둔 **예제 코드**다. 구조로 오인해 치환하면
@@ -167,7 +194,10 @@ export function nfmTablesToPipeTables(content: string): string {
       if (isInsideRanges(code, offset)) return match;
       const rows = parseRows(body);
       if (rows.length === 0) return match;
-      return toPipeTable(prefix, parseNfmAttrs(attrs), parseCols(body), rows);
+      return (
+        separatorBefore(content, offset, prefix) +
+        toPipeTable(prefix, parseNfmAttrs(attrs), parseCols(body), rows)
+      );
     },
   );
 }
@@ -256,24 +286,35 @@ function toNfmTable(prefix: string, bodies: readonly string[]): string[] {
  *
  * 컨테이너 접두는 표의 모든 줄에 그대로 입힌다. 콜아웃 변환이 그 접두를 탭으로 바꾸고, Notion 은
  * 탭으로 들여쓴 `<tr>` · `<td>` 도 표로 읽는다(2026-10-04 실측). 코드 안의 표는 코드다.
+ *
+ * 앞 표 바로 뒤의 표(사이에 빈 줄만 있거나 붙은 것)는 마커가 없어도 NFM 표로 보낸다 — 태그가 두
+ * 표의 경계를 적는다. 붙은 표는 둘째 표의 머리 · 구분행에서 가른다 — 예전 pull 이 인용 안 표를 붙여
+ * 받았다.
  */
 export function pipeTablesToNfmTables(content: string): string {
   const lines = content.split("\n");
   const parts = lines.map(splitContainerPrefix);
   const kinds = classifyContainerLines(parts.map((p) => p.body));
   const prose = (i: number) => kinds[i] === "prose";
-  const out: string[] = [];
-  let i = 0;
-  while (i < lines.length) {
-    const head = parts[i]!;
+  const startsTable = (i: number) => {
+    const head = parts[i];
     const delimiter = parts[i + 1];
-    const starts =
+    return (
+      head !== undefined &&
       prose(i) &&
       prose(i + 1) &&
       isPipeRow(head.body) &&
       delimiter?.prefix === head.prefix &&
-      isDelimiterRow(delimiter.body);
-    if (!starts) {
+      isDelimiterRow(delimiter.body)
+    );
+  };
+  const out: string[] = [];
+  /** 바로 앞 표 — 끝난 줄과 접두. */
+  let previous: { end: number; prefix: string } | undefined;
+  let i = 0;
+  while (i < lines.length) {
+    const head = parts[i]!;
+    if (!startsTable(i)) {
       out.push(lines[i]!);
       i++;
       continue;
@@ -283,12 +324,16 @@ export function pipeTablesToNfmTables(content: string): string {
       end < lines.length &&
       prose(end) &&
       parts[end]!.prefix === head.prefix &&
-      isPipeRow(parts[end]!.body)
+      isPipeRow(parts[end]!.body) &&
+      !startsTable(end)
     ) {
       end++;
     }
+    const afterTable =
+      previous?.prefix === head.prefix &&
+      parts.slice(previous.end, i).every((p) => p.body.trim() === "");
     const table = lines.slice(i, end);
-    if (HAS_TABLE_MARKER_RE.test(table.join("\n"))) {
+    if (afterTable || HAS_TABLE_MARKER_RE.test(table.join("\n"))) {
       out.push(
         ...toNfmTable(
           head.prefix,
@@ -298,6 +343,7 @@ export function pipeTablesToNfmTables(content: string): string {
     } else {
       out.push(...table);
     }
+    previous = { end, prefix: head.prefix };
     i = end;
   }
   return out.join("\n");
