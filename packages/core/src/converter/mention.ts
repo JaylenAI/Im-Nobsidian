@@ -20,16 +20,15 @@ import {
   MARKER_PAYLOAD_CHAR,
   MENTION_END,
   mentionMarker,
+  parseAttrsPayload,
 } from "../constants/markers.js";
 import { isNotionId } from "../utils/id.js";
 import { mapOutsideCode } from "../utils/md-regions.js";
+import { nfmAttrString, nfmAttrValue, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
 
 /** 짝 마커로 싣는 멘션 종류 — Notion 문서의 멘션 목록에서 페이지를 뺀 것이다. */
 const MENTION_KINDS = ["user", "date", "database", "data-source", "agent"] as const;
 type MentionKind = (typeof MENTION_KINDS)[number];
-
-/** 태그 속성 — Notion 이 내보낸 순서 그대로. 되살릴 때 같은 순서로 적는다. */
-type Attrs = ReadonlyArray<readonly [string, string]>;
 
 /** 이름을 모를 때 보이는 글 — 날짜는 속성에서 만든다({@link dateMentionLabel}). */
 const FALLBACK_LABEL: Readonly<Record<Exclude<MentionKind, "date">, string>> = {
@@ -46,7 +45,6 @@ const NFM_MENTION_RE = new RegExp(
   `<mention-(${KIND_SOURCE})((?:\\s+[A-Za-z][\\w-]*="[^"]*")*)\\s*(?:\\/>|>([^<]*)<\\/mention-\\1>)`,
   "g",
 );
-const ATTR_RE = /([A-Za-z][\w-]*)="([^"]*)"/g;
 
 /** 볼트의 짝 마커. 보이는 글은 한 줄 안에 있다. */
 const VAULT_MENTION_RE = new RegExp(
@@ -54,37 +52,10 @@ const VAULT_MENTION_RE = new RegExp(
   "g",
 );
 
-function parseAttrs(raw: string): Array<[string, string]> {
-  return [...raw.matchAll(ATTR_RE)].map((m) => [m[1]!, m[2]!]);
-}
-
-function attrValue(attrs: Attrs, name: string): string | undefined {
-  return attrs.find(([k]) => k === name)?.[1];
-}
-
-function attrString(attrs: Attrs): string {
-  return attrs.map(([k, v]) => ` ${k}="${v.replace(/"/g, "&quot;")}"`).join("");
-}
-
-/** 마커 페이로드(`k=v&k=v`, 값은 퍼센트 인코딩)를 속성으로. */
-function parsePayload(payload: string): Array<[string, string]> {
-  if (payload === "") return [];
-  return payload.split("&").map((pair) => {
-    const at = pair.indexOf("=");
-    const key = at === -1 ? pair : pair.slice(0, at);
-    const raw = at === -1 ? "" : pair.slice(at + 1);
-    try {
-      return [key, decodeURIComponent(raw)];
-    } catch {
-      return [key, raw];
-    }
-  });
-}
-
 /** 사용자 멘션의 사용자 id — `url="user://<id>"`(지금) 또는 `id="<id>"`(옛 모양). */
-function userIdOf(attrs: Attrs): string | undefined {
-  const url = attrValue(attrs, "url");
-  const id = url?.startsWith("user://") ? url.slice("user://".length) : attrValue(attrs, "id");
+function userIdOf(attrs: NfmAttrs): string | undefined {
+  const url = nfmAttrValue(attrs, "url");
+  const id = url?.startsWith("user://") ? url.slice("user://".length) : nfmAttrValue(attrs, "id");
   return id && isNotionId(id) ? id : undefined;
 }
 
@@ -114,13 +85,13 @@ function timeZoneFromLabel(label: string): string {
 }
 
 /** 날짜 멘션의 보이는 글 — `시작[ 시각][ → 끝[ 시각]][ (시간대)]`. 시작이 없으면 `date`. */
-export function dateMentionLabel(attrs: Attrs): string {
-  const start = attrValue(attrs, "start");
+export function dateMentionLabel(attrs: NfmAttrs): string {
+  const start = nfmAttrValue(attrs, "start");
   if (!start) return "date";
-  const startTime = attrValue(attrs, "startTime");
-  const end = attrValue(attrs, "end");
-  const endTime = attrValue(attrs, "endTime");
-  const timeZone = attrValue(attrs, "timeZone");
+  const startTime = nfmAttrValue(attrs, "startTime");
+  const end = nfmAttrValue(attrs, "end");
+  const endTime = nfmAttrValue(attrs, "endTime");
+  const timeZone = nfmAttrValue(attrs, "timeZone");
   let label = startTime ? `${start} ${startTime}` : start;
   if (end) label += ` → ${endTime ? `${end} ${endTime}` : end}`;
   else if (endTime) label += ` → ${endTime}`;
@@ -187,7 +158,7 @@ export function parseDateMentionLabel(label: string): DateParts | null {
 }
 
 /** 날짜 속성만 새 값으로 — Notion 이 더 붙인 속성은 그대로 둔다. */
-function withDateParts(attrs: Attrs, parts: DateParts): Attrs {
+function withDateParts(attrs: NfmAttrs, parts: DateParts): NfmAttrs {
   const dateKeys: ReadonlySet<string> = new Set(DATE_KEYS);
   const fresh = DATE_KEYS.flatMap((k) => (parts[k] ? [[k, parts[k]] as const] : []));
   return [...fresh, ...attrs.filter(([k]) => !dateKeys.has(k))];
@@ -197,7 +168,7 @@ function withDateParts(attrs: Attrs, parts: DateParts): Attrs {
 
 function labelOf(
   kind: MentionKind,
-  attrs: Attrs,
+  attrs: NfmAttrs,
   inner: string | undefined,
   userNames: ReadonlyMap<string, string> | undefined,
 ): string {
@@ -218,7 +189,7 @@ export function mentionUserIds(enhanced: string): string[] {
   mapOutsideCode(enhanced, (segment) => {
     for (const m of segment.matchAll(NFM_MENTION_RE)) {
       if (m[1] !== "user" || m[3]?.trim()) continue;
-      const id = userIdOf(parseAttrs(m[2]!));
+      const id = userIdOf(parseNfmAttrs(m[2]!));
       if (id) ids.add(id);
     }
     return segment;
@@ -239,7 +210,7 @@ export function mentionsToMarkers(
     segment.replace(
       NFM_MENTION_RE,
       (_m, kind: MentionKind, rawAttrs: string, inner: string | undefined) => {
-        const attrs = parseAttrs(rawAttrs);
+        const attrs = parseNfmAttrs(rawAttrs);
         return `${mentionMarker(kind, attrs)}${labelOf(kind, attrs, inner, userNames)}${MENTION_END}`;
       },
     ),
@@ -248,31 +219,31 @@ export function mentionsToMarkers(
 
 // ─── push ───
 
-function restoreDate(attrs: Attrs, label: string): string {
-  if (label === dateMentionLabel(attrs)) return `<mention-date${attrString(attrs)}/>`;
+function restoreDate(attrs: NfmAttrs, label: string): string {
+  if (label === dateMentionLabel(attrs)) return `<mention-date${nfmAttrString(attrs)}/>`;
   const edited = parseDateMentionLabel(label.trim());
   // 날짜로 읽지 못하는 글 — 사용자가 멘션을 글로 바꾼 것이다.
   if (!edited) return label;
-  return `<mention-date${attrString(withDateParts(attrs, edited))}/>`;
+  return `<mention-date${nfmAttrString(withDateParts(attrs, edited))}/>`;
 }
 
-function restoreMention(kind: MentionKind, attrs: Attrs, label: string): string {
+function restoreMention(kind: MentionKind, attrs: NfmAttrs, label: string): string {
   if (kind === "date") return restoreDate(attrs, label);
   // 보이는 글을 지웠으면 멘션을 지운 것이다.
   if (label.trim() === "") return "";
-  if (label === FALLBACK_LABEL[kind]) return `<mention-${kind}${attrString(attrs)}/>`;
+  if (label === FALLBACK_LABEL[kind]) return `<mention-${kind}${nfmAttrString(attrs)}/>`;
   // 안의 이름은 보이는 글일 뿐이다 — 누구 · 무엇인지는 url 이 정하고 Notion 이 이름을 다시 붙인다.
   // 그래도 싣는 까닭은 문서가 쓰는 형태라서이고, Notion 을 거치지 않은 왕복(오프라인)도 같은
   // 글로 돌아오게 하려서다.
   const inner = (kind === "user" ? label.replace(/^@/, "") : label).replace(/[<>]/g, "");
-  return `<mention-${kind}${attrString(attrs)}>${inner}</mention-${kind}>`;
+  return `<mention-${kind}${nfmAttrString(attrs)}>${inner}</mention-${kind}>`;
 }
 
 /** 짝 마커를 NFM 멘션 태그로 되살린다(push). */
 export function markersToMentions(obsidian: string): string {
   return mapOutsideCode(obsidian, (segment) =>
     segment.replace(VAULT_MENTION_RE, (_m, kind: MentionKind, payload: string, label: string) =>
-      restoreMention(kind, parsePayload(payload), label),
+      restoreMention(kind, parseAttrsPayload(payload), label),
     ),
   );
 }

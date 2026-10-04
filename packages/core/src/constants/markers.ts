@@ -198,12 +198,34 @@ export function blockColorMarker(color: string): string {
  * 실어 두고 push 가 태그로 되돌린다. 속성 값은 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
  */
 export function mentionMarker(kind: string, attrs: readonly (readonly [string, string])[]): string {
-  const payload = attrs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
-  return compactMarker(`mention-${kind}:${payload}`);
+  return compactMarker(`mention-${kind}:${attrsPayload(attrs)}`);
 }
 
 /** {@link mentionMarker} 의 닫는 토큰. */
 export const MENTION_END = "%%/mention%%";
+
+/**
+ * 태그 속성을 싣는 마커 페이로드 — `k=v&k=v`, 값은 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ * 되읽기는 {@link parseAttrsPayload}.
+ */
+export function attrsPayload(attrs: readonly (readonly [string, string])[]): string {
+  return attrs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+}
+
+/** {@link attrsPayload} 를 속성으로 되읽는다. 디코드하지 못하는 값은 받은 글자 그대로 둔다. */
+export function parseAttrsPayload(payload: string): Array<[string, string]> {
+  if (payload === "") return [];
+  return payload.split("&").map((pair) => {
+    const at = pair.indexOf("=");
+    const key = at === -1 ? pair : pair.slice(0, at);
+    const raw = at === -1 ? "" : pair.slice(at + 1);
+    try {
+      return [key, decodeURIComponent(raw)];
+    } catch {
+      return [key, raw];
+    }
+  });
+}
 
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
