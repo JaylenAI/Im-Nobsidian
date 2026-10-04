@@ -9,6 +9,12 @@ const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
 const HIGHLIGHT_REGEX = /(?<!=)==([^=\n]+?)==(?!=)/g;
 
 /**
+ * `<mark>형광</mark>` — HTML 의 형광이다. Highlightr 플러그인은 `<mark style="…">` 로 적는다. `==` 와 같이
+ * 같은 줄 안만 본다 — pull 이 형광을 `==` 로 되돌리는 것도 한 줄이다(HighlightRestorer).
+ */
+const MARK_REGEX = /<mark(?:\s[^>]*)?>([^\n]+?)<\/mark>/g;
+
+/**
  * 색상 span(`<span class="notion-red">` / `notion-yellow-bg`) — pull(notion-to-md) 경로가 만든
  * 레거시 표현. 1번 그룹=베이스 색, 2번 그룹=배경(`-bg`) 여부.
  */
@@ -77,11 +83,11 @@ export class InlineAnnotationPreserver implements Processor {
     // ==하이라이트== → 노랑 배경 (F24). Obsidian 하이라이트의 유일한 자연 대응이
     // Notion yellow 배경이다. 색상명은 pull 경로(Notion md export)가 쓰는
     // `yellow_bg` 로 맞춰 HighlightRestorer 와 왕복 대칭을 이룬다.
-    content = replaceOutsideCode(
-      content,
-      HIGHLIGHT_REGEX,
-      (_m, text) => `${compactMarker("color:yellow_bg")}${text}%%/color%%`,
-    );
+    // <mark> 도 같다 — 그대로 보내면 Notion 이 태그를 글자로 적는다(F-06, 2026-10-04 실측).
+    const highlight = (_m: string, text: string) =>
+      `${compactMarker("color:yellow_bg")}${text}%%/color%%`;
+    content = replaceOutsideCode(content, HIGHLIGHT_REGEX, highlight);
+    content = replaceOutsideCode(content, MARK_REGEX, highlight);
 
     return { content, metadata: input.metadata };
   }
