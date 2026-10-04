@@ -21,7 +21,7 @@ const SPACED_COLOR_REGEX = new RegExp(
 );
 
 /**
- * 인라인 annotation(underline·color) 무손실 보존기 — push 전처리(order 5).
+ * 인라인 annotation(underline·color) 무손실 보존기 — push 전처리(order 13).
  *
  * 과거에는 underline/color 표기를 **제거**(strip)했으나, 그러면 Notion 으로 push 할 때
  * 서식이 영구 소실됐다(I3 손실점). Notion 의 Enhanced Markdown 은 underline/color 를
@@ -40,7 +40,10 @@ const SPACED_COLOR_REGEX = new RegExp(
  */
 export class InlineAnnotationPreserver implements Processor {
   readonly name = "InlineAnnotationPreserver";
-  readonly order = 5;
+  // FrontmatterExtractor(10) · CommentStripper(11) 뒤 — 마커는 `%%` 로 쓰여, 주석 속 `==강조==` 를 먼저
+  // 마커로 바꾸면 `%%` 가 마커를 넘어 짝짓지 않아 주석이 통째로 Notion 에 올라갔다. YAML 값 속 `==` ·
+  // `<u>` 도 마커 글자로 바뀌어 속성에 실렸다(S-31).
+  readonly order = 13;
 
   process(input: ProcessorInput): ProcessorOutput {
     if (input.context.direction !== "push") {
