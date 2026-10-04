@@ -13,6 +13,7 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../../src/converter/enhanced-md-converter.js";
+import { sentForm } from "../../src/converter/sent-form.js";
 import { mapOutsideCodeFences } from "../../src/utils/md-regions.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
 import { roundtrip } from "./roundtrip-fidelity.js";
@@ -120,23 +121,19 @@ describe("주석 왕복 — 배치마다 (S-29)", () => {
     expect(pull(sent(note), note)).toBe(note);
   });
 
-  it.each(LAYOUTS.filter(([name]) => name !== "콜아웃 속 문단"))(
-    "%s — 압축형 export 로 받아도 노트 그대로",
-    (_name, note) => {
-      expect(pull(compact(sent(note)), note, true)).toBe(note);
-    },
-  );
+  it.each(LAYOUTS)("%s — 압축형 export 로 받아도 노트 그대로", (_name, note) => {
+    expect(pull(compact(sent(note)), note, true)).toBe(note);
+  });
 
-  it("압축형 export 는 콜아웃 속 문단의 경계를 잃는다 — 주석과 무관한 한계지만, 주석은 제자리에 남는다", () => {
+  it("압축형 export 는 콜아웃 속 문단의 경계를 내보내지 않는다 — 로컬 노트가 있으면 그 경계대로 둔다(F-06 · S-30)", () => {
     const [, note, shown] = LAYOUTS.find(([name]) => name === "콜아웃 속 문단")!;
-    // 주석이 없는 같은 노트도 경계를 잃는다.
-    expect(pull(compact(sent(shown)), shown, true)).toBe(
+    // 받기 직전의 로컬 노트가 없으면(새 페이지) 경계를 모른다.
+    expect(pull(compact(sent(shown)), undefined, true)).toBe(
       "> [!note] 제목\n> 본문 줄입니다.\n> 끝 줄입니다.",
     );
-    const pulled = pull(compact(sent(note)), note, true);
-    expect(pulled).toBe("> [!note] 제목\n> 본문 줄입니다.\n> %%콜아웃 메모%%\n> 끝 줄입니다.");
-    // 되살린 노트를 다시 올려도 Notion 의 글은 그대로다.
-    expect(sent(pulled)).toBe(sent("> [!note] 제목\n> 본문 줄입니다.\n> 끝 줄입니다."));
+    // Notion 은 콜아웃 속 빈 줄을 읽지 않는다 — 경계가 있으나 없으나 같은 블록이라 로컬 노트의 경계를 둔다.
+    expect(pull(compact(sent(shown)), shown, true)).toBe(shown);
+    expect(pull(compact(sent(note)), note, true)).toBe(note);
   });
 
   // 실측(2026-10-04, 프로브 `…9bb7`) — 아래 노트를 push 하고 Notion 에서 C · E 의 줄을 고치고, G 의 둘째 항목을
@@ -203,12 +200,15 @@ describe("주석 왕복 — 배치마다 (S-29)", () => {
           "C 문장 속 %%문장 속 메모%% 고친 주석입니다.",
         )
         .replace("> 콜아웃 본문 줄입니다.", "> 콜아웃 본문 줄 고침.")
-        // 압축형 export 는 콜아웃 속 문단 경계를 내보내지 않는다(위 시험) — 주석은 콜아웃 안에 남는다.
-        .replace(">\n> %%콜아웃 문단 메모%%\n>\n", "> %%콜아웃 문단 메모%%\n")
         .replace("- 항목 %%목록 메모%% 둘", "%%목록 메모%%")
         .replace("마지막 문단 — Notion 에서 고칠 자리.", "마지막 문단 — Notion 에서 고침."),
     );
-    expect(sent(pulled)).toBe(sent(pull(exported, undefined, true)));
+    // 되살린 노트를 다시 올려도 Notion 의 블록은 받은 것 그대로다 — 콜아웃 속 문단 경계(빈 줄)는 Notion 이
+    // 읽지 않는다(`sentForm`).
+    const pipeline = createDefaultPipeline();
+    expect(sentForm(pipeline, pulled, PULL)).toBe(
+      sentForm(pipeline, pull(exported, undefined, true), PULL),
+    );
   });
 
   it("로컬 노트가 없으면 push 때 남긴 마커로 앵커 줄 다음에 끼운다", () => {

@@ -51,6 +51,7 @@ import { CALLOUT_HEAD_LINE_RE, TOGGLE_HEAD_SOURCE, pushContainerKind } from "./c
 import { bookmarkBlockId, bookmarkLabel } from "./bookmark.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
+import { DEFAULT_CALLOUT_TYPE, calloutIconOf, calloutTypeOf } from "./callout-types.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -419,7 +420,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   // 업로드 이미지 아이콘은 만료되는 서명 URL 로만 노출된다(풀마다 서명이 바뀌어 churn,
   // push 하면 만료 URL 오염) — URL 아이콘은 마커에 싣지 않고 색만 보존한다(degrade).
   const icon = rawIcon !== undefined && /^https?:\/\//i.test(rawIcon) ? undefined : rawIcon;
-  const type = icon ? emojiToCalloutType(icon) : "note";
+  const type = icon ? calloutTypeOf(icon) : DEFAULT_CALLOUT_TYPE;
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
   // 앞뒤 **빈 줄만** 떨군다. `trim()` 은 첫 줄의 선행 공백까지 먹어 버려, 같은 깊이의
   // 형제 중 첫 줄만 한 단계 얕게 렌더된다(실측: 콜아웃 안 토글 헤딩 두 개가 서로 다른
@@ -434,8 +435,11 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   // 단, 아이콘이 type 기본 이모지와 같고 색이 없으면 push 가 type 에서 동일 아이콘을
   // 재생성하므로 마커를 생략한다 — 흔한 기본 콜아웃에서 볼트 노이즈를 없앤다.
   // 마커의 icon 부재는 "아이콘 없는 콜아웃"을 뜻하므로, 마커를 낼 때는 실제 속성만 싣는다.
+  // 아이콘이 없는 콜아웃도 마커를 단다 — 안 달면 push 가 note 의 아이콘(📝)을 붙여 Notion 을 바꾼다(F-06).
   const needsMarker =
-    Boolean(style?.color) || (icon !== undefined && calloutTypeToEmoji(type) !== icon);
+    Boolean(style?.color) ||
+    rawIcon === undefined ||
+    (icon !== undefined && calloutIconOf(type) !== icon);
   const styleTail = needsMarker ? ` ${calloutStyleMarker({ icon, color: style?.color })}` : "";
   const calloutTitle = title ? `> [!${type}] ${title}${styleTail}` : `> [!${type}]${styleTail}`;
   const calloutBody = rest.trim() ? `\n${quoteCalloutBody(rest)}` : "";
@@ -894,7 +898,7 @@ function convertObsidianCallouts(content: string): string {
         style = parseCalloutStyleParams(styleMatch[1]!);
         title = title.replace(CALLOUT_STYLE_MARKER_RE, "");
       } else {
-        style.icon = calloutTypeToEmoji(type!);
+        style.icon = calloutIconOf(type!);
       }
 
       const bodyLines: string[] = [];
@@ -928,33 +932,6 @@ function convertObsidianCallouts(content: string): string {
   }
 
   return result.join("\n");
-}
-
-const EMOJI_TYPE_MAP: Record<string, string> = {
-  "💡": "tip",
-  ℹ️: "info",
-  "⚠️": "warning",
-  "🔥": "danger",
-  "✅": "success",
-  "❌": "failure",
-  "❓": "question",
-  "📝": "note",
-  "📌": "abstract",
-  "🐛": "bug",
-  "💬": "quote",
-  "📋": "example",
-};
-
-const TYPE_EMOJI_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(EMOJI_TYPE_MAP).map(([k, v]) => [v, k]),
-);
-
-function emojiToCalloutType(emoji: string): string {
-  return EMOJI_TYPE_MAP[emoji] ?? "note";
-}
-
-function calloutTypeToEmoji(type: string): string | undefined {
-  return TYPE_EMOJI_MAP[type.toLowerCase()];
 }
 
 function escapeRegex(str: string): string {
