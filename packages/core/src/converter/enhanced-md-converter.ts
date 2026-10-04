@@ -47,6 +47,7 @@ import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
 import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
 import { separateLazyContinuations } from "./lazy-continuation.js";
+import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -174,6 +175,8 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   // 토글 헤딩이 가장 마지막 — 본문이 위 변환을 모두 통과한 뒤에 탭 한 단계를 입혀야
   // 각 변환기가 열 0 기준으로 동작할 수 있다(pull 의 정확한 역순).
   result = restoreToggleHeadings(result);
+  // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
+  result = indentPlaceholdersToNextLine(result);
 
   return result;
 }
