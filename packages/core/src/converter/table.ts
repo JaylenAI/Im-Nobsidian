@@ -25,6 +25,7 @@ import {
   tableMarker,
   type TableMarkerPart,
 } from "../constants/markers.js";
+import { inlineCodeRanges } from "../utils/md-regions.js";
 import {
   CONTAINER_PREFIX_SOURCE,
   classifyContainerLines,
@@ -211,6 +212,8 @@ const HAS_TABLE_MARKER_RE = new RegExp(TABLE_MARKER_SOURCE);
 /** 구분행 — `| --- | :-: |`. 칸이 하나인 표도 파이프는 하나 있다. */
 const DELIMITER_ROW_RE = /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?$/;
 const CELL_PIPE_RE = /(?<!\\)\|/;
+/** 칸 안 파이프 — 파이프 표는 코드 안에서도 `\|` 로 적는다(GFM). */
+const ESCAPED_PIPE = "\\|";
 
 function isDelimiterRow(body: string): boolean {
   const row = body.trim();
@@ -227,6 +230,20 @@ function splitPipeRow(body: string): string[] {
   if (row.startsWith("|")) row = row.slice(1);
   if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
   return row.split(CELL_PIPE_RE).map((cell) => cell.trim());
+}
+
+/**
+ * 칸의 코드 안 `\|` 를 `|` 로 — NFM 칸의 코드는 백슬래시를 글자로 남겨, `` `c\|d` `` 가 코드
+ * `c\|d` 가 됐다(2026-10-04 실측). 코드 밖 `\|` 는 Notion 이 `|` 로 읽고 그 모양으로 내보내므로 둔다.
+ */
+function unescapeCodePipes(cell: string): string {
+  let out = "";
+  let pos = 0;
+  for (const [start, end] of inlineCodeRanges(cell)) {
+    out += cell.slice(pos, start) + cell.slice(start, end).replaceAll(ESCAPED_PIPE, "|");
+    pos = end;
+  }
+  return out + cell.slice(pos);
 }
 
 /** 마커를 걷어 내며 속성을 모은다. 같은 자리의 마커가 둘이면 앞의 것을 쓴다. */
@@ -260,7 +277,7 @@ function toNfmTable(prefix: string, bodies: readonly string[]): string[] {
     const tds = Array.from({ length: colCount }, (_, c) => {
       const taken = attrs.take(cells[c] ?? "", c);
       rowAttrs ??= taken.row;
-      return `<td${nfmAttrString(taken.cell ?? [])}>${taken.text}</td>`;
+      return `<td${nfmAttrString(taken.cell ?? [])}>${unescapeCodePipes(taken.text)}</td>`;
     });
     return [`<tr${nfmAttrString(rowAttrs ?? [])}>`, ...tds, "</tr>"];
   });
@@ -290,6 +307,10 @@ function toNfmTable(prefix: string, bodies: readonly string[]): string[] {
  * 앞 표 바로 뒤의 표(사이에 빈 줄만 있거나 붙은 것)는 마커가 없어도 NFM 표로 보낸다 — 태그가 두
  * 표의 경계를 적는다. 붙은 표는 둘째 표의 머리 · 구분행에서 가른다 — 예전 pull 이 인용 안 표를 붙여
  * 받았다.
+ *
+ * 칸 안에 파이프(`\|`)가 있는 표도 NFM 표로 보낸다 — Notion 은 파이프 표의 `\|` 를 이스케이프로
+ * 읽지 않고 그 자리에서 칸을 갈라, `x\|y` 가 `x\` · `y` 두 칸이 되고 표에 열이 하나 늘었다
+ * (2026-10-04 실측, F-06). NFM 칸에서는 `\|` 가 파이프 글자다.
  */
 export function pipeTablesToNfmTables(content: string): string {
   const lines = content.split("\n");
@@ -333,7 +354,8 @@ export function pipeTablesToNfmTables(content: string): string {
       previous?.prefix === head.prefix &&
       parts.slice(previous.end, i).every((p) => p.body.trim() === "");
     const table = lines.slice(i, end);
-    if (afterTable || HAS_TABLE_MARKER_RE.test(table.join("\n"))) {
+    const source = table.join("\n");
+    if (afterTable || HAS_TABLE_MARKER_RE.test(source) || source.includes(ESCAPED_PIPE)) {
       out.push(
         ...toNfmTable(
           head.prefix,
