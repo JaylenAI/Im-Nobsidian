@@ -8,6 +8,7 @@
 import { describe, it, expect } from "vitest";
 import {
   baseEmbedPaths,
+  childLayout,
   extractChildTags,
   hasBodyBesidesChildren,
   restoreChildTags,
@@ -150,5 +151,72 @@ describe("baseEmbedPaths — 다시 보낼 때 DB id 를 찾아볼 .base 경로"
       basePlaceholder("사진.pdf"),
     ].join("\n\n");
     expect(baseEmbedPaths(md)).toEqual(["폴더/가.base"]);
+  });
+});
+
+describe("childLayout — 자식이 놓인 자리(차례 · 감싼 컨테이너)", () => {
+  /** Notion 이 돌려주는 꼴 — 빈 줄 없이, 토글 자식도 들여쓴다. */
+  const REMOTE = [
+    "첫 문단",
+    '<callout color="orange_bg">',
+    `\t${DB_TAG}`,
+    "</callout>",
+    "<details>",
+    "<summary>토글</summary>",
+    "\t토글 설명",
+    `\t${PAGE_TAG}`,
+    "</details>",
+    "끝 문단",
+  ].join("\n");
+
+  it("push 가 보내는 꼴(빈 줄 · 들여쓰지 않은 토글 자식)도 같은 배치로 본다", () => {
+    const sent = [
+      "첫 문단",
+      "",
+      '<callout color="orange_bg">',
+      `\t${DB_TAG}`,
+      "</callout>",
+      "",
+      "<details>",
+      "<summary>토글</summary>",
+      "",
+      "토글 설명",
+      "",
+      PAGE_TAG,
+      "",
+      "</details>",
+      "",
+      "끝 문단",
+    ].join("\n");
+    expect(childLayout(REMOTE)).toEqual([`${DB_ID}@callout#1`, `${PAGE_ID}@details#2`]);
+    expect(childLayout(sent)).toEqual(childLayout(REMOTE));
+  });
+
+  it("글 사이에서만 자리를 옮긴 컨테이너는 같은 배치다", () => {
+    const moved = REMOTE.replace("첫 문단\n", "").replace("끝 문단", "첫 문단\n끝 문단");
+    expect(childLayout(moved)).toEqual(childLayout(REMOTE));
+  });
+
+  it("컨테이너를 드나들거나 차례가 바뀌면 다른 배치다", () => {
+    expect(childLayout(`첫 문단\n${DB_TAG}\n${PAGE_TAG}`)).toEqual([
+      `${DB_ID}@+0`,
+      `${PAGE_ID}@+0`,
+    ]);
+    expect(childLayout(`${PAGE_TAG}\n${DB_TAG}`)).toEqual([`${PAGE_ID}@+0`, `${DB_ID}@+0`]);
+    expect(childLayout(`- 항목\n\t${DB_TAG}`)).toEqual([`${DB_ID}@+1`]);
+    expect(childLayout(`<columns>\n\t<column>\n\t\t${DB_TAG}\n\t</column>\n</columns>`)).toEqual([
+      `${DB_ID}@columns#1/column#2`,
+    ]);
+  });
+
+  it("같은 종류의 다른 컨테이너로 옮겨도 다른 배치다", () => {
+    const callouts = (first: string, second: string) =>
+      `<callout>\n\t${first}\n</callout>\n글\n<callout>\n\t${second}\n</callout>`;
+    expect(childLayout(callouts(DB_TAG, "둘째"))).toEqual([`${DB_ID}@callout#1`]);
+    expect(childLayout(callouts("첫째", DB_TAG))).toEqual([`${DB_ID}@callout#2`]);
+  });
+
+  it("코드 블록 속 태그 글자는 자식이 아니다", () => {
+    expect(childLayout(`\`\`\`html\n${DB_TAG}\n\`\`\`\n${PAGE_TAG}`)).toEqual([`${PAGE_ID}@+0`]);
   });
 });

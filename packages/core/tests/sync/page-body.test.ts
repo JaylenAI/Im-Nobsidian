@@ -89,6 +89,20 @@ describe("replacePageBody — 자식을 지우지 않고 본문 교체 (S-03)", 
     expect(client.getPageMarkdown).not.toHaveBeenCalled();
   });
 
+  it("자식이 컨테이너로 옮겨 가면 같은 본문을 한 번 더 보낸다 — Notion 이 그 컨테이너를 맨 위에 두는 일이 있다", async () => {
+    // 실측(2026-10-04, S-28): 맨 바깥의 자식 DB 둘을 한 번에 콜아웃 · 토글로 옮기면 뒤 컨테이너가 페이지 맨
+    // 위에 놓였다. 같은 본문을 다시 보내면 제자리로 갔다.
+    const client = clientWith(REMOTE, WOULD_DELETE, undefined, undefined);
+    const local = `첫 문단 A\n\n<callout icon="📝">\n\t[[S03 자식 페이지]]\n</callout>\n\n**S03 자식 DB** *(Notion DB)*%%im-nobsidian:child-database:id=${DB_ID}%%\n`;
+
+    await replacePageBody(client as never, "p", local);
+
+    const sent = `첫 문단 A\n\n<callout icon="📝">\n\t${PAGE_TAG}\n</callout>\n\n${DB_TAG}\n`;
+    expect(client.replacePageMarkdown).toHaveBeenCalledTimes(3);
+    expect(client.replacePageMarkdown.mock.calls[1]![1]).toBe(sent);
+    expect(client.replacePageMarkdown.mock.calls[2]![1]).toBe(sent);
+  });
+
   it(".base 임베드는 DB id 로 맞춘다 — 자식 DB 가 있을 때만, .base 경로만 묻는다", async () => {
     const client = clientWith(REMOTE, WOULD_DELETE, undefined);
     const databaseIdsOfBase = vi.fn().mockResolvedValue([DB_ID]);
