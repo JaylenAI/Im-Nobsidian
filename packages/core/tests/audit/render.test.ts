@@ -11,6 +11,18 @@ const lines = (...rows: string[]): string => rows.join("\n");
 const codes = (markdown: string): string[] =>
   lintRenderedMarkdown(markdown).map((f) => `${f.code}@${f.line}`);
 
+describe("한 줄 규칙(①~④) — 코드 안은 보지 않는다", () => {
+  it("NFM 태그가 본문에 남으면 잡고, 코드 안의 같은 태그는 예제 글자로 둔다", () => {
+    const md = lines(
+      '<span color="red" underline="true">새어 나온 span</span>',
+      "```html",
+      '<span color="red">예제</span> <details>',
+      "```",
+    );
+    expect(codes(md)).toEqual(["④@1"]);
+  });
+});
+
 describe("⑤ 코드펜스 4칸 들여쓰기 — 목록 · 콜아웃 밖", () => {
   it("문단 뒤의 4칸 펜스는 들여쓰기 코드블록이다 — 여는 줄 · 닫는 줄", () => {
     expect(codes(lines("문단", "", "    ```js", "    x", "    ```"))).toEqual(["⑤@3", "⑤@5"]);

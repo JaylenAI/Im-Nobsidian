@@ -61,6 +61,8 @@ export const DRIFT_METRICS: readonly DriftMetric[] = [
   { name: "<unknown_mention>", count: countOf(/<unknown_mention\b/g) },
   { name: "<mention-user>", count: countOf(/<mention-user\b/g) },
   { name: "<mention-date>", count: countOf(/<mention-date\b/g) },
+  { name: "글자색 span", count: countOf(/<span\b[^>]*\bcolor="/g) },
+  { name: "밑줄 span", count: countOf(/<span\b[^>]*\bunderline="true"/g) },
   { name: "토글헤딩", count: countOf(/\{toggle="true"\}/g) },
   { name: "코드펜스", count: countOf(/^[\t ]*```/gm) },
 ] as const;

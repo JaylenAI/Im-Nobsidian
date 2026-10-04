@@ -45,7 +45,8 @@ export const RENDER_LINE_RULES: readonly RenderLineRule[] = [
     label: "NFM 전용 태그 누수",
     // 이름이 붙어 `<unknown>` 폴백에 걸리지 않던 태그들. 멘션은 위키링크나 짝 마커가 되어야
     // 한다 — 태그가 남으면 읽기 보기에서 빈칸이 되고 편집 화면에서 줄이 끊긴다(F-01).
-    re: /<(?:table_of_contents|embed|unknown_mention|empty-block|mention-[a-z-]+)\b/,
+    // 색 · 밑줄 span 은 `<u>` 나 마커가 되어야 한다 — 속성이 둘인 span 이 그대로 남았다(F-07).
+    re: /<(?:(?:table_of_contents|embed|unknown_mention|empty-block|mention-[a-z-]+)\b|span\s+(?:color|underline)=)/,
   },
 ] as const;
 
@@ -128,7 +129,8 @@ export function lintRenderedMarkdown(markdown: string): RenderFinding[] {
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
-    for (const rule of RENDER_LINE_RULES) {
+    // 코드 안의 태그 · 들여쓰기는 사용자가 적은 예제 글자다 — `<details>` · `<span color>` HTML 예제.
+    for (const rule of inCode[i] ? [] : RENDER_LINE_RULES) {
       if (rule.re.test(line)) findings.push({ code: rule.code, label: rule.label, line: i + 1 });
     }
 
