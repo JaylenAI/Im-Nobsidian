@@ -43,6 +43,24 @@ import { nfmAttrString, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
  */
 const PIPE_TABLE_ATTRS: NfmAttrs = [["header-row", "true"]];
 
+/** 칸 안 파이프 — 파이프 표는 코드 안에서도 `\|` 로 적는다(GFM). */
+const ESCAPED_PIPE = "\\|";
+
+/** 칸의 글과 인라인 코드(백틱 포함)에 따로 바꾸기를 건다. */
+function mapCellCode(
+  cell: string,
+  text: (segment: string) => string,
+  code: (span: string) => string,
+): string {
+  let out = "";
+  let pos = 0;
+  for (const [start, end] of inlineCodeRanges(cell)) {
+    out += text(cell.slice(pos, start)) + code(cell.slice(start, end));
+    pos = end;
+  }
+  return out + text(cell.slice(pos));
+}
+
 // ─── pull: NFM 표 → 파이프 표 ───
 
 /**
@@ -96,12 +114,17 @@ function isAlignmentRow(cells: readonly NfmCell[]): boolean {
  * 줄바꿈은 행 자체를 끊어 표를 죽이므로 `<br>` 로 접고(Obsidian 표가 렌더하는 유일한
  * 줄바꿈 표현), 셀 안 파이프는 열 경계로 오인되므로 이스케이프한다. 이스케이프 형태는
  * pull 뒷단 `unescapePipes` 가 되돌리지 않도록 표 밖 규칙과 구분되는 `\|` 를 쓴다.
+ *
+ * 코드 밖에서는 Notion 이 파이프 글자를 이미 `\|` 로 적어 보내 날 `|` 만 이스케이프한다. 코드
+ * 안에서는 백슬래시가 글자라 모든 `|` 앞에 `\` 를 붙인다 — 파이프 표는 칸의 `\|` 에서 백슬래시
+ * 하나를 떼고 읽으므로(GFM) 코드의 `c\|d` 는 `c\\|d` 로 적어야 그대로 돌아간다.
  */
 function toTableCell(raw: string): string {
-  return raw
-    .trim()
-    .replace(/\r?\n/g, "<br>")
-    .replace(/(?<!\\)\|/g, "\\|");
+  return mapCellCode(
+    raw.trim().replace(/\r?\n/g, "<br>"),
+    (text) => text.replace(/(?<!\\)\|/g, ESCAPED_PIPE),
+    (code) => code.replaceAll("|", ESCAPED_PIPE),
+  );
 }
 
 function parseRows(body: string): NfmRow[] {
@@ -212,8 +235,6 @@ const HAS_TABLE_MARKER_RE = new RegExp(TABLE_MARKER_SOURCE);
 /** 구분행 — `| --- | :-: |`. 칸이 하나인 표도 파이프는 하나 있다. */
 const DELIMITER_ROW_RE = /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?$/;
 const CELL_PIPE_RE = /(?<!\\)\|/;
-/** 칸 안 파이프 — 파이프 표는 코드 안에서도 `\|` 로 적는다(GFM). */
-const ESCAPED_PIPE = "\\|";
 
 function isDelimiterRow(body: string): boolean {
   const row = body.trim();
@@ -237,13 +258,11 @@ function splitPipeRow(body: string): string[] {
  * `c\|d` 가 됐다(2026-10-04 실측). 코드 밖 `\|` 는 Notion 이 `|` 로 읽고 그 모양으로 내보내므로 둔다.
  */
 function unescapeCodePipes(cell: string): string {
-  let out = "";
-  let pos = 0;
-  for (const [start, end] of inlineCodeRanges(cell)) {
-    out += cell.slice(pos, start) + cell.slice(start, end).replaceAll(ESCAPED_PIPE, "|");
-    pos = end;
-  }
-  return out + cell.slice(pos);
+  return mapCellCode(
+    cell,
+    (text) => text,
+    (code) => code.replaceAll(ESCAPED_PIPE, "|"),
+  );
 }
 
 /** 마커를 걷어 내며 속성을 모은다. 같은 자리의 마커가 둘이면 앞의 것을 쓴다. */
