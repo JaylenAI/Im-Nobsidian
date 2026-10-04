@@ -43,8 +43,40 @@ import { nfmAttrString, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
  */
 const PIPE_TABLE_ATTRS: NfmAttrs = [["header-row", "true"]];
 
-/** 칸 안 파이프 — 파이프 표는 코드 안에서도 `\|` 로 적는다(GFM). */
+/** 칸 안 파이프 — 경계가 아닌 파이프는 백슬래시를 앞에 둔다. */
 const ESCAPED_PIPE = "\\|";
+
+/**
+ * 칸 경계 파이프 — 앞의 백슬래시가 짝수 개(0 포함)다. 백슬래시는 다음 글자 하나를 이스케이프해
+ * `\|` 는 칸 안 파이프지만 `\\|` 의 파이프는 경계다(Obsidian 1.12.4 읽기 보기 실측).
+ */
+const CELL_PIPE_SOURCE = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)\|`;
+const CELL_PIPE_RE = new RegExp(CELL_PIPE_SOURCE);
+const CELL_PIPES_RE = new RegExp(CELL_PIPE_SOURCE, "g");
+const TRAILING_CELL_PIPE_RE = new RegExp(`${CELL_PIPE_SOURCE}$`);
+
+/** 코드 속 파이프와 그 앞 백슬래시 묶음(그룹 1). */
+const CODE_PIPE_RE = /(\\*)\|/g;
+
+/**
+ * 칸 코드 속 파이프를 파이프 표에 적는 모양 — 앞 백슬래시 k개를 2k+1개로. Obsidian 은 칸의 코드를
+ * 글자 그대로 보이고(`` `c\|d` `` → `c\|d`) 짝수 개 뒤의 파이프에서 칸을 가른다(실측). 홀수 개라야
+ * 칸이 지켜지고 {@link decodeCodePipes} 가 그대로 되돌린다. Obsidian 에서는 이 백슬래시가 보인다.
+ */
+function encodeCodePipes(code: string): string {
+  return code.replace(CODE_PIPE_RE, (_m, bs: string) => `${bs}${bs}${ESCAPED_PIPE}`);
+}
+
+/**
+ * {@link encodeCodePipes} 의 반대 — 백슬래시 2k+1개를 k개로. NFM 칸의 코드는 백슬래시를 글자로 남겨
+ * `` `c\|d` `` 가 코드 `c\|d` 가 된다(2026-10-04 실측).
+ */
+function decodeCodePipes(code: string): string {
+  return code.replace(
+    CODE_PIPE_RE,
+    (_m, bs: string) => `${bs.slice(0, Math.floor(bs.length / 2))}|`,
+  );
+}
 
 /** 칸의 글과 인라인 코드(백틱 포함)에 따로 바꾸기를 건다. */
 function mapCellCode(
@@ -115,15 +147,14 @@ function isAlignmentRow(cells: readonly NfmCell[]): boolean {
  * 줄바꿈 표현), 셀 안 파이프는 열 경계로 오인되므로 이스케이프한다. 이스케이프 형태는
  * pull 뒷단 `unescapePipes` 가 되돌리지 않도록 표 밖 규칙과 구분되는 `\|` 를 쓴다.
  *
- * 코드 밖에서는 Notion 이 파이프 글자를 이미 `\|` 로 적어 보내 날 `|` 만 이스케이프한다. 코드
- * 안에서는 백슬래시가 글자라 모든 `|` 앞에 `\` 를 붙인다 — 파이프 표는 칸의 `\|` 에서 백슬래시
- * 하나를 떼고 읽으므로(GFM) 코드의 `c\|d` 는 `c\\|d` 로 적어야 그대로 돌아간다.
+ * 코드 밖에서는 Notion 이 파이프 글자를 이미 `\|` 로 적어 보내 경계가 될 파이프만 이스케이프한다.
+ * 코드 안은 백슬래시가 글자라 {@link encodeCodePipes} 로 적는다.
  */
 function toTableCell(raw: string): string {
   return mapCellCode(
     raw.trim().replace(/\r?\n/g, "<br>"),
-    (text) => text.replace(/(?<!\\)\|/g, ESCAPED_PIPE),
-    (code) => code.replaceAll("|", ESCAPED_PIPE),
+    (text) => text.replace(CELL_PIPES_RE, ESCAPED_PIPE),
+    encodeCodePipes,
   );
 }
 
@@ -234,7 +265,6 @@ const HAS_TABLE_MARKER_RE = new RegExp(TABLE_MARKER_SOURCE);
 
 /** 구분행 — `| --- | :-: |`. 칸이 하나인 표도 파이프는 하나 있다. */
 const DELIMITER_ROW_RE = /^\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?$/;
-const CELL_PIPE_RE = /(?<!\\)\|/;
 
 function isDelimiterRow(body: string): boolean {
   const row = body.trim();
@@ -245,24 +275,20 @@ function isPipeRow(body: string): boolean {
   return body.trim() !== "" && CELL_PIPE_RE.test(body);
 }
 
-/** 파이프 표 한 행을 칸으로 — 앞뒤 파이프를 떼고, 이스케이프하지 않은 파이프에서 자른다. */
+/** 파이프 표 한 행을 칸으로 — 앞뒤 파이프를 떼고, 경계 파이프({@link CELL_PIPE_SOURCE})에서 자른다. */
 function splitPipeRow(body: string): string[] {
   let row = body.trim();
   if (row.startsWith("|")) row = row.slice(1);
-  if (row.endsWith("|") && !row.endsWith("\\|")) row = row.slice(0, -1);
+  if (TRAILING_CELL_PIPE_RE.test(row)) row = row.slice(0, -1);
   return row.split(CELL_PIPE_RE).map((cell) => cell.trim());
 }
 
 /**
- * 칸의 코드 안 `\|` 를 `|` 로 — NFM 칸의 코드는 백슬래시를 글자로 남겨, `` `c\|d` `` 가 코드
- * `c\|d` 가 됐다(2026-10-04 실측). 코드 밖 `\|` 는 Notion 이 `|` 로 읽고 그 모양으로 내보내므로 둔다.
+ * NFM 칸에 보낼 글 — 코드 속 파이프만 {@link decodeCodePipes} 로 되돌린다. 코드 밖 `\|` 는 Notion 이
+ * 파이프 글자로 읽고 그 모양으로 내보내므로 둔다.
  */
-function unescapeCodePipes(cell: string): string {
-  return mapCellCode(
-    cell,
-    (text) => text,
-    (code) => code.replaceAll(ESCAPED_PIPE, "|"),
-  );
+function toNfmCellText(cell: string): string {
+  return mapCellCode(cell, (text) => text, decodeCodePipes);
 }
 
 /** 마커를 걷어 내며 속성을 모은다. 같은 자리의 마커가 둘이면 앞의 것을 쓴다. */
@@ -296,7 +322,7 @@ function toNfmTable(prefix: string, bodies: readonly string[]): string[] {
     const tds = Array.from({ length: colCount }, (_, c) => {
       const taken = attrs.take(cells[c] ?? "", c);
       rowAttrs ??= taken.row;
-      return `<td${nfmAttrString(taken.cell ?? [])}>${unescapeCodePipes(taken.text)}</td>`;
+      return `<td${nfmAttrString(taken.cell ?? [])}>${toNfmCellText(taken.text)}</td>`;
     });
     return [`<tr${nfmAttrString(rowAttrs ?? [])}>`, ...tds, "</tr>"];
   });
