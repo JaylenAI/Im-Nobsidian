@@ -227,6 +227,23 @@ export function parseAttrsPayload(payload: string): Array<[string, string]> {
   });
 }
 
+/** 표 속성 마커가 싣는 자리 — 표 · 열(`<col>`) · 행(`<tr>`) · 셀(`<td>`). */
+export const TABLE_MARKER_PARTS = ["table", "table-col", "table-row", "table-cell"] as const;
+export type TableMarkerPart = (typeof TABLE_MARKER_PARTS)[number];
+
+/**
+ * 표 속성 보존 마커 — `%%im-nobsidian:table-row:color=gray_bg%%` (F-04).
+ *
+ * 파이프 표에는 머리 열 · 열 너비 · 행/셀/열 색을 적을 자리가 없어, pull 이 셀 머리에 이 마커로
+ * 싣고 push 가 NFM 표로 되돌린다(`converter/table.ts`).
+ */
+export function tableMarker(
+  part: TableMarkerPart,
+  attrs: readonly (readonly [string, string])[],
+): string {
+  return compactMarker(`${part}:${attrsPayload(attrs)}`);
+}
+
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 

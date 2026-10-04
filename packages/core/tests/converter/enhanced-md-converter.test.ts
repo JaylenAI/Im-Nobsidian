@@ -421,7 +421,7 @@ describe("round-trip", () => {
 
   it("Notion 테이블 HTML → MD 테이블 변환", () => {
     const notion =
-      "<table><tr><th>이름</th><th>나이</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+      '<table header-row="true"><tr><th>이름</th><th>나이</th></tr><tr><td>Alice</td><td>30</td></tr></table>';
     const obsidian = notionEnhancedToObsidian(notion);
     expect(obsidian).toContain("| 이름 | 나이 |");
     expect(obsidian).toContain("| --- | --- |");

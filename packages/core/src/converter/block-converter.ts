@@ -9,6 +9,7 @@ import type { RichTextItem } from "./rich-text-converter.js";
 import { codeFingerprint, scanCodeFences } from "./code-fence.js";
 import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js";
 import { stripMentionMarkers } from "./mention.js";
+import { stripTableMarkers } from "./table.js";
 import {
   MARKER_BRAND,
   compactMarker,
@@ -470,9 +471,10 @@ export class BlockConverter {
    * 전담한다. martian 은 이 서식을 표현할 수 없으므로, Markdown API 가 실패해 이 폴백을 탈 때는
    * 마커 텍스트가 본문에 리터럴로 새지 않도록 텍스트만 남기고 마커를 제거한다(서식 degrade).
    * 멘션 짝 마커도 같다 — martian 은 멘션을 만들지 못해 보이는 글(이름 · 날짜)만 남긴다.
+   * 표 속성 마커도 걷는다 — martian 은 표를 머리 행 표로만 만든다.
    */
   private stripInlineAnnotationMarkers(markdown: string): string {
-    return stripMentionMarkers(markdown)
+    return stripTableMarkers(stripMentionMarkers(markdown))
       .replace(new RegExp(`%%${MARKER_BRAND}:underline%%([\\s\\S]*?)%%\\/underline%%`, "g"), "$1")
       .replace(new RegExp(`%%${MARKER_BRAND}:color:[^%]+%%([\\s\\S]*?)%%\\/color%%`, "g"), "$1");
   }
