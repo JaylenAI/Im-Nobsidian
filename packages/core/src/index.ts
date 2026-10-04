@@ -33,6 +33,7 @@ export type {
   ProcessorMetadata,
   ConversionContext,
   ConversionResult,
+  DeferredCode,
   PreserveMarker,
   ImageReference,
   WikilinkEntry,

@@ -7,7 +7,7 @@ import type { NotionClient } from "../notion/client.js";
 import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
-import type { ConversionResult } from "../types/convert.js";
+import type { ConversionResult, DeferredCode } from "../types/convert.js";
 import type { FailedOperation, FileType, LocalChange, SyncRecord } from "../types/sync.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import { computeHash } from "../utils/hash.js";
@@ -19,6 +19,7 @@ import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-cont
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
+import { fillDeferredCode } from "./deferred-code.js";
 import { moveOrigin } from "./local-moves.js";
 import type { PendingFolderMove } from "./local-planner.js";
 import {
@@ -173,7 +174,7 @@ export class PagePusher {
     // 페이지 생성 직후 매핑을 먼저 기록(전이 상태 pending). 이후 이미지 업로드 등이
     // 실패해도 이 레코드 덕에 다음 시도는 pushCreate(중복) 가 아니라 pushUpdate 로
     // 이어진다. contentHash 를 비워 변경감지가 "미완료 → 재푸시 필요"로 인식하게 한다.
-    this.stateDb.upsert({
+    const mapping = this.stateDb.upsert({
       obsidianPath: path,
       notionPageId: page.id,
       notionParentId: parentId,
@@ -188,7 +189,7 @@ export class PagePusher {
       localFileSize: null,
     });
 
-    const settled = await this.finishCreatedPage(created, conversionResult, path);
+    const settled = await this.finishCreatedPage(mapping.id, created, conversionResult, path);
 
     const hash = computeHash(content);
     const fileStat = await this.vaultFs.getFileStat(path);
@@ -273,7 +274,14 @@ export class PagePusher {
       record.baseSnapshot,
     );
 
-    if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path)) {
+    // 코드 · 첨부가 본문을 고쳤으면 고친 뒤의 지문을 다시 받는다.
+    let touched = await this.fillCodeBlocks(
+      record.id,
+      record.notionPageId,
+      conversionResult.deferredCode,
+    );
+    if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path)) touched = true;
+    if (touched) {
       bodyFingerprint = await this.drift.remoteBodyFingerprintOf(record.notionPageId);
     }
 
@@ -555,7 +563,7 @@ export class PagePusher {
     const { page } = created;
 
     // 매핑을 먼저 적는다 — 첨부 업로드가 실패해도 다음 시도는 새로 만들지 않고 갱신한다.
-    this.stateDb.upsert({
+    const mapping = this.stateDb.upsert({
       obsidianPath: path,
       notionPageId: page.id,
       notionParentId: databaseId,
@@ -570,7 +578,7 @@ export class PagePusher {
       localFileSize: null,
     });
 
-    const settled = await this.finishCreatedPage(created, conversionResult, path);
+    const settled = await this.finishCreatedPage(mapping.id, created, conversionResult, path);
 
     const fileStat = await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
@@ -748,7 +756,9 @@ export class PagePusher {
         conversionResult.content,
         record.baseSnapshot,
       );
-      if (await this.syncEmbeddedMedia(pageId, conversionResult, path)) {
+      let touched = await this.fillCodeBlocks(record.id, pageId, conversionResult.deferredCode);
+      if (await this.syncEmbeddedMedia(pageId, conversionResult, path)) touched = true;
+      if (touched) {
         bodyFingerprint = await this.drift.remoteBodyFingerprintOf(pageId);
       }
     }
@@ -908,22 +918,30 @@ export class PagePusher {
   }
 
   /**
-   * 만든 페이지를 마저 채운다 — 버려진 맨 앞 제목을 되살리고 첨부를 올린다. 호출측이 매핑을 먼저
-   * 적은 뒤 부른다.
+   * 만든 페이지를 마저 채운다 — 버려진 맨 앞 제목을 되살리고, 자리표시로 보낸 코드를 채우고(S-22),
+   * 첨부를 올린다. 호출측이 매핑을 먼저 적은 뒤 부른다.
    *
    * @returns 적을 원격 페이지와 본문 지문. 폴더 노트만 지문을 받는다 — 곧 그 아래에 노트가 생겨
    *   수정 시각이 바뀌므로, 다음 push 가 본문이 그대로임을 지문으로 확인한다(자식은 지문에 들지
    *   않는다). 다른 노트의 페이지는 이 도구가 쓰는 한 편집자가 봇으로 남아 지문 없이 가른다.
    */
   private async finishCreatedPage(
+    recordId: string,
     created: CreatedPage,
     conversionResult: ConversionResult,
     path: string,
   ): Promise<{ page: RemotePageStamp; bodyFingerprint: string | null }> {
     let page = await this.restoreCreatedHeading(created, path);
-    if (await this.syncEmbeddedMedia(created.page.id, conversionResult, path)) {
-      // 첨부가 본문을 고쳤다 — 수정 시각을 다시 받는다(I5). 옛 시각을 적으면 다음 push 가 이
-      // 변경을 원격 편집으로 본다.
+    // 자리표시로 보낸 코드를 채운다 — 맨 앞 제목을 되살리는 교체가 자리표시를 다시 쓰므로 그 뒤에.
+    let touched = await this.fillCodeBlocks(
+      recordId,
+      created.page.id,
+      conversionResult.deferredCode,
+    );
+    if (await this.syncEmbeddedMedia(created.page.id, conversionResult, path)) touched = true;
+    if (touched) {
+      // 코드 · 첨부가 본문을 고쳤다 — 수정 시각을 다시 받는다(I5). 옛 시각을 적으면 다음 push 가
+      // 이 변경을 원격 편집으로 본다.
       page = await this.notionClient.getPage(created.page.id);
     }
     const bodyFingerprint = isFolderNotePath(path)
@@ -1033,5 +1051,38 @@ export class PagePusher {
       }),
     );
     return null;
+  }
+
+  /**
+   * 자리표시로 보낸 코드를 채운다(S-22) — 본문을 바꾼 뒤(블록 방식이면 옛 블록을 지운 뒤) 부른다.
+   *
+   * 채우다 멈추면 지금 원격을 «지난번에 본 원격» 으로 적고 던진다 — 원격은 이 도구가 막 쓴
+   * 본문이다. 다음 push(이번 실행의 재시도 포함)는 이 쓰기를 pull 하지 않은 Notion 편집으로 보지
+   * 않고 본문을 다시 보내 채운다. 그 사이 pull 도 받을 것이 없다고 본다 — 자리표시가 든 본문을
+   * 노트로 받거나 충돌로 올리지 않는다. 레코드의 내용 해시는 그대로라 로컬은 여전히 올릴 변경이다.
+   *
+   * @returns 채웠으면 true — 본문이 바뀌었다.
+   */
+  private async fillCodeBlocks(
+    recordId: string,
+    pageId: string,
+    deferredCode: readonly DeferredCode[],
+  ): Promise<boolean> {
+    try {
+      return await fillDeferredCode(this.notionClient, pageId, deferredCode);
+    } catch (error) {
+      try {
+        const page = await this.notionClient.getPage(pageId);
+        this.observation.record(recordId, page, await this.drift.remoteBodyFingerprintOf(pageId));
+      } catch (readError) {
+        getLogger().warn(
+          `[Im-Nobsidian] 코드를 채우다 멈춘 페이지를 다시 읽지 못함 — 다음 push 가 pull 을 먼저 ` +
+            `하라며 거절하면 pull 한 뒤 다시 push 하세요: ${
+              readError instanceof Error ? readError.message : String(readError)
+            }`,
+        );
+      }
+      throw error;
+    }
   }
 }

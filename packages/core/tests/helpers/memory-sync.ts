@@ -5,6 +5,7 @@
  * 수정 시각을, Notion 은 만든 페이지의 제목 · 부모 · 수정 시각을 기억해야 한다. 시험마다 따로
  * 두면 한쪽만 고쳐져 같은 동작을 서로 다르게 흉내 낸다.
  */
+import { deferredCodeMarker } from "../../src/constants/markers.js";
 import { NotionClient } from "../../src/notion/client.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { EDIT_TIME_RESOLUTION_MS } from "../../src/sync/remote-observation.js";
@@ -126,6 +127,9 @@ export interface MemoryPage {
 
 /** Notion 에서 사람이 고친 것으로 적는 편집자 id. */
 export const HUMAN_USER_ID = "human-user-id";
+
+/** 본문을 쓴 뒤 블록으로 채우는 코드의 자리표시(S-22) — 한 페이지에 이만큼 넘게 쓰는 시험은 없다. */
+const DEFERRED_CODE_TOKENS = new Set(Array.from({ length: 100 }, (_, i) => deferredCodeMarker(i)));
 
 export interface MemoryNotionOptions {
   /**
@@ -345,11 +349,38 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     walk(rootId);
     return found;
   });
+  // 본문을 쓴 뒤 블록으로 채우는 코드(S-22) — 자리표시만 든 줄을 코드 블록으로 보이고, 그 글을 바꾸면
+  // 줄을 코드로 바꾼다. Notion 은 코드 줄을 컨테이너 깊이와 상관없이 열 0 에 내보낸다(2026-10-04 실측) —
+  // 맨 위 · 콜아웃 코드는 보낸 본문이 내보내는 모양과 같다. 목록 자식 코드는 들여쓰기를 탭으로 바꿔
+  // 내보내므로 이 메모리로 흉내 내지 않는다.
+  const codeTexts = new Map<string, string[]>();
+  const deferredCodeBlocks = (id: string) =>
+    (pages.get(id)?.body ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((text) => DEFERRED_CODE_TOKENS.has(text))
+      .map((token) => ({
+        id: `${id}#${token}`,
+        type: "code",
+        has_children: false,
+        code: { language: "markdown", rich_text: [{ plain_text: token }] },
+      }));
+  client.updateCodeBlockText.mockImplementation(async (blockId: string, code: string) => {
+    const [id, token] = blockId.split("#") as [string, string];
+    const page = touch(id);
+    page.body = page.body
+      .split("\n")
+      .map((line) => (line.trim() === token ? code : line))
+      .join("\n");
+    codeTexts.set(id, [...(codeTexts.get(id) ?? []), code]);
+  });
+  client.getCodeBlockTexts.mockImplementation(async (id: string) => codeTexts.get(id) ?? []);
   // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
-  client.fetchAllChildren.mockImplementation(async (parentId: string) =>
-    [...pages.values()]
+  client.fetchAllChildren.mockImplementation(async (parentId: string) => [
+    ...deferredCodeBlocks(parentId),
+    ...[...pages.values()]
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
-  );
+  ]);
   return { client, pages, add, touch, edit };
 }

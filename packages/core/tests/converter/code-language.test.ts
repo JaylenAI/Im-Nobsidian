@@ -9,9 +9,13 @@ import { describe, it, expect } from "vitest";
 import { isNotionLanguageInfo, notionCodeLanguage } from "../../src/converter/code-language.js";
 import {
   codeFingerprint,
+  codeLineLead,
+  fenceCodeText,
   hasBacktickFenceLine,
   scanCodeFences,
 } from "../../src/converter/code-fence.js";
+import { deferredCodeMarker } from "../../src/constants/markers.js";
+import { RICH_TEXT_ARRAY_MAX, RICH_TEXT_CONTENT_MAX } from "../../src/constants/notion-limits.js";
 import { CodeLanguageGuard } from "../../src/converter/pre-processors/code-language-guard.js";
 import { CodeLanguageRestorer } from "../../src/converter/post-processors/code-language-restorer.js";
 import { BlockConverter } from "../../src/converter/block-converter.js";
@@ -26,8 +30,12 @@ const pushContext = {
 const pullContext = { ...pushContext, direction: "pull" as const };
 
 function push(content: string): string {
-  const input: ProcessorInput = { content, metadata: {}, context: pushContext };
-  return new CodeLanguageGuard().process(input).content;
+  return pushed(content).content;
+}
+
+function pushed(content: string, metadata: ProcessorInput["metadata"] = {}) {
+  const input: ProcessorInput = { content, metadata, context: pushContext };
+  return new CodeLanguageGuard().process(input);
 }
 
 function pull(content: string, localContent?: string): string {
@@ -216,6 +224,45 @@ describe("scanCodeFences — 펜스 찾기", () => {
     expect(scanCodeFences("```ts\nx")[0]).toMatchObject({ close: null, closeBar: null });
   });
 
+  it("코드 줄 머리 — 인용 표시는 두고 목록 표시는 같은 폭의 공백으로", () => {
+    const [quoted, listed, nested] = scanCodeFences(
+      "> - ```py\n>   x\n>   ```\n\n1. ```py\n   y\n   ```\n\n> > ```py\n> > z\n> > ```",
+    );
+    expect(codeLineLead(quoted!)).toBe(">   ");
+    expect(codeLineLead(listed!)).toBe("   ");
+    expect(codeLineLead(nested!)).toBe("> > ");
+  });
+
+  it("Obsidian 이 보여 주는 코드 — 펜스까지의 들여쓰기 폭만큼 뗀다", () => {
+    const [listed, tabbed, shallow] = scanCodeFences(
+      [
+        "- ```py",
+        "  def f():",
+        "      return 1",
+        "  ```",
+        "",
+        "\t```py",
+        "\tx",
+        "\t\ty",
+        "\t```",
+        "",
+        "  ```py",
+        " a",
+        "b",
+        "  ```",
+      ].join("\n"),
+    );
+    expect(fenceCodeText(listed!)).toBe("def f():\n    return 1");
+    expect(fenceCodeText(tabbed!)).toBe("x\n\ty");
+    // CommonMark — 펜스보다 덜 들여쓴 줄은 있는 만큼만 뗀다.
+    expect(fenceCodeText(shallow!)).toBe("a\nb");
+  });
+
+  it("인용 안 코드는 인용 표시를 뗀 코드다", () => {
+    const [fenceInQuote] = scanCodeFences("> ```md\n> ```js\n> y\n> ```\n> ```");
+    expect(fenceCodeText(fenceInQuote!)).toBe("```js\ny");
+  });
+
   it("지문은 공백을 무시한다 — 컨테이너 들여쓰기가 달라도 같은 코드", () => {
     const [a] = scanCodeFences("> ```py\n>     x = 1\n> ```");
     const [b] = scanCodeFences("```py\nx = 1   \n```");
@@ -244,14 +291,98 @@ describe("CodeLanguageGuard (push) — Notion 이 그대로 받는 펜스로", (
     expect(push(fence("md", "# 제목", "````"))).toBe(fence("markdown", "# 제목"));
   });
 
-  it("코드에 ``` 줄이 있으면 펜스는 두고 언어만", () => {
-    const doc = "````md\n```js\ny\n```\n````";
-    expect(push(doc)).toBe("````markdown\n```js\ny\n```\n````");
+  // S-22: Notion 은 코드에 ``` 줄이 있으면 어떤 펜스 · 이스케이프로 보내도 그 줄에서 블록을 가른다
+  // (2026-10-04 실측). 자리표시만 보내고 코드는 본문을 쓴 뒤 블록으로 채운다.
+  it("코드에 ``` 줄이 있으면 자리표시를 보내고 코드는 따로 넘긴다", () => {
+    const out = pushed("앞\n\n````md\n```js\ny\n```\n````\n\n뒤");
+    expect(out.content).toBe(`앞\n\n\`\`\`markdown\n${deferredCodeMarker(0)}\n\`\`\`\n\n뒤`);
+    expect(out.metadata.deferredCode).toEqual([
+      { token: deferredCodeMarker(0), code: "```js\ny\n```" },
+    ]);
   });
 
-  it("들여쓴 ``` 줄도 Notion 이 블록을 가르는 줄로 본다 — 펜스를 둔다", () => {
-    const doc = "~~~md\n  ```js\n  y\n  ```\n~~~";
-    expect(push(doc)).toBe("~~~markdown\n  ```js\n  y\n  ```\n~~~");
+  it("들여쓴 ``` 줄도 Notion 이 블록을 가르는 줄로 본다 — 코드를 따로 넘긴다", () => {
+    const out = pushed("~~~md\n  ```js\n  y\n  ```\n~~~");
+    expect(out.content).toBe(`\`\`\`markdown\n${deferredCodeMarker(0)}\n\`\`\``);
+    expect(out.metadata.deferredCode).toEqual([
+      { token: deferredCodeMarker(0), code: "  ```js\n  y\n  ```" },
+    ]);
+  });
+
+  it("코드에 ``` 줄이 없으면 따로 넘기지 않는다", () => {
+    const out = pushed(fence("ts", "~~~"));
+    expect(out.content).toBe(fence("typescript", "~~~"));
+    expect(out.metadata.deferredCode).toBeUndefined();
+  });
+
+  it("콜아웃 · 목록 안 코드는 자리표시를 같은 컨테이너의 코드 줄로 보낸다", () => {
+    const doc = [
+      "> [!tip] 콜아웃",
+      "> ````md",
+      "> ```py",
+      "> z = 1",
+      "> ```",
+      "> ````",
+      "",
+      "- 항목",
+      "  ````md",
+      "  ```sh",
+      "  ls",
+      "  ```",
+      "  ````",
+      "",
+      "1. ````md",
+      "   ```js",
+      "   y",
+      "   ```",
+      "   ````",
+    ].join("\n");
+    const out = pushed(doc);
+    expect(out.content).toBe(
+      [
+        "> [!tip] 콜아웃",
+        "> ```markdown",
+        `> ${deferredCodeMarker(0)}`,
+        "> ```",
+        "",
+        "- 항목",
+        "  ```markdown",
+        `  ${deferredCodeMarker(1)}`,
+        "  ```",
+        "",
+        "1. ```markdown",
+        `   ${deferredCodeMarker(2)}`,
+        "   ```",
+      ].join("\n"),
+    );
+    expect(out.metadata.deferredCode!.map((d) => d.code)).toEqual([
+      "```py\nz = 1\n```",
+      "```sh\nls\n```",
+      "```js\ny\n```",
+    ]);
+  });
+
+  it("코드 블록 하나에 담을 수 없을 만큼 긴 코드는 넘기지 않고 넓은 펜스째 보낸다", () => {
+    const long = "x".repeat(RICH_TEXT_CONTENT_MAX * RICH_TEXT_ARRAY_MAX);
+    const doc = `\`\`\`\`md\n\`\`\`js\n${long}\n\`\`\`\n\`\`\`\`\n\n\`\`\`\`md\n\`\`\`py\n\`\`\`\n\`\`\`\``;
+    const out = pushed(doc);
+    // 펜스를 ``` 로 줄이면 Obsidian 에서도 코드 속 줄이 블록을 닫는다 — 넓힌 채 둔다.
+    expect(out.content).toBe(
+      `\`\`\`\`markdown\n\`\`\`js\n${long}\n\`\`\`\n\`\`\`\`\n\n\`\`\`markdown\n${deferredCodeMarker(0)}\n\`\`\``,
+    );
+    expect(out.metadata.deferredCode).toEqual([
+      { token: deferredCodeMarker(0), code: "```py\n```" },
+    ]);
+  });
+
+  it("앞 처리기가 넘긴 코드 뒤에 번호를 이어 붙인다", () => {
+    const earlier = [{ token: deferredCodeMarker(0), code: "```x\n```" }];
+    const out = pushed("````md\n```js\n```\n````", { deferredCode: earlier });
+    expect(out.content).toBe(`\`\`\`markdown\n${deferredCodeMarker(1)}\n\`\`\``);
+    expect(out.metadata.deferredCode).toEqual([
+      ...earlier,
+      { token: deferredCodeMarker(1), code: "```js\n```" },
+    ]);
   });
 
   it("콜아웃 · 목록 안 펜스도 접두를 지키며 바꾼다", () => {
