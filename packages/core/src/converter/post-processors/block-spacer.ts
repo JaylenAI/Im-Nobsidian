@@ -21,9 +21,9 @@ import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../uti
  *
  * 압축형 감지: 1차 신호는 `metadata.notionExportCompact` — orchestrator 가 **원시**
  * export(enhanced 변환 전)에서 `isCompactExport` 로 판정해 전달한다. 원시 export 는
- * 펜스 밖 빈 줄이 0 개지만(실측: v2 torture 89줄·f14 239줄), 노션의 명시적 빈 문단
- * 블록 `<empty-block/>` 이 enhanced 변환(removeEmptyBlocks)에서 빈 줄로 바뀌므로
- * 파이프라인 도착 시점의 내용만으로는 압축형을 오판한다(f14 실측: 빈 줄 6개로 스킵).
+ * 펜스 밖 빈 줄이 0 개지만(실측: v2 torture 89줄·f14 239줄), enhanced 변환이 빈 줄을
+ * 끼우므로(인접 콜아웃 분리 등. 빈 블록 `<empty-block/>` 도 예전엔 빈 줄이 됐다) 파이프라인
+ * 도착 시점의 내용만으로는 압축형을 오판한다(f14 실측: 빈 줄 6개로 스킵).
  * 플래그 미지정(오프라인 왕복, 테스트, blocks-API 폴백) 시에만 내용 기반 휴리스틱
  * — 펜스 밖 빈 줄이 하나라도 있으면 저작형으로 보고 무동작 — 으로 폴백한다.
  * 저작형 문서의 hard-wrap 문단·마커 주변 간격을 재그룹핑으로 파손하지 않기 위함.
@@ -86,7 +86,7 @@ export function respace(content: string, sourceCompact?: boolean): string {
 
   // 압축형 감지 휴리스틱(플래그 미지정 시 폴백) — 간격이 이미 있는 문서는 손대지 않는다.
   // sourceCompact === true 면 orchestrator 가 원시 export 로 이미 판정했으므로 건너뛴다
-  // (enhanced 변환의 <empty-block/>→빈 줄 치환이 휴리스틱을 오판시키는 것을 차단, D1).
+  // (enhanced 변환이 끼운 빈 줄이 휴리스틱을 오판시키는 것을 차단, D1).
   if (sourceCompact === undefined && hasBlankOutsideFences(lines, start)) return content;
 
   // 블록 그룹핑
@@ -96,8 +96,9 @@ export function respace(content: string, sourceCompact?: boolean): string {
   let fence: CodeFenceOpening | "math" | null = null;
   // 리스트 자식 코드블록의 구조 탭 — 펜스 · 코드 줄머리에서 이만큼을 4칸씩으로 편다(D4).
   let fenceLead = "";
-  // 압축 export 의 빈 줄은 <empty-block/>(명시적 빈 문단) 유래 — 사용자가 의도한
-  // 블록 경계다. 다음 줄이 같은 종류라도 직전 블록에 붙이지 않는다(리스트/인용 재병합 방지).
+  // 압축 export 의 빈 줄은 변환기가 끼운 블록 경계다(인접 콜아웃 분리 등). 다음 줄이 같은
+  // 종류라도 직전 블록에 붙이지 않는다(리스트/인용 재병합 방지). 빈 블록은 `<br>` 줄로 와서
+  // 그 자체가 블록이다(`converter/empty-block.ts`).
   let boundary = false;
 
   const push = (kind: BlockKind, line: string) => {
