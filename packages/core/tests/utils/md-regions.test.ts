@@ -120,6 +120,38 @@ describe("mapOutsideCodeFences", () => {
     const result = mapOutsideCodeFences(content, (seg) => seg.replace(/안/g, "X"));
     expect(result).toContain("안");
   });
+
+  // S-26 — 줄머리 공백 뒤의 펜스만 보아, 콜아웃 속 코드의 주석을 push 가 지웠다.
+  it("콜아웃 · 겹 인용 안 펜스도 코드다", () => {
+    const content =
+      "밖\n> [!note] 밖\n> ```html\n> <!-- 안 -->\n> ```\n> 밖\n\n> > ```\n> > 안\n> > ```";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "X\n> [!note] X\n> ```html\n> <!-- 안 -->\n> ```\n> X\n\n> > ```\n> > 안\n> > ```",
+    );
+  });
+
+  it("인용이 끝나면 닫히지 않은 펜스도 거기서 끝난다", () => {
+    expect(mapOutsideCodeFences("> ```\n> 안\n밖", (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "> ```\n> 안\nX",
+    );
+  });
+
+  it("CRLF 노트의 인용 안 펜스도 닫는다", () => {
+    const content = "> ```js\r\n> 안\r\n> ```\r\n밖";
+    expect(mapOutsideCodeFences(content, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "> ```js\r\n> 안\r\n> ```\r\nX",
+    );
+  });
+
+  it("목록 표시로 연 펜스 — 항목 안에서 닫고, 닫히지 않으면 항목이 끝날 때 끝난다", () => {
+    const closed = "- ```py\n  안\n\n  안\n  ```\n밖";
+    expect(mapOutsideCodeFences(closed, (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      closed.replace("밖", "X"),
+    );
+    expect(mapOutsideCodeFences("- ```py\n  안\n밖", (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
+      "- ```py\n  안\nX",
+    );
+  });
 });
 
 describe("indentWidth", () => {

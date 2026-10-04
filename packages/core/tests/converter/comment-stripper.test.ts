@@ -104,6 +104,34 @@ describe("CommentStripper (F26)", () => {
     expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
   });
 
+  // S-26 — 콜아웃 속 코드의 주석을 지우고, pull 이 `>` 없이 되살려 콜아웃을 끊었다.
+  it("콜아웃 · 인용 · 목록 안 코드의 주석도 건드리지 않음", () => {
+    const content = [
+      "> [!toggle]- 참고",
+      "> ```html",
+      "> <!-- 코드 예시 주석 -->",
+      "> ```",
+      "",
+      "> > ```",
+      "> > %%코드 속 퍼센트%%",
+      "> > ```",
+      "",
+      "- ```html",
+      "  <!-- 목록 속 코드 -->",
+      "  ```",
+    ].join("\n");
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  it("콜아웃 안 코드가 끝난 뒤의 주석은 제거한다", () => {
+    const result = run("> [!note] 제목\n> ```\n> 코드\n> ```\n\n<!-- 비밀 메모 -->");
+    expect(result.content).not.toContain("비밀 메모");
+    expect(result.content).toContain("> 코드");
+    expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe(" 비밀 메모 ");
+  });
+
   it("여러 줄 HTML 주석도 제거·보존", () => {
     const result = run("앞\n\n<!--줄1\n줄2-->\n\n뒤");
     expect(result.content).not.toContain("줄1");
