@@ -2,6 +2,7 @@ import type { PageMarkdownResponse } from "@notionhq/client/build/src/api-endpoi
 import { baseEmbedPaths, extractChildTags, restoreChildTags } from "../converter/child-tags.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { mentionUserIds } from "../converter/mention.js";
+import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
 import { isNotionValidationError, type NotionClient } from "../notion/client.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -76,15 +77,21 @@ export async function replacePageBody(
  * 받은 본문(Markdown API)을 볼트 마크다운으로 바꾼다 — 사용자 멘션에 보일 이름을 물어 함께 넘긴다
  * (`converter/mention.ts`). 페이지와 DB 행이 같은 길로 받아야 같은 멘션이 같은 글이 된다.
  *
- * 사용자 멘션이 없으면 묻지 않는다.
+ * 코드 속 ``` 줄 때문에 코드 범위를 markdown 만으로 가를 수 없으면 그 페이지의 코드 블록 글을 블록으로
+ * 읽어 맞춘다(S-22). 읽지 못하면 던진다 — 짐작한 범위로 쓰면 코드 뒷부분이 본문으로 새어 노트가
+ * 바뀐다. 사용자 멘션 · 그런 코드가 없으면 묻지 않는다.
  */
 export async function notionBodyToObsidian(
-  client: Pick<NotionClient, "getUserNames">,
+  client: Pick<NotionClient, "getUserNames" | "getCodeBlockTexts">,
   markdown: string,
+  pageId: string,
 ): Promise<string> {
   const ids = mentionUserIds(markdown);
   const userNames = ids.length > 0 ? await client.getUserNames(ids) : undefined;
-  return notionEnhancedToObsidian(markdown, { userNames });
+  const codeTexts = needsCodeBlockTexts(markdown)
+    ? new Set(await client.getCodeBlockTexts(pageId))
+    : undefined;
+  return notionEnhancedToObsidian(markdown, { userNames, codeTexts });
 }
 
 function messageOf(error: unknown): string {

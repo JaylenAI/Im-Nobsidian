@@ -2,6 +2,7 @@ import { Client, LogLevel } from "@notionhq/client";
 import { Sema } from "async-sema";
 import type {
   BlockObjectResponse,
+  LanguageRequest,
   PageObjectResponse,
   PartialBlockObjectResponse,
   PageMarkdownResponse,
@@ -27,6 +28,7 @@ import type { AbortLike } from "../utils/pool.js";
 import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
+import { richTextChunks } from "./rich-text.js";
 
 /**
  * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
@@ -888,6 +890,41 @@ export class NotionClient {
 
   async deleteBlock(blockId: string): Promise<void> {
     await this.withRateLimit(() => this.client.blocks.delete({ block_id: blockId }));
+  }
+
+  /**
+   * 코드 블록의 글을 바꾼다 — Markdown API 로 보낼 수 없는 코드(코드 속 ``` 줄, S-22)를 블록으로
+   * 채운다. 긴 코드는 rich text 여럿에 나눠 담는다. 같은 글로 다시 보내도 결과가 같아 모호한 실패는
+   * 다시 보낸다.
+   */
+  async updateCodeBlockText(
+    blockId: string,
+    code: string,
+    language: LanguageRequest,
+  ): Promise<void> {
+    const chunks = richTextChunks(code);
+    if (chunks === null) {
+      throw new Error(`코드가 너무 길어 Notion 코드 블록 하나에 담을 수 없음 (${code.length}자)`);
+    }
+    await this.withRateLimit(() =>
+      this.client.blocks.update({
+        block_id: blockId,
+        code: {
+          language,
+          rich_text: chunks.map((content) => ({ type: "text" as const, text: { content } })),
+        },
+      }),
+    );
+  }
+
+  /**
+   * 페이지 코드 블록의 글 — 컨테이너 안까지. 받은 markdown 만으로 코드 범위를 가를 수 없을 때(코드 속
+   * ``` 줄, S-22) 블록의 글로 맞춘다.
+   */
+  async getCodeBlockTexts(pageId: string): Promise<string[]> {
+    return (await this.fetchAllChildrenDeep(pageId)).flatMap((block) =>
+      block.type === "code" ? [block.code.rich_text.map((t) => t.plain_text).join("")] : [],
+    );
   }
 
   // ─── File Upload ───

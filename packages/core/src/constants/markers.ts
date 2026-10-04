@@ -38,6 +38,14 @@ export function compactMarker(body: string): string {
   return `%%${MARKER_BRAND}:${body}%%`;
 }
 
+/**
+ * 본문을 쓴 뒤 블록으로 채울 코드의 자리표시(S-22) — 코드 블록의 글로 보내 잠깐 Notion 에 머문다.
+ * Markdown API 가 받지 못하는 코드(코드 속 ``` 줄)를 대신한다. 페이지 안 몇 번째 코드인지로 가른다.
+ */
+export function deferredCodeMarker(index: number): string {
+  return compactMarker(`deferred-code:${index}`);
+}
+
 /** 토글 블록 보존 마커 (enhanced-md-converter / block-converter 공유). */
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");

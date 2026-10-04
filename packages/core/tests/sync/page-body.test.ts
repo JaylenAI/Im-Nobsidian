@@ -6,7 +6,7 @@
  * Notion 이 아무것도 바꾸지 않고 거절한다), 거절되면 자식 태그를 제자리에 되돌려 다시 보낸다.
  */
 import { describe, it, expect, vi } from "vitest";
-import { replacePageBody } from "../../src/sync/page-body.js";
+import { notionBodyToObsidian, replacePageBody } from "../../src/sync/page-body.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import {
   notionEnhancedToObsidian,
@@ -176,5 +176,41 @@ describe("pull 이 만든 폴더 노트를 고쳐 push 하면 자식이 제자�
         "DB",
       ]);
     });
+  });
+});
+
+describe("notionBodyToObsidian — 코드 속 펜스 줄 (S-22)", () => {
+  const NESTED = "앞\n```markdown\nbefore\n```js\nnested();\n```\nafter\n```\n뒤";
+  const CODE = "before\n```js\nnested();\n```\nafter";
+
+  function reader(texts: Promise<string[]>) {
+    return { getUserNames: vi.fn(), getCodeBlockTexts: vi.fn(() => texts) };
+  }
+
+  it("코드에 펜스 줄이 없으면 블록을 읽지 않는다", async () => {
+    const client = reader(Promise.resolve([]));
+
+    const md = await notionBodyToObsidian(client as never, "앞\n```js\nx\n```\n뒤", PAGE_ID);
+
+    expect(md).toContain("```js\nx\n```");
+    expect(client.getCodeBlockTexts).not.toHaveBeenCalled();
+    expect(client.getUserNames).not.toHaveBeenCalled();
+  });
+
+  it("코드 범위를 가를 수 없으면 그 페이지의 코드 블록 글로 맞추고 경계 펜스를 넓힌다", async () => {
+    const client = reader(Promise.resolve([CODE]));
+
+    const md = await notionBodyToObsidian(client as never, NESTED, PAGE_ID);
+
+    expect(client.getCodeBlockTexts).toHaveBeenCalledWith(PAGE_ID);
+    expect(md).toContain(`\`\`\`\`markdown\n${CODE}\n\`\`\`\``);
+  });
+
+  it("코드 블록 글을 읽지 못하면 짐작해 쓰지 않고 실패한다", async () => {
+    const client = reader(Promise.reject(new Error("rate limited")));
+
+    await expect(notionBodyToObsidian(client as never, NESTED, PAGE_ID)).rejects.toThrow(
+      "rate limited",
+    );
   });
 });

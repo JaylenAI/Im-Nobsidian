@@ -463,7 +463,7 @@ export class PagePuller {
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
         return {
           content: this.resolveNotionIdWikilinks(
-            await notionBodyToObsidian(this.notionClient, result.markdown),
+            await notionBodyToObsidian(this.notionClient, result.markdown, pageId),
           ),
           // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
           // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).

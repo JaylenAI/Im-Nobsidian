@@ -818,7 +818,7 @@ export class DatabaseSyncer {
     const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);
-    let markdown = await notionBodyToObsidian(this.notionClient, mdResult.markdown);
+    let markdown = await notionBodyToObsidian(this.notionClient, mdResult.markdown, page.id);
     // 이 행이 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 페이지와 같다. 행 id 와
     // 행 경로를 넘겨야 그 행이 올린 것(과 옛 캡션의 파일)을 찾는다.
     markdown = await this.imageHandler.restoreUploadedMedia(markdown, page.id, filePath);

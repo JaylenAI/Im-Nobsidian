@@ -1,3 +1,5 @@
+import { indentWidth } from "../utils/md-regions.js";
+
 /**
  * Obsidian 노트의 코드 펜스 — push 가 언어를 Notion 이름으로 바꿔 보내고 pull 이 원래 표기로
  * 되살리는 단위(S-20).
@@ -33,6 +35,8 @@ const OPEN_RE = /^((?:[\t ]*>)*)([\t ]*(?:(?:[-*+]|\d{1,9}[.)])[\t ]+)?)(`{3,}|~
 /** 인용 표시를 뗀 뒤의 닫는 펜스 — 들여쓰기 · 펜스 · 뒤 공백. */
 const CLOSE_BODY_RE = /^([\t ]*)(`{3,}|~{3,})[\t ]*$/;
 const QUOTE_MARK_RE = /^[\t ]*>/;
+/** 여는 줄 머리의 인용 표시 — 펜스 앞의 마지막 `>` 까지. */
+const QUOTE_LEAD_RE = /^(?:[\t ]*>)*/;
 
 /** 인용 표시를 `depth` 개 뗀다. 모자라면 null — 그 줄에서 컨테이너가 끝났다. */
 function stripQuoteMarks(line: string, depth: number): { marks: string; rest: string } | null {
@@ -116,4 +120,36 @@ export function codeFingerprint(fence: CodeFence): string {
 /** 코드에 Notion 이 펜스로 읽을 줄(```로 시작)이 있는가 — 있으면 Notion 이 블록을 거기서 가른다. */
 export function hasBacktickFenceLine(fence: CodeFence): boolean {
   return fence.code.some((line) => /^[\t ]*```/.test(line));
+}
+
+/**
+ * 코드 줄의 머리 — 여는 줄의 인용 표시와, 펜스까지의 들여쓰기(목록 표시는 같은 폭의 공백으로).
+ * 코드 줄을 새로 쓸 때 이 머리를 붙이면 같은 컨테이너 · 같은 깊이의 코드 줄이 된다.
+ */
+export function codeLineLead(fence: CodeFence): string {
+  const quotes = QUOTE_LEAD_RE.exec(fence.lead)![0];
+  return quotes + fence.lead.slice(quotes.length).replace(/[^\t ]/g, " ");
+}
+
+/**
+ * Obsidian 이 보여 주는 코드 — 코드 줄마다 펜스까지의 들여쓰기 폭만큼 뗀다(CommonMark: 펜스가 N칸
+ * 들여써졌으면 코드 줄에서 N칸까지 뗀다). 인용 표시는 이미 떼어져 있다({@link CodeFence.code}).
+ */
+export function fenceCodeText(fence: CodeFence): string {
+  const lead = codeLineLead(fence);
+  const width = indentWidth(lead.slice(QUOTE_LEAD_RE.exec(lead)![0].length));
+  return fence.code.map((line) => dedentColumns(line.replace(/\r$/, ""), width)).join("\n");
+}
+
+/** 줄머리 공백을 `width` 칸까지 뗀다 — 탭이 그 폭을 넘기면 그 앞에서 멈춘다. */
+function dedentColumns(line: string, width: number): string {
+  let column = 0;
+  let i = 0;
+  for (; i < line.length && column < width; i++) {
+    const ch = line[i];
+    const next = ch === " " ? column + 1 : ch === "\t" ? column + 4 - (column % 4) : Infinity;
+    if (next > width) break;
+    column = next;
+  }
+  return line.slice(i);
 }

@@ -27,6 +27,8 @@ export interface ProcessorMetadata {
    * 펜스 기호, S-20)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
    */
   readonly localContent?: string;
+  /** Markdown API 로 보낼 수 없어 본문을 쓴 뒤 블록으로 채울 코드({@link DeferredCode}). */
+  readonly deferredCode?: DeferredCode[];
   readonly [key: string]: unknown;
 }
 
@@ -48,6 +50,19 @@ export interface ConversionResult {
   readonly properties: Record<string, unknown>;
   readonly images: ImageReference[];
   readonly preserveMarkers: PreserveMarker[];
+  readonly deferredCode: DeferredCode[];
+}
+
+/**
+ * 본문을 쓴 뒤 블록으로 채울 코드(S-22). Notion Markdown API 는 코드에 ``` 로 시작하는 줄이 있으면
+ * 어떤 펜스로 보내도 그 줄에서 블록을 가른다 — 코드 자리에 자리표시(`token`)만 보내고, 페이지를
+ * 쓴 뒤 그 자리표시를 가진 코드 블록의 글을 `code` 로 바꾼다.
+ */
+export interface DeferredCode {
+  /** 코드 블록에 대신 보낸 자리표시 — 페이지 안에서 하나뿐이다. */
+  readonly token: string;
+  /** Obsidian 이 보여 주는 그대로의 코드 — 컨테이너 접두 · 펜스 들여쓰기를 뗀 것. */
+  readonly code: string;
 }
 
 export interface PreserveMarker {
