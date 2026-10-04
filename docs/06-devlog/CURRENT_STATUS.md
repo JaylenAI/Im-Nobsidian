@@ -1,6 +1,6 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-09-28
+> 마지막 업데이트: 2026-10-04
 > 버전: **v0.3.2 릴리스 완료** · **v0.4.0 트랙 진행 중** — 심층 QA 결함 23건 봉합 +
 > Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
 
@@ -72,7 +72,8 @@
 | A    | `refactor/orchestrator-modules`              | 5,791줄 오케스트레이터(메서드 137개)를 일마다 모듈 17개로 분리 — 오케스트레이터는 1,133줄 · 실행 순서와 작업 잠금만 (동작 불변, ADR-028)                                                                                           | 완료 `dd3be58` |
 | A    | `feature/fast-change-detection`              | pull 마다 발견 DB 166개를 전부 다시 조회(재pull 523.5초) · pull · 상태 확인마다 전체 대조 — 바뀐 DB 만 조회 · 전체 대조는 주기마다 · 취소가 DB 조회에서 안 먹음 · 설정 DB pull 실패를 경고로만 남김                                | 완료 `07a71e0` |
 | A    | `fix/delete-sync-row-restore`                | deleteSync 볼트에서 지운 DB 행을, 그 DB 를 조회한 pull 이 되살림 — 뒤이은 push 가 Notion 에서 지우지 못함                                                                                                                          | 완료 `d337193` |
-| 2    | `fix/mention-roundtrip` 외                   | F-01 ~ F-09 변환 왕복                                                                                                                                                                                                              | 대기           |
+| 2    | `fix/mention-roundtrip`                      | F-01 사용자 멘션 태그가 볼트에 그대로 남고 날짜는 시작만 평문 — 다음 push 가 Notion 의 멘션을 평문으로 바꿈 · F-02 사용자 멘션에 이름이 안 보임                                                                                    | 완료 `6964830` |
+| 2    | `fix/combined-span` 외                       | F-03 ~ F-09 변환 왕복                                                                                                                                                                                                              | 진행 중        |
 | 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                                                                                                                                                                        | 대기           |
 | 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                                                                                                                                                                          | 대기           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |

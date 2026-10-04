@@ -1,7 +1,7 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import type { BlockConverter } from "../converter/block-converter.js";
 import { hasBodyBesidesChildren } from "../converter/child-tags.js";
-import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
+import { notionBodyToObsidian } from "./page-body.js";
 import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
@@ -462,7 +462,9 @@ export class PagePuller {
         const result = await this.notionClient.getPageMarkdown(pageId);
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
         return {
-          content: this.resolveNotionIdWikilinks(notionEnhancedToObsidian(result.markdown)),
+          content: this.resolveNotionIdWikilinks(
+            await notionBodyToObsidian(this.notionClient, result.markdown),
+          ),
           // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
           // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
           compact: isCompactExport(result.markdown),

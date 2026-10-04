@@ -43,8 +43,9 @@ export const RENDER_LINE_RULES: readonly RenderLineRule[] = [
   {
     code: "④",
     label: "NFM 전용 태그 누수",
-    // 이름이 붙어 `<unknown>` 폴백에 걸리지 않던 태그들.
-    re: /<(?:table_of_contents|embed|unknown_mention|empty-block)\b/,
+    // 이름이 붙어 `<unknown>` 폴백에 걸리지 않던 태그들. 멘션은 위키링크나 짝 마커가 되어야
+    // 한다 — 태그가 남으면 읽기 보기에서 빈칸이 되고 편집 화면에서 줄이 끊긴다(F-01).
+    re: /<(?:table_of_contents|embed|unknown_mention|empty-block|mention-[a-z-]+)\b/,
   },
 ] as const;
 

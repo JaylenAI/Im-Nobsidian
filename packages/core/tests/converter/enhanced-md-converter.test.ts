@@ -63,15 +63,21 @@ describe("notionEnhancedToObsidian", () => {
     expect(result).not.toContain("<mention-page");
   });
 
-  it("<mention-user> → @name", () => {
+  // F-01: 보이는 글(이름 · 날짜)을 짝 마커로 감싸 원래 속성을 싣는다 — push 가 멘션으로 되돌린다.
+  // 자세한 경우는 mention.test.ts.
+  it("<mention-user> → @이름 을 짝 마커로 감싼다", () => {
     const input = '<mention-user id="user-1">John</mention-user>';
-    expect(notionEnhancedToObsidian(input)).toBe("@John");
+    expect(notionEnhancedToObsidian(input)).toBe(
+      "%%im-nobsidian:mention-user:id=user-1%%@John%%/mention%%",
+    );
   });
 
-  it("<mention-date> → date text", () => {
-    expect(notionEnhancedToObsidian('<mention-date start="2026-05-13"/>')).toBe("2026-05-13");
+  it("<mention-date> → 날짜 글을 짝 마커로 감싼다", () => {
+    expect(notionEnhancedToObsidian('<mention-date start="2026-05-13"/>')).toBe(
+      "%%im-nobsidian:mention-date:start=2026-05-13%%2026-05-13%%/mention%%",
+    );
     expect(notionEnhancedToObsidian('<mention-date start="2026-05-13" end="2026-06-01"/>')).toBe(
-      "2026-05-13 → 2026-06-01",
+      "%%im-nobsidian:mention-date:start=2026-05-13&end=2026-06-01%%2026-05-13 → 2026-06-01%%/mention%%",
     );
   });
 

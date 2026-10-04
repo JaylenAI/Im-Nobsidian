@@ -43,11 +43,10 @@ import {
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
+import { markersToMentions, mentionsToMarkers } from "./mention.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
-const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
-const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
 const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
 const NOTION_UNKNOWN_URL_RE = /<unknown url="([^"]*)"([^>]*)\/>/g;
 
@@ -62,7 +61,16 @@ const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
   "g",
 );
 
-export function notionEnhancedToObsidian(enhanced: string): string {
+/** {@link notionEnhancedToObsidian} 의 선택 입력. */
+export interface EnhancedToObsidianOptions {
+  /** 사용자 멘션에 보일 이름 — 사용자 id → 이름(`NotionClient.getUserNames`). */
+  readonly userNames?: ReadonlyMap<string, string>;
+}
+
+export function notionEnhancedToObsidian(
+  enhanced: string,
+  options?: EnhancedToObsidianOptions,
+): string {
   let result = enhanced;
 
   // 토글 헤딩이 가장 먼저 — 자식을 열 0 으로 내려야 아래 컨테이너 변환이 들여쓰기를
@@ -73,8 +81,7 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertFencedCallouts(result);
   result = convertPageMentions(result);
   result = convertPageLinks(result);
-  result = convertUserMentions(result);
-  result = convertDateMentions(result);
+  result = mentionsToMarkers(result, options?.userNames);
   result = convertMediaTags(result);
   result = convertTabBlocks(result);
   result = preserveUnknownBlocks(result);
@@ -136,6 +143,7 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreMediaTags(result);
   result = restoreUnknownBlocks(result);
   result = restoreNfmOnlyBlocks(result);
+  result = markersToMentions(result);
   result = restoreColorSpans(result);
   result = restoreBlockColorMarkers(result);
   result = restoreUnderlineSpans(result);
@@ -440,16 +448,6 @@ function convertPageMentions(content: string): string {
     return `[[notion:${normalized}|${label}]]`;
   });
   return result;
-}
-
-function convertUserMentions(content: string): string {
-  return content.replace(NOTION_USER_MENTION_RE, (_match, name: string) => `@${name}`);
-}
-
-function convertDateMentions(content: string): string {
-  return content.replace(NOTION_DATE_MENTION_RE, (_match, start: string, end?: string) => {
-    return end ? `${start} → ${end}` : start;
-  });
 }
 
 /**
