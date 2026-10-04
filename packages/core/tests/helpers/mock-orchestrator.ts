@@ -154,6 +154,8 @@ export function createMockNotionClient() {
     fetchAllChildren: vi.fn().mockResolvedValue([]),
     fetchAllChildrenDeep: vi.fn().mockResolvedValue([]),
     deleteBlock: vi.fn().mockResolvedValue(undefined),
+    updateCodeBlockText: vi.fn().mockResolvedValue(undefined),
+    getCodeBlockTexts: vi.fn().mockResolvedValue([]),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
     archivePage: vi.fn().mockResolvedValue(undefined),
     getPageMarkdown: vi
