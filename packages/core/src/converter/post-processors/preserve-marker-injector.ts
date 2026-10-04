@@ -37,8 +37,11 @@ export class PreserveMarkerInjector implements Processor {
     }
 
     let content = input.content;
+    // 로컬 노트가 있으면 주석은 거기서 되살린다(CommentRestorer) — 로컬에만 있는 글이라 로컬이 정본이다.
+    const commentsFromLocal = input.metadata.localContent !== undefined;
 
     const missing = markers.filter((m) => {
+      if (m.type === "comment" && commentsFromLocal) return false;
       const rendered = this.renderMarker(m);
       if (rendered === null) return false;
       if (content.includes(rendered)) return false;

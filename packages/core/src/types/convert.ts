@@ -24,7 +24,7 @@ export interface ProcessorMetadata {
   readonly notionExportCompact?: boolean;
   /**
    * pull 직전 로컬 노트 원문 — 있을 때만. Notion 에 남길 자리가 없는 표기(코드 펜스의 원래 언어 ·
-   * 펜스 기호, S-20)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
+   * 펜스 기호 S-20, 주석 S-29)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
    */
   readonly localContent?: string;
   /** Markdown API 로 보낼 수 없어 본문을 쓴 뒤 블록으로 채울 코드({@link DeferredCode}). */

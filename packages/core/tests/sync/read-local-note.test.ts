@@ -43,7 +43,7 @@ describe("readLocalNote — 받기 직전의 로컬 노트(S-20)", () => {
 
     expect(await readLocalNote(fs, "Locked.md")).toBeUndefined();
     expect(warn).toEqual([
-      "[Im-Nobsidian] 로컬 노트를 읽지 못해 코드 펜스 표기를 되살리지 못함 (Locked.md): EACCES: permission denied",
+      "[Im-Nobsidian] 로컬 노트를 읽지 못해 코드 펜스 표기 · 주석 자리를 되살리지 못함 (Locked.md): EACCES: permission denied",
     ]);
   });
 });
