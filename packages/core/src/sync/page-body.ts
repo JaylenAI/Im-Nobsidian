@@ -1,5 +1,10 @@
 import type { PageMarkdownResponse } from "@notionhq/client/build/src/api-endpoints.js";
-import { baseEmbedPaths, extractChildTags, restoreChildTags } from "../converter/child-tags.js";
+import {
+  baseEmbedPaths,
+  childLayout,
+  extractChildTags,
+  restoreChildTags,
+} from "../converter/child-tags.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { mentionUserIds } from "../converter/mention.js";
 import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
@@ -40,7 +45,8 @@ export async function replacePageBody(
   } catch (error) {
     if (!isNotionValidationError(error)) throw error;
 
-    const children = extractChildTags((await client.getPageMarkdown(pageId)).markdown);
+    const remote = (await client.getPageMarkdown(pageId)).markdown;
+    const children = extractChildTags(remote);
     const baseIds = new Map<string, readonly string[]>();
     if (options.databaseIdsOfBase && children.some((c) => c.kind === "database")) {
       for (const path of baseEmbedPaths(markdown)) {
@@ -56,6 +62,12 @@ export async function replacePageBody(
     let written: PageMarkdownResponse;
     try {
       written = await client.replacePageMarkdown(pageId, restored.markdown);
+      // 자식이 다른 컨테이너로 옮겨 가거나 차례가 바뀌면 Notion 이 그 자식을 품은 콜아웃 · 토글을 페이지
+      // 맨 위에 두는 일이 있다 — 같은 본문을 한 번 더 보내면 제자리로 갔다(2026-10-04 실측, S-28). 어느
+      // 이동이 어긋나는지 Notion 이 밝히지 않아, 자식의 배치가 바뀐 교체는 모두 한 번 더 보낸다.
+      if (childLayout(remote).join("\n") !== childLayout(restored.markdown).join("\n")) {
+        written = await client.replacePageMarkdown(pageId, restored.markdown);
+      }
     } catch (retryError) {
       if (!isNotionValidationError(retryError)) throw retryError;
       throw new Error(

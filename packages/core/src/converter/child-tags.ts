@@ -104,8 +104,9 @@ const MENTION_LINE_RE =
 const WIKILINK_LINE_RE = /^\[\[([^[\]|]+)(?:\|[^[\]]*)?\]\]$/;
 /**
  * `.base` 임베드가 나가는 모양 — `> 📎 이름.base %% im-nobsidian:local-file:<경로|별칭> %%`
- * (converter/pre-processors/embed.ts 의 placeholder). 자리표시자는 늘 줄머리에서 제 `>` 로
- * 시작한다 — 인용 안의 임베드도 인용 접두사를 떼고 나간다(같은 파일 isolate).
+ * (converter/pre-processors/embed.ts 의 placeholder). 자리표시자는 제 `>` 로 시작하고 앞에는
+ * 컨테이너 들여쓰기만 온다 — 일반 인용 안의 임베드는 인용 접두사를 떼고 나가고, 콜아웃 · 토글 안의
+ * 임베드는 그 컨테이너의 자식 줄(`\t> 📎 …`)이 된다(같은 파일 isolate, S-28).
  */
 const LOCAL_FILE_LINE_RE = new RegExp(
   `^([ \\t]*)>[ \\t]*📎${MARKER_PAYLOAD_CHAR}*?%%\\s*${MARKER_BRAND_RE}:local-file:(${MARKER_PAYLOAD_CHAR}+?)\\s*%%[ \\t]*$`,
@@ -160,19 +161,10 @@ export function restoreChildTags(
 
   const pending = new PendingChildren(children);
   const lines = markdown.split("\n");
-  let fence: string | null = null;
   let placed = 0;
 
-  for (let i = 0; i < lines.length && pending.size > 0; i++) {
-    const line = lines[i]!;
-    const fenceRun = FENCE_RE.exec(line)?.[1];
-    if (fenceRun) {
-      if (fence === null) fence = fenceRun;
-      else if (fenceRun[0] === fence[0] && fenceRun.length >= fence.length) fence = null;
-      continue;
-    }
-    if (fence !== null) continue;
-
+  for (const [i, line] of linesOutsideFences(lines)) {
+    if (pending.size === 0) break;
     // 첨부 자리표시자는 제 `>` 까지가 자리표시자다 — 태그로 바꿀 때 `>` 를 남기지 않는다.
     const placeholder = LOCAL_FILE_LINE_RE.exec(line);
     const [, prefix = "", content = ""] = placeholder ?? LINE_RE.exec(line) ?? [];
@@ -191,6 +183,61 @@ export function restoreChildTags(
     out = `${out.replace(/\s+$/, "")}\n\n${appended.map((c) => c.tag).join("\n\n")}\n`;
   }
   return { markdown: out, placed, appended };
+}
+
+/** NFM 컨테이너를 여는 줄 · 닫는 줄 — 줄에 컨테이너 태그만 있을 때. 그룹 1 = 종류. */
+const CONTAINER_OPEN_RE = /^[ \t]*<(callout|details|columns|column)\b[^>]*>[ \t]*$/;
+const CONTAINER_CLOSE_RE = /^[ \t]*<\/(?:callout|details|columns|column)>[ \t]*$/;
+
+/**
+ * 본문에 실린 자식 페이지 · DB 의 배치 — 나온 차례대로 `id@감싼 컨테이너`.
+ *
+ * 받은 본문과 보낼 본문의 배치가 다르면 자식이 자리를 옮긴다(sync/page-body 의 replacePageBody).
+ * 컨테이너는 본문에서 몇 번째로 연 것인지까지 적는다 — 같은 종류의 다른 콜아웃으로 옮겨도 옮긴
+ * 것이다. 컨테이너 밖에서는 들여쓰기 단(목록 · 토글 제목 아래)까지 본다. 컨테이너 안의 들여쓰기는
+ * 보지 않는다 — Notion 이 돌려주는 본문은 토글 자식을 들여쓰고 push 가 보내는 본문은 들여쓰지 않아,
+ * 같은 배치도 들여쓰기가 다르다.
+ */
+export function childLayout(markdown: string): string[] {
+  const layout: string[] = [];
+  const open: string[] = [];
+  let opened = 0;
+  for (const [, line] of linesOutsideFences(markdown.split("\n"))) {
+    const kind = CONTAINER_OPEN_RE.exec(line)?.[1];
+    if (kind) {
+      open.push(`${kind}#${++opened}`);
+      continue;
+    }
+    if (CONTAINER_CLOSE_RE.test(line)) {
+      open.pop();
+      continue;
+    }
+    const where = open.length > 0 ? open.join("/") : `+${indentLevel(line)}`;
+    for (const child of extractChildTags(line)) layout.push(`${child.id}@${where}`);
+  }
+  return layout;
+}
+
+/** 줄머리 들여쓰기 단 — 탭 하나 · 공백 넷이 한 단, 모자란 공백도 한 단으로 친다. */
+function indentLevel(line: string): number {
+  const lead = /^[ \t]*/.exec(line)![0];
+  const width = [...lead].reduce((sum, c) => sum + (c === "\t" ? 4 : 1), 0);
+  return Math.ceil(width / 4);
+}
+
+/** 코드 블록 밖의 줄과 그 번호 — 펜스 줄 자체도 뺀다. */
+function* linesOutsideFences(lines: readonly string[]): Generator<[number, string]> {
+  let fence: string | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+    const fenceRun = FENCE_RE.exec(line)?.[1];
+    if (fenceRun) {
+      if (fence === null) fence = fenceRun;
+      else if (fenceRun[0] === fence[0] && fenceRun.length >= fence.length) fence = null;
+      continue;
+    }
+    if (fence === null) yield [i, line];
+  }
 }
 
 /** 아직 자리를 못 찾은 자식들. 한 자식은 한 줄에만, 먼저 나온 줄에 놓는다. */
