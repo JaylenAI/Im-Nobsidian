@@ -47,6 +47,7 @@ import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
 import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
 import { separateLazyContinuations } from "./lazy-continuation.js";
+import { CALLOUT_HEAD_LINE_RE, TOGGLE_HEAD_SOURCE, pushContainerKind } from "./container-head.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -726,7 +727,10 @@ function convertTogglesToHtml(content: string): string {
   // 토글들이 push 에서 **통째로 사라진다** — 실볼트 `Creai LLM.md` 왕복 실측에서
   // `<details>` 8개가 0개가 됐다. 본문 줄은 역참조 `\1` 로 같은 들여쓰기를 요구해
   // 이웃 블록을 삼키지 않는다.
-  const calloutToggleRe = /^([ \t]{0,3})> \[!toggle\]-[ \t]*(.*)((?:\n\1>.*)*)/gm;
+  const calloutToggleRe = new RegExp(
+    String.raw`${TOGGLE_HEAD_SOURCE}[ \t]*(.*)((?:\n\1>.*)*)`,
+    "gm",
+  );
 
   let result = content;
   let prev = "";
@@ -840,11 +844,12 @@ function convertObsidianCallouts(content: string): string {
   while (i < lines.length) {
     // 선행 들여쓰기는 pull 의 클램프(callout-indent)가 남긴 것 — 받지 않으면 리스트/칼럼
     // 안 콜아웃이 push 에서 리터럴 `> [!x]` 텍스트로 Notion 에 박제된다.
-    const headerMatch = /^([ \t]{0,3})> \[!(\w+)\]([-+])?[ \t]*(.*)$/.exec(lines[i]!);
-    const type = headerMatch?.[2]?.toLowerCase();
     // toggle/tab 헤드는 전용 변환기(convertTogglesToHtml/restoreTabBlocks) 소관 —
     // 콜아웃으로 오변환하지 않는다.
-    if (headerMatch && type !== "toggle" && type !== "tab") {
+    const headerMatch =
+      pushContainerKind(lines[i]!) === "callout" ? CALLOUT_HEAD_LINE_RE.exec(lines[i]!) : null;
+    const type = headerMatch?.[2]?.toLowerCase();
+    if (headerMatch) {
       const indentRead = readCalloutIndentDepth(headerMatch[1]!, headerMatch[4]!);
       const depth = indentRead.depth;
       let title = indentRead.title;
