@@ -523,6 +523,55 @@ describe("CodeLanguageRestorer (pull) — 로컬 노트의 원래 표기로", ()
     expect(pull("> [!note] 제목\n> ```plain text\n> LIST\n> ```", local)).toBe(local);
   });
 
+  // S-27 — 옛 push 가 코드 속 빈 줄을 줄여 올렸다. 원격이 바뀌어 받으면 로컬 코드의 빈 줄이 사라졌다(실측).
+  describe("옛 push 가 줄인 코드 속 빈 줄", () => {
+    const local = fence("py", "import os\n\n\ndef a():\n    pass\n\n\n\ndef b():\n    pass");
+    const collapsed = fence("python", "import os\n\ndef a():\n    pass\n\ndef b():\n    pass");
+
+    it("받은 코드가 로컬 코드를 줄인 것이면 로컬의 빈 줄을 되살린다", () => {
+      const pulled = `앞\n\n${collapsed}\n\n뒤 — Notion 에서 고침`;
+      expect(pull(pulled, `앞\n\n${local}\n\n뒤`)).toBe(`앞\n\n${local}\n\n뒤 — Notion 에서 고침`);
+    });
+
+    it("코드 첫머리 · 끝의 빈 줄도 — 펜스 줄의 줄바꿈까지 줄었다", () => {
+      expect(pull(fence("python", "\nx\n"), fence("py", "\n\nx\n\n"))).toBe(
+        fence("py", "\n\nx\n\n"),
+      );
+    });
+
+    it("목록 안 코드 — 받은 들여쓰기로 되살린다", () => {
+      const local = "- 항목\n  ```js\n  a\n\n\n  b\n  ```";
+      expect(pull("- 항목\n    ```javascript\n    a\n\n    b\n    ```", local)).toBe(
+        "- 항목\n    ```js\n    a\n\n\n    b\n    ```",
+      );
+    });
+
+    it("옛 push 도 줄이지 않은 자리는 받은 그대로 — 인용의 `>` 줄 · CRLF 노트 · 공백 줄", () => {
+      const quoted = "> ```javascript\n> a\n>\n> b\n> ```";
+      expect(pull(quoted, "> ```js\n> a\n>\n>\n> b\n> ```")).toBe(
+        quoted.replace("javascript", "js"),
+      );
+      expect(pull(fence("python", "a\n\nb"), "```py\r\na\r\n\r\n\r\nb\r\n```")).toBe(
+        fence("py", "a\n\nb"),
+      );
+      expect(pull(fence("python", "a\n\nb"), fence("py", "a\n  \n\nb"))).toBe(
+        fence("py", "a\n\nb"),
+      );
+    });
+
+    it("여러 펜스 — 앞 펜스에서 되살린 줄이 뒤 펜스의 자리를 밀지 않는다", () => {
+      const pulled = `${collapsed}\n\n${fence("plain text", "LIST")}`;
+      expect(pull(pulled, `${local}\n\n${fence("dataview", "LIST")}`)).toBe(
+        `${local}\n\n${fence("dataview", "LIST")}`,
+      );
+    });
+
+    it("Notion 에서 빈 줄 하나를 지웠거나 코드를 고쳤으면 받은 그대로", () => {
+      expect(pull(fence("python", "a\nb"), fence("py", "a\n\nb"))).toBe(fence("py", "a\nb"));
+      expect(pull(fence("python", "a\n\nc"), fence("py", "a\n\n\nb"))).toBe(fence("py", "a\n\nc"));
+    });
+  });
+
   it("로컬 노트가 없으면 받은 그대로", () => {
     expect(pull(fence("plain text"))).toBe(fence("plain text"));
   });

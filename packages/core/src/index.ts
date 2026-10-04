@@ -140,6 +140,7 @@ export {
   PreserveMarkerInjector,
   LocalImageRestorer,
   UnsupportedBlockStripper,
+  BlankLineCollapser,
   PropertiesTableInjector,
   PropertiesTableRestorer,
   InlineAnnotationPreserver,

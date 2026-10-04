@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  collapseBlankLines,
   computeAnchor,
   indentWidth,
   inlineCodeRanges,
@@ -151,6 +152,31 @@ describe("mapOutsideCodeFences", () => {
     expect(mapOutsideCodeFences("- ```py\n  안\n밖", (seg) => seg.replace(/[밖안]/g, "X"))).toBe(
       "- ```py\n  안\nX",
     );
+  });
+});
+
+describe("collapseBlankLines", () => {
+  it("코드 밖에서 이어진 빈 줄을 한 줄로", () => {
+    expect(collapseBlankLines("a\n\n\nb\n\n\n\nc\n\nd")).toBe("a\n\nb\n\nc\n\nd");
+  });
+
+  it("코드가 없으면 예전(문서 전체 줄이기)과 같다 — 문서 앞뒤 빈 줄까지", () => {
+    for (const text of ["\n\n\na\n\n\n", "a\n\n\n\n", "> a\n\n\n> b", "\n\n"]) {
+      expect(collapseBlankLines(text)).toBe(text.replace(/\n{3,}/g, "\n\n"));
+    }
+  });
+
+  // S-27 — 문서 전체에서 줄여, 함수 사이 빈 줄 두 줄을 둔 파이썬 코드가 Notion 에서 한 줄이 됐다.
+  it("코드 속 빈 줄은 그대로 두고, 코드 바로 앞뒤의 빈 줄은 줄인다", () => {
+    const code = "```py\nimport os\n\n\ndef a():\n    pass\n```";
+    expect(collapseBlankLines(`앞\n\n\n${code}\n\n\n뒤`)).toBe(`앞\n\n${code}\n\n뒤`);
+  });
+
+  it("목록 · 콜아웃 안 코드와 닫히지 않은 코드의 빈 줄도 그대로", () => {
+    const listed = "- 항목\n\n  ```py\n  a = 1\n\n\n  b = 2\n  ```";
+    expect(collapseBlankLines(listed)).toBe(listed);
+    const unclosed = "```\nx\n\n\n";
+    expect(collapseBlankLines(unclosed)).toBe(unclosed);
   });
 });
 

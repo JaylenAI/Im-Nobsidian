@@ -12,6 +12,7 @@ import { CommentStripper } from "./pre-processors/comment-stripper.js";
 import { FootnoteGuard } from "./pre-processors/footnote-guard.js";
 import { TableAlignmentGuard } from "./pre-processors/table-alignment.js";
 import { CodeLanguageGuard } from "./pre-processors/code-language-guard.js";
+import { BlankLineCollapser } from "./pre-processors/blank-line-collapser.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { EscapeNormalizer } from "./post-processors/escape-normalizer.js";
 import { HighlightRestorer } from "./post-processors/highlight-restorer.js";
@@ -44,6 +45,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPreProcessor(new CodeLanguageGuard());
   pipeline.registerPreProcessor(new MathNormalizer());
   pipeline.registerPreProcessor(new EmbedResolver());
+  pipeline.registerPreProcessor(new BlankLineCollapser());
   pipeline.registerPreProcessor(new PreserveMarkerCollector());
 
   pipeline.registerPostProcessor(new EscapeNormalizer());
