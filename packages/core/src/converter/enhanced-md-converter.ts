@@ -31,6 +31,7 @@ import {
   indentContainerBody,
   isInsideRanges,
   nfmOpenTagSource,
+  replaceOutsideCode,
   splitContainerPrefix,
 } from "./container-indent.js";
 import {
@@ -147,6 +148,8 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreColorSpans(result);
   result = restoreBlockColorMarkers(result);
   result = restoreUnderlineSpans(result);
+  result = restoreUnderlineTags(result);
+  result = flattenNestedSpans(result);
   result = convertMentionPageIdToUrl(result);
   result = restoreWikilinkPreserveLinks(result);
   result = restoreSyncedBlocks(result);
@@ -638,27 +641,52 @@ function convertTabBlocks(content: string): string {
   });
 }
 
-// 2C: <span underline> / <span color> → 보존 마커 (균형 매칭, 중첩 안전)
+// 2C: <span underline> / <span color> → `<u>` · 색 보존 마커 (균형 매칭, 중첩 안전)
 //
 // 비탐욕 단일 정규식(`<span ...>([\s\S]*?)</span>`)은 중첩 span 에서 첫 `</span>` 에
 // 멈춰 바깥 span 의 닫는 토큰 순서를 뒤집는다(rank6/I3 — 사용자가 보는 Obsidian 마커가
-// `%%/color%%%%/underline%%` 처럼 잘못 중첩됨). 대신 **안쪽(중첩 없는) span 부터** 마커로
-// 치환한다: 마커엔 `<span` 이 없으므로 다음 패스에서 바깥 span 이 다시 innermost 가 되어
+// `%%/color%%%%/underline%%` 처럼 잘못 중첩됨). 대신 **안쪽(중첩 없는) span 부터** 바꾼다:
+// 바꾼 결과엔 `<span` 이 없으므로 다음 패스에서 바깥 span 이 다시 innermost 가 되어
 // 임의 깊이 중첩이 올바른 순서로 환원된다. body 패턴 `(?:(?!<span )[\s\S])*?` 가 내부에
 // 또 다른 span 시작이 없음을 보장해 "가장 안쪽"만 매칭한다.
+//
+// 속성은 집합으로 받는다 — Notion 은 빨강+밑줄을 `<span color="red" underline="true">` 한 태그로
+// 내보낸다. 속성 하나만 받던 정규식은 그 span 을 볼트에 그대로 남겼다(F-07). 둘이면 색이 바깥이다.
 const INNERMOST_SPAN_RE =
-  /<span (?:underline="true"|color="([^"]+)")>((?:(?!<span )[\s\S])*?)<\/span>/g;
+  /<span((?:\s+(?:underline="true"|color="[^"]+"))+)>((?:(?!<span )[\s\S])*?)<\/span>/g;
 
+/**
+ * 밑줄은 안이 평문일 때 Obsidian 이 그리는 `<u>` 로 받는다 — 밑줄 마커는 볼트에서 밑줄로 보이지
+ * 않았고, 사용자가 쓴 `<u>` 가 한 바퀴 돌면 마커가 됐다(F-06). push 는 `<u>` 를 span 으로 되돌린다
+ * ({@link restoreUnderlineTags}).
+ *
+ * 안에 마크다운이 있으면 지금처럼 마커로 받는다. Live Preview 는 인라인 HTML 안의 마크다운을 풀지 않아
+ * `<u>**굵게**</u>` 의 `**` · `<u>[글](주소)</u>` 의 괄호가 글자로 보인다. 강조를 `<u>` 밖으로 꺼내면
+ * 조사가 바로 붙는 글(`**<u>중요</u>**합니다`)에서 굵게가 풀린다(Obsidian 1.13.7 실측).
+ */
+const UNDERLINE_TAG_UNSAFE_RE = /[*_`[\]$<\\#]|~~|==|%%|:\/\//;
+
+function spanToVault(attrs: string, inner: string): string {
+  const color = /color="([^"]+)"/.exec(attrs)?.[1];
+  let text = inner;
+  if (/underline="true"/.test(attrs)) {
+    text = UNDERLINE_TAG_UNSAFE_RE.test(inner)
+      ? `${compactMarker("underline")}${inner}%%/underline%%`
+      : `<u>${inner}</u>`;
+  }
+  return color === undefined ? text : `${compactMarker(`color:${color}`)}${text}%%/color%%`;
+}
+
+/**
+ * 코드(펜스 · 인라인) 안의 span 은 사용자가 적은 글자다 — HTML 예제 코드가 흔하다. 예전에는 그것까지
+ * 마커로 바꿔 볼트의 코드에 마커 글자가 보였다. 바꿀 때마다 글 길이가 달라지므로 패스마다 다시 잰다.
+ */
 function convertSpans(content: string): string {
   let result = content;
   let safety = 0;
   while (safety++ < 1000) {
-    const next = result.replace(
-      INNERMOST_SPAN_RE,
-      (_match, color: string | undefined, inner: string) =>
-        color !== undefined
-          ? `${compactMarker(`color:${color}`)}${inner}%%/color%%`
-          : `${compactMarker("underline")}${inner}%%/underline%%`,
+    const next = replaceOutsideCode(result, INNERMOST_SPAN_RE, (_match, attrs, inner) =>
+      spanToVault(attrs!, inner!),
     );
     if (next === result) break;
     result = next;
@@ -1156,26 +1184,102 @@ function restoreNfmOnlyBlocks(content: string): string {
   });
 }
 
+// 안쪽(같은 마커를 품지 않은) 짝부터 바꾼다 — 비탐욕 하나로는 빨강 마커 안의 `==형광==`(노랑 배경
+// 마커)에서 바깥 여는 마커를 안쪽 닫는 마커와 짝지어 `%%/color%%` 가 글로 남았다. pull 의
+// {@link convertSpans} 와 같은 방식이다.
 const OBSIDIAN_COLOR_RE = new RegExp(
-  `%%${MARKER_BRAND_RE}:color:([^%]+)%%([\\s\\S]*?)%%\\/color%%`,
+  `%%${MARKER_BRAND_RE}:color:([^%]+)%%((?:(?!%%${MARKER_BRAND_RE}:color:)[\\s\\S])*?)%%\\/color%%`,
   "g",
 );
-
-function restoreColorSpans(content: string): string {
-  return content.replace(OBSIDIAN_COLOR_RE, (_match, color: string, text: string) => {
-    return `<span color="${color}">${text}</span>`;
-  });
-}
 
 const OBSIDIAN_UNDERLINE_RE = new RegExp(
-  `%%${MARKER_BRAND_RE}:underline%%([\\s\\S]*?)%%\\/underline%%`,
+  `%%${MARKER_BRAND_RE}:underline%%((?:(?!%%${MARKER_BRAND_RE}:underline%%)[\\s\\S])*?)%%\\/underline%%`,
   "g",
 );
 
+/** 더 바뀌지 않을 때까지 안쪽 짝부터 바꾼다. */
+function replaceInnermostFirst(
+  content: string,
+  re: RegExp,
+  replace: (match: string, ...groups: string[]) => string,
+): string {
+  let result = content;
+  for (let pass = 0; pass < 1000; pass++) {
+    const next = result.replace(re, replace);
+    if (next === result) break;
+    result = next;
+  }
+  return result;
+}
+
+function restoreColorSpans(content: string): string {
+  return replaceInnermostFirst(
+    content,
+    OBSIDIAN_COLOR_RE,
+    (_match, color, text) => `<span color="${color}">${text}</span>`,
+  );
+}
+
 function restoreUnderlineSpans(content: string): string {
-  return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {
-    return `<span underline="true">${text}</span>`;
-  });
+  return replaceInnermostFirst(
+    content,
+    OBSIDIAN_UNDERLINE_RE,
+    (_match, text) => `<span underline="true">${text}</span>`,
+  );
+}
+
+const OBSIDIAN_U_TAG_RE = /<u>([\s\S]*?)<\/u>/g;
+
+/**
+ * 볼트의 `<u>` → NFM 밑줄 span. pull 이 밑줄을 `<u>` 로 받고({@link convertSpans}), 사용자도 `<u>` 로
+ * 밑줄을 쓴다. 코드 안의 `<u>` 는 사용자가 적은 글자라 그대로 둔다.
+ */
+function restoreUnderlineTags(content: string): string {
+  return replaceOutsideCode(
+    content,
+    OBSIDIAN_U_TAG_RE,
+    (_match, text) => `<span underline="true">${text}</span>`,
+  );
+}
+
+const NFM_SPAN_ATTRS = `((?:\\s+(?:underline="true"|color="[^"]+"))+)`;
+const WITHOUT_SPAN_TAG = `((?:(?!<\\/?span\\b)[\\s\\S])*?)`;
+/** 다른 span 하나를 바로 품은 span — 바깥 속성 · 앞 글 · 안쪽 속성 · 안쪽 글. */
+const SPAN_WITH_INNER_RE = new RegExp(
+  `<span${NFM_SPAN_ATTRS}>${WITHOUT_SPAN_TAG}<span${NFM_SPAN_ATTRS}>${WITHOUT_SPAN_TAG}<\\/span>`,
+  "g",
+);
+const EMPTY_SPAN_RE = new RegExp(`<span${NFM_SPAN_ATTRS}><\\/span>`, "g");
+
+/** 속성을 합친다 — 색은 안쪽이 이긴다. Notion 의 글 한 조각은 색을 하나만 가진다(글자색이나 배경색). */
+function mergeSpanAttrs(...attrs: string[]): string {
+  const color = attrs
+    .map((a) => /color="([^"]+)"/.exec(a)?.[1])
+    .filter((c) => c !== undefined)
+    .at(-1);
+  const underline = attrs.some((a) => /underline="true"/.test(a));
+  return `${color ? ` color="${color}"` : ""}${underline ? ' underline="true"' : ""}`;
+}
+
+/**
+ * 겹친 span 을 펼친다. Notion 은 span 안의 span 을 읽지 못한다 — 바깥 span 에 안쪽 속성을 합치고 안쪽의
+ * 닫는 태그를 글자 `</span>` 로 남긴다(2026-10-04 실측). 볼트의 색 마커 안 `<u>` · 밑줄 마커가 그 모양이
+ * 된다(F-07). 안쪽 span 은 두 속성을 합친 한 태그로, 그 앞뒤 글은 바깥 속성만 단 태그로 나눈다.
+ */
+function flattenNestedSpans(content: string): string {
+  let result = content;
+  for (let pass = 0; pass < 1000; pass++) {
+    const next = replaceOutsideCode(
+      result,
+      SPAN_WITH_INNER_RE,
+      (_match, outer, before, inner, text) =>
+        `<span${mergeSpanAttrs(outer!)}>${before}</span>` +
+        `<span${mergeSpanAttrs(outer!, inner!)}>${text}</span><span${mergeSpanAttrs(outer!)}>`,
+    ).replace(EMPTY_SPAN_RE, "");
+    if (next === result) break;
+    result = next;
+  }
+  return result;
 }
 
 // ─── 디자인 마커 재조립 (ADR-008) ───

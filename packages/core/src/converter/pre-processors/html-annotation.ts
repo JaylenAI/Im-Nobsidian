@@ -1,6 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE, compactMarker } from "../../constants/markers.js";
-import { mapOutsideCodeFences } from "../../utils/md-regions.js";
+import { replaceOutsideCode } from "../container-indent.js";
 
 /** `<u>밑줄</u>` (Obsidian·HTML 관용) — push 시 underline 마커로 승격. */
 const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
@@ -55,29 +55,29 @@ export class InlineAnnotationPreserver implements Processor {
       (_m, color: string, text: string) => `${compactMarker(`color:${color}`)}${text}%%/color%%`,
     );
 
+    // 아래 셋은 코드 안에서는 사용자가 적은 글자다. 예전에는 펜스 안의 `<u>` 까지 바꿔 Notion 의
+    // 코드가 `<span underline="true">` 로 바뀌었고, 인라인 코드의 `a==b==c` 가 노랑 배경이 됐다.
+
     // <u>…</u> → underline 마커
-    content = content.replace(
+    content = replaceOutsideCode(
+      content,
       UNDERLINE_REGEX,
-      (_m, text: string) => `${compactMarker("underline")}${text}%%/underline%%`,
+      (_m, text) => `${compactMarker("underline")}${text}%%/underline%%`,
     );
 
     // <span class="notion-X[-bg]"> → compact 색상 마커 (-bg → _background)
-    content = content.replace(
-      COLOR_SPAN_REGEX,
-      (_m, base: string, bg: string | undefined, text: string) => {
-        const color = bg ? `${base}_background` : base;
-        return `${compactMarker(`color:${color}`)}${text}%%/color%%`;
-      },
-    );
+    content = replaceOutsideCode(content, COLOR_SPAN_REGEX, (_m, base, bg, text) => {
+      const color = bg ? `${base}_background` : base;
+      return `${compactMarker(`color:${color}`)}${text}%%/color%%`;
+    });
 
     // ==하이라이트== → 노랑 배경 (F24). Obsidian 하이라이트의 유일한 자연 대응이
     // Notion yellow 배경이다. 색상명은 pull 경로(Notion md export)가 쓰는
     // `yellow_bg` 로 맞춰 HighlightRestorer 와 왕복 대칭을 이룬다.
-    content = mapOutsideCodeFences(content, (segment) =>
-      segment.replace(
-        HIGHLIGHT_REGEX,
-        (_m, text: string) => `${compactMarker("color:yellow_bg")}${text}%%/color%%`,
-      ),
+    content = replaceOutsideCode(
+      content,
+      HIGHLIGHT_REGEX,
+      (_m, text) => `${compactMarker("color:yellow_bg")}${text}%%/color%%`,
     );
 
     return { content, metadata: input.metadata };

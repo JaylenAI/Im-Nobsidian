@@ -380,6 +380,27 @@ describe("InlineAnnotationPreserver (I3 무손실 underline/color push)", () => 
     );
   });
 
+  it("코드 안의 <u> · 색 span · ==…== 는 글자 그대로 둔다", () => {
+    const fenced = '```html\n<u>u</u> <span class="notion-red">r</span> ==h==\n```';
+    expect(transform(fenced)).toBe(fenced);
+    const inline = "`<u>u</u>` 와 `a==b==c`";
+    expect(transform(inline)).toBe(inline);
+    expect(transform("`x` 뒤 <u>u</u> ==h==")).toBe(
+      "`x` 뒤 %%im-nobsidian:underline%%u%%/underline%% %%im-nobsidian:color:yellow_bg%%h%%/color%%",
+    );
+  });
+
+  it("서식 안에 인라인 코드가 들어도 승격한다 — 코드를 사이에 둔 짝", () => {
+    expect(transform("==a `b` c== <u>d `e`</u>")).toBe(
+      "%%im-nobsidian:color:yellow_bg%%a `b` c%%/color%% %%im-nobsidian:underline%%d `e`%%/underline%%",
+    );
+  });
+
+  it("콜아웃 안 코드블록의 <u> 도 글자 그대로 둔다", () => {
+    const md = "> [!note]\n> ```html\n> <u>u</u> ==h==\n> ```";
+    expect(transform(md)).toBe(md);
+  });
+
   it("승격된 마커는 obsidianToNotionEnhanced 가 Notion span 으로 무손실 복원", () => {
     // <u>·color span → compact 마커 → push 직전 단일 SSOT → Notion Enhanced-MD span
     const promoted = transform(

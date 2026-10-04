@@ -142,11 +142,16 @@ describe("notionEnhancedToObsidian", () => {
     expect(notionEnhancedToObsidian(input)).toBe("%%im-nobsidian:color:red%%중요%%/color%%");
   });
 
-  // 2C: 밑줄 보존
-  it("<span underline> → 보존 마커", () => {
+  // 2C: 밑줄 — 안이 평문이면 Obsidian 이 그리는 <u>, 마크다운이 있으면 보존 마커
+  it("<span underline> → <u> (안이 평문)", () => {
     const input = '<span underline="true">밑줄 텍스트</span>';
+    expect(notionEnhancedToObsidian(input)).toBe("<u>밑줄 텍스트</u>");
+  });
+
+  it("<span underline> → 보존 마커 (안에 마크다운)", () => {
+    const input = '<span underline="true">**굵게**</span>';
     expect(notionEnhancedToObsidian(input)).toBe(
-      "%%im-nobsidian:underline%%밑줄 텍스트%%/underline%%",
+      "%%im-nobsidian:underline%%**굵게**%%/underline%%",
     );
   });
 
@@ -340,7 +345,7 @@ describe("round-trip", () => {
   it("밑줄 왕복", () => {
     const notion = '<span underline="true">밑줄</span>';
     const obsidian = notionEnhancedToObsidian(notion);
-    expect(obsidian).toBe("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    expect(obsidian).toBe("<u>밑줄</u>");
     const back = obsidianToNotionEnhanced(obsidian);
     expect(back).toBe(notion);
   });
@@ -377,7 +382,7 @@ describe("round-trip", () => {
 
     const obsidian = notionEnhancedToObsidian(notion);
     expect(obsidian).toContain("%%im-nobsidian:color:red%%중요%%/color%%");
-    expect(obsidian).toContain("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    expect(obsidian).toContain("<u>밑줄</u>");
     expect(obsidian).toContain("[🔊 음악](https://x.com/a.mp3)");
     expect(obsidian).toContain("%%im-nobsidian:unknown:id=xyz&type=synced_block%%");
 

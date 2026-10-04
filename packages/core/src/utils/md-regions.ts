@@ -160,6 +160,24 @@ export function mapOutsideInlineCode(content: string, fn: SegmentMapper): string
   return out + fn(content.slice(plainStart), plainStart);
 }
 
+/**
+ * 인라인 코드의 문자 구간 — {@link mapOutsideInlineCode} 가 비켜 가는 곳.
+ *
+ * 여는 태그와 닫는 태그 사이에 인라인 코드가 낀 서식(`<u>a \`b\` c</u>`)은 조각마다 치환하는
+ * {@link mapOutsideCode} 로는 짝을 찾지 못한다. 치환은 글 전체에 걸고, 시작이 이 구간 안인 것만
+ * 건너뛴다.
+ */
+export function inlineCodeRanges(content: string): Array<readonly [number, number]> {
+  const ranges: Array<readonly [number, number]> = [];
+  let pos = 0;
+  mapOutsideInlineCode(content, (segment, offset) => {
+    if (offset > pos) ranges.push([pos, offset] as const);
+    pos = offset + segment.length;
+    return segment;
+  });
+  return ranges;
+}
+
 /** 코드 펜스와 인라인 코드를 **둘 다** 피해 적용한다. */
 export function mapOutsideCode(content: string, fn: SegmentMapper): string {
   return mapOutsideCodeFences(content, (segment, base) =>

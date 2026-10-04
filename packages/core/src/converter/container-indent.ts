@@ -3,7 +3,7 @@
  * 한곳에서 보장한다. 토글/콜아웃/칼럼(enhanced-md-converter)과 토글 헤딩
  * (toggle-heading)이 같은 기준을 공유해야 왕복이 수렴한다.
  */
-import { indentWidth } from "../utils/md-regions.js";
+import { indentWidth, inlineCodeRanges } from "../utils/md-regions.js";
 
 /**
  * 컨테이너 본문 한 줄의 성격. 들여쓰기를 **붙일 때도 뗄 때도** 같은 기준으로 갈라야
@@ -362,6 +362,43 @@ export function isInsideRanges(
   offset: number,
 ): boolean {
   return ranges.some(([start, end]) => offset >= start && offset < end);
+}
+
+/**
+ * 코드의 문자 구간 전부 — 펜스 줄 · 코드블록 안 · 인라인 코드.
+ *
+ * 인라인 코드는 펜스 밖 줄에서만 찾는다. 펜스의 백틱까지 짝으로 세면 한 코드블록의 닫는 펜스와 다음
+ * 코드블록의 여는 펜스 사이 글을 통째로 코드로 본다.
+ */
+export function codeRanges(text: string): Array<readonly [number, number]> {
+  const lines = text.split("\n");
+  const kinds = classifyContainerLines(lines.map((l) => splitContainerPrefix(l).body));
+  const ranges: Array<readonly [number, number]> = [];
+  let offset = 0;
+  lines.forEach((line, i) => {
+    if (kinds[i] !== "prose") ranges.push([offset, offset + line.length + 1] as const);
+    offset += line.length + 1;
+  });
+  // 코드 줄은 같은 길이의 공백으로 지워 offset 을 지킨다 — 빈 줄이 되어 문단도 끊긴다.
+  const prose = lines.map((l, i) => (kinds[i] === "prose" ? l : " ".repeat(l.length))).join("\n");
+  return [...ranges, ...inlineCodeRanges(prose)];
+}
+
+/**
+ * 코드 밖에서 시작하는 일치에만 치환을 건다. 일치가 인라인 코드를 품어도 된다(`<u>a \`b\` c</u>`) —
+ * 코드 밖 조각마다 치환하는 `mapOutsideCode` 는 코드를 사이에 둔 짝을 찾지 못한다.
+ */
+export function replaceOutsideCode(
+  content: string,
+  re: RegExp,
+  replace: (match: string, ...groups: string[]) => string,
+): string {
+  const code = codeRanges(content);
+  return content.replace(re, (match: string, ...rest: unknown[]) => {
+    const at = rest.findIndex((arg) => typeof arg === "number");
+    if (isInsideRanges(code, rest[at] as number)) return match;
+    return replace(match, ...(rest.slice(0, at) as string[]));
+  });
 }
 
 /**
