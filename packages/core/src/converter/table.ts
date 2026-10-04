@@ -31,8 +31,9 @@ import {
 import { nfmAttrString, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
 
 /**
- * 파이프 표를 받은 Notion 이 만드는 표 속성(실측). 이 속성뿐인 표는 마커 없이 파이프 표로 둔다 —
- * 그대로 push 해도 같은 표가 된다.
+ * 파이프 표를 받은 Notion 이 만드는 표 속성 — 새 파이프 표를 push 하면 `<table header-row="true">`
+ * 로 돌아온다(2026-10-04 실측). 이 속성뿐인 표는 마커 없이 파이프 표로 둔다 — 그대로 push 해도
+ * 같은 표가 된다.
  */
 const PIPE_TABLE_ATTRS: NfmAttrs = [["header-row", "true"]];
 
