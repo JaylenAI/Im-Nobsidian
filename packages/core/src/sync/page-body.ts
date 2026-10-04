@@ -1,5 +1,7 @@
 import type { PageMarkdownResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { baseEmbedPaths, extractChildTags, restoreChildTags } from "../converter/child-tags.js";
+import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
+import { mentionUserIds } from "../converter/mention.js";
 import { isNotionValidationError, type NotionClient } from "../notion/client.js";
 import { getLogger } from "../utils/logger.js";
 
@@ -68,6 +70,21 @@ export async function replacePageBody(
     }
     return written;
   }
+}
+
+/**
+ * 받은 본문(Markdown API)을 볼트 마크다운으로 바꾼다 — 사용자 멘션에 보일 이름을 물어 함께 넘긴다
+ * (`converter/mention.ts`). 페이지와 DB 행이 같은 길로 받아야 같은 멘션이 같은 글이 된다.
+ *
+ * 사용자 멘션이 없으면 묻지 않는다.
+ */
+export async function notionBodyToObsidian(
+  client: Pick<NotionClient, "getUserNames">,
+  markdown: string,
+): Promise<string> {
+  const ids = mentionUserIds(markdown);
+  const userNames = ids.length > 0 ? await client.getUserNames(ids) : undefined;
+  return notionEnhancedToObsidian(markdown, { userNames });
 }
 
 function messageOf(error: unknown): string {

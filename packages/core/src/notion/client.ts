@@ -191,6 +191,8 @@ export class NotionClient {
   private readonly markdownCompletionMaxBlocks: number;
   /** {@link getBotUserId} 가 받은 값 — 받는 중이면 그 약속. */
   private botUserId: Promise<string> | null = null;
+  /** {@link getUserNames} 가 물은 사용자 이름 — 읽지 못한 사용자는 null. */
+  private readonly userNames = new Map<string, string | null>();
 
   constructor(options: NotionClientOptions) {
     this.client = new Client({
@@ -250,6 +252,36 @@ export class NotionClient {
       this.botUserId = null;
       throw error;
     }
+  }
+
+  /**
+   * 사용자 멘션에 보일 이름(`GET /v1/users/:id`). Markdown API 는 사용자 멘션을 이름 없는 태그로
+   * 내보낸다(`converter/mention.ts`).
+   *
+   * 물은 사용자는 기억한다 — 같은 사람이 여러 노트에 나와도 한 번만 묻는다. 읽지 못한 사용자(권한 없는
+   * 통합 · 나간 사용자)는 이유를 남기고 맵에서 뺀다. 그 멘션은 이름 대신 정해 둔 글로 보이지만, 멘션
+   * 자체는 id 로 보존된다.
+   */
+  async getUserNames(ids: readonly string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const id of new Set(ids)) {
+      if (!this.userNames.has(id)) {
+        try {
+          const user = await this.withRateLimit(() => this.client.users.retrieve({ user_id: id }));
+          this.userNames.set(id, user.name ?? null);
+        } catch (error) {
+          getLogger().warn(
+            `[Im-Nobsidian] 사용자 이름을 읽지 못함 (${id}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          this.userNames.set(id, null);
+        }
+      }
+      const name = this.userNames.get(id);
+      if (name) names.set(id, name);
+    }
+    return names;
   }
 
   // ─── Page CRUD ───
