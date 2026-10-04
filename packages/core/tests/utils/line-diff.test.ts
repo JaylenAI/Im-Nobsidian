@@ -2,7 +2,14 @@
  * 줄 비교 — 변경 패널 · 충돌 창 · CLI 가 같은 비교를 보인다.
  */
 import { describe, it, expect } from "vitest";
-import { formatHunkHeader, formatUnifiedDiff, lineDiff } from "../../src/utils/line-diff.js";
+import {
+  alignLines,
+  formatHunkHeader,
+  formatUnifiedDiff,
+  lineDiff,
+  lineSimilarity,
+  mapOffset,
+} from "../../src/utils/line-diff.js";
 import type { DiffHunk } from "../../src/utils/line-diff.js";
 
 /** 묶음의 줄을 `+a` · `-b` · ` c` 로 — 번호 없이 무엇이 바뀌었는지만. */
@@ -177,5 +184,54 @@ describe("formatHunkHeader", () => {
     );
     expect(formatHunkHeader(lineDiff("", "가\n")[0]!)).toBe("@@ -0,0 +1,1 @@");
     expect(formatHunkHeader(lineDiff("가\n", "")[0]!)).toBe("@@ -1,1 +0,0 @@");
+  });
+});
+
+/*
+ * 주석 되살리기(S-29)가 받은 글과 로컬 노트를 맞출 때 쓴다 — 줄 맞춤 · 고친 줄의 글자 자리 · 비슷한 정도.
+ */
+describe("alignLines", () => {
+  it("옛 줄마다 같은 새 줄의 번호 — 맞는 줄이 없으면 -1", () => {
+    expect(alignLines(["앞.", "", "지운 문단.", "", "뒤."], ["앞.", "", "뒤."])).toEqual([
+      0, 1, -1, -1, 2,
+    ]);
+  });
+
+  it("번호는 늘어나기만 한다 — 순서가 바뀐 줄은 하나만 맞춘다", () => {
+    expect(alignLines(["가", "나"], ["나", "가"])).toEqual([-1, 0]);
+  });
+
+  it("빈 글", () => {
+    expect(alignLines([], ["가"])).toEqual([]);
+    expect(alignLines(["가"], [])).toEqual([-1]);
+  });
+});
+
+describe("mapOffset", () => {
+  it("옛 줄의 글자 자리를 새 줄의 같은 글 뒤로 옮긴다", () => {
+    expect(mapOffset("첫 문단 이어서.", "첫 문단 고침 이어서.", 5)).toBe(5);
+    expect(mapOffset("가나다", "가다", 2)).toBe(1);
+    expect(mapOffset("가나다", "가나다라", 3)).toBe(3);
+  });
+
+  it("같은 글이 하나도 없으면 줄 머리", () => {
+    expect(mapOffset("abc", "xyz", 2)).toBe(0);
+  });
+});
+
+describe("lineSimilarity", () => {
+  it("같은 줄은 1, 겹치는 두 글자 묶음이 없으면 0", () => {
+    expect(lineSimilarity("문단 글.", "문단 글.")).toBe(1);
+    expect(lineSimilarity("가나다", "라마바")).toBe(0);
+  });
+
+  it("고친 줄은 반 넘게 같다", () => {
+    expect(lineSimilarity("첫 문단 이어서.", "첫 문단 고침 이어서.")).toBeGreaterThan(0.5);
+    expect(lineSimilarity("- 항목 둘", "- 항목 둘 고침")).toBeGreaterThan(0.5);
+  });
+
+  it("두 글자가 안 되는 줄은 같을 때만 같다", () => {
+    expect(lineSimilarity("가", "가")).toBe(1);
+    expect(lineSimilarity("가", "가나")).toBe(0);
   });
 });

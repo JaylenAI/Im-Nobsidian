@@ -126,6 +126,22 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
     expect(result).not.toContain("%%");
   });
 
+  it("로컬 노트가 있으면 comment 마커는 끼우지 않는다 — 주석은 로컬 노트에서 되살린다(S-29)", () => {
+    const content = "앞 문단입니다.\n뒤 문단입니다.";
+    const markers: PreserveMarker[] = [
+      { type: "comment", params: { text: "옛 메모", __anchor: "앞 문단입니다." }, startIndex: 999 },
+      { type: "wikilink", params: { text: "링크", __anchor: "뒤 문단입니다." }, startIndex: 999 },
+    ];
+    const result = injector.process({
+      content,
+      // 로컬에서 지운 주석이 마커로 되살아나지 않는다 — 로컬 노트가 정본이다.
+      metadata: { preserveMarkers: markers, localContent: "앞 문단입니다.\n뒤 문단입니다." },
+      context: pullContext,
+    }).content;
+    expect(result).not.toContain("옛 메모");
+    expect(result).toContain("im-nobsidian:wikilink");
+  });
+
   it("앵커를 못 찾으면 줄 경계로 삽입하되 단어를 자르지 않음", () => {
     const content = "첫 줄\n둘째 줄";
     const result = run(content, [
