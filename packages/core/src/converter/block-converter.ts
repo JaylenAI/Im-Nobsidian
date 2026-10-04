@@ -11,6 +11,7 @@ import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js"
 import { stripMentionMarkers } from "./mention.js";
 import { fenceBarAbove } from "./nested-code-fence.js";
 import { stripTableMarkers } from "./table.js";
+import { calloutTypeOf } from "./callout-types.js";
 import {
   MARKER_BRAND,
   compactMarker,
@@ -430,21 +431,7 @@ export class BlockConverter {
       const children = b.has_children ? await n2m.pageToMarkdown(b.id) : [];
       const childMd = (Array.isArray(children) ? n2m.toMarkdownString(children).parent : "") ?? "";
 
-      const EMOJI_TO_TYPE: Record<string, string> = {
-        "\u{1F4DD}": "note",
-        "\u{1F4CB}": "abstract",
-        "\u{2139}\u{FE0F}": "info",
-        "\u{1F4A1}": "tip",
-        "\u{2705}": "success",
-        "\u{2753}": "question",
-        "\u{26A0}\u{FE0F}": "warning",
-        "\u{274C}": "failure",
-        "\u{1F525}": "danger",
-        "\u{1F41B}": "bug",
-        "\u{1F4CC}": "example",
-        "\u{1F4AC}": "quote",
-      };
-      const calloutType = EMOJI_TO_TYPE[emoji] ?? "note";
+      const calloutType = calloutTypeOf(emoji);
 
       let result = `> [!${calloutType}] ${text}`;
       if (childMd?.trim()) {
