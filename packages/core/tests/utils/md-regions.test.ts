@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   computeAnchor,
   indentWidth,
+  inlineCodeRanges,
   mapOutsideCode,
   mapOutsideCodeFences,
   mapOutsideInlineCode,
@@ -158,6 +159,20 @@ describe("mapOutsideInlineCode", () => {
 
   it("공백만 있는 줄도 문단을 가른다", () => {
     expect(mark("홑 ` 하나\n  \n링크 `")).toBe("홑 ` 하나\n  \nX `");
+  });
+});
+
+describe("inlineCodeRanges", () => {
+  it("백틱을 포함한 스팬 구간을 원문 offset 으로 준다", () => {
+    const content = "a `b` c ``d ` e`` f";
+    expect(inlineCodeRanges(content).map(([s, e]) => content.slice(s, e))).toEqual([
+      "`b`",
+      "``d ` e``",
+    ]);
+  });
+
+  it("짝 없는 백틱 · 문단을 넘는 짝은 구간이 아니다", () => {
+    expect(inlineCodeRanges("홑 ` 하나\n\n또 ` 하나")).toEqual([]);
   });
 });
 
