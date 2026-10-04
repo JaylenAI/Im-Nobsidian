@@ -1,8 +1,9 @@
 /**
- * 렌더 감사 중 문맥이 필요한 규칙 — 목록 안 코드블록(⑤ · ⑱, S-24).
+ * 렌더 감사 중 문맥이 필요한 규칙 — 목록 안 코드블록(⑤ · ⑱, S-24) · 들여쓴 코드블록(⑲).
  *
  * 한 줄만 보고 판정하는 규칙(①~④)과 표 · 펜스 개수(⑦ · ⑧)는 렌더 게이트 코퍼스가 지킨다.
- * 여기는 4칸 들여쓴 펜스가 목록 자식인지, 목록 안 코드가 목록 밖으로 새는지를 본다.
+ * 여기는 4칸 들여쓴 펜스가 목록 자식인지, 목록 안 코드가 목록 밖으로 새는지, 구조 들여쓰기가
+ * 남아 글이 코드 상자로 보이는지를 본다.
  */
 import { describe, it, expect } from "vitest";
 import { lintRenderedMarkdown } from "../../src/audit/render.js";
@@ -104,5 +105,40 @@ describe("⑱ 목록 안 코드가 목록 밖으로 샌다", () => {
   it("목록 밖 코드 · 문단 아래 들여쓴 펜스는 이 규칙 밖이다", () => {
     expect(codes(lines("- 목록", "", "```js", "x", "```"))).toEqual([]);
     expect(codes(lines("문단", "\t```js", "x", "\t```"))).toEqual([]);
+  });
+});
+
+describe("⑲ 들여쓴 코드블록 — 구조 들여쓰기가 남은 줄", () => {
+  it("인용 · 문단 뒤 빈 줄 다음의 4칸 줄 — 자식 블록이 코드 상자로 보인다", () => {
+    expect(codes(lines("> 인용", "", "    자식 문단", "", "    - 자식 항목"))).toEqual([
+      "⑲@3",
+      "⑲@5",
+    ]);
+  });
+
+  it("제목 바로 뒤의 4칸 줄도 코드블록이다 — 문단만 들여쓴 코드블록에 끊기지 않는다", () => {
+    expect(codes(lines("### 제목", "    %%im-nobsidian:column-list:start%%"))).toEqual(["⑲@2"]);
+    expect(codes(lines("문단", "    이어지는 줄"))).toEqual([]);
+  });
+
+  it("2칸 들여쓴 자식은 코드가 아니다 — 손자 목록은 자식 목록 내용 폭에서 센다", () => {
+    expect(codes(lines("> 인용", "", "  자식 문단", "", "  - 자식", "      - 손자"))).toEqual([]);
+  });
+
+  it("목록 항목 · 각주 정의 안은 그 내용 폭에서 센다", () => {
+    expect(codes(lines("- 항목", "", "    자식 문단"))).toEqual([]);
+    expect(codes(lines("- 항목", "    - 자식", "", "        손자 문단"))).toEqual([]);
+    expect(codes(lines("- 항목", "", "      여섯 칸"))).toEqual(["⑲@3"]);
+    expect(codes(lines("[^1]: 정의", "", "    이어지는 문단"))).toEqual([]);
+  });
+
+  it("코드 · 수식 · 프론트매터 안은 보지 않는다", () => {
+    expect(codes(lines("```", "", "    코드", "```"))).toEqual([]);
+    expect(codes(lines("$$", "a", "", "    b", "$$"))).toEqual([]);
+    expect(codes(lines("---", "a: |", "", "    b", "---"))).toEqual([]);
+  });
+
+  it("들여쓴 콜아웃은 ① 이 맡는다 — 같은 줄을 두 번 세지 않는다", () => {
+    expect(codes(lines("문단", "", "    > [!tip] 팁"))).toEqual(["①@3"]);
   });
 });

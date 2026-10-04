@@ -4,6 +4,7 @@ import {
   respace,
   isCompactExport,
 } from "../../src/converter/post-processors/block-spacer.js";
+import { obsidianToNotionEnhanced } from "../../src/converter/enhanced-md-converter.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
 
 describe("respace — Notion 압축형 export 블록 간격 복원 (D1/D4)", () => {
@@ -113,6 +114,113 @@ describe("respace — Notion 압축형 export 블록 간격 복원 (D1/D4)", () 
 
     it("들여쓰지 않은 수식은 목록 뒤 새 블록이다", () => {
       expect(respace("- 항목\n$$\nx\n$$", true)).toBe("- 항목\n\n$$\nx\n$$");
+    });
+  });
+
+  // 4칸으로 펴면 빈 줄 뒤라 들여쓴 코드블록이 된다. Notion 은 빈 줄 뒤 2칸 들여쓴 줄을 앞 블록의
+  // 자식으로 읽는다(2026-10-04 실측).
+  describe("문단 · 인용의 자식은 2칸 들여써 앞 블록과 띄운다", () => {
+    const T = "\t";
+    const lines = (...l: string[]) => l.join("\n");
+
+    it("인용의 자식 목록 · 문단 — 자식끼리도 블록마다 띄운다", () => {
+      const raw = lines("> 인용", `${T}- 자식 항목`, `${T}자식 문단`, "다음 문단");
+      expect(respace(raw, true)).toBe(
+        lines("> 인용", "", "  - 자식 항목", "", "  자식 문단", "", "다음 문단"),
+      );
+    });
+
+    it("문단의 자식 — 손자 목록은 목록 들여쓰기(4칸)를 2칸 위에 쌓는다", () => {
+      const raw = lines("문단", `${T}- 자식`, `${T}${T}- 손자`, `${T}자식 문단`);
+      expect(respace(raw, true)).toBe(
+        lines("문단", "", "  - 자식", "      - 손자", "", "  자식 문단"),
+      );
+    });
+
+    it("이어지는 인용은 자식 묶음 밖이다", () => {
+      const raw = lines("> 앞 인용", `${T}자식`, "> 다음 인용");
+      expect(respace(raw, true)).toBe(lines("> 앞 인용", "", "  자식", "", "> 다음 인용"));
+    });
+
+    it("자식 코드블록 — 코드 줄도 펜스와 같은 2칸이고, 코드 속 빈 줄 · 줄머리 탭은 코드다", () => {
+      // Notion 은 펜스만 탭으로 들여쓰고 코드 줄은 열 0 에 둔다. 코드 줄을 열 0 에 두면 Obsidian 이
+      // 코드 줄머리 공백을 2칸까지 떼어 보인다.
+      const raw = lines(
+        "> 인용",
+        `${T}\`\`\`py`,
+        "def f():",
+        "    return 1",
+        "",
+        `${T}x`,
+        `${T}\`\`\``,
+        "뒤",
+      );
+      expect(respace(raw, true)).toBe(
+        lines(
+          "> 인용",
+          "",
+          "  ```py",
+          "  def f():",
+          "      return 1",
+          "",
+          `  ${T}x`,
+          "  ```",
+          "",
+          "뒤",
+        ),
+      );
+    });
+
+    it("목록 자식 코드는 변환기가 맞춘 구조 탭만 펴서 2칸 위에 쌓는다", () => {
+      // alignNestedCodeBodies 가 코드 줄을 펜스 깊이(탭 둘)로 맞춰 둔 모양
+      const raw = lines("문단", `${T}- 항목`, `${T}${T}\`\`\`js`, `${T}${T}x()`, `${T}${T}\`\`\``);
+      expect(respace(raw, true)).toBe(
+        lines("문단", "", "  - 항목", "      ```js", "      x()", "      ```"),
+      );
+    });
+
+    it("2칸으로 눌러 둔 콜아웃 자식도 같은 묶음이다", () => {
+      const raw = lines("문단", "  > [!tip] 팁", "  > 본문", `${T}자식 문단`);
+      expect(respace(raw, true)).toBe(
+        lines("문단", "", "  > [!tip] 팁", "  > 본문", "", "  자식 문단"),
+      );
+    });
+
+    it("자식 묶음 안 빈 줄(변환기가 끼운 경계)은 두 목록을 가른다", () => {
+      const raw = lines("> 인용", `${T}- 하나`, "", `${T}- 둘`);
+      expect(respace(raw, true)).toBe(lines("> 인용", "", "  - 하나", "", "  - 둘"));
+    });
+
+    it("자식의 --- 는 프론트매터가 아니라 구분선이다", () => {
+      const raw = lines("문단", `${T}---`, `${T}자식`, `${T}---`);
+      expect(respace(raw, true)).toBe(lines("문단", "", "  ---", "", "  자식", "", "  ---"));
+    });
+
+    it("목록 항목 · 각주 정의의 자식은 지금처럼 4칸이다 — 들여쓸 자리가 따로 있다", () => {
+      expect(respace(lines("- 항목", `${T}자식 문단`, "뒤"), true)).toBe(
+        lines("- 항목", "    자식 문단", "", "뒤"),
+      );
+      expect(respace(lines("[^1]: 정의", `${T}이어지는 문단`), true)).toBe(
+        lines("[^1]: 정의", "", "    이어지는 문단"),
+      );
+    });
+
+    it("push 는 2칸 자식을 그대로 보낸다 — Notion 이 빈 줄 뒤 2칸 줄을 앞 블록의 자식으로 읽는다", () => {
+      const pulled = respace(
+        lines(
+          "> 인용",
+          `${T}- 자식 항목`,
+          `${T}${T}- 손자`,
+          `${T}자식 문단`,
+          `${T}\`\`\`py`,
+          "def f():",
+          "    return 1",
+          `${T}\`\`\``,
+          "> 다음 인용",
+        ),
+        true,
+      );
+      expect(obsidianToNotionEnhanced(pulled)).toBe(pulled);
     });
   });
 

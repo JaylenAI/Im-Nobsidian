@@ -1,7 +1,13 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND } from "../../constants/markers.js";
 import { CLAMPED_INDENT } from "../callout-indent.js";
-import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../utils/md-regions.js";
+import {
+  closesCodeFence,
+  type CodeFenceOpening,
+  FOOTNOTE_DEF_RE,
+  MATH_FENCE_RE,
+  openCodeFence,
+} from "../../utils/md-regions.js";
 
 /**
  * 블록 간격 정규화(D1) — Notion markdown export 는 블록 사이 빈 줄이 없는 압축형이라
@@ -12,6 +18,16 @@ import { closesCodeFence, openCodeFence, type CodeFenceOpening } from "../../uti
  * 묶음 유지(내부 빈 줄 없음): 리스트 연속(중첩·들여쓴 하위 내용 · 자식 코드블록 포함), 인용 연속
  * (단 `> [!type]` 콜아웃 시작은 새 블록), 표 행 연속, 각주 정의(`[^n]:`) 연속,
  * 펜스(``` ~~~ $$) 내부, 브랜드 보존 마커 줄(직전 블록에 부착 — 앵커 인접성 유지).
+ *
+ * 문단 · 인용의 자식: Notion 은 문단 · 인용(콜아웃 아님)도 자식 블록을 가지며 탭 한 단계 들여써
+ * 내보낸다. 목록 자식처럼 4칸으로 펴면 Obsidian 은 빈 줄 뒤 4칸 줄을 들여쓴 코드블록으로 그린다
+ * (실볼트 파일 그대로 인용 바로 뒤만 154곳 · 19노트). 자식 묶음은 한 단계 떼어 같은 규칙으로
+ * 간격을 맞춘 뒤 2칸(`CLAMPED_INDENT`)으로 다시 들여쓴다 — 코드블록 임계 아래라 문단 · 목록으로
+ * 그려지고, Notion 은 빈 줄 뒤 2칸 들여쓴 줄을 앞 블록의 자식으로 읽는다(2026-10-04 실측).
+ * 목록 · 각주 정의의 자식은 품은 줄 안에 들여쓸 자리가 있어 그대로 두고, 콜아웃 · 토글의 자식은
+ * `>` 안에 온다.
+ * 한계: 목록이 아닌 손자(문단 아래 문단 아래 문단)는 2칸 위에 2칸을 더 얹어 4칸이 되므로 여전히
+ * 코드블록으로 보인다 — 실볼트에는 없다.
  *
  * 들여쓰기 정규화(D4): export 는 리스트 중첩에 탭을 쓴다. Obsidian/작성 관행의
  * 4-space 로 통일한다(펜스 내부 제외). 리스트 자식 코드블록은 변환기가 코드 줄까지 펜스
@@ -55,8 +71,6 @@ const LIST_ITEM_RE = /^[ \t]*(?:[-*+]|\d+[.)])\s/;
 const QUOTE_RE = /^[ \t]*>/;
 const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;
-const FOOTNOTE_DEF_RE = /^\[\^[^\]]+\]:/;
-const MATH_FENCE_RE = /^[ \t]*\$\$\s*$/;
 const BRAND_MARKER_LINE_RE = new RegExp(`^[ \\t]*%%\\s*${MARKER_BRAND}:`);
 
 /** 리스트 항목 아래 들여쓴 연속 내용(자식 문단 등)인지 — 리스트 블록에 묶는다. */
@@ -64,6 +78,17 @@ const INDENTED_CONTINUATION_RE = /^(?:\t| {2,})\S/;
 
 /** 들여쓴 줄 — 리스트 자식 코드블록의 펜스는 깊이에 따라 탭이 여럿이다. */
 const INDENTED_RE = /^(?:\t| {2})/;
+
+/**
+ * 앞 블록의 자식 줄 — Notion 이 탭 한 단계 들여써 내보낸 줄, 또는 변환기가 이미 2칸으로 눌러 둔
+ * 콜아웃 · 토글 줄(`callout-indent`).
+ */
+const CHILD_LINE_RE = new RegExp(`^(?:\\t|${CLAMPED_INDENT}>)`);
+
+interface Block {
+  kind: BlockKind;
+  lines: string[];
+}
 
 export function respace(content: string, sourceCompact?: boolean): string {
   // 원시 export 가 간격 있는 문서였다면(blocks-API 폴백 등) 무동작
@@ -89,8 +114,15 @@ export function respace(content: string, sourceCompact?: boolean): string {
   // (enhanced 변환이 끼운 빈 줄이 휴리스틱을 오판시키는 것을 차단, D1).
   if (sourceCompact === undefined && hasBlankOutsideFences(lines, start)) return content;
 
-  // 블록 그룹핑
-  const blocks: { kind: BlockKind; lines: string[] }[] = [];
+  const body = spaceBlocks(lines.slice(start));
+  const tail = content.endsWith("\n") ? "\n" : "";
+  if (head.length === 0) return body + tail;
+  return `${head.join("\n")}\n\n${body}${tail}`;
+}
+
+/** 블록을 묶고 블록 사이에 빈 줄 하나를 둔다. 문단 · 인용의 자식 묶음은 한 단계 떼어 다시 부른다. */
+function spaceBlocks(lines: readonly string[]): string {
+  const blocks: Block[] = [];
   // 열린 펜스 — 코드면 여는 펜스, 수식이면 "math". 코드 안의 ```bash · 짧은 펜스 줄에서 닫으면
   // 그 뒤 코드를 문단으로 보고 빈 줄을 끼운다(S-25). 닫는 줄은 Obsidian 이 읽는 대로 가린다.
   let fence: CodeFenceOpening | "math" | null = null;
@@ -109,7 +141,7 @@ export function respace(content: string, sourceCompact?: boolean): string {
   };
   const last = () => blocks[blocks.length - 1];
 
-  for (let i = start; i < lines.length; i++) {
+  for (let i = 0; i < lines.length; i++) {
     const raw = lines[i]!;
 
     if (fence !== null) {
@@ -128,6 +160,14 @@ export function respace(content: string, sourceCompact?: boolean): string {
     }
     const atBoundary = boundary;
     boundary = false;
+
+    if (CHILD_LINE_RE.test(raw) && takesChildren(last())) {
+      const end = childrenEnd(lines, i);
+      const children = spaceBlocks(dedentChildren(lines.slice(i, end))).split("\n");
+      blocks.push({ kind: "other", lines: indentChildren(children) });
+      i = end - 1;
+      continue;
+    }
 
     const opening = openCodeFence(raw);
     if (opening) {
@@ -207,10 +247,78 @@ export function respace(content: string, sourceCompact?: boolean): string {
     push("other", line);
   }
 
-  const body = blocks.map((b) => b.lines.join("\n")).join("\n\n");
-  const tail = content.endsWith("\n") ? "\n" : "";
-  if (head.length === 0) return body + tail;
-  return `${head.join("\n")}\n\n${body}${tail}`;
+  return blocks.map((b) => b.lines.join("\n")).join("\n\n");
+}
+
+/**
+ * 자식을 들여쓸 자리가 없는 블록인가 — 맨 바깥의 문단 · 인용(콜아웃 아님). 목록 자식은 항목 안에
+ * 들여쓸 자리가 있고, 콜아웃 · 토글의 자식은 `>` 안에 온다.
+ */
+function takesChildren(block: Block | undefined): boolean {
+  const first = block?.lines[0];
+  if (first === undefined || /^[\t ]/.test(first)) return false;
+  return block!.kind === "other" || (block!.kind === "quote" && !CALLOUT_START_RE.test(first));
+}
+
+/**
+ * 자식 묶음의 끝(제외) — 자식 줄이 이어지는 동안. 자식 코드블록의 안쪽 줄(Notion 은 열 0 에 둔다)과
+ * 다음 자식 줄 앞의 빈 줄(변환기가 끼운 경계)도 묶음이다.
+ */
+function childrenEnd(lines: readonly string[], start: number): number {
+  let end = start;
+  let fence: CodeFenceOpening | null = null;
+  for (let i = start; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (fence !== null) {
+      if (closesCodeFence(line, fence)) fence = null;
+      end = i + 1;
+    } else if (CHILD_LINE_RE.test(line)) {
+      fence = openCodeFence(line);
+      end = i + 1;
+    } else if (line.trim() !== "") {
+      break;
+    }
+  }
+  return end;
+}
+
+/** 자식 줄 하나에서 구조 들여쓰기 한 단계(탭 · 눌러 둔 2칸)를 뗀다. */
+function dedentChild(line: string): string {
+  if (line.startsWith("\t")) return line.slice(1);
+  return CHILD_LINE_RE.test(line) ? line.slice(CLAMPED_INDENT.length) : line;
+}
+
+/**
+ * 자식 묶음을 한 단계 뗀다. 코드블록 안쪽 줄은 변환기가 펜스 깊이로 맞춰 둔 목록 자식 코드
+ * (`alignNestedCodeBodies`)만 함께 뗀다. 바로 아래 자식 코드(펜스가 탭 하나)는 Notion 이 코드 줄을
+ * 열 0 에 두므로, 그 줄머리 탭은 코드다.
+ */
+function dedentChildren(lines: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; i++) {
+    out.push(dedentChild(lines[i]!));
+    const opening = openCodeFence(lines[i]!);
+    if (!opening) continue;
+    const aligned =
+      lines[i]!.startsWith("\t\t") &&
+      alignedLead(lines, i, (line) => closesCodeFence(line, opening)) !== "";
+    for (i++; i < lines.length; i++) {
+      const line = lines[i]!;
+      const closed = closesCodeFence(line, opening);
+      out.push(closed || aligned ? dedentChild(line) : line);
+      if (closed) break;
+    }
+  }
+  return out;
+}
+
+/**
+ * 간격을 맞춘 자식 묶음을 2칸 들여쓴다 — 코드 줄까지. 펜스와 코드 줄이 같은 폭이면 Obsidian 은 그
+ * 폭만큼 떼고 읽어 코드가 그대로 보이고, Notion 도 같은 모양을 앞 블록의 자식 코드로 읽는다(ADR-022).
+ * 코드 줄을 열 0 에 두면 CommonMark 가 코드 줄머리 공백을 2칸까지 떼어 들여쓴 코드가 얕아진다.
+ */
+function indentChildren(lines: readonly string[]): string[] {
+  return lines.map((line) => (line === "" ? line : CLAMPED_INDENT + line));
 }
 
 /**
