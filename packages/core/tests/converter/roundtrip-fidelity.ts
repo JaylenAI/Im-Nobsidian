@@ -26,6 +26,7 @@ import {
   type PipelineOptions,
 } from "../../src/converter/pipeline-factory.js";
 import type { ConversionContext } from "../../src/types/convert.js";
+import { collapseBlankLines } from "../../src/utils/md-regions.js";
 
 const PUSH_CTX: ConversionContext = {
   direction: "push",
@@ -39,15 +40,12 @@ const PULL_CTX: ConversionContext = {
 };
 
 /**
- * 비교용 body 정규화: 줄바꿈 통일, 행말 공백 제거, 3줄 이상 연속 빈줄 축약, 양끝 trim.
- * 의미 없는 공백 차이만 제거하며 실제 콘텐츠는 보존한다.
+ * 비교용 body 정규화: 줄바꿈 통일, 행말 공백 제거, 코드 밖 연속 빈줄 축약, 양끝 trim.
+ * 의미 없는 공백 차이만 제거하며 실제 콘텐츠는 보존한다. 코드 속 빈 줄은 코드라 줄이지 않는다 —
+ * 문서 전체에서 줄이던 때는 push 가 코드 속 빈 줄을 줄이는 것을 못 잡았다(S-27).
  */
 export function canonicalBody(md: string): string {
-  return md
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return collapseBlankLines(md.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "")).trim();
 }
 
 /**

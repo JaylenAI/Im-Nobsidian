@@ -227,11 +227,7 @@ export function scanCodeFences(text: string): CodeFence[] {
  */
 export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string {
   const lines = content.split("\n");
-  const inCode = new Array<boolean>(lines.length).fill(false);
-  for (const fence of scanCodeFences(content)) {
-    const last = fence.close ?? fence.open + fence.code.length;
-    for (let i = fence.open; i <= last; i++) inCode[i] = true;
-  }
+  const inCode = codeLineMask(content);
 
   const out: string[] = [];
   let buffer: string[] = [];
@@ -258,6 +254,35 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
   }
   flush();
   return out.join("\n");
+}
+
+/** 줄마다 코드 펜스(여는 줄 · 코드 · 닫는 줄)인가 — {@link scanCodeFences} 의 구간. */
+function codeLineMask(content: string): boolean[] {
+  const inCode = new Array<boolean>(content.split("\n").length).fill(false);
+  for (const fence of scanCodeFences(content)) {
+    const last = fence.close ?? fence.open + fence.code.length;
+    for (let i = fence.open; i <= last; i++) inCode[i] = true;
+  }
+  return inCode;
+}
+
+/** 줄바꿈 셋 이상 — 빈 줄이 둘 이상 이어진 자리. */
+const BLANK_RUN_RE = /\n{3,}/g;
+
+/**
+ * 코드 밖에서 이어진 빈 줄을 한 줄로 줄인다. 코드 속 빈 줄은 코드다 — 예전에는 문서 전체에서 줄여,
+ * 함수 사이에 빈 줄 두 줄을 둔 파이썬 코드가 Notion 에서 한 줄이 됐다(S-27).
+ */
+export function collapseBlankLines(content: string): string {
+  const inCode = codeLineMask(content);
+  let line = 0;
+  let scanned = 0;
+  return content.replace(BLANK_RUN_RE, (run: string, offset: number) => {
+    for (; scanned < offset; scanned++) if (content.charCodeAt(scanned) === 10) line++;
+    // 줄바꿈 하나가 줄 하나를 끝낸다 — 첫 줄바꿈이 끝내는 줄(`line`) 뒤의 빈 줄들이 코드인가.
+    for (let i = line + 1; i < line + run.length; i++) if (inCode[i]) return run;
+    return "\n\n";
+  });
 }
 
 /**
