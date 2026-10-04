@@ -189,6 +189,22 @@ export function blockColorMarker(color: string): string {
   return compactMarker(`block-color:${color}`);
 }
 
+/**
+ * 멘션 보존 짝 마커 — `%%im-nobsidian:mention-<종류>:<속성>%%보이는 글%%/mention%%`.
+ *
+ * Notion 은 사용자 · 날짜 멘션을 `<mention-user url="user://…"/>` · `<mention-date start="…"
+ * startTime="…"/>` 처럼 이름 없는 태그로 내보낸다. 볼트에 대응 문법이 없어 보이는 글(이름 ·
+ * 날짜)만 남기면 다음 push 가 Notion 의 멘션까지 평문으로 바꾼다(F-01). 원래 속성을 마커에
+ * 실어 두고 push 가 태그로 되돌린다. 속성 값은 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ */
+export function mentionMarker(kind: string, attrs: readonly (readonly [string, string])[]): string {
+  const payload = attrs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+  return compactMarker(`mention-${kind}:${payload}`);
+}
+
+/** {@link mentionMarker} 의 닫는 토큰. */
+export const MENTION_END = "%%/mention%%";
+
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 

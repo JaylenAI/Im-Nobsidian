@@ -59,6 +59,8 @@ export const DRIFT_METRICS: readonly DriftMetric[] = [
   { name: "<embed>", count: countOf(/<embed\b/g) },
   { name: "<table_of_contents>", count: countOf(/<table_of_contents\b/g) },
   { name: "<unknown_mention>", count: countOf(/<unknown_mention\b/g) },
+  { name: "<mention-user>", count: countOf(/<mention-user\b/g) },
+  { name: "<mention-date>", count: countOf(/<mention-date\b/g) },
   { name: "토글헤딩", count: countOf(/\{toggle="true"\}/g) },
   { name: "코드펜스", count: countOf(/^[\t ]*```/gm) },
 ] as const;
@@ -161,12 +163,13 @@ const plain = (s: string) =>
   s.replace(/\{[a-z-]+="[^"]*"\}/g, "").replace(/[^가-힣a-zA-Z0-9]/g, "");
 
 /**
- * 판정 대상 줄인가 — URL·원시 태그가 섞인 줄은 제외한다.
+ * 판정 대상 줄인가 — URL·원시 태그가 섞인 줄은 제외한다. 태그 이름에는 `-` 가 들어간다
+ * (`<mention-date …/>` · `<empty-block/>`) — 빠뜨리면 태그가 볼트에 그대로 새어야 통과한다.
  *
  * 보존 마커는 URL 을 encodeURIComponent 로 실어 `%3A%2F` 처럼 영숫자를 새로 만든다.
  * 그 줄을 그대로 비교하면 내용이 멀쩡해도 불일치로 잡혀 게이트가 통째로 못 쓰게 된다.
  */
-const isProse = (l: string) => !/https?:\/\/|<[a-z_]+[ />]|^\s*(?:%%|!\[)/.test(l);
+const isProse = (l: string) => !/https?:\/\/|<[a-z_][\w-]*[ />]|^\s*(?:%%|!\[)/.test(l);
 
 export interface ContentLoss {
   /** 연속으로 사라진 산문 줄의 최대 길이 — 5 이상이면 "문단이 통째로 삼켜졌다". */
