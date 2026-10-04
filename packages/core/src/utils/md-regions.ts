@@ -1,7 +1,5 @@
-import { MARKER_TOKEN_RE } from "../constants/markers.js";
-
 /**
- * 마크다운 본문에서 **건드리면 안 되는 구간**(코드 펜스·인라인 코드·보존 마커)을
+ * 마크다운 본문에서 **건드리면 안 되는 구간**(코드 펜스·인라인 코드)을
  * 피해 치환을 적용하는 공용 가드 모음.
  *
  * 모든 `map*` 함수는 같은 계약을 따른다 — 콜백은 `(조각, 입력 기준 절대 offset)` 을 받고
@@ -299,27 +297,34 @@ export function collapseBlankLines(content: string): string {
 export function mapOutsideInlineCode(content: string, fn: SegmentMapper): string {
   let out = "";
   let plainStart = 0;
-  let i = 0;
 
-  while (i < content.length) {
-    if (content[i] !== "`") {
-      i += 1;
-      continue;
-    }
-    let run = 1;
-    while (content[i + run] === "`") run += 1;
-    const close = content.indexOf("`".repeat(run), i + run);
-    if (close === -1 || BLANK_LINE_RE.test(content.slice(i + run, close))) {
-      i += run;
-      continue;
-    }
-    out += fn(content.slice(plainStart, i), plainStart);
-    out += content.slice(i, close + run);
-    i = close + run;
-    plainStart = i;
+  for (let span = nextCodeSpan(content, 0); span; span = nextCodeSpan(content, span[1])) {
+    out += fn(content.slice(plainStart, span[0]), plainStart);
+    out += content.slice(span[0], span[1]);
+    plainStart = span[1];
   }
 
   return out + fn(content.slice(plainStart), plainStart);
+}
+
+/**
+ * `from` 부터 처음 «시작하는» 인라인 코드의 문자 구간(백틱 포함) — 짝짓는 규칙은
+ * {@link mapOutsideInlineCode}. 다른 표기와 겹칠 때 먼저 시작한 쪽이 이기게 하려는 호출자가 쓴다
+ * (CommonMark: 코드 스팬과 HTML 은 순위가 같다) — 코드를 먼저 떼면 주석 안의 백틱이 주석 밖 백틱과
+ * 짝지어 주석을 가른다.
+ */
+export function nextCodeSpan(content: string, from: number): readonly [number, number] | null {
+  let i = content.indexOf("`", from);
+  while (i !== -1) {
+    let run = 1;
+    while (content[i + run] === "`") run += 1;
+    const close = content.indexOf("`".repeat(run), i + run);
+    if (close !== -1 && !BLANK_LINE_RE.test(content.slice(i + run, close))) {
+      return [i, close + run] as const;
+    }
+    i = content.indexOf("`", i + run);
+  }
+  return null;
 }
 
 /**
@@ -345,26 +350,4 @@ export function mapOutsideCode(content: string, fn: SegmentMapper): string {
   return mapOutsideCodeFences(content, (segment, base) =>
     mapOutsideInlineCode(segment, (text, inner) => fn(text, base + inner)),
   );
-}
-
-/**
- * 브랜드 보존 마커 토큰 바깥 영역에만 변환 함수를 적용한다.
- *
- * `%%` 를 위치로만 짝짓는 스캐너는 마커의 구분자를 자기 구분자로 오인해 본문을
- * 삼킨다(D-COMMENT-PAIR, {@link MARKER_TOKEN_RE} 주석에 실측 사례). 마커 토큰을 먼저
- * 떼어 내고 남은 평문 조각에만 적용하면 그 오인이 구조적으로 불가능해진다.
- */
-export function mapOutsideMarkers(content: string, fn: SegmentMapper): string {
-  const re = new RegExp(MARKER_TOKEN_RE.source, "g");
-  let out = "";
-  let last = 0;
-  let match: RegExpExecArray | null;
-
-  while ((match = re.exec(content)) !== null) {
-    out += fn(content.slice(last, match.index), last);
-    out += match[0];
-    last = match.index + match[0].length;
-  }
-
-  return out + fn(content.slice(last), last);
 }

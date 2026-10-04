@@ -297,7 +297,7 @@ export const MARKER_BRAND_RE = MARKER_BRAND;
  * 자기 구분자로 오인하면 본문이 통째로 사라진다. 실측: `100%%` 같은 홑 `%%` 가 있는 문서에
  * `==하이라이트==` 가 함께 있으면, `100%%` 의 `%%` 와 색상 마커 여는 `%%` 가 짝지어져
  * 그 사이 문장 전체와 하이라이트 본문이 삭제됐다(D-COMMENT-PAIR).
- * 마커 토큰을 먼저 떼어 내는 {@link mapOutsideMarkers} 의 SSOT.
+ * 주석을 찾는 `findComments`(converter/comments.ts)가 이 패턴으로 마커 토큰을 먼저 건너뛴다.
  */
 export const MARKER_TOKEN_RE = new RegExp(
   `%%\\s*(?:${MARKER_BRAND_RE}:${MARKER_PAYLOAD_CHAR}*|/[A-Za-z][\\w-]*)\\s*%%`,

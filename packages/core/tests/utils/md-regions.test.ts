@@ -7,6 +7,7 @@ import {
   mapOutsideCode,
   mapOutsideCodeFences,
   mapOutsideInlineCode,
+  nextCodeSpan,
 } from "../../src/utils/md-regions.js";
 
 describe("computeAnchor", () => {
@@ -231,6 +232,28 @@ describe("inlineCodeRanges", () => {
 
   it("짝 없는 백틱 · 문단을 넘는 짝은 구간이 아니다", () => {
     expect(inlineCodeRanges("홑 ` 하나\n\n또 ` 하나")).toEqual([]);
+  });
+});
+
+describe("nextCodeSpan", () => {
+  it("`from` 부터 처음 시작하는 스팬 — 백틱 포함", () => {
+    const content = "a `b` c ``d ` e`` f";
+    expect(nextCodeSpan(content, 0)).toEqual([2, 5]);
+    expect(nextCodeSpan(content, 5)).toEqual([8, 17]);
+    expect(nextCodeSpan(content, 17)).toBeNull();
+  });
+
+  it("`from` 의 백틱부터 센다 — 스팬 한가운데서 부르면 닫는 백틱이 여는 백틱이 된다", () => {
+    // 먼저 시작한 주석이 스팬의 여는 백틱을 삼키면 남은 백틱끼리 짝짓는다(CommonMark).
+    expect(nextCodeSpan("a `b` c `d`", 3)).toEqual([4, 9]);
+  });
+
+  it("짝 없는 백틱은 건너뛰고 다음 짝을 찾는다", () => {
+    expect(nextCodeSpan("홑 `` 하나 `코드`", 0)).toEqual([8, 12]);
+  });
+
+  it("빈 줄을 넘는 짝은 스팬이 아니다", () => {
+    expect(nextCodeSpan("홑 ` 하나\n\n또 ` 하나", 0)).toBeNull();
   });
 });
 

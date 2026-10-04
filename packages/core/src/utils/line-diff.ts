@@ -1,4 +1,4 @@
-import { structuredPatch } from "diff";
+import { diffArrays, diffChars, structuredPatch } from "diff";
 import type { StructuredPatchHunk } from "diff";
 
 /** 줄 비교의 한 줄. 번호는 1부터 — 더한 줄은 옛 번호가, 지운 줄은 새 번호가 없다. */
@@ -57,6 +57,73 @@ export function lineDiff(before: string, after: string, options?: LineDiffOption
   });
   if (!patch) return [replaceAll(before, after)];
   return patch.hunks.map(toHunk);
+}
+
+/**
+ * 두 글의 줄 맞춤 — 옛 줄마다 같은 새 줄의 번호(0부터), 맞는 줄이 없으면 -1. 번호는 늘어나기만 한다.
+ * 가장 긴 공통 줄을 맞춘다({@link lineDiff} 와 같은 상한 — 넘게 바뀐 두 글은 한 줄도 맞추지 않는다).
+ */
+export function alignLines(before: readonly string[], after: readonly string[]): number[] {
+  const match = new Array<number>(before.length).fill(-1);
+  const changes = diffArrays([...before], [...after], { maxEditLength: MAX_EDIT_LENGTH });
+  if (!changes) return match;
+  let i = 0;
+  let j = 0;
+  for (const change of changes) {
+    if (change.added) j += change.count;
+    else if (change.removed) i += change.count;
+    else for (let n = 0; n < change.count; n++) match[i++] = j++;
+  }
+  return match;
+}
+
+/**
+ * 옛 줄의 글자 자리 `offset` 이 새 줄의 어디인가 — 글자 단위로 맞춰, 그 자리 앞의 같은 글 바로 뒤를 준다.
+ * 그 자리에 새 글이 끼었으면 끼운 글 앞이다. 넘게 바뀐 두 줄은 같은 비율의 자리를 준다.
+ */
+export function mapOffset(before: string, after: string, offset: number): number {
+  const changes = diffChars(before, after, { maxEditLength: MAX_EDIT_LENGTH });
+  if (!changes) return Math.round((offset / Math.max(before.length, 1)) * after.length);
+  let oldPos = 0;
+  let newPos = 0;
+  for (const change of changes) {
+    const length = change.value.length;
+    if (change.added) {
+      if (oldPos >= offset) return newPos;
+      newPos += length;
+    } else if (change.removed) {
+      if (offset < oldPos + length) return newPos;
+      oldPos += length;
+    } else {
+      if (offset <= oldPos + length) return newPos + (offset - oldPos);
+      oldPos += length;
+      newPos += length;
+    }
+  }
+  return newPos;
+}
+
+/**
+ * 두 줄이 얼마나 같은가 — 이어진 두 글자 묶음이 겹치는 비율(0~1, 다이스 계수). 글자 단위로 맞추면 긴 두
+ * 줄에서 느려, 여러 줄을 서로 견줄 때 쓴다. 두 글자가 안 되는 줄은 같을 때만 1 이다.
+ */
+export function lineSimilarity(before: string, after: string): number {
+  if (before === after) return 1;
+  if (before.length < 2 || after.length < 2) return 0;
+  const pairs = new Map<string, number>();
+  for (let i = 0; i + 1 < before.length; i++) {
+    const pair = before.slice(i, i + 2);
+    pairs.set(pair, (pairs.get(pair) ?? 0) + 1);
+  }
+  let same = 0;
+  for (let i = 0; i + 1 < after.length; i++) {
+    const pair = after.slice(i, i + 2);
+    const left = pairs.get(pair);
+    if (!left) continue;
+    same += 1;
+    pairs.set(pair, left - 1);
+  }
+  return (2 * same) / (before.length + after.length - 2);
 }
 
 /** 끝 줄바꿈이 없는 줄 뒤에 적는 줄 — Git 과 같은 글이다. */
