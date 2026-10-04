@@ -10,9 +10,15 @@
  * 볼트를 훑는 데 쓸 수 있다. 원본 NFM 과 견주는 지표(구조 드리프트·코드블록 경계)는
  * 회귀 코퍼스를 쥔 테스트 쪽에 남는다.
  *
- * 규칙 번호(①~⑧)는 트랙 초기 실측 조사에서 붙인 결함 분류를 그대로 잇는다. ⑱ 은 그 뒤에 더했다.
+ * 규칙 번호(①~⑧)는 트랙 초기 실측 조사에서 붙인 결함 분류를 그대로 잇는다. ⑱ · ⑲ 는 그 뒤에 더했다.
  */
-import { closesCodeFence, indentWidth, openCodeFence } from "../utils/md-regions.js";
+import {
+  closesCodeFence,
+  FOOTNOTE_DEF_RE,
+  indentWidth,
+  MATH_FENCE_RE,
+  openCodeFence,
+} from "../utils/md-regions.js";
 
 /** 한 줄만 보고 판정할 수 있는 렌더 결함. */
 export interface RenderLineRule {
@@ -71,6 +77,14 @@ const FENCE_RE = /^[\t ]*(?:>[\t ]*)*```/;
 const DEEP_FENCE_RE = /^ {4,}```/;
 /** 목록 항목 줄 — 줄머리 · 표시(글머리표 · 번호). 할 일(`- [ ]`)의 상자는 내용이다. */
 const LIST_ITEM_RE = /^([\t ]*)([-*+]|\d{1,9}[.)])(?:[\t ]|$)/;
+/** 이 폭부터 들여쓴 코드블록이다 — 품은 목록 항목의 내용 폭에서 센다(CommonMark). */
+const CODE_INDENT = 4;
+/** 각주 정의의 이어지는 문단은 이만큼 들여쓴다 — 그 안은 각주다. */
+const FOOTNOTE_CONTENT_WIDTH = 4;
+/** ATX 제목 줄 — 들여쓴 코드블록은 문단을 끊지 못하지만 제목 바로 뒤에서는 열린다. */
+const ATX_HEADING_RE = /^ {0,3}#{1,6}(?:[\t ]|$)/;
+/** 인용 · 콜아웃 줄 — 들여쓴 콜아웃은 ① 이 맡는다. */
+const QUOTE_LEAD_RE = /^[\t ]*>/;
 
 /** 펜스 코드블록 하나 — 코드 줄은 `open` 다음 줄부터 `end` 앞 줄까지다. */
 interface FencedBlock {
@@ -80,6 +94,12 @@ interface FencedBlock {
 }
 
 const leadWidth = (line: string): number => indentWidth(/^[\t ]*/.exec(line)![0]);
+
+/** 목록 항목 줄이면 그 항목의 내용 폭, 아니면 -1. */
+function itemContentWidth(line: string): number {
+  const item = LIST_ITEM_RE.exec(line);
+  return item ? indentWidth(item[1]!) + item[2]!.length + 1 : -1;
+}
 
 /** 펜스 코드블록을 위에서부터 짝짓는다 — 목록 구조는 보지 않고, 인용 안의 펜스는 펜스로 치지 않는다. */
 function fencedBlocks(lines: readonly string[]): FencedBlock[] {
@@ -111,12 +131,68 @@ function listChildContentWidth(
   for (let j = i - 1; j >= 0; j--) {
     const line = lines[j]!;
     if (line.trim() === "" || inCode[j] || leadWidth(line) >= width) continue;
-    const item = LIST_ITEM_RE.exec(line);
-    if (!item) return -1;
-    const content = indentWidth(item[1]!) + item[2]!.length + 1;
+    const content = itemContentWidth(line);
+    if (content === -1) return -1;
     return width >= content && width - content <= 3 ? content : -1;
   }
   return -1;
+}
+
+/**
+ * 줄을 품은 가장 안쪽 목록 항목 · 각주 정의의 내용 폭 — 없으면 0(문서 바닥).
+ *
+ * 들여쓰기가 더 얕은 앞 줄을 거슬러 오른다(빈 줄 · 건너뛸 줄 제외). 그 줄이 항목이고 줄이 내용
+ * 폭 안이면 그 항목이 품는다. 항목의 자식 문단처럼 항목이 아닌 얕은 줄이면, 그 줄을 품은 항목을
+ * 이어 찾는다.
+ */
+function containerContentWidth(
+  lines: readonly string[],
+  skip: readonly boolean[],
+  i: number,
+): number {
+  let width = leadWidth(lines[i]!);
+  for (let j = i - 1; j >= 0 && width > 0; j--) {
+    const line = lines[j]!;
+    if (line.trim() === "" || skip[j]) continue;
+    const lead = leadWidth(line);
+    if (lead >= width) continue;
+    const content = FOOTNOTE_DEF_RE.test(line) ? FOOTNOTE_CONTENT_WIDTH : itemContentWidth(line);
+    if (content !== -1 && width >= content) return content;
+    width = lead;
+  }
+  return 0;
+}
+
+/**
+ * 들여쓴 코드블록을 여는 줄인가 — 빈 줄 · 제목 바로 뒤에서 품은 항목 내용보다 {@link CODE_INDENT}
+ * 넘게 깊은 줄. 펜스 줄은 ⑤ · ⑱ 이, 들여쓴 콜아웃은 ① 이 맡는다.
+ */
+function opensIndentedCode(lines: readonly string[], skip: readonly boolean[], i: number): boolean {
+  const line = lines[i]!;
+  if (skip[i] || line.trim() === "" || openCodeFence(line) || QUOTE_LEAD_RE.test(line)) {
+    return false;
+  }
+  const prev = i > 0 && !skip[i - 1] ? lines[i - 1]! : "";
+  if (prev.trim() !== "" && !ATX_HEADING_RE.test(prev)) return false;
+  return leadWidth(line) - containerContentWidth(lines, skip, i) >= CODE_INDENT;
+}
+
+/** 코드 · 수식 · 선두 프론트매터 줄 — 마크다운 구조로 읽지 않는다. */
+function structureFreeLines(lines: readonly string[], blocks: readonly FencedBlock[]): boolean[] {
+  const skip = lines.map(() => false);
+  for (const b of blocks) for (let j = b.open; j <= b.end && j < lines.length; j++) skip[j] = true;
+  if (lines[0]?.trim() === "---") {
+    const close = lines.findIndex((l, j) => j > 0 && l.trim() === "---");
+    for (let j = 0; j <= close; j++) skip[j] = true;
+  }
+  let math = false;
+  for (let j = 0; j < lines.length; j++) {
+    if (skip[j]) continue;
+    const fence = MATH_FENCE_RE.test(lines[j]!);
+    if (math || fence) skip[j] = true;
+    if (fence) math = !math;
+  }
+  return skip;
 }
 
 /** 볼트에 실제로 쓰인 마크다운을 훑어 렌더 결함을 모은다. */
@@ -126,6 +202,7 @@ export function lintRenderedMarkdown(markdown: string): RenderFinding[] {
   const blocks = fencedBlocks(lines);
   const inCode = lines.map(() => false);
   for (const b of blocks) for (let j = b.open + 1; j < b.end; j++) inCode[j] = true;
+  const structureFree = structureFreeLines(lines, blocks);
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]!;
@@ -138,6 +215,12 @@ export function lintRenderedMarkdown(markdown: string): RenderFinding[] {
     //    밖이면 들여쓰기 코드블록이 되어 펜스와 코드가 글자로 보인다.
     if (!inCode[i] && DEEP_FENCE_RE.test(line) && listChildContentWidth(lines, inCode, i) === -1) {
       findings.push({ code: "⑤", label: "코드펜스 4칸 들여쓰기(목록·콜아웃 밖)", line: i + 1 });
+    }
+
+    // ⑲ 들여쓴 코드블록 — Notion 의 코드는 늘 펜스로 온다. 빈 줄 뒤 4칸 넘게 들여쓴 줄은 구조
+    //    들여쓰기가 남은 것이다 — 문단 · 인용의 자식이 회색 코드 상자로 보였다(2026-10-04 실측).
+    if (opensIndentedCode(lines, structureFree, i)) {
+      findings.push({ code: "⑲", label: "들여쓴 코드블록(구조 들여쓰기 잔존)", line: i + 1 });
     }
 
     // ⑦ 표 구분행 고아 — 바로 윗줄이 같은 접두의 표 행이 아니면 표가 열리지 않는다.
