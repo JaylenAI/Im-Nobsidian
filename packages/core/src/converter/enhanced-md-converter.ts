@@ -45,6 +45,7 @@ import { formatWikilink } from "../utils/wikilink-title.js";
 import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
 import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
+import { separateLazyContinuations } from "./lazy-continuation.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -98,6 +99,7 @@ export function notionEnhancedToObsidian(
   result = unescapeBrackets(result);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
+  result = separateLazyContinuations(result);
   // 목록 안 코드의 코드 줄을 펜스 깊이로 — 탭 기준 들여쓰기로 부모 목록 항목을 가린다(S-24).
   result = alignNestedCodeBodies(result);
   // 들여쓰기 클램프가 가장 마지막 — 위 변환기들은 모두 탭 기준 구조 들여쓰기를 전제로

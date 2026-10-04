@@ -266,7 +266,9 @@ describe("콜아웃 제목 자리에 구조를 올리지 않는다", () => {
     expect(lines[0]).toBe("> [!tip]");
     expect(lines[1]).toBe("> > [!toggle]- 중첩 토글");
     expect(lines[2]).toBe("> > 안쪽 내용");
-    expect(lines[3]).toBe("> 바깥 계속");
+    // 붙어 있으면 바깥 글이 안쪽 토글의 문단에 이어 보인다 — 빈 인용 줄로 띄운다(lazy-continuation)
+    expect(lines[3]).toBe(">");
+    expect(lines[4]).toBe("> 바깥 계속");
   });
 
   it("push 가 콜아웃과 중첩 토글을 둘 다 복원한다", () => {
