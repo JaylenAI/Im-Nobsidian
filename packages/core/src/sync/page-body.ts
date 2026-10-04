@@ -5,6 +5,7 @@ import {
   extractChildTags,
   restoreChildTags,
 } from "../converter/child-tags.js";
+import { bookmarkBlockIds } from "../converter/bookmark.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { mentionUserIds } from "../converter/mention.js";
 import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
@@ -91,10 +92,11 @@ export async function replacePageBody(
  *
  * 코드 속 ``` 줄 때문에 코드 범위를 markdown 만으로 가를 수 없으면 그 페이지의 코드 블록 글을 블록으로
  * 읽어 맞춘다(S-22). 읽지 못하면 던진다 — 짐작한 범위로 쓰면 코드 뒷부분이 본문으로 새어 노트가
- * 바뀐다. 사용자 멘션 · 그런 코드가 없으면 묻지 않는다.
+ * 바뀐다. 북마크는 블록을 읽어 주소 · 캡션을 보인다(F-09) — 읽지 못한 북마크는 Notion 의 블록을
+ * 가리키는 링크로 남고 블록은 마커로 보존된다. 사용자 멘션 · 그런 코드 · 북마크가 없으면 묻지 않는다.
  */
 export async function notionBodyToObsidian(
-  client: Pick<NotionClient, "getUserNames" | "getCodeBlockTexts">,
+  client: Pick<NotionClient, "getUserNames" | "getCodeBlockTexts" | "getBookmarks">,
   markdown: string,
   pageId: string,
 ): Promise<string> {
@@ -103,7 +105,9 @@ export async function notionBodyToObsidian(
   const codeTexts = needsCodeBlockTexts(markdown)
     ? new Set(await client.getCodeBlockTexts(pageId))
     : undefined;
-  return notionEnhancedToObsidian(markdown, { userNames, codeTexts });
+  const bookmarkIds = bookmarkBlockIds(markdown);
+  const bookmarks = bookmarkIds.length > 0 ? await client.getBookmarks(bookmarkIds) : undefined;
+  return notionEnhancedToObsidian(markdown, { userNames, codeTexts, bookmarks });
 }
 
 function messageOf(error: unknown): string {

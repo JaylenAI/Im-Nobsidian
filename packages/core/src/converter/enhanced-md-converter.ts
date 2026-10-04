@@ -48,6 +48,8 @@ import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
 import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
 import { separateLazyContinuations } from "./lazy-continuation.js";
 import { CALLOUT_HEAD_LINE_RE, TOGGLE_HEAD_SOURCE, pushContainerKind } from "./container-head.js";
+import { bookmarkBlockId, bookmarkLabel } from "./bookmark.js";
+import type { BookmarkTarget } from "../types/convert.js";
 import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
@@ -75,6 +77,11 @@ export interface EnhancedToObsidianOptions {
    * 없을 때만(S-22, `needsCodeBlockTexts`).
    */
   readonly codeTexts?: ReadonlySet<string>;
+  /**
+   * 북마크의 주소와 캡션 — 블록 ID(하이픈 없이) → 북마크(`NotionClient.getBookmarks`). 없는 북마크는
+   * Notion 의 블록을 가리키는 링크로 보인다(F-09, `converter/bookmark.ts`).
+   */
+  readonly bookmarks?: ReadonlyMap<string, BookmarkTarget>;
 }
 
 export function notionEnhancedToObsidian(
@@ -108,6 +115,8 @@ export function notionEnhancedToObsidian(
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
+  // 북마크의 이름은 escape 를 푼 뒤에 넣는다 — 캡션의 대괄호 escape 가 함께 풀리지 않게(F-09).
+  result = linkBookmarks(result, options?.bookmarks);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
   result = separateLazyContinuations(result);
@@ -487,8 +496,11 @@ function degradeLink(label: string, url: string, marker: string): string {
   return `[${label}](${url.replace(/\(/g, "%28").replace(/\)/g, "%29")})${marker}`;
 }
 
-/** {@link degradeLink} 가 앞세운 가시 링크. 마커 패턴 앞에 붙여 한 쌍으로 소비한다. */
-const DEGRADE_LINK_SOURCE = "(?:\\[[^\\]]*\\]\\([^)]*\\))?";
+/**
+ * {@link degradeLink} 가 앞세운 가시 링크. 마커 패턴 앞에 붙여 한 쌍으로 소비한다. 이름의 backslash
+ * escape 를 받는다 — 북마크 캡션의 대괄호가 `\]` 로 들어온다(F-09).
+ */
+const DEGRADE_LINK_SOURCE = "(?:\\[(?:\\\\.|[^\\\\\\]])*\\]\\([^)]*\\))?";
 
 // 2D: <unknown> → 보존 마커 (삭제 대신 보존)
 function preserveUnknownBlocks(content: string): string {
@@ -506,11 +518,31 @@ function preserveUnknownBlocks(content: string): string {
       blockType === "embed"
         ? "🔗 Embed"
         : blockType === "bookmark"
-          ? "🔖 Bookmark"
+          ? bookmarkLabel()
           : `🔗 ${blockType}`;
     return degradeLink(label, url, marker);
   });
   return result;
+}
+
+/** 북마크 마커와 그 앞의 가시 링크 — 그룹 1 = 마커, 그룹 2 = 인코딩된 자리 태그 url. */
+const BOOKMARK_PAIR_RE = new RegExp(
+  `${DEGRADE_LINK_SOURCE}(%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=bookmark%%)`,
+  "g",
+);
+
+/**
+ * 북마크의 가시 링크를 그 북마크의 주소와 캡션으로 바꾼다(F-09, `converter/bookmark.ts`) —
+ * {@link preserveUnknownBlocks} 가 자리 태그만으로 만든 링크는 Notion 의 그 블록을 가리킨다.
+ * 마커는 그대로 둔다 — 왕복은 마커가 맡는다.
+ */
+function linkBookmarks(content: string, bookmarks?: ReadonlyMap<string, BookmarkTarget>): string {
+  if (bookmarks === undefined || bookmarks.size === 0) return content;
+  return content.replace(BOOKMARK_PAIR_RE, (match, marker: string, encodedUrl: string) => {
+    const id = bookmarkBlockId(decodeMarkerTarget(encodedUrl));
+    const target = id === undefined ? undefined : bookmarks.get(id);
+    return target === undefined ? match : degradeLink(bookmarkLabel(target), target.url, marker);
+  });
 }
 
 // NFM 전용 자기완결 태그들. 이름 뒤가 `\s` 또는 `/` 로 **닫히는 것**까지 확인한다 —
