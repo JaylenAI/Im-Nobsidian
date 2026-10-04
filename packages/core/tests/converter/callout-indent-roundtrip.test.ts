@@ -194,7 +194,7 @@ describe("콜아웃 들여쓰기 클램프", () => {
   });
 
   it("콜아웃 안 빈 문단이 인용 깊이를 잃지 않는다", () => {
-    // 결함: `removeEmptyBlocks` 가 `> > <empty-block/>` 를 **열 0 빈 줄**로 바꿔 인용
+    // 결함: 빈 블록 변환이 `> > <empty-block/>` 를 **열 0 빈 줄**로 바꿔 인용
     // 깊이를 통째로 버렸다. Obsidian 은 거기서 인용을 닫으므로 뒤 본문이 콜아웃 밖으로
     // 떨어지고, 중첩 컬럼에선 시작·끝 마커가 서로 다른 본문에 갈려 레이아웃이 소실됐다.
     const raw = [
@@ -213,7 +213,7 @@ describe("콜아웃 들여쓰기 클램프", () => {
     // 빈 줄이 얕은 `>` 로 떨어지면 그 자리에서 안쪽 콜아웃이 두 조각 난다
     expect(pulled.split("\n").filter((l) => l.trim() === ">")).toHaveLength(0);
     expect(pulled).toContain("> > [!abstract] 첫 문단");
-    expect(pulled).toContain("> >\n> > 끝 문단");
+    expect(pulled).toContain("> >\n> > <br>\n> >\n> > 끝 문단");
     // 끝 문단이 안쪽 콜아웃 안에 남아야 한다 — 밖으로 새면 push 가 형제로 만든다
     expect(
       obsidianToNotionEnhanced(pulled)
@@ -241,6 +241,8 @@ describe("콜아웃 들여쓰기 클램프", () => {
     expect(tail).toBeGreaterThan(0);
     expect(lines[tail]).toBe("> 바깥 계속");
     expect(lines[tail - 1]).toBe(">");
+    expect(lines[tail - 2]).toBe("> <br>");
+    expect(lines[tail - 3]).toBe(">");
   });
 });
 

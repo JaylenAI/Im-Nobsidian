@@ -44,6 +44,7 @@ import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
 import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
+import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -91,7 +92,7 @@ export function notionEnhancedToObsidian(
   result = convertSpans(result);
   result = convertDatabaseBlocks(result);
   result = convertBlockColorAttrs(result);
-  result = removeEmptyBlocks(result);
+  result = emptyBlocksToBreaks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
@@ -137,8 +138,9 @@ function unescapeBrackets(content: string): string {
 export function obsidianToNotionEnhanced(obsidian: string): string {
   let result = obsidian;
 
-  // 표가 가장 먼저 — 콜아웃 안의 줄도 아직 `> ` 접두로 있어 볼트 모양 그대로 찾는다.
+  // 빈 블록 · 표가 가장 먼저 — 콜아웃 안의 줄도 아직 `> ` 접두로 있어 볼트 모양 그대로 찾는다.
   // 바꾼 태그 줄은 아래 컨테이너 변환이 다른 본문 줄처럼 탭으로 들여쓴다.
+  result = breaksToEmptyBlocks(result);
   result = pipeTablesToNfmTables(result);
   result = convertTogglesToHtml(result);
   result = restoreTabBlocks(result);
@@ -908,13 +910,6 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-/**
- * 빈 문단 토큰(`<empty-block/>`). 선행 여백을 **인용 접두 앞**에서 받아야 한다 —
- * 여백을 인용 뒤에만 두면 `\t> <empty-block/>`(리스트/칼럼 안 콜아웃의 빈 줄)이 매칭되지
- * 않아 토큰 원문이 그대로 볼트에 새어 나간다(실측: `Creai LLM.md` pull 961행).
- */
-const NOTION_EMPTY_BLOCK_RE = /^([\t ]*(?:>[\t ]*)*)<empty-block\/>[\t ]*\n?/gm;
-
 function convertPageLinks(content: string): string {
   return content.replace(CHILD_PAGE_TAG_RE, (_match, _url: string, text: string) => {
     const cleaned = text.replace(/\*\*/g, "").trim();
@@ -977,23 +972,6 @@ function separateAdjacentCallouts(content: string): string {
     out.push(line);
   }
   return out.join("\n");
-}
-
-/** 인용 접두만 남은 줄인지 — `> > ` 처럼 `>` 를 하나라도 품은 여백. */
-const QUOTE_ONLY_PREFIX_RE = /^[\t ]*(?:>[\t ]*)+$/;
-
-/**
- * 빈 문단 토큰을 실제 빈 줄로 되돌린다.
- *
- * 콜아웃 **안**의 토큰은 인용 접두를 남긴다. 열 0 빈 줄로 바꾸면 Obsidian 이 거기서
- * 인용을 닫아 버려 뒤따르는 본문이 콜아웃 밖으로 떨어진다. 중첩 컬럼에서는 이 절단이
- * 시작·끝 마커를 서로 다른 콜아웃 본문으로 갈라 놓아 push 가 레이아웃을 재조립하지
- * 못했다(실측: `건강검진.md` 등 3노트 9개 `<columns>` 소실).
- */
-function removeEmptyBlocks(content: string): string {
-  return content.replace(NOTION_EMPTY_BLOCK_RE, (_match, prefix: string) =>
-    QUOTE_ONLY_PREFIX_RE.test(prefix) ? `${prefix.trimEnd()}\n` : "\n",
-  );
 }
 
 const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;
