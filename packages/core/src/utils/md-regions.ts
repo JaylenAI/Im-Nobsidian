@@ -255,7 +255,7 @@ export function mapOutsideCodeFences(content: string, fn: SegmentMapper): string
 }
 
 /** 줄마다 코드 펜스(여는 줄 · 코드 · 닫는 줄)인가 — {@link scanCodeFences} 의 구간. */
-function codeLineMask(content: string): boolean[] {
+export function codeLineMask(content: string): boolean[] {
   const inCode = new Array<boolean>(content.split("\n").length).fill(false);
   for (const fence of scanCodeFences(content)) {
     const last = fence.close ?? fence.open + fence.code.length;

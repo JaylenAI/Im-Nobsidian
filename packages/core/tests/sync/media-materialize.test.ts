@@ -382,6 +382,48 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
     });
   });
 
+  describe("자리표시자 아래에 묶인 블록 (S-33)", () => {
+    let warn: string[];
+
+    beforeEach(() => {
+      warn = [];
+      setLogger({
+        warn: (msg) => warn.push(msg),
+        error: () => {},
+        info: () => {},
+        debug: () => {},
+      });
+    });
+
+    afterEach(() => {
+      setLogger({ warn: () => {}, error: () => {}, info: () => {}, debug: () => {} });
+    });
+
+    it("자식이 있는 자리표시자는 지우지 않고 남긴다 — 지우면 그 자식도 지워진다", async () => {
+      const { client, appendChildBlocks, deleteBlock } = createTreeClient({
+        "page-1": [quote("blk-held", IMG_MARKER, true), quote("blk-img", FILE_MARKER)],
+        "blk-held": [{ id: "blk-child", type: "paragraph", has_children: false, paragraph: {} }],
+      });
+      const handler = new ImageHandler(mockFs, "attachments", client);
+
+      const result = await handler.materializeLocalMedia(
+        "page-1",
+        `> ${IMG_MARKER}\n\n> ${FILE_MARKER}\n`,
+        "연구/노트.md",
+      );
+
+      expect(deleteBlock).toHaveBeenCalledTimes(1);
+      expect(deleteBlock).toHaveBeenCalledWith("blk-img");
+      expect(appendChildBlocks).toHaveBeenCalledTimes(1);
+      expect(client.uploadFile).toHaveBeenCalledTimes(1);
+      expect(result.handledTargets.has("assets/t-img.png")).toBe(false);
+      expect(warn).toEqual([
+        "[Im-Nobsidian] 자리표시자 아래에 다른 블록이 묶여 이미지로 바꾸지 않은 임베드 (연구/노트.md): " +
+          "assets/t-img.png — 바꾸면 그 블록이 함께 지워진다. Notion 에는 파일 이름 자리표시자로 남는다",
+      ]);
+    });
+  });
+
   it("NotionClient 가 없으면 아무 일도 하지 않는다", async () => {
     const handler = new ImageHandler(mockFs, "attachments");
 
