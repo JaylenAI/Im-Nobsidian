@@ -228,6 +228,24 @@ function captionOfLabel(label: string): string {
   return FILE_LABEL_PREFIX_RE.test(label) && MEDIA_PLACEHOLDER_CAPTIONS.has(caption) ? "" : caption;
 }
 
+/**
+ * 받은 파일의 이름이자 별칭 — 사람이 단 캡션, 없으면 Notion 에 올라간 파일 이름.
+ *
+ * 캡션 없는 파일 블록은 markdown API 가 서명 URL 만 주고(`<file src="…"></file>`) pull 변환이 자리 이름을
+ * 붙인다(`[📎 file](…)`). 자리 이름으로 받으면 `file-<해시>` 로 저장하고 별칭이 `file` 이 된다 — 같은
+ * 파일을 올라간 이름으로 받아 둔 볼트는 다시 받을 때 같은 바이트의 사본이 생기고 임베드가 바뀐다(실볼트
+ * 사본, 2026-10-05). 올라간 이름은 서명 URL 의 경로 끝에만 있다. URL 에도 이름이 없으면 예전처럼 자리
+ * 이름으로 받는다.
+ *
+ * @param caption 라벨에서 표시 이모지를 뗀 캡션 · 태그 안의 글. 사람이 자리 이름과 같은 캡션을 달았으면
+ *   가를 수 없다 — 이름으로 받는다.
+ */
+function fileAliasOf(caption: string, url: string): string {
+  const alias = toWikilinkAlias(caption);
+  if (alias && !MEDIA_PLACEHOLDER_CAPTIONS.has(alias)) return alias;
+  return toWikilinkAlias(uploadedFileNameFromUrl(url)) || alias || "file";
+}
+
 /** Notion 이 호스팅한 미디어 URL — 서명 URL 이거나 markdown API 의 내부 참조(`file://`). */
 function isNotionMediaUrl(url: string): boolean {
   return (/^https?:\/\//.test(url) && isNotionHostedFileUrl(url)) || INTERNAL_FILE_URL_RE.test(url);
@@ -1000,13 +1018,14 @@ export class ImageHandler {
     for (const span of notionHttpMatches) {
       await sema.acquire();
       try {
-        const caption = toWikilinkAlias(span.label.replace(FILE_LABEL_PREFIX_RE, "")) || "file";
+        const caption = fileAliasOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), span.url);
         const download = await this.downloadFile(span.url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
         const obsidianLink = `![[${download.localPath}|${caption}]]`;
-        result = result.replace(span.full, obsidianLink);
+        // 이름 · 캡션에 `$` 가 있어도(`가격$&.pdf`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
+        result = result.replace(span.full, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
       } finally {
@@ -1031,7 +1050,7 @@ export class ImageHandler {
         if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `![[${download.localPath}|${caption}]]`;
-        result = result.replace(span.full, obsidianLink);
+        result = result.replace(span.full, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
       } finally {
@@ -1043,12 +1062,12 @@ export class ImageHandler {
       await sema.acquire();
       try {
         const url = match[1]!;
-        const caption = toWikilinkAlias(match[2] ?? "") || "file";
+        const caption = fileAliasOf(match[2] ?? "", url);
         const download = await this.downloadFile(url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `![[${download.localPath}|${caption}]]`;
-        result = result.replace(match[0]!, obsidianLink);
+        result = result.replace(match[0]!, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
       } finally {
@@ -1073,7 +1092,7 @@ export class ImageHandler {
         if (!download.localPath) continue;
         downloads.push(download);
         const obsidianLink = `![[${download.localPath}|${caption}]]`;
-        result = result.replace(match[0]!, obsidianLink);
+        result = result.replace(match[0]!, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
       } finally {
