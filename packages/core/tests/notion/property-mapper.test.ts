@@ -195,11 +195,11 @@ describe("PropertyMapper", () => {
       expect(result.due).toBe("2026-06-30");
     });
 
-    it("date → 객체 (end 있을 때)", () => {
+    it("date → 시작은 그 키, 끝은 _end 키 (end 있을 때 · F-08)", () => {
       const result = mapper.fromNotionProperties({
         due: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
       });
-      expect(result.due).toEqual({ start: "2026-01-01", end: "2026-12-31" });
+      expect(result).toEqual({ due: "2026-01-01", due_end: "2026-12-31" });
     });
 
     it("url → 문자열", () => {
@@ -595,10 +595,19 @@ describe("PropertyMapper", () => {
       expect(readToWrite(read)).toEqual({ related: { relation: [{ id: PID_A }] } });
     });
 
-    it("date with time/timezone: 초·밀리초·타임존 보존", () => {
-      const iso = "2026-05-29T14:30:00.000+09:00";
-      const read = { due: { type: "date", date: { start: iso } } };
-      expect(readToWrite(read)).toEqual({ due: { date: { start: iso, end: null } } });
+    it("date with time: 같은 순간으로 왕복 — 초·밀리초는 남고 오프셋은 설정 시간대 (F-08)", () => {
+      const seoul = new PropertyMapper({ timeZone: "Asia/Seoul" });
+      seoul.loadSchema({ due: { id: "6", type: "date" } });
+      const cases = [
+        ["2026-05-29T14:30:00.000+09:00", "2026-05-29T14:30", "2026-05-29T14:30:00+09:00"],
+        ["2026-05-29T05:30:15.250Z", "2026-05-29T14:30:15.250", "2026-05-29T14:30:15.250+09:00"],
+      ] as const;
+      for (const [read, local, sent] of cases) {
+        const fm = seoul.fromNotionProperties({ due: { type: "date", date: { start: read } } });
+        expect(fm.due).toBe(local);
+        expect(seoul.toNotionProperties(fm, "T").due).toEqual({ date: { start: sent, end: null } });
+        expect(Date.parse(sent)).toBe(Date.parse(read));
+      }
     });
   });
 

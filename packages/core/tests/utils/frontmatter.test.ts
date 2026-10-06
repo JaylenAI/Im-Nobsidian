@@ -3,8 +3,11 @@ import matter from "gray-matter";
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import {
+  frontmatterLines,
+  joinFrontmatter,
   parseFrontmatter,
   plainFrontmatterValue,
+  sameFrontmatterValue,
   splitFrontmatter,
   stringifyFrontmatter,
 } from "../../src/utils/frontmatter.js";
@@ -36,6 +39,15 @@ describe("stringifyFrontmatter", () => {
   it("date-only 가 아닌 값(datetime 등)의 따옴표는 유지한다", () => {
     const out = stringifyFrontmatter("본문", { at: "2026-07-14T09:00:00" });
     expect(out).toContain("'2026-07-14T09:00:00'");
+  });
+
+  it("초가 없는 날짜시각(Obsidian 날짜시각 속성)은 따옴표 없이 적고, 다시 읽어도 같은 글이다 (F-08)", () => {
+    const data = { at: "2026-07-14T09:30", end: "2026-07-14T18:00", sec: "2026-07-14T09:30:15" };
+    const out = stringifyFrontmatter("본문", data);
+    expect(out).toBe(
+      "---\nat: 2026-07-14T09:30\nend: 2026-07-14T18:00\nsec: '2026-07-14T09:30:15'\n---\n본문\n",
+    );
+    expect(splitFrontmatter(out).data).toEqual(data);
   });
 
   describe("BMP 밖 문자(이모지)를 이스케이프하지 않고 그대로 적는다(F-i)", () => {
@@ -89,6 +101,31 @@ describe("stringifyFrontmatter", () => {
   });
 });
 
+describe("frontmatterLines · joinFrontmatter — 줄 단위로 합칠 때 (F-08)", () => {
+  it("stringifyFrontmatter 와 같은 규칙의 YAML 줄 · 같은 모양의 노트", () => {
+    const data = { title: "T", 목록: ["a", "b"], at: "2026-07-14T09:30", icon: "🚀" };
+    const lines = frontmatterLines(data);
+    expect(lines).toEqual([
+      "title: T",
+      "목록:",
+      "  - a",
+      "  - b",
+      "at: 2026-07-14T09:30",
+      "icon: 🚀",
+    ]);
+    expect(joinFrontmatter(lines, "본문")).toBe(stringifyFrontmatter("본문", data));
+    expect(frontmatterLines({})).toEqual([]);
+  });
+
+  it("살린 빈 줄 · 주석은 그대로 · 빈 줄뿐이면 본문만", () => {
+    expect(joinFrontmatter(["# 주석", "a: 1", ""], "본문\n")).toBe(
+      "---\n# 주석\na: 1\n\n---\n본문\n",
+    );
+    expect(joinFrontmatter(["", "  "], "본문")).toBe("본문\n");
+    expect(joinFrontmatter([], "")).toBe("\n");
+  });
+});
+
 describe("plainFrontmatterValue — YAML 이 만든 Date 를 pull 이 적는 평문으로", () => {
   it("자정 Date 는 날짜만, 시각이 있으면 ISO 전체", () => {
     expect(plainFrontmatterValue(new Date("2026-10-01T00:00:00.000Z"))).toBe("2026-10-01");
@@ -108,6 +145,27 @@ describe("plainFrontmatterValue — YAML 이 만든 Date 를 pull 이 적는 평
 
   it("잘못된 Date 는 던지지 않고 글로", () => {
     expect(plainFrontmatterValue(new Date("nope"))).toBe("Invalid Date");
+  });
+});
+
+describe("sameFrontmatterValue — frontmatter 값이 같은가", () => {
+  it("YAML 이 읽은 Date 는 적힌 글자와 같다", () => {
+    expect(sameFrontmatterValue(new Date("2026-10-01T00:00:00.000Z"), "2026-10-01")).toBe(true);
+    expect(sameFrontmatterValue(new Date("2026-10-01T09:30:00.000Z"), "2026-10-01T18:30")).toBe(
+      false,
+    );
+  });
+
+  it("객체는 키 차례를 보지 않고 안쪽까지, 목록은 차례대로", () => {
+    expect(sameFrontmatterValue({ start: "a", end: "b" }, { end: "b", start: "a" })).toBe(true);
+    expect(sameFrontmatterValue({ start: "a" }, { start: "a", end: null })).toBe(false);
+    expect(sameFrontmatterValue(["a", "b"], ["b", "a"])).toBe(false);
+  });
+
+  it("글 · 수 · null 은 엄격히 — 빈 값끼리도 모양이 다르면 다르다", () => {
+    expect(sameFrontmatterValue("1", 1)).toBe(false);
+    expect(sameFrontmatterValue(null, undefined)).toBe(false);
+    expect(sameFrontmatterValue(null, [])).toBe(false);
   });
 });
 

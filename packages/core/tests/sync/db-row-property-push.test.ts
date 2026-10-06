@@ -430,6 +430,113 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     expect(markdown).toContain("im-nobsidian:properties");
     expect(markdown).toContain("태그: 메모");
   });
+
+  describe("F-08 행 속성 모양", () => {
+    const seoul = () => {
+      const config = createConfig();
+      config.conversion = { ...config.conversion, timeZone: "Asia/Seoul" };
+      return config;
+    };
+    const STYLE = {
+      bold: false,
+      italic: false,
+      strikethrough: false,
+      underline: false,
+      code: false,
+      color: "default",
+    };
+    const BOLD = { ...STYLE, bold: true };
+
+    it("시각은 설정 시간대 오프셋을 붙여 보내고, 기간의 끝만 고쳐도 시작과 함께 보낸다", async () => {
+      const base = BASE.replace(
+        "마감: 2026-10-01",
+        "마감: 2026-10-01T10:00\n마감_end: 2026-10-03T18:00",
+      );
+      records.set(
+        ROW_PATH,
+        rowRecord({ contentHash: computeHash(base), baseSnapshot: Buffer.from(base, "utf-8") }),
+      );
+      files.set(ROW_PATH, base.replace("마감_end: 2026-10-03T18:00", "마감_end: 2026-10-04T09:30"));
+
+      const result = await build(seoul()).push();
+
+      expect(result.failed).toEqual([]);
+      expect(notion.updatePageProperties).toHaveBeenCalledWith(ROW_ID, {
+        마감: { date: { start: "2026-10-01T10:00:00+09:00", end: "2026-10-04T09:30:00+09:00" } },
+      });
+    });
+
+    it("글 속성은 Notion 의 서식(굵게 · 링크) 위에 바뀐 글자만 고친다", async () => {
+      remote.get(ROW_ID)!.properties = {
+        ...REMOTE_PROPS,
+        설명: {
+          type: "rich_text",
+          rich_text: [
+            {
+              type: "text",
+              plain_text: "굵은 글",
+              href: null,
+              annotations: BOLD,
+              text: { content: "굵은 글", link: null },
+            },
+            {
+              type: "text",
+              plain_text: "과 링크",
+              href: "https://example.com/",
+              annotations: STYLE,
+              text: { content: "과 링크", link: { url: "https://example.com/" } },
+            },
+          ],
+        },
+      };
+      files.set(ROW_PATH, BASE.replace("설명: 굵은 글과 링크", "설명: 굵은 새 글과 링크"));
+
+      await build().push();
+
+      expect(notion.updatePageProperties).toHaveBeenCalledWith(ROW_ID, {
+        설명: {
+          rich_text: [
+            { text: { content: "굵은 새 글" }, annotations: BOLD },
+            { text: { content: "과 링크", link: { url: "https://example.com/" } } },
+          ],
+        },
+      });
+    });
+
+    it("예전 모양의 날짜(오프셋 시각)는 같은 순간이면 «로컬» 해소에서도 다시 보내지 않는다", async () => {
+      const local = BASE.replace("진척: 0.42", "진척: 0.5").replace(
+        "마감: 2026-10-01",
+        "마감: '2026-10-01T10:00:00.000+09:00'",
+      );
+      files.set(ROW_PATH, local);
+      records.set(ROW_PATH, rowRecord({ status: "conflict" }));
+      remote.set(ROW_ID, {
+        lastEdited: "2026-09-26T20:00:00.000Z",
+        title: "과제 A",
+        properties: {
+          ...REMOTE_PROPS,
+          마감: { type: "date", date: { start: "2026-10-01T01:00:00.000+00:00", end: null } },
+        },
+      });
+      const conflict = {
+        syncRecord: records.get(ROW_PATH)!,
+        localChange: { path: ROW_PATH, type: "modified" as const, hash: computeHash(local) },
+        remoteChange: {
+          pageId: ROW_ID,
+          type: "modified" as const,
+          lastEdited: "2026-09-26T20:00:00.000Z",
+          previousEdited: SYNCED_AT,
+        },
+        baseContent: BASE,
+        localContent: local,
+        remoteContent: "(원격 렌더)",
+      };
+
+      await build(seoul()).resolveConflict(conflict as never, "local");
+
+      expect(notion.updatePageProperties).toHaveBeenCalledWith(ROW_ID, { 진척: { number: 0.5 } });
+    });
+  });
 });
 
 describe("S-02 pull — 행 본문 첫머리의 속성 블록은 값으로 쓰지 않고 걷어 낸다", () => {

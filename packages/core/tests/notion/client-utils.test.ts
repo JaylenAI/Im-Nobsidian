@@ -175,13 +175,15 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Due).toBe("2026-01-01");
   });
 
-  it("date 속성 추출 (end 있음)", () => {
+  it("date 속성 추출 (end 있음) — 시작은 그 키, 끝은 _end 키 (F-08)", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Due: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
     });
 
-    expect(client.extractProperties(page).Due).toEqual({ start: "2026-01-01", end: "2026-12-31" });
+    const props = client.extractProperties(page);
+    expect(props.Due).toBe("2026-01-01");
+    expect(props.Due_end).toBe("2026-12-31");
   });
 
   it("phone_number 속성 추출", () => {
@@ -209,20 +211,28 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Status).toBeNull();
   });
 
-  it("created_time 속성 추출", () => {
+  // 시각은 설정 시간대의 벽시계 시각 — Obsidian 날짜시각 속성의 모양이다(F-08).
+  const seoulClient = new NotionClient({
+    token: "ntn_test_fake_token",
+    concurrency: 1,
+    timeoutMs: 1000,
+    timeZone: "Asia/Seoul",
+  });
+
+  it("created_time 속성 추출 — 설정 시간대의 벽시계 시각", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Created: { type: "created_time", created_time: "2026-01-15T09:00:00.000Z" },
     });
-    expect(client.extractProperties(page).Created).toBe("2026-01-15T09:00:00.000Z");
+    expect(seoulClient.extractProperties(page).Created).toBe("2026-01-15T18:00");
   });
 
-  it("last_edited_time 속성 추출", () => {
+  it("last_edited_time 속성 추출 — 설정 시간대의 벽시계 시각", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Edited: { type: "last_edited_time", last_edited_time: "2026-05-10T12:30:00.000Z" },
     });
-    expect(client.extractProperties(page).Edited).toBe("2026-05-10T12:30:00.000Z");
+    expect(seoulClient.extractProperties(page).Edited).toBe("2026-05-10T21:30");
   });
 
   it("people 속성 추출", () => {
