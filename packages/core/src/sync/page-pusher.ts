@@ -59,6 +59,11 @@ interface CreatedPage {
   readonly markdown: string | null;
 }
 
+/** 페이지의 속성(`page.properties`) — 없으면 빈 객체. */
+function pagePropertiesOf(page: PageObjectResponse): Record<string, unknown> {
+  return (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
+}
+
 /**
  * 로컬 변경을 Notion 에 올린다(push) — 새 노트는 페이지 · 행으로 만들고, 고친 노트는 본문과 제목 ·
  * 속성을 보내고, 옮긴 노트 · 폴더는 부모와 제목을 바꾸고, 지운 노트는 휴지통으로 보낸다.
@@ -496,6 +501,7 @@ export class PagePusher {
     const { properties, skipped } = mapper.toNotionPropertyChanges(
       diffRowProperties(null, current.data),
       title,
+      { current: current.data },
     );
     if (skipped.length > 0) {
       getLogger().info(
@@ -719,9 +725,11 @@ export class PagePusher {
     const { properties, skipped } = mapper.toNotionPropertyChanges(
       diffRowProperties(
         against?.properties ?? null,
-        options.overwriteRemote ? mapper.pickWritable(current.data) : current.data,
+        options.overwriteRemote ? mapper.writableValues(current.data) : current.data,
       ),
       against?.title === title ? null : title,
+      // 글 속성 · 제목은 방금 읽은 원격의 서식 위에 바뀐 글자만 고친다 — 로컬은 평문만 안다(F-08).
+      { current: current.data, remote: pagePropertiesOf(remote) },
     );
     if (skipped.length > 0) {
       getLogger().info(
@@ -826,9 +834,8 @@ export class PagePusher {
     mapper: PropertyMapper,
     page: Awaited<ReturnType<NotionClient["getPage"]>>,
   ): RowState {
-    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
     return {
-      properties: mapper.pickWritable(mapper.fromNotionProperties(raw)),
+      properties: mapper.writableValues(mapper.fromNotionProperties(pagePropertiesOf(page))),
       title: this.notionClient.extractTitle(page),
       body: null,
     };

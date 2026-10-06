@@ -100,16 +100,43 @@ function mapFrontmatter(out: string, map: (frontmatter: string) => string): stri
   return map(out.slice(0, fmEnd)) + out.slice(fmEnd);
 }
 
-const QUOTED_DATE_LINE_RE = /^([ \t]*[^:\n]+:[ \t]*)'(\d{4}-\d{2}-\d{2})'([ \t]*)$/gm;
+const QUOTED_DATE_LINE_RE =
+  /^([ \t]*[^:\n]+:[ \t]*)'(\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2})?)'([ \t]*)$/gm;
 
 /**
  * js-yaml 은 `2026-07-14` 평문이 YAML timestamp 로 재해석되는 것을 막으려 작은따옴표로
  * 감싸지만, Obsidian 저작 관행(그리고 Obsidian 의 해석)은 따옴표 없는 날짜다 — 왕복 시
  * `created: 2026-07-14` 가 `created: '2026-07-14'` 로 변해 가짜 diff 를 만든다(D3).
  * 의미가 동일하므로 프론트매터 영역에 한해 원 표기로 되돌린다.
+ *
+ * 초가 없는 날짜시각(`2026-07-14T09:30` — Obsidian 날짜시각 속성의 모양, F-08)도 같다. js-yaml 3 은 `:` 가
+ * 든 글을 모두 따옴표로 감싸지만, 이 모양은 YAML timestamp 가 아니라(초가 있어야 한다) 따옴표가 없어도
+ * 글로 읽힌다. 초가 있는 시각은 따옴표가 없으면 UTC 의 날짜로 읽히므로 그대로 둔다.
  */
 function unquoteFrontmatterDates(out: string): string {
   return mapFrontmatter(out, (fm) => fm.replace(QUOTED_DATE_LINE_RE, "$1$2$3"));
+}
+
+/**
+ * `data` 를 frontmatter 에 적을 YAML 줄들 — {@link stringifyFrontmatter} 와 같은 규칙(이모지 · 날짜의
+ * 따옴표)으로. 비었으면 빈 배열.
+ */
+export function frontmatterLines(data: Record<string, unknown>): string[] {
+  const out = stringifyFrontmatter("", data);
+  if (!out.startsWith("---\n")) return [];
+  const close = out.indexOf("\n---\n", 3);
+  return close === -1 ? [] : out.slice(4, close).split("\n");
+}
+
+/**
+ * YAML 줄들을 frontmatter 로 붙인 노트 — {@link stringifyFrontmatter} 가 적는 것과 같은 모양(여닫는 줄 ·
+ * 본문 끝 줄바꿈)이다. 줄은 그대로 둔다 — 로컬 노트에서 살린 빈 줄 · 주석도. 빈 줄뿐이면 본문만.
+ */
+export function joinFrontmatter(lines: readonly string[], content: string): string {
+  const newline = (text: string) => (text.endsWith("\n") ? text : `${text}\n`);
+  return lines.some((line) => line.trim())
+    ? `---\n${lines.join("\n")}\n---\n${newline(content)}`
+    : newline(content);
 }
 
 /**
@@ -137,6 +164,32 @@ export function plainFrontmatterValue(value: unknown): unknown {
     );
   }
   return value;
+}
+
+/**
+ * 두 frontmatter 값이 같은가 — 글 · 수 · 참거짓 · null 은 엄격히, 목록 · 객체는 안쪽까지(객체의 키 차례는
+ * 보지 않는다). YAML 이 `Date` 로 읽은 값은 {@link plainFrontmatterValue} 의 글자로 견준다.
+ */
+export function sameFrontmatterValue(a: unknown, b: unknown): boolean {
+  const pa = plainFrontmatterValue(a);
+  const pb = plainFrontmatterValue(b);
+  if (pa === pb) return true;
+  if (Array.isArray(pa) || Array.isArray(pb)) {
+    return (
+      Array.isArray(pa) &&
+      Array.isArray(pb) &&
+      pa.length === pb.length &&
+      pa.every((item, i) => sameFrontmatterValue(item, pb[i]))
+    );
+  }
+  if (pa === null || pb === null || typeof pa !== "object" || typeof pb !== "object") return false;
+  const ra = pa as Record<string, unknown>;
+  const rb = pb as Record<string, unknown>;
+  const keys = Object.keys(ra);
+  return (
+    keys.length === Object.keys(rb).length &&
+    keys.every((key) => Object.hasOwn(rb, key) && sameFrontmatterValue(ra[key], rb[key]))
+  );
 }
 
 /** {@link splitFrontmatter} 의 결과. */

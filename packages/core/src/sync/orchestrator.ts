@@ -156,7 +156,7 @@ export class SyncOrchestrator {
         itemTimeoutMs: config.advanced.itemTimeoutMs,
       },
     );
-    const propertyMapper = new PropertyMapper();
+    const propertyMapper = PropertyMapper.fromConfig(config);
     this.databaseSyncer = new DatabaseSyncer(
       config,
       stateDb,
@@ -191,6 +191,7 @@ export class SyncOrchestrator {
     this.rowSchemas = new RowSchemaCache(
       (databaseId) => notionClient.getDatabaseSchema(databaseId),
       wikilinkResolver,
+      () => PropertyMapper.fromConfig(config),
     );
 
     this.drift = new RemoteDriftChecker(

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isTimeZone } from "../utils/zoned-time.js";
 
 const DatabaseSyncSchema = z.object({
   databaseId: z.string(),
@@ -43,6 +44,15 @@ export const ConfigSchema = z.object({
     preserveMarkers: z.boolean().default(true),
     frontmatterMapping: z.boolean().default(true),
     imageDownload: z.enum(["immediate", "lazy", "skip"]).default("immediate"),
+    // 행 속성의 날짜시각을 적고 보낼 시간대(IANA 이름, 예: "Asia/Seoul"). 없으면 이 컴퓨터의 시간대.
+    // Obsidian 날짜시각 속성에는 시간대가 없다 — pull 은 이 시간대의 시각으로 적고 push 는 이 시간대의
+    // 오프셋을 붙여 보낸다(F-08).
+    timeZone: z
+      .string()
+      .refine(isTimeZone, {
+        message: "알 수 없는 시간대 이름 — IANA 이름(예: Asia/Seoul)을 쓰세요",
+      })
+      .optional(),
   }),
   advanced: z.object({
     // Notion API 클라이언트 동시성/타임아웃
