@@ -177,13 +177,15 @@ export interface NotionClientOptions {
   readonly batchSize?: number;
   /** 잘린 Markdown 을 채우려고 다시 받는 블록 수 상한 (S-06) */
   readonly markdownCompletionMaxBlocks?: number;
+  /** 페이지 속성의 날짜시각을 적을 시간대(`conversion.timeZone`) — 없으면 이 컴퓨터의 시간대. */
+  readonly timeZone?: string;
   readonly fetch?: typeof globalThis.fetch;
 }
 
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
-  private readonly propertyMapper = new PropertyMapper();
+  private readonly propertyMapper: PropertyMapper;
 
   private readonly minRequestInterval: number;
   private readonly maxRetries: number;
@@ -218,6 +220,7 @@ export class NotionClient {
     this.batchSize = options.batchSize ?? 100;
     this.markdownCompletionMaxBlocks =
       options.markdownCompletionMaxBlocks ?? DEFAULT_CONFIG.advanced.markdownCompletionMaxBlocks;
+    this.propertyMapper = new PropertyMapper({ timeZone: options.timeZone });
   }
 
   /** config.advanced 의 운영 튜닝값으로 클라이언트를 생성한다 (매직넘버 단일 진실원). */
@@ -234,6 +237,7 @@ export class NotionClient {
       pageSize: a.pageSize,
       batchSize: a.batchSize,
       markdownCompletionMaxBlocks: a.markdownCompletionMaxBlocks,
+      timeZone: config.conversion.timeZone,
       ...(fetch ? { fetch } : {}),
     });
   }

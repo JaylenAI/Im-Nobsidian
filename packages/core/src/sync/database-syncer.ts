@@ -110,7 +110,7 @@ function emptyDatabaseSyncResult(): DatabaseSyncResult {
 }
 
 export class DatabaseSyncer {
-  private readonly propertyMapper = new PropertyMapper();
+  private readonly propertyMapper: PropertyMapper;
   private readonly baseFileGenerator = new BaseFileGenerator();
   private readonly sidecarGenerator = new SidecarGenerator();
 
@@ -134,6 +134,7 @@ export class DatabaseSyncer {
     private readonly observation: () => ObservationContext = () => NO_OBSERVATION,
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.propertyMapper = PropertyMapper.fromConfig(config);
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
       // M4: 후처리 패스(resolveNotionLinks)와 동일하게 파일 basename 으로 해소 — 원시 제목과
@@ -466,6 +467,7 @@ export class DatabaseSyncer {
    *    (틀린) 전제로 db-row 를 제외해 두었기에 양쪽 어디에도 복원 경로가 없는 상태였다.
    *    deleteSync 가 켜져 있으면 되살리지 않는다 — 지운 것은 Notion 에서도 지우라는 뜻이고, sync 는
    *    pull 을 먼저 돌려 되살리면 뒤이은 push 가 지울 것을 잃는다(detectMissingLocalFiles 와 같다).
+   *  · 예전 버전이 적은 날짜 모양이 남은 행은 한 번 다시 받는다({@link outdatedDateForm}, F-08).
    */
   private async rowAction(
     dbConfig: DatabaseSyncConfig,
@@ -478,8 +480,28 @@ export class DatabaseSyncer {
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
     if (misplaced || this.remoteVerdict(record, page) !== "unchanged") return "pull";
+    if (await this.outdatedDateForm(record, page)) return "pull";
     if (this.config.sync.deleteSync) return "skip";
     return (await this.vaultFs.exists(record.obsidianPath)) ? "skip" : "restore";
+  }
+
+  /**
+   * 원격이 그대로인 행이지만 예전 버전이 적은 날짜 모양(`…Z` · `…+09:00` · `{start, end}`)이 남아 다시
+   * 받아 새 모양으로 쓸 행인가(F-08, {@link PropertyMapper.hasOutdatedDateForm}). 다시 받아 쓰면 사본도 새
+   * 모양이 되어 다음 pull 은 건너뛴다.
+   *
+   * 지난 동기화 뒤 로컬을 고친 행은 고르지 않는다 — 받아도 로컬 편집을 지키느라 쓰지 않으니 pull 마다 원격을
+   * 읽기만 한다. 그 편집을 올린 뒤의 pull 이 고른다. 로컬 파일을 읽지 못하면 고르지 않는다.
+   */
+  private async outdatedDateForm(record: SyncRecord, page: PageObjectResponse): Promise<boolean> {
+    const base = snapshotFrontmatter(record.baseSnapshot);
+    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
+    if (base === null || !this.propertyMapper.hasOutdatedDateForm(base, raw)) return false;
+    try {
+      return computeHash(await this.vaultFs.readFile(record.obsidianPath)) === record.contentHash;
+    } catch {
+      return false;
+    }
   }
 
   /** 이 DB 의 추적 행 가운데 이번 조회에 없던 것 — 지워졌는지는 아직 모른다. */
@@ -782,17 +804,12 @@ export class DatabaseSyncer {
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
 
-    const properties = this.propertyMapper.fromNotionProperties(
-      (page as unknown as { properties: Record<string, unknown> }).properties,
-    );
+    const rawProperties = (page as unknown as { properties: Record<string, unknown> }).properties;
+    const properties = this.propertyMapper.fromNotionProperties(rawProperties);
     properties.title = title;
 
     if (downloadMedia) {
-      await this.localizeFileProperties(
-        (page as unknown as { properties: Record<string, unknown> }).properties,
-        properties,
-        safeName,
-      );
+      await this.localizeFileProperties(rawProperties, properties, safeName);
     }
 
     const cover = this.notionClient.extractCover(page);
@@ -853,6 +870,8 @@ export class DatabaseSyncer {
         properties,
         notionExportCompact: exportCompact,
         localContent: await readLocalNote(this.vaultFs, options?.localPath ?? filePath),
+        // 이 렌더러가 적는 키 — 속성과 제목 · 커버 · 아이콘. 나머지는 로컬 키다(F-08).
+        notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", "cover", "icon"],
       },
     );
     return { content, title, properties, bodyFingerprint };
@@ -878,8 +897,8 @@ export class DatabaseSyncer {
   ): boolean {
     const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
     const { changed, cleared } = diffRowProperties(
-      mapper.pickWritable(mapper.fromNotionProperties(raw)),
-      mapper.pickWritable(base),
+      mapper.writableValues(mapper.fromNotionProperties(raw)),
+      mapper.writableValues(base),
     );
     return (
       this.notionClient.extractTitle(page) === noteTitle(base, path) &&

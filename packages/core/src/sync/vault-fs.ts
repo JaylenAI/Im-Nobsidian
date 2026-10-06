@@ -40,7 +40,7 @@ export async function readLocalNote(vaultFs: VaultFS, path: string): Promise<str
     return await vaultFs.readFile(path);
   } catch (error) {
     getLogger().warn(
-      `[Im-Nobsidian] 로컬 노트를 읽지 못해 코드 펜스 표기 · 주석 자리를 되살리지 못함 (${path}): ${
+      `[Im-Nobsidian] 로컬 노트를 읽지 못해 코드 펜스 표기 · 주석 자리 · frontmatter 의 로컬 키를 되살리지 못함 (${path}): ${
         error instanceof Error ? error.message : String(error)
       }`,
     );

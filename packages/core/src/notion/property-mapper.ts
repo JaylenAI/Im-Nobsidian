@@ -1,8 +1,10 @@
-import { richTextChunks } from "./rich-text.js";
+import { patchRichText, richTextChunks, type RichTextItem } from "./rich-text.js";
+import type { Config } from "../types/config.js";
 import type { RowPropertyChanges } from "../types/sync.js";
-import { plainFrontmatterValue } from "../utils/frontmatter.js";
+import { plainFrontmatterValue, sameFrontmatterValue } from "../utils/frontmatter.js";
 import { isNotionId } from "../utils/id.js";
 import { isNotionHostedFileUrl } from "../utils/notion-file-url.js";
+import { isWallTime, systemTimeZone, toWallTime, toZonedIso } from "../utils/zoned-time.js";
 
 type NotionPropertySchema = {
   id: string;
@@ -18,6 +20,21 @@ type NotionPropertyValue = Record<string, unknown>;
 const DATE_REGEX =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
+
+/**
+ * 기간(끝이 있는 날짜)의 끝을 적는 짝 키의 꼬리 — `마감` 의 끝은 `마감_end`(F-08).
+ *
+ * Obsidian 속성에는 기간 타입이 없다. `{start, end}` 객체로 적으면 Obsidian 이 알아보지 못하는 값이라
+ * 속성 패널 · Bases 에서 날짜로 쓸 수 없다. 짝 키 둘이면 둘 다 날짜(시각) 속성이다. 이 꼬리가 붙은 이름의
+ * 속성이 DB 에 따로 있으면 짝 키를 쓰지 않고 예전처럼 객체로 적는다.
+ */
+export const RANGE_END_SUFFIX = "_end";
+
+/** 날짜 값을 낼 수 있는 속성 타입 — 기간이면 짝 키에 끝을 적는다. */
+const DATE_VALUED_TYPES: ReadonlySet<string> = new Set(["date", "formula", "rollup"]);
+
+/** 시각만 내는 속성 타입 — 기간이 없다. */
+const TIMESTAMP_TYPES: ReadonlySet<string> = new Set(["created_time", "last_edited_time"]);
 
 /**
  * 값을 보낼 수 없는 속성 타입 — Notion 이 계산하거나(수식 · 롤업 · 생성일 · ID …) 값이 없다
@@ -51,9 +68,37 @@ export interface WikilinkResolver {
   resolvePageId(pageId: string): string | null;
 }
 
+export interface PropertyMapperOptions {
+  /**
+   * 날짜시각을 적고 보낼 시간대(IANA 이름, 설정 `conversion.timeZone`). 없으면 이 컴퓨터의 시간대.
+   */
+  readonly timeZone?: string;
+}
+
+/** {@link PropertyMapper.toNotionPropertyChanges} 가 기준으로 삼는 지금 값들. */
+export interface PropertyChangeContext {
+  /**
+   * 지금 로컬 frontmatter — 기간의 시작과 끝 중 하나만 바뀌어도 둘 다 보내야 해서 읽는다. 없으면 바뀐
+   * 값만 본다(새 행처럼 비교할 기준이 없을 때와 같다).
+   */
+  readonly current?: Readonly<Record<string, unknown>>;
+  /**
+   * 원격 페이지의 지금 속성(`page.properties`) — 글 속성 · 제목은 이 서식 위에 바뀐 글자만 고친다
+   * ({@link patchRichText}). 없으면 평문으로 보낸다.
+   */
+  readonly remote?: Readonly<Record<string, unknown>>;
+}
+
 export class PropertyMapper {
   private schema: Map<string, NotionPropertySchema> = new Map();
   private wikilinkResolver: WikilinkResolver | null = null;
+
+  constructor(private readonly options: PropertyMapperOptions = {}) {}
+
+  /** 설정의 변환 옵션으로 만든다 — 시간대를 이 한 곳에서 읽는다. */
+  static fromConfig(config: Pick<Config, "conversion">): PropertyMapper {
+    return new PropertyMapper({ timeZone: config.conversion.timeZone });
+  }
 
   setWikilinkResolver(resolver: WikilinkResolver): void {
     this.wikilinkResolver = resolver;
@@ -77,6 +122,7 @@ export class PropertyMapper {
     frontmatter: Record<string, unknown>,
     title: string,
   ): Record<string, NotionPropertyValue> {
+    const zone = this.zone();
     const result: Record<string, NotionPropertyValue> = {
       title: { title: [{ text: { content: title } }] },
     };
@@ -87,11 +133,15 @@ export class PropertyMapper {
       if (value === null || value === undefined) continue;
 
       const schemaProp = this.schema.get(key);
-      if (schemaProp) {
-        const converted = this.convertBySchema(schemaProp.type, value);
+      if (this.rangeOwnerOf(key) !== null) continue; // 짝 키 — 시작 속성과 함께 보낸다
+      if (schemaProp && this.hasRangeKey(key)) {
+        const converted = this.rangeRequest(key, frontmatter, zone);
+        if (converted) result[key] = converted;
+      } else if (schemaProp) {
+        const converted = this.convertBySchema(schemaProp.type, value, zone);
         if (converted) result[key] = converted;
       } else if (this.schema.size === 0) {
-        const inferred = this.inferAndConvert(value);
+        const inferred = this.inferAndConvert(value, zone);
         if (inferred) result[key] = inferred;
       }
     }
@@ -106,54 +156,152 @@ export class PropertyMapper {
    * 를 비우면 Notion 에 올라간 첨부가 지워지고 볼트에는 그 파일이 없다. `status` 는 빈 값이
    * 없다. 스키마에 없는 키와 읽기 전용 속성(수식 · 롤업 · 생성일 …)도 보내지 않는다.
    *
+   * 날짜는 오프셋 없는 시각에 시간대의 오프셋을 붙여 보낸다 — Notion 은 오프셋 없는 시각을 UTC 로 읽는다.
+   * 기간은 시작과 끝(짝 키) 중 하나만 바뀌어도 둘을 함께 보낸다 — 날짜 값은 통째로 바뀐다. 글 속성 ·
+   * 제목은 원격 서식 위에 바뀐 글자만 고친다(`context.remote`).
+   *
    * @param title 제목이 바뀌었을 때만 새 제목, 아니면 null.
    * @returns `skipped` — 바뀌었지만 보내지 않은 속성 이름. 호출측이 알린다.
    */
   toNotionPropertyChanges(
     changes: RowPropertyChanges,
     title: string | null,
+    context: PropertyChangeContext = {},
   ): { properties: Record<string, NotionPropertyValue>; skipped: string[] } {
+    const zone = this.zone();
     const properties: Record<string, NotionPropertyValue> = {};
     const skipped: string[] = [];
-    if (title !== null) properties.title = { title: [{ text: { content: title } }] };
+    if (title !== null) {
+      const runs = context.remote ? titleRunsOf(context.remote) : null;
+      properties.title = {
+        title: (runs && patchRichText(runs, title)) ?? [{ text: { content: title } }],
+      };
+    }
+
+    // 기간은 시작 속성 이름으로 모아 한 번에 — 짝 키는 속성이 아니다.
+    const ranges = new Set<string>();
+    const rangeOf = (key: string): string | null =>
+      this.rangeOwnerOf(key) ?? (this.hasRangeKey(key) ? key : null);
 
     for (const [key, value] of Object.entries(changes.changed)) {
+      const range = rangeOf(key);
+      if (range !== null) {
+        ranges.add(range);
+        continue;
+      }
       const schemaProp = this.schema.get(key);
-      const converted = schemaProp ? this.convertBySchema(schemaProp.type, value) : null;
+      const converted = !schemaProp
+        ? null
+        : schemaProp.type === "rich_text"
+          ? richTextRequest(String(value), richTextRunsOf(context.remote, key))
+          : this.convertBySchema(schemaProp.type, value, zone);
       if (converted) properties[key] = converted;
       else skipped.push(key);
     }
     for (const key of changes.cleared) {
+      const range = rangeOf(key);
+      if (range !== null) {
+        ranges.add(range);
+        continue;
+      }
       const schemaProp = this.schema.get(key);
       const empty = schemaProp ? emptyValueOf(schemaProp.type) : null;
       if (empty) properties[key] = empty;
       else skipped.push(key);
+    }
+    for (const name of ranges) {
+      const converted = this.rangeRequest(name, context.current ?? changes.changed, zone);
+      if (converted) properties[name] = converted;
+      else skipped.push(name);
     }
 
     return { properties, skipped };
   }
 
   /**
-   * 값을 보낼 수 있는 속성만 고른다 — 스키마에 있고, 읽기 전용이 아니고, 제목이 아닌 키.
-   * 원격 값과 로컬 값을 견줄 때 쓴다. 수식 · 롤업 같은 값은 달라도 보낼 수 없으니 견주지 않는다.
+   * 값을 보낼 수 있는 속성만, pull 이 적는 모양으로 — 원격 값과 로컬 값을 견줄 때 쓴다.
+   *
+   * 고르는 것은 스키마에 있고 읽기 전용이 아니고 제목이 아닌 키와 날짜 속성의 짝 키다. 수식 · 롤업 같은
+   * 값은 달라도 보낼 수 없으니 견주지 않는다. 날짜는 예전 버전이 적은 모양(`…+09:00` · `{start, end}`)도
+   * 시간대의 벽시계 시각 · 짝 키로 바꿔 같은 순간이면 같게 본다(F-08).
    */
-  pickWritable(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  writableValues(values: Readonly<Record<string, unknown>>): Record<string, unknown> {
+    const zone = this.zone();
     const picked: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(values)) {
       const type = this.schema.get(key)?.type;
-      if (type && type !== "title" && !READ_ONLY_TYPES.has(type)) picked[key] = value;
+      if (this.rangeOwnerOf(key) !== null) {
+        picked[key] = localDateForm(value, zone);
+      } else if (type === "date") {
+        const plain = plainFrontmatterValue(value);
+        if (!isDateRangeValue(plain)) {
+          picked[key] = localDateForm(plain, zone);
+        } else if (this.hasRangeKey(key) && !(key + RANGE_END_SUFFIX in values)) {
+          picked[key] = localDateForm(plain.start, zone);
+          if (!isBlank(plain.end)) picked[key + RANGE_END_SUFFIX] = localDateForm(plain.end, zone);
+        } else {
+          picked[key] = {
+            start: localDateForm(plain.start, zone),
+            ...(isBlank(plain.end) ? {} : { end: localDateForm(plain.end, zone) }),
+          };
+        }
+      } else if (type && type !== "title" && !READ_ONLY_TYPES.has(type)) {
+        picked[key] = value;
+      }
     }
     return picked;
   }
 
+  /**
+   * `written` 에 예전 버전이 적은 날짜 모양이 남았는가(F-08) — 날짜 · 생성일 · 수정일 · 날짜 수식 · 날짜
+   * 롤업 가운데, 지금 받으면 적을 값과 같은 순간인데 적힌 모양이 다른 키가 있다(`…Z` · `…+09:00` ·
+   * `{start, end}`). 원격이 그대로인 행은 다시 받지 않으므로, 이런 행은 따로 골라 한 번 다시 받아야 새
+   * 모양이 된다.
+   *
+   * 값이 다른 키는 보지 않는다 — 수식 · 롤업은 행의 수정 시각을 바꾸지 않고 다시 계산되고, 시간대 설정을
+   * 바꾸면 벽시계 시각이 달라진다. 모양 때문이 아니다.
+   *
+   * @param written 행 노트에 적힌 frontmatter — 지난 동기화 사본.
+   * @param notionProps 원격 행의 속성(`page.properties`).
+   */
+  hasOutdatedDateForm(
+    written: Readonly<Record<string, unknown>>,
+    notionProps: Record<string, unknown>,
+  ): boolean {
+    const zone = this.zone();
+    const fresh = this.fromNotionProperties(notionProps);
+    return Object.entries(notionProps).some(([key, rawProp]) => {
+      const type = (rawProp as { type?: string } | null)?.type ?? "";
+      if (!DATE_VALUED_TYPES.has(type) && !TIMESTAMP_TYPES.has(type)) return false;
+      const endKey = rangeEndKeyOf(key, type, notionProps);
+      // 적히지 않은 키는 null 로 본다.
+      const sameForm = [key, endKey].every(
+        (k) => k === null || sameFrontmatterValue(written[k] ?? null, fresh[k] ?? null),
+      );
+      return (
+        !sameForm &&
+        sameFrontmatterValue(
+          momentForm(spanOf(written, key, endKey), zone),
+          momentForm(spanOf(fresh, key, endKey), zone),
+        )
+      );
+    });
+  }
+
   fromNotionProperties(notionProps: Record<string, unknown>): Record<string, unknown> {
+    const zone = this.zone();
     const result: Record<string, unknown> = {};
 
     for (const [key, rawProp] of Object.entries(notionProps)) {
       const prop = rawProp as { type: string; [k: string]: unknown };
       if (prop.type === "title") continue;
-      const value = this.extractValue(prop);
-      if (value !== undefined) {
+      const value = this.extractValue(prop, zone);
+      if (value === undefined) continue;
+      const endKey = rangeEndKeyOf(key, prop.type, notionProps);
+      if (endKey !== null && isDateRangeValue(value) && value.end != null) {
+        result[key] = value.start;
+        result[endKey] = value.end;
+      } else {
         result[key] = value;
       }
     }
@@ -161,7 +309,55 @@ export class PropertyMapper {
     return result;
   }
 
-  private convertBySchema(type: string, value: unknown): NotionPropertyValue | null {
+  /**
+   * 이 행에서 Notion 이 정하는 frontmatter 키 — {@link fromNotionProperties} 가 적을 수 있는 키 전부다.
+   * 값이 비어 적지 않은 속성과 지금은 기간이 아니어서 적지 않은 짝 키도 든다. pull 이 받은 속성을 로컬
+   * frontmatter 와 합칠 때 이 밖의 키는 로컬 것으로 둔다.
+   */
+  ownedKeys(notionProps: Readonly<Record<string, unknown>>): string[] {
+    const keys: string[] = [];
+    for (const [key, rawProp] of Object.entries(notionProps)) {
+      const type = (rawProp as { type?: string } | null)?.type ?? "";
+      if (type === "title") continue;
+      keys.push(key);
+      const endKey = rangeEndKeyOf(key, type, notionProps);
+      if (endKey !== null) keys.push(endKey);
+    }
+    return keys;
+  }
+
+  private zone(): string {
+    return this.options.timeZone ?? systemTimeZone();
+  }
+
+  /** `key` 가 날짜 속성의 짝 키면 그 날짜 속성 이름. */
+  private rangeOwnerOf(key: string): string | null {
+    if (!key.endsWith(RANGE_END_SUFFIX) || this.schema.has(key)) return null;
+    const owner = key.slice(0, -RANGE_END_SUFFIX.length);
+    return this.schema.get(owner)?.type === "date" ? owner : null;
+  }
+
+  /** 날짜 속성인데 짝 키를 쓰는가 — 같은 이름의 속성이 DB 에 따로 없을 때. */
+  private hasRangeKey(name: string): boolean {
+    return this.schema.get(name)?.type === "date" && !this.schema.has(name + RANGE_END_SUFFIX);
+  }
+
+  /**
+   * 짝 키를 쓰는 날짜 속성에 보낼 값 — 시작(`name`)과 끝(`name_end`)을 함께. 둘 다 비었으면 지운다.
+   * 끝만 있으면 보낼 수 없다(Notion 의 날짜는 시작이 있어야 한다) — null.
+   */
+  private rangeRequest(
+    name: string,
+    values: Readonly<Record<string, unknown>>,
+    zone: string,
+  ): NotionPropertyValue | null {
+    const start = plainFrontmatterValue(values[name]);
+    const end = plainFrontmatterValue(values[name + RANGE_END_SUFFIX]);
+    if (isBlank(start)) return isBlank(end) ? { date: null } : null;
+    return this.convertBySchema("date", isBlank(end) ? start : { start, end }, zone);
+  }
+
+  private convertBySchema(type: string, value: unknown, zone: string): NotionPropertyValue | null {
     switch (type) {
       case "rich_text":
         return richTextValue(String(value));
@@ -195,14 +391,14 @@ export class PropertyMapper {
 
       case "date": {
         if (typeof value === "object" && value !== null && "start" in value) {
-          const obj = value as { start: string; end?: string | null };
-          return { date: { start: obj.start, end: obj.end ?? null } };
+          const obj = value as { start: unknown; end?: unknown };
+          const start = dateText(obj.start, zone);
+          const end = isBlank(obj.end) ? null : dateText(obj.end, zone);
+          if (start === null || (end === null && !isBlank(obj.end))) return null;
+          return { date: { start, end } };
         }
-        const dateStr = String(value);
-        if (DATE_REGEX.test(dateStr)) {
-          return { date: { start: dateStr, end: null } };
-        }
-        return null;
+        const start = dateText(value, zone);
+        return start === null ? null : { date: { start, end: null } };
       }
 
       case "url":
@@ -290,7 +486,7 @@ export class PropertyMapper {
     }
   }
 
-  private inferAndConvert(value: unknown): NotionPropertyValue | null {
+  private inferAndConvert(value: unknown, zone: string): NotionPropertyValue | null {
     if (typeof value === "boolean") {
       return { checkbox: value };
     }
@@ -303,8 +499,9 @@ export class PropertyMapper {
       };
     }
     if (typeof value === "string") {
-      if (DATE_REGEX.test(value)) {
-        return { date: { start: value, end: null } };
+      const start = dateText(value, zone);
+      if (start !== null) {
+        return { date: { start, end: null } };
       }
       if (value.startsWith("http://") || value.startsWith("https://")) {
         return { url: value };
@@ -314,7 +511,7 @@ export class PropertyMapper {
     return null;
   }
 
-  private extractValue(prop: { type: string; [k: string]: unknown }): unknown {
+  private extractValue(prop: { type: string; [k: string]: unknown }, zone: string): unknown {
     switch (prop.type) {
       case "rich_text": {
         const arr = asArray<{ plain_text: string }>(prop.rich_text);
@@ -331,12 +528,8 @@ export class PropertyMapper {
       }
       case "checkbox":
         return prop.checkbox;
-      case "date": {
-        const dateObj = prop.date as { start: string; end?: string | null } | null;
-        if (!dateObj) return null;
-        if (dateObj.end) return { start: dateObj.start, end: dateObj.end };
-        return dateObj.start;
-      }
+      case "date":
+        return dateValue(prop.date, zone);
       case "url":
         return prop.url;
       case "email":
@@ -348,9 +541,10 @@ export class PropertyMapper {
         return status?.name ?? null;
       }
       case "created_time":
-        return prop.created_time;
-      case "last_edited_time":
-        return prop.last_edited_time;
+      case "last_edited_time": {
+        const time = prop[prop.type];
+        return typeof time === "string" ? toWallTime(time, zone) : null;
+      }
       case "people": {
         return asArray<{ name?: string; id: string }>(prop.people).map((p) => p.name ?? p.id);
       }
@@ -374,6 +568,7 @@ export class PropertyMapper {
       case "formula": {
         const formula = prop.formula as { type: string; [k: string]: unknown } | undefined;
         if (!formula) return null;
+        if (formula.type === "date") return dateValue(formula.date, zone);
         return formula[formula.type];
       }
       case "relation": {
@@ -392,8 +587,9 @@ export class PropertyMapper {
         if (!rollup) return null;
         if (rollup.type === "array") {
           const arr = asArray<{ type: string; [k: string]: unknown }>(rollup.array);
-          return arr.map((item) => this.extractValue(item));
+          return arr.map((item) => this.extractValue(item, zone));
         }
+        if (rollup.type === "date") return dateValue(rollup.date, zone);
         return rollup[rollup.type] ?? null;
       }
       case "unique_id": {
@@ -415,6 +611,116 @@ export class PropertyMapper {
         return null;
     }
   }
+}
+
+/** 날짜(시각) 값 — 기간이면 끝까지. */
+interface DateRangeValue {
+  start: unknown;
+  end?: unknown;
+}
+
+function isDateRangeValue(value: unknown): value is DateRangeValue {
+  return typeof value === "object" && value !== null && !Array.isArray(value) && "start" in value;
+}
+
+function isBlank(value: unknown): boolean {
+  return value === null || value === undefined || (typeof value === "string" && !value.trim());
+}
+
+/**
+ * 날짜 속성 값의 짝 키 — 날짜 값을 낼 수 있는 속성이고, 같은 이름의 속성이 따로 없을 때.
+ * `properties` 는 그 행의 속성 전부(`page.properties`)다.
+ */
+function rangeEndKeyOf(
+  name: string,
+  type: string,
+  properties: Readonly<Record<string, unknown>>,
+): string | null {
+  if (!DATE_VALUED_TYPES.has(type)) return null;
+  const endKey = name + RANGE_END_SUFFIX;
+  return endKey in properties ? null : endKey;
+}
+
+/**
+ * Notion 의 날짜 값(`{start, end, time_zone}`)을 볼트에 적을 모양으로 — 시각은 시간대의 벽시계 시각.
+ * 끝이 있으면 `{start, end}`, 없으면 시작 글자. 비었으면 null.
+ */
+function dateValue(date: unknown, zone: string): string | { start: string; end: string } | null {
+  const value = date as { start?: unknown; end?: unknown } | null | undefined;
+  if (typeof value?.start !== "string" || !value.start) return null;
+  const start = toWallTime(value.start, zone);
+  return typeof value.end === "string" && value.end
+    ? { start, end: toWallTime(value.end, zone) }
+    : start;
+}
+
+/**
+ * 로컬 날짜 값을 pull 이 적는 모양으로 — 오프셋이 붙은 시각은 시간대의 벽시계 시각, YAML 이 읽은 날짜는
+ * 적힌 글자. 날짜가 아니면 그대로.
+ */
+function localDateForm(value: unknown, zone: string): unknown {
+  const plain = plainFrontmatterValue(value);
+  return typeof plain === "string" ? toWallTime(plain, zone) : plain;
+}
+
+/**
+ * 날짜 키와 그 짝 키에 적힌 값을 기간 하나로 — 예전 모양(`{start, end}` 객체 · 수식의 `time_zone` 이 붙은
+ * 객체)과 짝 키를 같은 모양으로 편다. 짝 키를 쓰지 않는 속성이면 `endKey` 가 null.
+ */
+function spanOf(
+  values: Readonly<Record<string, unknown>>,
+  key: string,
+  endKey: string | null,
+): { start: unknown; end: unknown } {
+  const value = plainFrontmatterValue(values[key]);
+  if (isDateRangeValue(value)) return { start: value.start, end: value.end };
+  return { start: value, end: endKey === null ? null : values[endKey] };
+}
+
+/** 날짜 값을 같은 순간이면 같은 모양으로 — 시각은 시간대의 벽시계 시각, 목록 · 기간은 안쪽까지. */
+function momentForm(value: unknown, zone: string): unknown {
+  const plain = plainFrontmatterValue(value);
+  if (Array.isArray(plain)) return plain.map((item) => momentForm(item, zone));
+  if (isDateRangeValue(plain)) {
+    return {
+      start: momentForm(plain.start, zone),
+      end: isBlank(plain.end) ? null : momentForm(plain.end, zone),
+    };
+  }
+  return localDateForm(plain, zone) ?? null;
+}
+
+/**
+ * 날짜 속성에 보낼 글자 — 오프셋 없는 시각에는 시간대의 오프셋을 붙인다. 날짜로 읽을 수 없으면 null.
+ */
+function dateText(value: unknown, zone: string): string | null {
+  const text = String(plainFrontmatterValue(value));
+  if (!DATE_REGEX.test(text)) return null;
+  return isWallTime(text) ? toZonedIso(text, zone) : text;
+}
+
+/** 원격 행의 제목 조각들 — 제목 타입 속성. */
+function titleRunsOf(remote: Readonly<Record<string, unknown>>): RichTextItem[] | null {
+  for (const prop of Object.values(remote)) {
+    const value = prop as { type?: string; title?: unknown } | null;
+    if (value?.type === "title") return Array.isArray(value.title) ? value.title : null;
+  }
+  return null;
+}
+
+/** 원격 행의 글 속성 조각들. 그 속성이 글 속성이 아니거나 없으면 null. */
+function richTextRunsOf(
+  remote: Readonly<Record<string, unknown>> | undefined,
+  key: string,
+): RichTextItem[] | null {
+  const value = remote?.[key] as { type?: string; rich_text?: unknown } | undefined;
+  return value?.type === "rich_text" && Array.isArray(value.rich_text) ? value.rich_text : null;
+}
+
+/** 글 속성에 보낼 값 — 원격 조각이 있으면 그 서식 위에 바뀐 글자만 고친다. */
+function richTextRequest(text: string, runs: RichTextItem[] | null): NotionPropertyValue | null {
+  const patched = runs ? patchRichText(runs, text) : null;
+  return patched ? { rich_text: patched } : richTextValue(text);
 }
 
 /**

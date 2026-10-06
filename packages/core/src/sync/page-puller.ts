@@ -401,11 +401,13 @@ export class PagePuller {
     const title = this.notionClient.extractTitle(page);
 
     let properties: Record<string, unknown>;
+    // DB 모드의 행에서 Notion 이 정하는 키 — 속성과 제목. 나머지는 로컬 키다(F-08).
+    let notionKeys: string[] | undefined;
     if (isDatabaseMode(this.config)) {
       await this.ensureDbSchema();
-      properties = this.propertyMapper.fromNotionProperties(
-        (page as unknown as { properties: Record<string, unknown> }).properties,
-      );
+      const raw = (page as unknown as { properties: Record<string, unknown> }).properties;
+      properties = this.propertyMapper.fromNotionProperties(raw);
+      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title"];
     } else {
       properties = this.notionClient.extractProperties(page);
     }
@@ -443,6 +445,7 @@ export class PagePuller {
         preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined,
         notionExportCompact: fetched.compact,
         localContent: await readLocalNote(this.vaultFs, record.obsidianPath),
+        notionKeys,
       },
     );
     return { content, title, properties, bodyFingerprint: fetched.fingerprint };

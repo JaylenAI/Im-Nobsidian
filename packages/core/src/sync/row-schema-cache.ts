@@ -18,6 +18,8 @@ export class RowSchemaCache {
   constructor(
     private readonly loadSchema: SchemaLoader,
     private readonly wikilinkResolver: WikilinkResolver,
+    /** 빈 매퍼를 만든다 — 설정의 변환 옵션(시간대)을 따르게 호출측이 정한다. */
+    private readonly createMapper: () => PropertyMapper = () => new PropertyMapper(),
   ) {}
 
   mapperFor(databaseId: string): Promise<PropertyMapper> {
@@ -26,7 +28,7 @@ export class RowSchemaCache {
     if (cached) return cached;
 
     const created = this.loadSchema(databaseId).then((schema) => {
-      const mapper = new PropertyMapper();
+      const mapper = this.createMapper();
       mapper.setWikilinkResolver(this.wikilinkResolver);
       mapper.loadSchema(schema);
       return mapper;

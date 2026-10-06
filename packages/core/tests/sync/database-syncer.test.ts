@@ -293,6 +293,52 @@ describe("DatabaseSyncer", () => {
       );
     });
 
+    it("받은 속성을 로컬 frontmatter 에 합친다 — 로컬에만 있는 키 · 키 차례 · 적은 모양을 지킨다 (F-08)", async () => {
+      const local = [
+        "---",
+        "aliases: [별칭]",
+        "title: Updated Task",
+        "Status: Todo",
+        "# 손으로 단 주석",
+        "Tags: [a, b]",
+        "cssclasses:",
+        "  - wide",
+        "---",
+        "본문",
+        "",
+      ].join("\n");
+      (mockVaultFs.exists as any).mockResolvedValue(true);
+      (mockVaultFs.readFile as any).mockResolvedValue(local);
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([
+        {
+          id: "page-1",
+          last_edited_time: "2026-05-16T02:00:00.000Z",
+          properties: {
+            Name: { type: "title", title: [{ plain_text: "Updated Task" }] },
+            Status: { type: "select", select: { name: "Done" } },
+            Tags: { type: "multi_select", multi_select: [{ name: "a" }, { name: "b" }] },
+          },
+        },
+      ]);
+      mockNotionClient.extractTitle.mockReturnValue("Updated Task");
+      mockStateDb.getByNotionId.mockReturnValue({
+        id: "rec-1",
+        obsidianPath: "databases/tasks/Updated Task.md",
+        notionPageId: "page-1",
+        notionLastEdited: "2026-05-16T00:00:00.000Z",
+        contentHash: computeHash(local),
+      });
+
+      await syncer.pullAll();
+
+      const mdCall = (mockVaultFs.writeFile as any).mock.calls.find((c: string[]) =>
+        c[0].endsWith(".md"),
+      );
+      expect((mdCall[1] as string).split("---\n")[1]).toBe(
+        "aliases: [별칭]\ntitle: Updated Task\nStatus: Done\n# 손으로 단 주석\nTags: [a, b]\ncssclasses:\n  - wide\n",
+      );
+    });
+
     it("로컬·리모트 동시 수정이면 충돌로 보존 (manual 전략, 데이터 손실 방지)", async () => {
       // 로컬이 마지막 동기화 이후 수정됨(해시 불일치) + 리모트도 변경 → 충돌
       (mockVaultFs.readFile as any).mockResolvedValue("LOCALLY EDITED — 사용자 변경분");
@@ -799,6 +845,138 @@ describe("DatabaseSyncer", () => {
         seenAt: SEEN_NOW,
         bodyFingerprint: remoteBodyFingerprint("# Hello\n\nWorld"),
       });
+    });
+  });
+
+  describe("예전 버전이 적은 날짜 모양이 남은 행 (F-08)", () => {
+    // 업그레이드 전에 받은 행은 원격이 그대로라 다시 받지 않는다. 그대로 두면 Notion 에서 바뀔 때까지
+    // Obsidian 이 그 행의 날짜를 글로 본다 — 그런 행은 한 번 다시 받아 새 모양으로 쓴다.
+    const T = "2026-10-04T15:00:00.000Z";
+    const PATH = "databases/tasks/Task One.md";
+    const row = {
+      id: "page-1",
+      last_edited_time: T,
+      properties: {
+        Name: { type: "title", title: [{ plain_text: "Task One" }] },
+        마감: {
+          type: "date",
+          date: { start: "2026-10-01T01:00:00.000+00:00", end: null, time_zone: null },
+        },
+        생성일: { type: "created_time", created_time: "2026-10-04T14:44:00.000Z" },
+      },
+    };
+    /** 예전 버전이 받아 적은 행 노트 — 시각에 오프셋 · UTC. 별칭은 로컬에서 붙였다. */
+    const OLD = [
+      "---",
+      "title: Task One",
+      "aliases: [별칭]",
+      "마감: '2026-10-01T10:00:00.000+09:00'",
+      "생성일: '2026-10-04T14:44:00.000Z'",
+      "---",
+      "# Hello",
+      "",
+      "World",
+      "",
+    ].join("\n");
+
+    const seoulSyncer = () =>
+      new DatabaseSyncer(
+        {
+          ...createConfig([createDbConfig()]),
+          conversion: { ...DEFAULT_CONFIG.conversion, timeZone: "Asia/Seoul" },
+        },
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+        pipeline,
+        mockImageHandler as any,
+      );
+    /** 원격이 그 뒤로 바뀌지 않은 행의 레코드 — 사본은 `content`. */
+    const recordOf = (content: string) => ({
+      id: "rec-1",
+      obsidianPath: PATH,
+      notionPageId: "page-1",
+      ...settledObservation(T),
+      contentHash: computeHash(content),
+      baseSnapshot: Buffer.from(content, "utf-8"),
+      localLastModified: T,
+      syncDirection: "both",
+      fileType: "db-row",
+      status: "synced",
+      localMtime: null,
+      localFileSize: null,
+    });
+    const mdWrites = () =>
+      (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) => String(c[0]).endsWith(".md"));
+
+    beforeEach(() => {
+      mockNotionClient.getDatabaseSchema.mockResolvedValue({
+        Name: { id: "title", type: "title" },
+        마감: { id: "p1", type: "date" },
+        생성일: { id: "p2", type: "created_time" },
+      });
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([row]);
+      mockNotionClient.extractTitle.mockReturnValue("Task One");
+      (mockVaultFs.exists as any).mockResolvedValue(true);
+    });
+
+    it("원격이 그대로여도 한 번 다시 받아 새 모양으로 쓴다 — 로컬에만 있는 키 · 차례는 그대로", async () => {
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(OLD));
+      (mockVaultFs.readFile as any).mockResolvedValue(OLD);
+
+      const result = await seoulSyncer().pullAll();
+
+      expect(result).toMatchObject({ updated: 1, failed: [] });
+      expect(result.conflicts).toEqual([]);
+      expect(mockNotionClient.getPageMarkdown).toHaveBeenCalledTimes(1);
+      const written = String(mdWrites()[0]![1]);
+      expect(written.slice(0, written.indexOf("\n---\n"))).toBe(
+        [
+          "---",
+          "title: Task One",
+          "aliases: [별칭]",
+          "마감: 2026-10-01T10:00",
+          "생성일: 2026-10-04T23:44",
+        ].join("\n"),
+      );
+    });
+
+    it("새 모양으로 쓴 행은 다음 pull 이 건너뛴다", async () => {
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(OLD));
+      (mockVaultFs.readFile as any).mockResolvedValue(OLD);
+      await seoulSyncer().pullAll();
+      const written = String(mdWrites()[0]![1]);
+      vi.clearAllMocks();
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(written));
+      (mockVaultFs.readFile as any).mockResolvedValue(written);
+
+      const result = await seoulSyncer().pullAll();
+
+      expect(result).toMatchObject({ updated: 0, failed: [] });
+      expect(mockNotionClient.getPageMarkdown).not.toHaveBeenCalled();
+      expect(mdWrites()).toHaveLength(0);
+    });
+
+    it("로컬을 고친 행은 다시 받지 않는다 — 원격을 읽지 않고, 편집을 올린 뒤 받는다", async () => {
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(OLD));
+      (mockVaultFs.readFile as any).mockResolvedValue(`${OLD}로컬에서 더한 문단\n`);
+
+      const result = await seoulSyncer().pullAll();
+
+      expect(result).toMatchObject({ updated: 0, failed: [] });
+      expect(mockNotionClient.getPageMarkdown).not.toHaveBeenCalled();
+      expect(mdWrites()).toHaveLength(0);
+    });
+
+    it("받기 전에 세어 볼 때(dry-run)도 다시 받을 행으로 센다", async () => {
+      mockStateDb.getByNotionId.mockReturnValue(recordOf(OLD));
+      (mockVaultFs.readFile as any).mockResolvedValue(OLD);
+
+      const planned = await seoulSyncer().planDatabase(createDbConfig());
+
+      expect(planned).toEqual([
+        { pageId: "page-1", path: PATH, operation: "update", restore: false },
+      ]);
     });
   });
 

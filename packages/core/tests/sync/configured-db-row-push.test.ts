@@ -404,4 +404,69 @@ describe("설정 DB · DB 모드의 행 push 는 행 경로를 탄다", () => {
       });
     });
   });
+
+  describe("F-08 행 속성 모양 — 왕복", () => {
+    const SEOUL = { ...DEFAULT_CONFIG.conversion, timeZone: "Asia/Seoul" };
+    /** 로컬에만 있는 키 · 흐름 목록 · 주석 · 기간 짝 키 · 벽시계 시각이 든 행. */
+    const note = (title: string) =>
+      [
+        "---",
+        "aliases: [별칭]",
+        `title: ${title}`,
+        "진척: 1",
+        "마감: 2026-10-01T10:00",
+        "마감_end: 2026-10-03T18:00",
+        "메모: 첫 메모 # 손으로 단 주석",
+        "cssclasses:",
+        "  - wide",
+        "---",
+        "본문 한 줄",
+        "",
+      ].join("\n");
+
+    beforeEach(() => {
+      notion.client.getDatabaseSchema.mockResolvedValue({
+        ...SCHEMA,
+        마감: { id: "p4", type: "date" },
+      });
+    });
+
+    /** Notion 에서 진척을 고친다 — Notion 은 오프셋을 붙여 보낸 시각을 UTC 로 돌려준다. */
+    async function editInNotion(row: MemoryPage): Promise<void> {
+      await notion.client.updatePageProperties(row.id, { 진척: { number: 2 } });
+      row.properties["마감"] = {
+        type: "date",
+        date: {
+          start: "2026-10-01T01:00:00.000+00:00",
+          end: "2026-10-03T09:00:00.000+00:00",
+          time_zone: null,
+        },
+      };
+      clearCalls();
+    }
+
+    for (const [mode, config, path, title] of [
+      ["설정 DB", () => ({ ...configuredDb(), conversion: SEOUL }), "Tasks/Row.md", "Row"],
+      ["DB 모드", () => ({ ...databaseMode(), conversion: SEOUL }), "note.md", "note"],
+    ] as const) {
+      it(`${mode}: 시각 · 기간은 같은 순간으로 올라가고, 받을 때는 Notion 에서 고친 줄만 바뀐다`, async () => {
+        orchestrator = build(config());
+        await seed({ [path]: note(title) });
+        const row = pageOf(path);
+        expect(row.properties["마감"]).toMatchObject({
+          date: { start: "2026-10-01T10:00:00+09:00", end: "2026-10-03T18:00:00+09:00" },
+        });
+        expect(Object.keys(row.properties)).not.toContain("마감_end");
+        expect(Object.keys(row.properties)).not.toContain("aliases");
+
+        await editInNotion(row);
+        const pulled = await orchestrator.pull();
+
+        expect(pulled.failed).toEqual([]);
+        expect(vault.read(path)).toBe(note(title).replace("진척: 1", "진척: 2"));
+        expect(await orchestrator.push()).toMatchObject({ created: 0, updated: 0, failed: [] });
+        expect(notion.client.updatePageProperties).not.toHaveBeenCalled();
+      });
+    }
+  });
 });

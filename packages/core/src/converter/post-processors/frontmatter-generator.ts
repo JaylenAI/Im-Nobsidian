@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
+import { mergeRowFrontmatter } from "../frontmatter-merge.js";
 import { restoreLinkMarkersInValue } from "../link-restore.js";
-import { stringifyFrontmatter } from "../../utils/frontmatter.js";
+import { joinFrontmatter, stringifyFrontmatter } from "../../utils/frontmatter.js";
 
 export class FrontmatterGenerator implements Processor {
   readonly name = "FrontmatterGenerator";
@@ -14,9 +15,18 @@ export class FrontmatterGenerator implements Processor {
     }
 
     // Pull 시 속성 값에 박힌 위키링크/임베드 보존 마커를 [[...]] 로 복원한다.
-    const restoreMarkers = input.context.direction === "pull";
-    const normalized = normalizeProperties(properties, restoreMarkers);
-    const content = stringifyFrontmatter(input.content, normalized);
+    const pull = input.context.direction === "pull";
+    const normalized = normalizeProperties(properties, pull);
+
+    // 행은 받은 속성을 로컬 frontmatter 에 합친다 — 로컬에만 있는 키 · 키 차례 · 적은 모양을 지킨다(F-08).
+    const { localContent, notionKeys } = input.metadata;
+    const merged =
+      pull && localContent !== undefined && notionKeys
+        ? mergeRowFrontmatter(localContent, normalized, new Set(notionKeys))
+        : null;
+    const content = merged
+      ? joinFrontmatter(merged, input.content)
+      : stringifyFrontmatter(input.content, normalized);
 
     return {
       content,

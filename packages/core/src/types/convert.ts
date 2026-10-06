@@ -27,6 +27,11 @@ export interface ProcessorMetadata {
    * 펜스 기호 S-20, 주석 S-29)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
    */
   readonly localContent?: string;
+  /**
+   * 행 노트에서 Notion 이 정하는 frontmatter 키 — 행을 받을 때만. 받은 속성을 로컬 frontmatter 에 합칠 때
+   * 이 밖의 키(`aliases` 등)는 로컬 것으로 두고, 키 차례 · 적은 모양도 로컬을 따른다(F-08).
+   */
+  readonly notionKeys?: readonly string[];
   /** Markdown API 로 보낼 수 없어 본문을 쓴 뒤 블록으로 채울 코드({@link DeferredCode}). */
   readonly deferredCode?: DeferredCode[];
   readonly [key: string]: unknown;

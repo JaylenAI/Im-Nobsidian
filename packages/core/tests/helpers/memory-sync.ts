@@ -143,11 +143,15 @@ export interface MemoryNotionOptions {
 
 type PropertyRequest = Record<string, unknown>;
 
-/** 보낸 속성 값(요청 모양)을 Notion 이 돌려주는 모양으로 — 글은 pull 이 읽는 `plain_text` 를 채운다. */
+/**
+ * 보낸 속성 값(요청 모양)을 Notion 이 돌려주는 모양으로 — 글 조각은 pull 이 읽는 `plain_text` 와 조각의
+ * 타입(`text` · `mention` · `equation`)을 채운다. 요청은 타입을 적지 않아도 된다(SDK 5.23.1).
+ */
 function storedProperty(request: PropertyRequest): Record<string, unknown> {
   const [type, value] = Object.entries(request)[0]!;
   const text = (items: unknown) =>
-    (items as Array<{ text?: { content?: string } }>).map((item) => ({
+    (items as Array<{ type?: string; text?: { content?: string } }>).map((item) => ({
+      type: item.type ?? ("mention" in item ? "mention" : "equation" in item ? "equation" : "text"),
       ...item,
       plain_text: item.text?.content ?? "",
     }));
