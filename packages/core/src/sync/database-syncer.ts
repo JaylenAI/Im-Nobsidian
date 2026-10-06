@@ -27,7 +27,12 @@ import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
-import { snapshotFrontmatter } from "../utils/frontmatter.js";
+import {
+  replaceFrontmatterLines,
+  snapshotFrontmatter,
+  splitFrontmatter,
+} from "../utils/frontmatter.js";
+import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator } from "../view/sidecar-generator.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
@@ -96,6 +101,12 @@ export interface RowProgress {
   planned(count: number): void;
   done(item: ProgressItem): void;
 }
+
+/**
+ * 조회한 행 하나에 할 일 — 건너뜀 · 되살림(볼트에서 사라짐) · 받음 · 날짜 모양만 고쳐 씀(원격은 그대로,
+ * F-08).
+ */
+type RowAction = "skip" | "restore" | "pull" | "reform";
 
 function emptyDatabaseSyncResult(): DatabaseSyncResult {
   return {
@@ -261,20 +272,19 @@ export class DatabaseSyncer {
     });
 
     // 받을 행을 먼저 가른다 — 진행 표시가 이 DB 에서 받을 행 수를 받기 전에 안다.
-    const pending: { page: PageObjectResponse; restoring: boolean }[] = [];
+    const pending: { page: PageObjectResponse; action: Exclude<RowAction, "skip"> }[] = [];
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
         const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
-        // 원격 무변경인데도 되살리려고 내려온 행인가 — 아래 집계에서 updated 와 가른다.
-        if (action !== "skip") pending.push({ page, restoring: action === "restore" });
+        if (action !== "skip") pending.push({ page, action });
       } catch (error) {
         failed.push(rowFailure(page, error));
       }
     }
     opts?.progress?.planned(pending.length);
 
-    for (const { page, restoring } of pending) {
+    for (const { page, action } of pending) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
 
@@ -284,7 +294,10 @@ export class DatabaseSyncer {
         // 같은 결함군 — 같은 계약이 두 경로에 있으면 한쪽만 빠진다). 볼트의 887개 파일 중
         // 629개가 DB 행이므로 보호 공백이 오히려 다수였다.
         const outcome = await withDeadline(
-          () => this.pullDatabasePage(page, dbConfig),
+          () =>
+            action === "reform" && record
+              ? this.rewriteDateForms(page, record)
+              : this.pullDatabasePage(page, dbConfig),
           this.config.advanced.itemTimeoutMs,
           `pull ${dbConfig.localFolder}/${page.id}`,
         );
@@ -293,7 +306,8 @@ export class DatabaseSyncer {
           created++;
           if (outcome.action === "written") writtenPaths.push(outcome.path);
         } else if (outcome.action === "written") {
-          if (restoring) restored++;
+          // 원격 무변경인데도 되살린 행은 updated 와 가른다.
+          if (action === "restore") restored++;
           else updated++;
           writtenPaths.push(outcome.path);
         } else if (outcome.action === "conflict") {
@@ -467,7 +481,8 @@ export class DatabaseSyncer {
    *    (틀린) 전제로 db-row 를 제외해 두었기에 양쪽 어디에도 복원 경로가 없는 상태였다.
    *    deleteSync 가 켜져 있으면 되살리지 않는다 — 지운 것은 Notion 에서도 지우라는 뜻이고, sync 는
    *    pull 을 먼저 돌려 되살리면 뒤이은 push 가 지울 것을 잃는다(detectMissingLocalFiles 와 같다).
-   *  · 예전 버전이 적은 날짜 모양이 남은 행은 한 번 다시 받는다({@link outdatedDateForm}, F-08).
+   *  · 예전 버전이 적은 날짜 모양이 남은 행은 그 줄만 새 모양으로 고쳐 쓴다({@link outdatedDateForm},
+   *    F-08).
    */
   private async rowAction(
     dbConfig: DatabaseSyncConfig,
@@ -475,33 +490,76 @@ export class DatabaseSyncer {
     record: SyncRecord | null,
     wholeDbInScope: boolean,
     scope: readonly string[] | undefined,
-  ): Promise<"skip" | "restore" | "pull"> {
+  ): Promise<RowAction> {
     if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) return "skip";
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
     if (misplaced || this.remoteVerdict(record, page) !== "unchanged") return "pull";
-    if (await this.outdatedDateForm(record, page)) return "pull";
+    if (await this.outdatedDateForm(record, page)) return "reform";
     if (this.config.sync.deleteSync) return "skip";
     return (await this.vaultFs.exists(record.obsidianPath)) ? "skip" : "restore";
   }
 
   /**
-   * 원격이 그대로인 행이지만 예전 버전이 적은 날짜 모양(`…Z` · `…+09:00` · `{start, end}`)이 남아 다시
-   * 받아 새 모양으로 쓸 행인가(F-08, {@link PropertyMapper.hasOutdatedDateForm}). 다시 받아 쓰면 사본도 새
-   * 모양이 되어 다음 pull 은 건너뛴다.
+   * 원격이 그대로인 행이지만 예전 버전이 적은 날짜 모양(`…Z` · `…+09:00` · `{start, end}`)이 남아 새
+   * 모양으로 고쳐 쓸 행인가(F-08, {@link PropertyMapper.outdatedDateKeys}). 고쳐 쓰면 사본도 새 모양이
+   * 되어 다음 pull 은 건너뛴다.
    *
-   * 지난 동기화 뒤 로컬을 고친 행은 고르지 않는다 — 받아도 로컬 편집을 지키느라 쓰지 않으니 pull 마다 원격을
-   * 읽기만 한다. 그 편집을 올린 뒤의 pull 이 고른다. 로컬 파일을 읽지 못하면 고르지 않는다.
+   * 지난 동기화 뒤 로컬을 고친 행은 고르지 않는다 — 로컬 편집을 지키느라 쓰지 않으니 pull 마다 고르기만
+   * 한다. 그 편집을 올린 뒤의 pull 이 고른다. 로컬 파일을 읽지 못하면 고르지 않는다.
    */
   private async outdatedDateForm(record: SyncRecord, page: PageObjectResponse): Promise<boolean> {
     const base = snapshotFrontmatter(record.baseSnapshot);
-    const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
-    if (base === null || !this.propertyMapper.hasOutdatedDateForm(base, raw)) return false;
+    if (
+      base === null ||
+      this.propertyMapper.outdatedDateKeys(base, rowProperties(page)).length === 0
+    ) {
+      return false;
+    }
     try {
       return computeHash(await this.vaultFs.readFile(record.obsidianPath)) === record.contentHash;
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 예전 버전이 적은 날짜 모양이 남은 행에서 그 키들만 새 모양으로 고쳐 쓴다(F-08) — 원격이 그대로라 본문 ·
+   * 첨부는 다시 받지 않는다. 본문은 한 글자도 바꾸지 않고, 다른 키의 줄은 그대로 둔다(키 단위로 나눠 읽을
+   * 수 없는 frontmatter 는 값만 지킨다 — {@link mergeRowFrontmatter}).
+   *
+   * 예전에는 행을 통째로 다시 받았다. 행마다 본문을 읽어 요청이 늘고, 다시 그릴 때마다 달라지는 본문(빈
+   * 블록 · 첨부 이름)까지 바뀌었다 — 실볼트 사본에서 다시 받은 149행 중 99행.
+   *
+   * 고른 뒤 로컬을 고쳤으면 쓰지 않는다(`skipped`) — 이어지는 push 가 올린다.
+   */
+  private async rewriteDateForms(
+    page: PageObjectResponse,
+    record: SyncRecord,
+  ): Promise<PullOutcome> {
+    const path = record.obsidianPath;
+    const local = await this.vaultFs.readFile(path);
+    if (computeHash(local) !== record.contentHash) return { action: "skipped", path };
+
+    const raw = rowProperties(page);
+    const keys = this.propertyMapper.outdatedDateKeys(splitFrontmatter(local).data, raw);
+    // 고를 때 견준 값 그대로 적는다 — 다음 pull 이 같은 값으로 견줘 다시 고르지 않는다.
+    const fresh = this.propertyMapper.fromNotionProperties(raw);
+    const pulled = Object.fromEntries(
+      keys.filter((key) => Object.hasOwn(fresh, key)).map((key) => [key, fresh[key]]),
+    );
+    const lines = keys.length > 0 ? mergeRowFrontmatter(local, pulled, new Set(keys)) : null;
+    const content = lines === null ? null : replaceFrontmatterLines(local, lines);
+    if (content === null) return { action: "unchanged", path };
+
+    await this.vaultFs.writeFile(path, content);
+    // 원격을 본 기록은 그대로 둔다 — 원격을 다시 읽지 않았다.
+    const stat = await this.vaultFs.getFileStat(path);
+    this.stateDb.transaction(() => {
+      this.stateDb.updateHash(record.id, computeHash(content), Buffer.from(content, "utf-8"));
+      if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
+    });
+    return { action: "written", path };
   }
 
   /** 이 DB 의 추적 행 가운데 이번 조회에 없던 것 — 지워졌는지는 아직 모른다. */
@@ -1100,6 +1158,11 @@ export class DatabaseSyncer {
 
     return { action: "written", path: filePath };
   }
+}
+
+/** 원격 행의 속성(`page.properties`). */
+function rowProperties(page: PageObjectResponse): Record<string, unknown> {
+  return (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
 }
 
 /**

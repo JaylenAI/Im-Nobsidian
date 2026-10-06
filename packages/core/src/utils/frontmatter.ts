@@ -236,15 +236,38 @@ export function splitFrontmatter(text: string): FrontmatterSplit {
   const input = text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
   const none: FrontmatterSplit = { data: {}, content: input, hasFrontmatter: false };
   const lines = input.split("\n");
-  if (!DELIMITER_LINE_RE.test(lines[0]!)) return none;
-  // gray-matter 는 `---` 로 «시작하는» 첫 줄에서 닫는다. 그 줄이 `---` 뿐이 아니면(`----` · `---x`)
-  // Obsidian 은 더 내려가 닫지만, 그 사이는 키-값 YAML 일 수 없다(맨 앞 `---` 는 문서 구분이다).
-  const close = lines.findIndex((line, i) => i > 0 && line.startsWith("---"));
-  if (close === -1 || !DELIMITER_LINE_RE.test(lines[close]!)) return none;
+  const close = closingLineIndex(lines);
+  if (close === -1) return none;
 
   const data: unknown = matter(input, {}).data;
   if (!isYamlMapping(data)) return none;
   return { data, content: lines.slice(close + 1).join("\n"), hasFrontmatter: true };
+}
+
+/**
+ * 노트의 frontmatter 줄만 `lines` 로 바꾼다 — 여닫는 줄 · 본문 · 맨 앞 BOM 은 한 글자도 바꾸지 않는다.
+ * 노트의 frontmatter 줄이 CRLF 면 바꾼 줄도 CRLF 다. 노트가 frontmatter 로 시작하지 않으면 null.
+ *
+ * {@link joinFrontmatter} 는 본문을 받아 새 노트를 짓는다 — 본문 끝 줄바꿈 · 닫는 줄 뒤를 그 모양으로
+ * 맞춘다. 여기는 이미 있는 노트에서 frontmatter 만 고쳐 쓸 때 쓴다.
+ */
+export function replaceFrontmatterLines(note: string, lines: readonly string[]): string | null {
+  const bom = note.charCodeAt(0) === 0xfeff ? note[0]! : "";
+  const noteLines = note.slice(bom.length).split("\n");
+  const close = closingLineIndex(noteLines);
+  if (close === -1) return null;
+  const crlf = noteLines.slice(1, close).some((line) => line.endsWith("\r"));
+  const yaml = lines.map((line) => (crlf && !line.endsWith("\r") ? `${line}\r` : line));
+  return bom + [noteLines[0]!, ...yaml, ...noteLines.slice(close)].join("\n");
+}
+
+/** frontmatter 를 닫는 줄의 차례 — `lines` 는 BOM 을 뗀 노트의 줄이다. frontmatter 로 시작하지 않으면 -1. */
+function closingLineIndex(lines: readonly string[]): number {
+  if (!DELIMITER_LINE_RE.test(lines[0]!)) return -1;
+  // gray-matter 는 `---` 로 «시작하는» 첫 줄에서 닫는다. 그 줄이 `---` 뿐이 아니면(`----` · `---x`)
+  // Obsidian 은 더 내려가 닫지만, 그 사이는 키-값 YAML 일 수 없다(맨 앞 `---` 는 문서 구분이다).
+  const close = lines.findIndex((line, i) => i > 0 && line.startsWith("---"));
+  return close !== -1 && DELIMITER_LINE_RE.test(lines[close]!) ? close : -1;
 }
 
 /** YAML 이 키-값으로 읽혔는가. 글 · 목록 · 날짜(`Date`) · null 은 아니다. */
