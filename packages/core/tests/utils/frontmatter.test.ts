@@ -7,6 +7,7 @@ import {
   joinFrontmatter,
   parseFrontmatter,
   plainFrontmatterValue,
+  replaceFrontmatterLines,
   sameFrontmatterValue,
   splitFrontmatter,
   stringifyFrontmatter,
@@ -123,6 +124,42 @@ describe("frontmatterLines · joinFrontmatter — 줄 단위로 합칠 때 (F-08
     );
     expect(joinFrontmatter(["", "  "], "본문")).toBe("본문\n");
     expect(joinFrontmatter([], "")).toBe("\n");
+  });
+});
+
+describe("replaceFrontmatterLines — 있는 노트의 frontmatter 만 고쳐 쓸 때 (F-08)", () => {
+  it("여닫는 줄 사이만 바꾼다 — 본문의 구분선 · 끝 공백 · 끝 줄바꿈 없음은 그대로", () => {
+    const note = "---\na: 1\nb: 2\n---\n---\n본문  \n\n\n끝";
+    expect(replaceFrontmatterLines(note, ["a: 1", "b: 3"])).toBe(
+      "---\na: 1\nb: 3\n---\n---\n본문  \n\n\n끝",
+    );
+    expect(replaceFrontmatterLines("---\na: 1\n---", ["a: 2"])).toBe("---\na: 2\n---");
+  });
+
+  it("빈 frontmatter 에도 줄을 넣고 · 맨 앞 BOM 은 남긴다", () => {
+    expect(replaceFrontmatterLines("---\n---\n본문\n", ["a: 1"])).toBe("---\na: 1\n---\n본문\n");
+    expect(replaceFrontmatterLines("\ufeff---\na: 1\n---\n본문", ["a: 2"])).toBe(
+      "\ufeff---\na: 2\n---\n본문",
+    );
+  });
+
+  it("frontmatter 줄이 CRLF 면 바꾼 줄도 CRLF 로 — 여닫는 줄만 CRLF 면 LF 그대로", () => {
+    expect(replaceFrontmatterLines("---\r\na: 1\r\n---\r\n본문\r\n", ["a: 2", "b: 3"])).toBe(
+      "---\r\na: 2\r\nb: 3\r\n---\r\n본문\r\n",
+    );
+    expect(replaceFrontmatterLines("---\r\na: 1\n---\r\n본문", ["a: 2"])).toBe(
+      "---\r\na: 2\n---\r\n본문",
+    );
+    expect(replaceFrontmatterLines("---\r\na: 1\r\n---\r\n", ["a: 2\r"])).toBe(
+      "---\r\na: 2\r\n---\r\n",
+    );
+  });
+
+  it("frontmatter 로 시작하지 않으면 null — splitFrontmatter 와 같은 여닫는 줄", () => {
+    expect(replaceFrontmatterLines("본문", ["a: 1"])).toBeNull();
+    expect(replaceFrontmatterLines("---\na: 1\n본문", ["a: 2"])).toBeNull();
+    expect(replaceFrontmatterLines("---js\na: 1\n---\n", ["a: 2"])).toBeNull();
+    expect(replaceFrontmatterLines("---\na: 1\n---x\n", ["a: 2"])).toBeNull();
   });
 });
 
