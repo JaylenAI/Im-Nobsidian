@@ -253,39 +253,43 @@ export class PropertyMapper {
   }
 
   /**
-   * `written` 에 예전 버전이 적은 날짜 모양이 남았는가(F-08) — 날짜 · 생성일 · 수정일 · 날짜 수식 · 날짜
-   * 롤업 가운데, 지금 받으면 적을 값과 같은 순간인데 적힌 모양이 다른 키가 있다(`…Z` · `…+09:00` ·
-   * `{start, end}`). 원격이 그대로인 행은 다시 받지 않으므로, 이런 행은 따로 골라 한 번 다시 받아야 새
-   * 모양이 된다.
+   * `written` 에서 예전 버전이 적은 날짜 모양이 남은 키(F-08) — 날짜 · 생성일 · 수정일 · 날짜 수식 · 날짜
+   * 롤업 가운데, 지금 받으면 적을 값과 같은 순간인데 적힌 모양이 다른 것(`…Z` · `…+09:00` · `{start, end}`).
+   * 기간은 짝 키(`<이름>_end`)도 함께 — 둘 중 하나라도 적혀 있거나 받으면 적을 키만. 원격이 그대로인 행은
+   * 다시 받지 않으므로, 이런 행은 따로 골라 이 키들을 새 모양으로 고쳐 써야 한다.
    *
    * 값이 다른 키는 보지 않는다 — 수식 · 롤업은 행의 수정 시각을 바꾸지 않고 다시 계산되고, 시간대 설정을
    * 바꾸면 벽시계 시각이 달라진다. 모양 때문이 아니다.
    *
-   * @param written 행 노트에 적힌 frontmatter — 지난 동기화 사본.
+   * @param written 행 노트에 적힌 frontmatter.
    * @param notionProps 원격 행의 속성(`page.properties`).
+   * @returns 고쳐 쓸 키. 없으면 빈 배열.
    */
-  hasOutdatedDateForm(
+  outdatedDateKeys(
     written: Readonly<Record<string, unknown>>,
     notionProps: Record<string, unknown>,
-  ): boolean {
+  ): string[] {
     const zone = this.zone();
     const fresh = this.fromNotionProperties(notionProps);
-    return Object.entries(notionProps).some(([key, rawProp]) => {
+    const keys: string[] = [];
+    for (const [key, rawProp] of Object.entries(notionProps)) {
       const type = (rawProp as { type?: string } | null)?.type ?? "";
-      if (!DATE_VALUED_TYPES.has(type) && !TIMESTAMP_TYPES.has(type)) return false;
+      if (!DATE_VALUED_TYPES.has(type) && !TIMESTAMP_TYPES.has(type)) continue;
       const endKey = rangeEndKeyOf(key, type, notionProps);
+      const pair = (endKey === null ? [key] : [key, endKey]).filter(
+        (k) => Object.hasOwn(written, k) || Object.hasOwn(fresh, k),
+      );
       // 적히지 않은 키는 null 로 본다.
-      const sameForm = [key, endKey].every(
-        (k) => k === null || sameFrontmatterValue(written[k] ?? null, fresh[k] ?? null),
+      const sameForm = pair.every((k) =>
+        sameFrontmatterValue(written[k] ?? null, fresh[k] ?? null),
       );
-      return (
-        !sameForm &&
-        sameFrontmatterValue(
-          momentForm(spanOf(written, key, endKey), zone),
-          momentForm(spanOf(fresh, key, endKey), zone),
-        )
+      const sameMoment = sameFrontmatterValue(
+        momentForm(spanOf(written, key, endKey), zone),
+        momentForm(spanOf(fresh, key, endKey), zone),
       );
-    });
+      if (!sameForm && sameMoment) keys.push(...pair);
+    }
+    return keys;
   }
 
   fromNotionProperties(notionProps: Record<string, unknown>): Record<string, unknown> {

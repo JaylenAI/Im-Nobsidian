@@ -196,7 +196,7 @@ describe("writableValues — 예전 모양과 새 모양을 같은 순간이면 
   });
 });
 
-describe("hasOutdatedDateForm — 예전 버전이 적은 날짜 모양이 남은 행 (F-08)", () => {
+describe("outdatedDateKeys — 예전 버전이 적은 날짜 모양이 남은 키 (F-08)", () => {
   const remote = {
     이름: { type: "title", title: [] },
     마감: date("2026-10-01T01:00:00.000+00:00"),
@@ -225,60 +225,80 @@ describe("hasOutdatedDateForm — 예전 버전이 적은 날짜 모양이 남�
     return splitFrontmatter(note).data;
   };
 
-  it("새 매퍼가 적은 frontmatter 는 예전 모양이 아니다 — 다시 받은 행을 또 고르지 않는다", () => {
+  it("새 매퍼가 적은 frontmatter 는 예전 모양이 아니다 — 고친 행을 또 고르지 않는다", () => {
     const written = freshlyWritten();
     expect(written).not.toHaveProperty("빈묶음");
     expect(written).toHaveProperty("빈날", null);
-    expect(seoulMapper().hasOutdatedDateForm(written, remote)).toBe(false);
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual([]);
   });
 
   it.each([
-    ["생성일 UTC", { 생성일: "2026-10-04T14:44:00.000Z" }],
-    ["시각의 오프셋", { 마감: "2026-10-01T10:00:00.000+09:00" }],
+    ["생성일 UTC", { 생성일: "2026-10-04T14:44:00.000Z" }, ["생성일"]],
+    ["시각의 오프셋", { 마감: "2026-10-01T10:00:00.000+09:00" }, ["마감"]],
     [
-      "기간 객체",
+      "기간 객체 — 짝 키도",
       { 기간: { start: "2026-10-01T09:00", end: "2026-10-03T18:30" }, 기간_end: undefined },
+      ["기간", "기간_end"],
     ],
-    ["수식 날짜 객체", { 계산: { start: "2026-10-01", end: null, time_zone: null } }],
-    ["롤업 목록의 오프셋", { 묶음: ["2026-10-01T01:00:00.000+00:00"] }],
-  ])("예전 모양 — %s", (_label, old) => {
+    [
+      "기간의 끝만 오프셋 — 짝 키도",
+      { 기간_end: "2026-10-03T18:30:00.000+09:00" },
+      ["기간", "기간_end"],
+    ],
+    ["수식 날짜 객체", { 계산: { start: "2026-10-01", end: null, time_zone: null } }, ["계산"]],
+    ["롤업 목록의 오프셋", { 묶음: ["2026-10-01T01:00:00.000+00:00"] }, ["묶음"]],
+  ])("예전 모양 — %s", (_label, old, keys) => {
     const written: Record<string, unknown> = { ...freshlyWritten(), ...old };
     for (const [key, value] of Object.entries(old)) if (value === undefined) delete written[key];
-    expect(seoulMapper().hasOutdatedDateForm(written, remote)).toBe(true);
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual(keys);
+  });
+
+  it("로컬에만 적힌 짝 키도 고칠 키다 — 받으면 적지 않는 키라 지운다", () => {
+    const written = { ...freshlyWritten(), 마감: "2026-10-01T10:00:00.000+09:00", 마감_end: null };
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual(["마감", "마감_end"]);
+  });
+
+  it("여럿이면 모두 — 속성 차례로", () => {
+    const written = {
+      ...freshlyWritten(),
+      생성일: "2026-10-04T14:44:00.000Z",
+      마감: "2026-10-01T10:00:00.000+09:00",
+    };
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual(["마감", "생성일"]);
   });
 
   it("YAML 이 날짜로 읽은 예전 시각(Date)도 예전 모양이다", () => {
     const { data } = splitFrontmatter("---\n생성일: 2026-10-04T14:44:00.000Z\n---\n");
     expect(data.생성일).toBeInstanceOf(Date);
     const written = { ...freshlyWritten(), 생성일: data.생성일 };
-    expect(seoulMapper().hasOutdatedDateForm(written, remote)).toBe(true);
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual(["생성일"]);
   });
 
   it("값이 다르면 고르지 않는다 — 다시 계산된 수식 · 시간대를 바꾼 벽시계 시각은 모양 탓이 아니다", () => {
     const mapper = seoulMapper();
-    expect(mapper.hasOutdatedDateForm({ ...freshlyWritten(), 계산: "2026-09-30" }, remote)).toBe(
-      false,
+    expect(mapper.outdatedDateKeys({ ...freshlyWritten(), 계산: "2026-09-30" }, remote)).toEqual(
+      [],
     );
     expect(
-      mapper.hasOutdatedDateForm({ ...freshlyWritten(), 마감: "2026-10-01T01:00" }, remote),
-    ).toBe(false);
+      mapper.outdatedDateKeys({ ...freshlyWritten(), 마감: "2026-10-01T01:00" }, remote),
+    ).toEqual([]);
     expect(
-      mapper.hasOutdatedDateForm(
+      mapper.outdatedDateKeys(
         { ...freshlyWritten(), 마감: "2026-10-01T11:00:00.000+09:00" },
         remote,
       ),
-    ).toBe(false);
+    ).toEqual([]);
   });
 
   it("빈 날짜는 키가 없어도 null 로 적혀 있어도 같다", () => {
     const written = freshlyWritten();
     delete written.빈날;
-    expect(seoulMapper().hasOutdatedDateForm(written, remote)).toBe(false);
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual([]);
   });
 
   it("날짜 속성이 아니면 보지 않는다 — 글 속성에 적힌 시각", () => {
     const written = { ...freshlyWritten(), 메모: "2026-10-04T23:44" };
-    expect(seoulMapper().hasOutdatedDateForm(written, remote)).toBe(false);
+    expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual([]);
   });
 
   it("`_end` 이름의 속성이 따로 있으면 기간 객체가 지금 모양이다 — 안쪽 시각만 본다", () => {
@@ -288,12 +308,12 @@ describe("hasOutdatedDateForm — 예전 버전이 적은 날짜 모양이 남�
     };
     const mapper = seoulMapper();
     const now = { 기간: { end: "2026-10-03T18:30", start: "2026-10-01T09:00" }, 기간_end: "따로" };
-    expect(mapper.hasOutdatedDateForm(now, collided)).toBe(false);
+    expect(mapper.outdatedDateKeys(now, collided)).toEqual([]);
     const old = {
       기간: { start: "2026-10-01T09:00:00.000+09:00", end: "2026-10-03T18:30:00.000+09:00" },
       기간_end: "따로",
     };
-    expect(mapper.hasOutdatedDateForm(old, collided)).toBe(true);
+    expect(mapper.outdatedDateKeys(old, collided)).toEqual(["기간"]);
   });
 });
 
