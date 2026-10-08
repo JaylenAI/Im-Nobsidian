@@ -229,7 +229,7 @@ function captionOfLabel(label: string): string {
 }
 
 /**
- * 받은 파일의 이름이자 별칭 — 사람이 단 캡션, 없으면 Notion 에 올라간 파일 이름.
+ * 받은 파일의 이름 — 사람이 단 캡션, 없으면 Notion 에 올라간 파일 이름.
  *
  * 캡션 없는 파일 블록은 markdown API 가 서명 URL 만 주고(`<file src="…"></file>`) pull 변환이 자리 이름을
  * 붙인다(`[📎 file](…)`). 자리 이름으로 받으면 `file-<해시>` 로 저장하고 별칭이 `file` 이 된다 — 같은
@@ -237,13 +237,25 @@ function captionOfLabel(label: string): string {
  * 사본, 2026-10-05). 올라간 이름은 서명 URL 의 경로 끝에만 있다. URL 에도 이름이 없으면 예전처럼 자리
  * 이름으로 받는다.
  *
+ * 올라간 이름은 다듬지 않고 저장 이름으로 넘긴다 — 내부 참조(`attachment:<id>:<이름>`)로 받던 파일도
+ * 이름 그대로 저장했다. 같은 파일이 어느 모양으로 와도 같은 자리에 받아야 사본이 생기지 않는다. 별칭은
+ * {@link fileEmbedOf} 가 다듬는다.
+ *
  * @param caption 라벨에서 표시 이모지를 뗀 캡션 · 태그 안의 글. 사람이 자리 이름과 같은 캡션을 달았으면
  *   가를 수 없다 — 이름으로 받는다.
  */
-function fileAliasOf(caption: string, url: string): string {
+function fileNameOf(caption: string, url: string): string {
   const alias = toWikilinkAlias(caption);
   if (alias && !MEDIA_PLACEHOLDER_CAPTIONS.has(alias)) return alias;
-  return toWikilinkAlias(uploadedFileNameFromUrl(url)) || alias || "file";
+  return uploadedFileNameFromUrl(url) || alias || "file";
+}
+
+/**
+ * 받은 파일의 임베드. 별칭은 이름을 별칭으로 쓸 수 있게 다듬은 것이다 — 이름의 `]]` · `|`
+ * (`초안]]최종.pdf`)가 임베드를 끝내거나 나누지 않는다. 남는 글자가 없으면 자리 이름 `file`.
+ */
+function fileEmbedOf(localPath: string, name: string): string {
+  return `![[${localPath}|${toWikilinkAlias(name) || "file"}]]`;
 }
 
 /** Notion 이 호스팅한 미디어 URL — 서명 URL 이거나 markdown API 의 내부 참조(`file://`). */
@@ -1020,12 +1032,12 @@ export class ImageHandler {
     for (const span of notionHttpMatches) {
       await sema.acquire();
       try {
-        const caption = fileAliasOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), span.url);
+        const caption = fileNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), span.url);
         const download = await this.downloadFile(span.url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
-        const obsidianLink = `![[${download.localPath}|${caption}]]`;
+        const obsidianLink = fileEmbedOf(download.localPath, caption);
         // 이름 · 캡션에 `$` 가 있어도(`가격$&.pdf`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
         result = result.replace(span.full, () => obsidianLink);
       } catch (error) {
@@ -1051,7 +1063,7 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = `![[${download.localPath}|${caption}]]`;
+        const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(span.full, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
@@ -1064,11 +1076,11 @@ export class ImageHandler {
       await sema.acquire();
       try {
         const url = match[1]!;
-        const caption = fileAliasOf(match[2] ?? "", url);
+        const caption = fileNameOf(match[2] ?? "", url);
         const download = await this.downloadFile(url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = `![[${download.localPath}|${caption}]]`;
+        const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(match[0]!, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
@@ -1093,7 +1105,7 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = `![[${download.localPath}|${caption}]]`;
+        const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(match[0]!, () => obsidianLink);
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);

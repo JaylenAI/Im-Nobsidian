@@ -133,7 +133,7 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
   it("이름의 `]]` · `|` 는 별칭에서 바꾼다 — 임베드가 깨지지 않는다", async () => {
     const content = await pull(`[📎 file](${signedUrl("초안]]최종|v2.pdf")})`);
 
-    expect(content).toBe(`![[attachments/초안최종-v2.pdf-${SHA12}.pdf|초안)최종-v2.pdf]]`);
+    expect(content).toBe(`![[attachments/초안최종v2.pdf-${SHA12}.pdf|초안)최종-v2.pdf]]`);
   });
 });
 
