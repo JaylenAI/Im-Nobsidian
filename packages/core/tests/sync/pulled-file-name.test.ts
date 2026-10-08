@@ -130,10 +130,22 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     expect(internalTag).toBe(internal);
   });
 
-  it("이름의 `]]` · `|` 는 별칭에서 바꾼다 — 임베드가 깨지지 않는다", async () => {
-    const content = await pull(`[📎 file](${signedUrl("초안]]최종|v2.pdf")})`);
+  it("이름의 `]]` · `|` 는 별칭에서만 바꾼다 — 서명 URL · 내부 참조 어느 쪽으로 와도 같은 첨부", async () => {
+    const name = "초안]]최종|v2.pdf";
+    const signed = await pull(`[📎 file](${signedUrl(name)})`);
+    const signedTag = await pull(`<file src="${signedUrl(name)}"></file>`);
+    const internal = await pull(`[📎 file](${internalFileUrl(name)})`);
+    const internalTag = await pull(`<file src="${internalFileUrl(name)}"></file>`);
 
-    expect(content).toBe(`![[attachments/초안최종v2.pdf-${SHA12}.pdf|초안)최종-v2.pdf]]`);
+    // 저장 이름은 올라간 이름에서 못 쓰는 글자만 뺀 것 — 예전에 내부 참조로 받던 자리와 같다.
+    expect(signed).toBe(`![[attachments/초안최종v2.pdf-${SHA12}.pdf|초안)최종-v2.pdf]]`);
+    expect([signedTag, internal, internalTag]).toEqual([signed, signed, signed]);
+  });
+
+  it("이름에 별칭으로 남는 글자가 없으면 별칭은 자리 이름 file", async () => {
+    const content = await pull(`[📎 file](${signedUrl("[](x)")})`);
+
+    expect(content).toBe(`![[attachments/x-${SHA12}|file]]`);
   });
 });
 
