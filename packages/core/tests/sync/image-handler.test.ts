@@ -108,6 +108,47 @@ describe("ImageHandler", () => {
   });
 });
 
+describe("ImageHandler.downloadAllImages — 받은 이미지 별칭", () => {
+  const PNG = Buffer.from("png-bytes");
+  const SHA12 = createHash("sha256").update(PNG).digest("hex").slice(0, 12);
+  const signedUrl = (name: string): string =>
+    `https://prod-files-secure.s3.us-west-2.amazonaws.com/space/file/${name}?X-Amz-Signature=sig`;
+  const internalUrl = (name: string): string =>
+    `file://${encodeURIComponent(
+      JSON.stringify({
+        source: `attachment:file:${name}`,
+        permissionRecord: { table: "block", id: "block-1" },
+      }),
+    )}`;
+  let handler: ImageHandler;
+
+  beforeEach(() => {
+    const download = vi.fn(
+      async () => new Response(PNG, { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const notion = {
+      getFileBlockUrl: vi.fn(async () => signedUrl("a.png")),
+    } as unknown as NotionClient;
+    handler = new ImageHandler(createMockVaultFs(), "attachments", notion, download as never);
+  });
+
+  it("캡션의 `$` 는 글자 그대로다 — 원래 링크 · 뒤 글이 별칭에 들어가지 않는다", async () => {
+    const caption = "가격 $& · $' · $$ 표";
+
+    const signed = await handler.downloadAllImages(
+      `앞 ![${caption}](${signedUrl("a.png")}) 뒤`,
+      "행",
+    );
+    const internal = await handler.downloadAllImages(
+      `앞 ![${caption}](${internalUrl("a.png")}) 뒤`,
+      "행",
+    );
+
+    expect(signed.content).toBe(`앞 ![[attachments/행-${SHA12}.png|${caption}]] 뒤`);
+    expect(internal.content).toBe(signed.content);
+  });
+});
+
 // D6: push 가 페이지 끝에 append 한 임베드 이미지 사본은 pull 에서 다시 받으면 노트 꼬리에
 // 중복 ![[attachments/...]] 로 유입된다. registry 해시 + 본문 마커 파일명이 모두 일치하면
 // 사본으로 판정해 라인째 버리고 디스크에도 쓰지 않는다.
