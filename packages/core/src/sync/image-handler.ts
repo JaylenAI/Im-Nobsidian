@@ -645,7 +645,9 @@ export class ImageHandler {
       downloads.push(download);
       const alias = toWikilinkAlias(span.label);
       const obsidianEmbed = `![[${download.localPath}${alias ? `|${alias}` : ""}]]`;
-      result = result.replace(span.full, obsidianEmbed);
+      // 캡션에 `$` 가 있어도(`가격 $& 표`) 치환 패턴으로 읽지 않도록 함수로 넘긴다 — 원래 링크(서명
+      // URL)가 별칭에 들어간다.
+      result = result.replace(span.full, () => obsidianEmbed);
     }
 
     for (const span of internalMatches) {
@@ -669,7 +671,7 @@ export class ImageHandler {
         downloads.push(download);
         const alias = toWikilinkAlias(span.label);
         const obsidianEmbed = `![[${download.localPath}${alias ? `|${alias}` : ""}]]`;
-        result = result.replace(span.full, obsidianEmbed);
+        result = result.replace(span.full, () => obsidianEmbed);
       } catch (error) {
         getLogger().warn(`내부 이미지 다운로드 실패: ${error}`);
       } finally {
