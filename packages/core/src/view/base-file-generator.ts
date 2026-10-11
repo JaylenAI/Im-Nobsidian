@@ -70,7 +70,7 @@ interface BasesView {
   name: string;
   order?: string[];
   sort?: Array<{ property: string; direction: string }>;
-  groupBy?: { property: string; direction?: string };
+  groupBy?: { property: string; direction: string };
   image?: string;
   filters?: BasesFilterNode;
 }
@@ -187,9 +187,7 @@ export class BaseFileGenerator {
       if (view.groupBy) {
         lines.push("    groupBy:");
         lines.push(`      property: ${this.propRef(view.groupBy.property)}`);
-        if (view.groupBy.direction) {
-          lines.push(`      direction: ${view.groupBy.direction}`);
-        }
+        lines.push(`      direction: ${view.groupBy.direction}`);
       }
 
       if (view.image) {
@@ -321,14 +319,12 @@ export class BaseFileGenerator {
       const propName =
         view.groupBy.propertyName ?? this.resolvePropertyName(view.groupBy.propertyId, schema);
       if (propName) {
+        // Bases 는 direction 이 없는 groupBy 를 읽지 못한다(「베이스 파일을 읽어들일 수 없음」).
+        // Notion 의 수동 그룹 순서는 Bases 에 대응이 없어 오름차순으로 쓰고, 원래 값은
+        // 사이드카(`groupBy.sort`)에 남긴다 — 손실은 사이드카의 degrade 리포트가 알린다.
         result.groupBy = {
           property: this.toNoteRef(propName),
-          direction:
-            view.groupBy.sort === "ascending"
-              ? "ASC"
-              : view.groupBy.sort === "descending"
-                ? "DESC"
-                : undefined,
+          direction: view.groupBy.sort === "descending" ? "DESC" : "ASC",
         };
       }
     }

@@ -74,6 +74,7 @@ const DROPPED_SETTING_REASONS: Record<string, string> = {
   columnWidths: "컬럼 너비(width)는 Bases 미지원",
   columnWraps: "컬럼 줄바꿈(wrap)은 Bases 미지원",
   hideEmptyGroups: "빈 그룹 숨김은 Bases 미지원",
+  manualGroupOrder: "수동 그룹 순서는 Bases 미지원 — 오름차순으로 격하",
 };
 
 export class SidecarGenerator {
@@ -197,6 +198,7 @@ export class SidecarGenerator {
     if (view.groupBy) {
       config["groupBy"] = view.groupBy;
       if (view.groupBy.hideEmptyGroups) noteDrop("hideEmptyGroups");
+      if (view.groupBy.sort === "manual") noteDrop("manualGroupOrder");
     }
     if (view.cover) config["cover"] = view.cover;
     if (view.coverSize) {

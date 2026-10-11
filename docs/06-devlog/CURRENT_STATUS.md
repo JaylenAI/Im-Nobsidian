@@ -1,6 +1,6 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-10-08
+> 마지막 업데이트: 2026-10-11
 > 버전: **v0.3.2 릴리스 완료** · **v0.4.0 트랙 진행 중** — 심층 QA 결함 23건 봉합 +
 > Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
 
@@ -94,8 +94,10 @@
 | 2    | `fix/date-form-upgrade`                      | F-08 후속 — 업그레이드 뒤 첫 전체 대조가 예전 날짜 모양이 남은 행을 통째로 다시 받아 본문 · 첨부까지 바뀜 (실볼트 사본 149행 중 99행 본문 · 첨부 사본 41개) — 날짜 줄만 고쳐 씀                                                    | 완료 `25d8a5f` |
 | 2    | `fix/pulled-file-name`                       | F-08 후속 — 캡션 없는 파일 첨부를 다시 받으면 `file-<해시>` 이름 · 별칭 `file` 로 받아 같은 바이트 사본이 생기고 임베드가 바뀜 (실볼트 사본 43개) — Notion 에 올라간 이름으로 받음                                                 | 완료 `281b4cd` |
 | 2    | `fix/embed-alias-text`                       | F-08 후속 — 받은 이미지 캡션의 `$` 를 치환 패턴으로 읽어 별칭에 원래 링크 · 뒤 본문이 들어감 (탐침 노트의 뒤 본문이 두 번) · 내부 참조로 온 파일 이름의 `]]` 가 임베드를 끝냄 — 글자 그대로 넣고 별칭 규칙으로 다듬음              | 완료 `15bb6af` |
-| 3    | `feature/design-renderer` 외                 | U-01 ~ U-03                                                                                                                                                                                                                        | 대기           |
+| 3    | `fix/base-groupby-direction`                 | U-02 Notion 에서 그룹 순서를 수동으로 둔 보드가 `.base` 를 열 수 없게 만듦 (groupBy 에 direction 이 빠짐) — 오름차순으로 쓰고 사이드카에 격하 보고                                                                                 | 완료 `2decafd` |
+| 3    | `feature/design-renderer` 외                 | U-01 · U-03                                                                                                                                                                                                                        | 진행           |
 | 4    | `fix/plugin-distribution`                    | U-04 wasm · U-05 manifest                                                                                                                                                                                                          | 대기           |
+| 4 뒤 | `fix/media-reupload`                         | 본문을 고쳐 push 하면 그 페이지의 미디어를 바뀌지 않은 것까지 모두 다시 올림 (ADR-020 제약) — 바뀐 미디어만 올림                                                                                                                   | 대기           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
