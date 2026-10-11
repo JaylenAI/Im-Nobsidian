@@ -5,7 +5,7 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { NOTION_COLOR_NAMES } from "@im-nobsidian/core";
-import { colorClass, colorRgbVar } from "../src/design/design-classes.js";
+import { DESIGN_CLASS, colorClass, colorRgbVar } from "../src/design/design-classes.js";
 
 const read = (relative: string): string =>
   readFileSync(new URL(relative, import.meta.url), "utf-8");
@@ -97,6 +97,15 @@ describe("플러그인 CSS", () => {
       const rgb = colorRgbVar({ name, background: false }).replace(/^var\((.*)\)$/, "$1");
       return [`.${fg} {`, `.${bg} {`, `${rgb}:`].filter((needle) => !css.includes(needle));
     });
+
+    expect(missing).toEqual([]);
+  });
+
+  it("디자인 마커 렌더러가 붙이는 클래스마다 main.css 에 규칙이 있다 — 없으면 붙여도 아무 일도 없다", () => {
+    const css = read("../src/styles/main.css");
+    const missing = Object.values(DESIGN_CLASS).filter(
+      (name) => !new RegExp(`\\.${name}(?![\\w-])`).test(css),
+    );
 
     expect(missing).toEqual([]);
   });

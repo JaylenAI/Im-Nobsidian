@@ -164,7 +164,10 @@ describe("decorateRendered — 블록 단위", () => {
   it("Notion 에서 아이콘을 지운 콜아웃은 아이콘을 숨기고, 마커 없는 콜아웃은 그대로 둔다", () => {
     const bare = section(CALLOUT("note", "아이콘 없음"));
     decorateRendered(bare, ["> [!note] 아이콘 없음 %%im-nobsidian:callout-style:%%"], OPTIONS);
-    expect(bare.querySelector<HTMLElement>(".callout-icon")!.style.display).toBe("none");
+    const icon = bare.querySelector<HTMLElement>(".callout-icon")!;
+    expect(icon.classList.contains("im-nobsidian-callout-no-icon")).toBe(true);
+    // 인라인 style 을 쓰지 않는다 — 디렉터리 리뷰 규칙(no-static-styles-assignment)
+    expect(icon.getAttribute("style")).toBeNull();
 
     const html = CALLOUT("tip", "A11 기본 전구 콜아웃");
     const plain = section(html);
