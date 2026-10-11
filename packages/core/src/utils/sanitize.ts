@@ -1,4 +1,4 @@
-// eslint-disable-next-line no-control-regex
+// eslint-disable-next-line no-control-regex -- 파일 이름에 쓸 수 없는 제어 문자(U+0000–U+001F)를 찾는다
 const INVALID_CHARS = /[<>:"/\\|?*\x00-\x1f]/g;
 // 파일시스템상으로는 유효하지만 Obsidian 위키링크 문법(`[[제목]]`)을 깨는 문자(대괄호).
 // basename 에 `[`/`]` 가 남으면 그 basename 으로 만든 `[[..]]` 가 첫 `]]` 에서 조기 종료돼

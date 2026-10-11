@@ -87,7 +87,7 @@ body {
 .im-nobsidian-diff-line {
   display: grid;
   grid-template-columns: 3em 3em 1.2em minmax(0, 1fr) auto;
-  column-gap: 4px;
+  gap: 0 4px;
   padding: 0 8px;
 }
 
@@ -372,6 +372,11 @@ body {
 
 .callout.im-nobsidian-block[class*="im-nobsidian-color-"] > .callout-title {
   color: inherit;
+}
+
+/* Notion 에서 지운 콜아웃 아이콘 */
+.callout-icon.im-nobsidian-callout-no-icon {
+  display: none;
 }
 
 /* Notion 이모지 아이콘 — Obsidian 이 아이콘을 다시 그려도 남도록 요소의 속성으로 싣는다 */
