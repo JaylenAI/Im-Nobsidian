@@ -58,6 +58,13 @@
   제목으로 읽어 경고를 낸다. README 를 고칠 때 함께 정리한다.
 - 저장소 메타데이터 검사는 `GITHUB_TOKEN` 이 있어야 돈다. 로컬 실행에서는 건너뛰었다.
 - 번들 사전 점검(인라인 wasm 경고)과 릴리스 검사는 릴리스가 생긴 뒤에야 끝까지 돈다(ADR-031).
+- 스캐너 lint 의 플러그인 경고 넷은 남긴다(`fix/plugin-review-lint` 뒤).
+  - `setWarning` 이 낡았다 — 바꿀 `setDestructive` 는 1.13.0 부터라 minAppVersion 1.12.4 에 없다.
+  - `getSettingDefinitions` 가 없다 — 1.13.0 의 설정 검색이다. 기능을 더하는 일이라 따로 한다.
+  - `Vault.trash` 대신 `FileManager.trashFile` — 사용자의 «지운 파일» 설정(영구 삭제 포함)을 따른다. 동기화가
+    지우는 노트(Notion 에서 지운 페이지)는 설정과 상관없이 시스템 휴지통에 남겨 되살릴 수 있게 둔다.
+  - `createSpan` 을 쓰라 — Obsidian 이 DOM 에 더한 함수라 시험(happy-dom)에 없다. 대신 그 노드의 문서
+    (`ownerDocument`)로 만들어 팝아웃 창에서도 맞는 문서에 만든다.
 
 ## 트레이드오프
 
@@ -81,6 +88,9 @@
 - 디렉터리 검사를 로컬에서 돌림(`node dist/index.js`, 엄격 모드)
   - dev: 실패 — 오류 1(브랜드 이름) · 경고 4
   - 이 브랜치 작업트리: 통과 — 오류 0 · 경고 1(README 제목, 위 한계)
+- 스캐너 lint 를 함께(`lint: true` · `scanner-lint: true`, 형식 정보를 주려 임시 루트 `tsconfig.json`)
+  - dev(`1e3fe0b`, 이 ADR 의 브랜치를 머지한 뒤): 오류 2 · 플러그인 경고 36(stylelint 2 포함)
+  - `fix/plugin-review-lint`: 오류 0 · 플러그인 경고 4(위 한계). core 79 · CLI 632 는 그대로.
 - `release.yml` 의 확인 단계를 같은 셸로 돌림
   - dev 에서 `v0.3.2` — 실패(`versions.json[0.3.2]` 1.7.0 ≠ minAppVersion 1.12.4). v0.4.0 때 함께 고친다.
   - `v0.4.0` — 실패(manifest 0.3.2). 버전을 올리기 전이라 맞다.

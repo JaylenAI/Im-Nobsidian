@@ -74,7 +74,8 @@ function applyCallout(el: HTMLElement, style: CalloutDesign, options: RenderOpti
   const icon = el.querySelector<HTMLElement>(":scope > .callout-title > .callout-icon");
   if (!icon || style.icon === undefined) return;
   if (style.icon === null) {
-    icon.style.display = "none";
+    // 인라인 style 이 아니라 클래스로 — 테마 · 스니펫이 덮을 수 있다(디렉터리 리뷰 규칙)
+    icon.classList.add(DESIGN_CLASS.calloutNoIcon);
   } else if (EMOJI_RE.test(style.icon)) {
     // Notion 의 이모지 아이콘 — 내장 아이콘(경로)은 가까운 것이 없어 기본 아이콘을 둔다.
     // 아이콘 안을 바꾸지 않고 CSS 로 덮는다. 1.12.4 는 후처리기 뒤에 아이콘을 다시 그려, 바꾼 안이
@@ -226,7 +227,7 @@ function wrapRange(runs: readonly TextRun[], { from, to, classes }: Wrap): void 
     const b = Math.min(to, end) - start;
     if (b < node.data.length) node.splitText(b);
     const target = a > 0 ? node.splitText(a) : node;
-    const span = document.createElement("span");
+    const span = target.ownerDocument.createElement("span");
     span.className = classes.join(" ");
     target.replaceWith(span);
     span.appendChild(target);

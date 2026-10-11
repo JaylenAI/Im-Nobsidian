@@ -10,7 +10,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Notice } from "obsidian";
+import { Notice, TFile, TFolder } from "obsidian";
 
 vi.mock("svelte", () => ({
   mount: vi.fn(() => ({ $$: {} })),
@@ -944,6 +944,28 @@ describe("ImNobsidianPlugin", () => {
     ]);
     expect(controller.pull.mock.calls).toEqual([[["a.md"], { force: false }]]);
     expect(controller.push.mock.calls).toEqual([[["a.md"]]]);
+  });
+
+  it("사이드바 · 데이터베이스 보기에서 고른 경로는 노트일 때만 연다 — 폴더 · 없는 경로는 열지 않는다", () => {
+    // 예전에는 찾은 것을 TFile 로 단언해 폴더도 openFile 에 넘겼다
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const note = Object.assign(new TFile(), { path: "a.md" });
+    const entries = new Map<string, unknown>([
+      ["a.md", note],
+      ["folder", Object.assign(new TFolder(), { path: "folder" })],
+    ]);
+    const openFile = vi.fn(() => Promise.resolve());
+    const internals = plugin as unknown as { app: unknown; openVaultFile: (path: string) => void };
+    internals.app = {
+      vault: { getAbstractFileByPath: (path: string) => entries.get(path) ?? null },
+      workspace: { getLeaf: () => ({ openFile }) },
+    };
+
+    internals.openVaultFile("folder");
+    internals.openVaultFile("missing.md");
+    internals.openVaultFile("a.md");
+
+    expect(openFile.mock.calls).toEqual([[note]]);
   });
 
   it("default export 존재", async () => {

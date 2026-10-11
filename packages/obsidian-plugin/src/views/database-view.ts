@@ -1,4 +1,4 @@
-import { ItemView, Notice, type TFile, type WorkspaceLeaf } from "obsidian";
+import { ItemView, Notice, TFile, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import ViewContainer from "./ViewContainer.svelte";
 import type { ViewRenderData, DBEntry, ViewConfig, ViewDataProvider } from "@im-nobsidian/core";
@@ -68,14 +68,14 @@ export class DatabaseItemView extends ItemView {
     if (!container) return;
 
     if (this.component) {
-      unmount(this.component);
+      void unmount(this.component);
       this.component = null;
     }
 
     container.empty();
 
     this.component = mount(ViewContainer, {
-      target: container as Element,
+      target: container,
       props: {
         data: this.viewData,
         availableViews: this.availableViews,
@@ -89,8 +89,8 @@ export class DatabaseItemView extends ItemView {
 
   private async openEntry(entry: DBEntry) {
     const file = this.app.vault.getAbstractFileByPath(entry.path);
-    if (file) {
-      await this.app.workspace.getLeaf(false).openFile(file as TFile);
+    if (file instanceof TFile) {
+      await this.app.workspace.getLeaf(false).openFile(file);
     }
   }
 
@@ -121,8 +121,8 @@ export class DatabaseItemView extends ItemView {
       await this.loadData(this.viewData?.viewConfig.id);
 
       const file = this.app.vault.getAbstractFileByPath(path);
-      if (file) {
-        await this.app.workspace.getLeaf(false).openFile(file as TFile);
+      if (file instanceof TFile) {
+        await this.app.workspace.getLeaf(false).openFile(file);
       }
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
@@ -132,7 +132,7 @@ export class DatabaseItemView extends ItemView {
 
   async onClose() {
     if (this.component) {
-      unmount(this.component);
+      void unmount(this.component);
       this.component = null;
     }
   }

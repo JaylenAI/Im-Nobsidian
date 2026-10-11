@@ -11,7 +11,7 @@ interface SyncActions {
   onPush: () => Promise<void>;
   onSync: () => Promise<void>;
   onRefresh: () => Promise<void>;
-  onResolveConflict: () => void;
+  onResolveConflict: () => Promise<void>;
   onCancel: () => void;
   onOpenFile: (path: string) => void;
   onPushPath: (path: string) => Promise<void>;
@@ -109,7 +109,7 @@ export class SyncSidebarView extends ItemView {
 
   async onClose(): Promise<void> {
     if (this.component) {
-      unmount(this.component);
+      void unmount(this.component);
       this.component = null;
     }
   }

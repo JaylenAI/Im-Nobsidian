@@ -30,6 +30,7 @@ export default defineWorkspace([
       name: "node",
       globals: true,
       environment: "node",
+      setupFiles: ["tests/helpers/window-global.ts"],
       include: ["tests/**/*.test.ts"],
       exclude: COMPONENT_TESTS,
       deps: { inline: ["@im-nobsidian/core"] },

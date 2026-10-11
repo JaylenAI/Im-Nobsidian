@@ -7,7 +7,7 @@
 
 /**
  * Notion 토큰을 Obsidian 키체인(SecretStorage)에 둘 때 쓰는 이름 — 예전 설정(data.json 의 글자 그대로)을
- * 옮길 때 붙인다. 키체인은 이 기기의 모든 볼트가 함께 쓰므로, 같은 이름에 다른 토큰이 있으면 번호를 붙인다.
+ * 옮길 때 붙인다. 키체인은 볼트마다 따로다 — 그 볼트의 키체인에 같은 이름으로 다른 토큰이 있으면 번호를 붙인다.
  */
 export const TOKEN_SECRET_ID = "im-nobsidian-notion-token";
 

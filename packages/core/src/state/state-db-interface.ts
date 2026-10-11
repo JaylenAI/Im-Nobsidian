@@ -14,7 +14,8 @@ import type {
 } from "./state-db.js";
 
 export interface IStateDB {
-  close(): void;
+  /** 닫는다 — 파일에 남은 쓰기를 마쳐야 하는 구현(플러그인의 sql.js)은 그 일을 Promise 로 돌려준다. */
+  close(): void | Promise<void>;
 
   // sync_state
   getByPath(path: string): SyncRecord | null;

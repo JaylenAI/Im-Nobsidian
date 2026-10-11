@@ -13,6 +13,8 @@ export const DESIGN_CLASS = {
   tableNoHeaderRow: "im-nobsidian-table-no-header-row",
   /** 아이콘을 Notion 이모지로 바꾼 콜아웃의 아이콘 자리. */
   calloutEmoji: "im-nobsidian-callout-emoji",
+  /** Notion 에서 아이콘을 지운 콜아웃의 아이콘 자리 — 숨긴다. */
+  calloutNoIcon: "im-nobsidian-callout-no-icon",
 } as const;
 
 /** `red` → `im-nobsidian-color-red`, `red_bg` → `im-nobsidian-bg-red`. */
