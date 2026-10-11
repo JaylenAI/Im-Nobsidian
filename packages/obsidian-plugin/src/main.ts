@@ -23,7 +23,7 @@ import type {
   ResolutionChoice,
 } from "@im-nobsidian/core";
 import { STATE_DB_PATH, StateDbUnavailableError } from "@im-nobsidian/core";
-import { WASM_FILE } from "./constants.js";
+import { TOKEN_SECRET_ID, WASM_FILE } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
 import { designLivePreview } from "./design/live-preview.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
@@ -86,29 +86,39 @@ interface DatabaseConfig {
   localFolder: string;
 }
 
-interface ImNobsidianSettings {
-  token: string;
+export interface ImNobsidianSettings {
+  /**
+   * 예전 설정 — 토큰을 볼트 설정 파일(data.json)에 글자 그대로 적었다. 볼트를 git 등으로 나누면 토큰도
+   * 함께 나갔다. 불러오면 키체인으로 옮기고 지운다({@link ImNobsidianPlugin.moveTokenToKeychain}).
+   */
+  token?: string;
+  /** Obsidian 키체인(SecretStorage)에 둔 Notion 토큰의 이름 — 토큰은 이 기기에만 있다. */
+  tokenSecret: string;
   rootPageId: string;
   syncDirection: "push" | "pull" | "both";
   autoSync: boolean;
   autoSyncInterval: number;
   conflictStrategy: "local-first" | "remote-first" | "manual";
   attachments: string;
+  /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */
+  timeZone: string;
   databases?: DatabaseConfig[];
 }
 
 const DEFAULT_SETTINGS: ImNobsidianSettings = {
-  token: "",
+  tokenSecret: "",
   rootPageId: "",
   syncDirection: "both",
   autoSync: false,
   autoSyncInterval: 300,
   conflictStrategy: "manual",
   attachments: "attachments",
+  timeZone: "",
 };
 
 export default class ImNobsidianPlugin extends Plugin {
-  settings: ImNobsidianSettings = DEFAULT_SETTINGS;
+  // 사본을 둔다 — 설정을 고치면 기본값까지 바뀌었다(시험에서 앞 시험의 토큰이 뒤 시험으로 샜다)
+  settings: ImNobsidianSettings = { ...DEFAULT_SETTINGS };
   private syncController: SyncController | null = null;
   private stateDb: SqlJsStateDB | null = null;
   /** 상태 DB 파일과 그 잠금 — 닫으면서 푼다({@link closeStateDb}). */
@@ -187,9 +197,9 @@ export default class ImNobsidianPlugin extends Plugin {
           const file = this.app.vault.getAbstractFileByPath(path);
           if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
         },
-        onPushPath: async (path: string) => this.syncController?.push([path]),
+        onPushPath: (path: string) => this.executePush([path]),
         onDiscard: (change: LocalChange) => this.discardLocal(change),
-        onPullPath: async (path: string) => this.syncController?.pull([path]),
+        onPullPath: (path: string) => this.executePull({ paths: [path] }),
         onShowLocalDiff: (change: LocalChange) => this.showLocalDiff(change),
         onShowRemoteDiff: (change: RemoteChange) => this.showRemoteDiff(change),
       });
@@ -219,12 +229,9 @@ export default class ImNobsidianPlugin extends Plugin {
     this.statusBarEl = this.addStatusBarItem();
     this.updateStatusBar("ready");
 
+    // 자동 동기화 주기는 초기화가 성공하면 그 안에서 건다({@link createOrchestrator}).
     if (this.hasConnectionSettings()) {
       await this.initOrchestrator();
-    }
-
-    if (this.settings.autoSync) {
-      this.startAutoSync();
     }
 
     this.registerDesignRenderer();
@@ -288,6 +295,45 @@ export default class ImNobsidianPlugin extends Plugin {
   async loadSettings(): Promise<void> {
     const data = await this.loadData();
     this.settings = { ...DEFAULT_SETTINGS, ...data };
+    await this.moveTokenToKeychain();
+  }
+
+  /**
+   * 예전 설정의 토큰(data.json 에 글자 그대로)을 키체인으로 옮긴다 (U-03). 옮기지 못하면 그대로 두고 까닭을
+   * 알린다 — 지우면 토큰을 잃는다.
+   */
+  private async moveTokenToKeychain(): Promise<void> {
+    const token = this.settings.token;
+    if (!token) return;
+    const secrets = this.app.secretStorage;
+    let id = this.settings.tokenSecret || TOKEN_SECRET_ID;
+    // 키체인은 이 기기의 모든 볼트가 함께 쓴다 — 다른 볼트가 같은 이름에 다른 토큰을 두었으면 덮지 않는다.
+    for (let n = 2; ; n++) {
+      const held = secrets.getSecret(id);
+      if (held === null || held === token) break;
+      id = `${TOKEN_SECRET_ID}-${n}`;
+    }
+    try {
+      secrets.setSecret(id, token);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      new Notice(`Im-Nobsidian: Notion 토큰을 키체인으로 옮기지 못했습니다 — ${reason}`);
+      return;
+    }
+    this.settings.tokenSecret = id;
+    delete this.settings.token;
+    await this.saveSettings();
+    new Notice(
+      `Im-Nobsidian: Notion 토큰을 Obsidian 키체인(이름 ${id})으로 옮겼습니다. ` +
+        "볼트 설정 파일에는 이제 이름만 남습니다 — 다른 기기에서는 설정에서 토큰을 한 번 더 넣으세요.",
+      0,
+    );
+  }
+
+  /** 키체인에서 읽은 Notion 토큰 — 이름이 없거나 이 기기의 키체인에 없으면 null. */
+  private notionToken(): string | null {
+    if (!this.settings.tokenSecret) return null;
+    return this.app.secretStorage.getSecret(this.settings.tokenSecret);
   }
 
   async saveSettings(): Promise<void> {
@@ -295,7 +341,7 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   /**
-   * 설정으로 오케스트레이터를 새로 만든다. 설정 창은 글자를 칠 때마다 부른다 — 차례로 돌려,
+   * 설정으로 오케스트레이터를 새로 만든다. 설정 창은 닫힐 때 연결 설정이 바뀌었으면 부른다 — 차례로 돌려,
    * 앞 초기화가 연 DB 를 뒤 초기화가 모르고 새로 여는 일이 없게 한다.
    */
   initOrchestrator(): Promise<void> {
@@ -303,17 +349,43 @@ export default class ImNobsidianPlugin extends Plugin {
     return this.initializing;
   }
 
-  /** Notion 에 닿을 설정(토큰 · 루트 페이지)을 다 채웠나. */
+  /** Notion 에 닿을 설정(토큰 이름 · 루트 페이지)을 다 채웠나. */
   private hasConnectionSettings(): boolean {
-    return Boolean(this.settings.token && this.settings.rootPageId);
+    return Boolean(this.settings.tokenSecret && this.settings.rootPageId);
+  }
+
+  /** 비어 있는 연결 설정 — 「설정을 먼저」 대신 무엇을 넣어야 하는지 말한다. */
+  private missingSettings(): string[] {
+    return [
+      ...(this.settings.tokenSecret ? [] : ["Notion 토큰"]),
+      ...(this.settings.rootPageId ? [] : ["루트 페이지 ID"]),
+    ];
+  }
+
+  /**
+   * 설정 화면이 보이는 연결 상태 — 동기화 명령이 막히는 까닭({@link notReadyReason})과 같은 말이다.
+   * Notion 에 묻지는 않는다 — 토큰이 맞는지는 첫 동기화가 안다.
+   */
+  connectionStatus(): { readonly ready: boolean; readonly message: string } {
+    if (this.syncController) return { ready: true, message: "준비됨 — 동기화할 수 있습니다." };
+    return { ready: false, message: this.notReadyReason().replace(/^Im-Nobsidian:? /, "") };
   }
 
   private async createOrchestrator(): Promise<void> {
     this.initFailure = null;
-    if (!this.hasConnectionSettings()) return;
-
     try {
       await this.closeStateDb();
+      // 연결 설정을 비웠으면 옛 연결로 계속 동기화하지 않는다
+      if (!this.hasConnectionSettings()) {
+        this.stopAutoSync();
+        return;
+      }
+      const token = this.notionToken();
+      if (token === null) {
+        throw new Error(
+          `이 기기의 키체인에 Notion 토큰(이름 ${this.settings.tokenSecret})이 없습니다 — 설정에서 토큰을 넣으세요`,
+        );
+      }
 
       const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
       /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
@@ -330,7 +402,7 @@ export default class ImNobsidianPlugin extends Plugin {
       const config: Config = {
         ...DEFAULT_CONFIG,
         notion: {
-          token: this.settings.token,
+          token,
           rootPageId: this.settings.rootPageId,
           parentMode: "page" as const,
           databases: [],
@@ -344,6 +416,10 @@ export default class ImNobsidianPlugin extends Plugin {
         paths: {
           ...DEFAULT_CONFIG.paths,
           attachments: this.settings.attachments,
+        },
+        conversion: {
+          ...DEFAULT_CONFIG.conversion,
+          ...(this.settings.timeZone ? { timeZone: this.settings.timeZone } : {}),
         },
       };
 
@@ -366,6 +442,7 @@ export default class ImNobsidianPlugin extends Plugin {
       this.viewProvider = new ViewDataProvider(vaultAdapter);
       this.entryEditor = new EntryEditor(vaultAdapter);
       this.updateStatusBar("ready");
+      this.startAutoSync();
       await this.refreshSidebarStatus();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -562,7 +639,10 @@ export default class ImNobsidianPlugin extends Plugin {
 
   /** 동기화할 수 없는 까닭 — 설정이 비었나, 초기화가 실패했나, 아직 초기화 중인가. */
   private notReadyReason(): string {
-    if (!this.hasConnectionSettings()) return "Im-Nobsidian: 설정을 먼저 완료해주세요.";
+    const missing = this.missingSettings();
+    if (missing.length > 0) {
+      return `Im-Nobsidian: 설정이 비어 있습니다 — ${missing.join(" · ")}`;
+    }
     if (this.initFailure !== null) return `Im-Nobsidian ${this.initFailure}`;
     return "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.";
   }
@@ -571,21 +651,45 @@ export default class ImNobsidianPlugin extends Plugin {
     this.syncController?.cancel();
   }
 
-  private async executePush(): Promise<void> {
+  /**
+   * 동기화 방향이 막는 동작이면 그 까닭. 엔진은 막힌 방향을 조용히 0건으로 끝낸다 — 단추를 눌러도
+   * 아무 일이 없었고 까닭도 보이지 않았다.
+   */
+  private blockedByDirection(action: "push" | "pull"): string | null {
+    const direction = this.settings.syncDirection;
+    if (direction === "both" || direction === action) return null;
+    const only = direction === "push" ? "Push만" : "Pull만";
+    return `Im-Nobsidian: 동기화 방향이 «${only}» 이라 ${action === "push" ? "Push" : "Pull"} 하지 않습니다 — 설정에서 바꿀 수 있습니다.`;
+  }
+
+  private async executePush(paths?: string[]): Promise<void> {
     if (!this.syncController) {
       new Notice(this.notReadyReason());
       return;
     }
-    await this.syncController.push();
+    const blocked = this.blockedByDirection("push");
+    if (blocked) {
+      new Notice(blocked);
+      return;
+    }
+    await this.syncController.push(paths);
   }
 
   /** Pull. `force` 는 원격을 전체 대조한다 — Notion 에서 지운 노트를 바로 반영한다. */
-  private async executePull({ force = false }: { readonly force?: boolean } = {}): Promise<void> {
+  private async executePull({
+    force = false,
+    paths,
+  }: { readonly force?: boolean; readonly paths?: string[] } = {}): Promise<void> {
     if (!this.syncController) {
       new Notice(this.notReadyReason());
       return;
     }
-    await this.syncController.pull(undefined, { force });
+    const blocked = this.blockedByDirection("pull");
+    if (blocked) {
+      new Notice(blocked);
+      return;
+    }
+    await this.syncController.pull(paths, { force });
   }
 
   private async executeSync(): Promise<void> {

@@ -2,7 +2,7 @@
   "id": "im-notion-sync",
   "name": "Im-Notion Sync",
   "version": "0.3.2",
-  "minAppVersion": "1.7.0",
+  "minAppVersion": "1.12.4",
   "description": "Bidirectional sync between Obsidian and Notion",
   "author": "hanseungheon",
   "authorUrl": "https://github.com/JaylenAI",
