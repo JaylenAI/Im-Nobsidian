@@ -196,6 +196,7 @@ export {
   getNotionColor,
   getNotionBgColor,
   generateColorCSS,
+  NOTION_COLOR_NAMES,
 } from "./view/index.js";
 export type {
   DBEntry,
@@ -277,3 +278,16 @@ export {
 // 마커 포맷 세부는 core 내부 전용이지만, 브랜드 토큰만은 플러그인 미리보기 렌더링 등
 // 패키지 외부 소비자도 마커를 식별해야 하므로 단일 진실원으로 공개한다.
 export { MARKER_BRAND } from "./constants/markers.js";
+
+// 디자인 마커 읽기(U-01) — 플러그인 렌더러가 마커가 칠하는 것을 읽는다. 마커 모양은 core 의 것이다.
+export { readDesignLine, hasDesignMarker, parseDesignColor } from "./converter/design-markers.js";
+export type {
+  CalloutDesign,
+  DesignColor,
+  DesignLine,
+  DesignSegment,
+  InlineStyle,
+  LineRange,
+  StyledRange,
+  TableLineDesign,
+} from "./converter/design-markers.js";
