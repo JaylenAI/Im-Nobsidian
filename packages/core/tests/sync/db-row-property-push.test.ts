@@ -466,6 +466,36 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
       });
     });
 
+    it("시간대를 바꿔도 고치지 않은 날짜는 다시 보내지 않고, 고친 날짜만 새 시간대로 보낸다 (U-03)", async () => {
+      // 서울 시간대로 받아 적은 시각 — 노트에는 시간대 없이 벽시계 시각만 있다
+      const base = BASE.replace("마감: 2026-10-01", "마감: 2026-10-01T10:00");
+      records.set(
+        ROW_PATH,
+        rowRecord({ contentHash: computeHash(base), baseSnapshot: Buffer.from(base, "utf-8") }),
+      );
+      const newYork = () => {
+        const config = createConfig();
+        config.conversion = { ...config.conversion, timeZone: "America/New_York" };
+        return config;
+      };
+
+      files.set(ROW_PATH, base.replace("진척: 0.42", "진척: 0.5"));
+      await build(newYork()).push();
+      expect(notion.updatePageProperties).toHaveBeenLastCalledWith(ROW_ID, {
+        진척: { number: 0.5 },
+      });
+
+      // 앞 push 가 사본을 올렸다 — 그 위에서 날짜만 고친다
+      files.set(
+        ROW_PATH,
+        files.get(ROW_PATH)!.replace("마감: 2026-10-01T10:00", "마감: 2026-10-02T10:00"),
+      );
+      await build(newYork()).push();
+      expect(notion.updatePageProperties).toHaveBeenLastCalledWith(ROW_ID, {
+        마감: { date: { start: "2026-10-02T10:00:00-04:00", end: null } },
+      });
+    });
+
     it("글 속성은 Notion 의 서식(굵게 · 링크) 위에 바뀐 글자만 고친다", async () => {
       remote.get(ROW_ID)!.properties = {
         ...REMOTE_PROPS,
