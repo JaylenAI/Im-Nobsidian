@@ -8,6 +8,7 @@
 import { describe, it, expect, onTestFinished, vi } from "vitest";
 import initSqlJs from "sql.js";
 import { SavedStateDbError } from "@im-nobsidian/core";
+import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import { SqlJsStateDB } from "../../src/state/sqljs-state-db.js";
 
 /** 동기화 기록 하나를 담아 저장한 파일의 내용. */
@@ -51,6 +52,14 @@ describe("저장된 상태 DB 파일로 열기", () => {
 
     expect(db.getByPath("노트.md")?.notionPageId).toBe("page-1");
     await db.close();
+  });
+
+  it("main.js 에 실린 wasm 바이트(Uint8Array)로 띄워도 저장한 파일을 그대로 읽는다 (U-04)", async () => {
+    // 플러그인은 wasm 을 파일에서 읽지 않고 번들에 실린 바이트를 넘긴다 — 예전 파일(ArrayBuffer)과 같은 엔진이다
+    const db = await SqlJsStateDB.open(await savedFile(), undefined, sqlJsWasm);
+    onTestFinished(() => db.close());
+
+    expect(db.getByPath("노트.md")?.notionPageId).toBe("page-1");
   });
 
   it("저장한 파일이 없으면 새 DB 로 연다 — 처음 쓰는 볼트", async () => {

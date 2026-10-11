@@ -126,7 +126,7 @@ import {
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
-import { WASM_FILE } from "../src/constants.js";
+import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 
 /** Obsidian 키체인(SecretStorage) — 이름 → 비밀. 시험이 무엇을 넣었는지 본다. */
 function keychain(entries: Record<string, string> = {}) {
@@ -139,14 +139,14 @@ function keychain(entries: Record<string, string> = {}) {
   };
 }
 
-/** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
+/**
+ * 설정을 다 채운 플러그인 — 상태 DB 파일은 `readBinary` 가 읽는다. 볼트에는 플러그인 폴더도 sql.js wasm 도 없다:
+ * 디렉터리는 main.js · manifest.json · styles.css 만 받는다(U-04).
+ */
 function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
   const plugin = new ImNobsidianPlugin({} as never, {} as never);
   plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: "root" };
   const vaultPath = mkdtempSync(join(tmpdir(), "im-nobsidian-main-"));
-  const pluginDir = join(vaultPath, ".obsidian", "plugins", "test-plugin");
-  mkdirSync(pluginDir, { recursive: true });
-  writeFileSync(join(pluginDir, WASM_FILE), "");
   let reads = 0;
   const patches: unknown[] = [];
   const internals = plugin as unknown as {
@@ -380,6 +380,22 @@ describe("ImNobsidianPlugin", () => {
       { syncState: "error", errorMessage: READ_FAILURE },
     ]);
     expect(shown).toEqual([`Im-Nobsidian ${READ_FAILURE}`]);
+  });
+
+  it("SQLite 엔진은 main.js 에 실린 wasm 으로 띄운다 — 플러그인 폴더에 네 번째 파일이 없어도 연다 (U-04)", async () => {
+    // 예전에는 `<볼트>/.obsidian/plugins/<id>/sql-wasm.wasm` 을 읽었다. 디렉터리 설치에는 그 파일이 없고,
+    // 설정 폴더를 바꾼 볼트(`Vault#configDir`)에서는 경로부터 틀렸다.
+    const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    vi.mocked(SqlJsStateDB.open).mockClear();
+
+    await plugin.initOrchestrator();
+
+    expect(internals.initFailure).toBeNull();
+    const engine = vi.mocked(SqlJsStateDB.open).mock.calls[0]![2];
+    // toBe 는 실패할 때 1MB 바이트를 모두 찍는다 — 같은 객체인지만 본다
+    expect(engine === sqlJsWasm, "main.js 에 실린 wasm 을 넘긴다").toBe(true);
+    // wasm 머리(\0asm) — 빈 버퍼 · 다른 파일이 아니다
+    expect([...new Uint8Array(engine as Uint8Array).subarray(0, 4)]).toEqual([0, 0x61, 0x73, 0x6d]);
   });
 
   it("실패한 뒤 새로고침을 누르면 초기화를 다시 해 본다 — 이제 읽히면 그 파일로 연다", async () => {

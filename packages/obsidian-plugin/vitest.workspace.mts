@@ -3,7 +3,11 @@ import { svelte } from "@sveltejs/vite-plugin-svelte";
 import path from "path";
 
 const here = import.meta.dirname;
-const obsidianAlias = { obsidian: path.resolve(here, "tests/helpers/obsidian-stub.ts") };
+// wasm 은 빌드가 esbuild binary 로더로 main.js 에 싣는다 — vite 에는 그 로더가 없어 같은 바이트를 읽는 모듈로 잇는다.
+const obsidianAlias = {
+  obsidian: path.resolve(here, "tests/helpers/obsidian-stub.ts"),
+  "sql.js/dist/sql-wasm-browser.wasm": path.resolve(here, "tests/helpers/sql-wasm.ts"),
+};
 
 // Svelte 5 컴포넌트의 실제 DOM 마운트 테스트(I9). browser 컨디션으로 svelte 클라이언트
 // 빌드를 해석해야 `mount()` 가 동작한다. 이 컨디션이 node 프로젝트로 새지 않도록 분리한다.
