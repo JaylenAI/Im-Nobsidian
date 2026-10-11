@@ -7,6 +7,8 @@ import {
   TFolder,
   type TFile,
 } from "obsidian";
+import { join } from "node:path";
+import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
   NotionClient,
   SyncOrchestrator,
@@ -23,7 +25,7 @@ import type {
   ResolutionChoice,
 } from "@im-nobsidian/core";
 import { STATE_DB_PATH, StateDbUnavailableError } from "@im-nobsidian/core";
-import { TOKEN_SECRET_ID, WASM_FILE } from "./constants.js";
+import { TOKEN_SECRET_ID } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
 import { designLivePreview } from "./design/live-preview.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
@@ -388,14 +390,7 @@ export default class ImNobsidianPlugin extends Plugin {
       }
 
       const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
-      /* eslint-disable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
-      const nodePath: typeof import("path") = require("path");
-      const nodeFs: typeof import("fs") = require("fs");
-      /* eslint-enable @typescript-eslint/no-require-imports, @typescript-eslint/consistent-type-imports */
-      const wasmPath = nodePath.join(basePath, ".obsidian", "plugins", this.manifest.id, WASM_FILE);
-      const wasmBinary = nodeFs.readFileSync(wasmPath).buffer;
-
-      const stateDb = await this.openStateDb(nodePath.join(basePath, STATE_DB_PATH), wasmBinary);
+      const stateDb = await this.openStateDb(join(basePath, STATE_DB_PATH));
 
       const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
 
@@ -465,7 +460,7 @@ export default class ImNobsidianPlugin extends Plugin {
    * 플러그인을 다시 불러왔으면 옛 인스턴스가 DB 를 다 닫고 잠금을 푼 뒤에 잡는다 — 먼저 잡으면 그 잠금에 막히고,
    * 먼저 읽으면 옛 인스턴스의 마지막 기록이 빠진 DB 를 연다.
    */
-  private async openStateDb(path: string, wasmBinary: ArrayBuffer): Promise<SqlJsStateDB> {
+  private async openStateDb(path: string): Promise<SqlJsStateDB> {
     await previousStateDbClosed();
     const stateDbFile = StateDbFile.acquire(path, this.manifest.name);
     let stateDb: SqlJsStateDB;
@@ -474,7 +469,9 @@ export default class ImNobsidianPlugin extends Plugin {
         await this.readStateDbFile(),
         // 한 번에 갈아 끼운다 — 쓰는 도중에 Obsidian 이 죽어도 파일이 잘리지 않는다.
         (data: Uint8Array) => this.writeStateDb(stateDbFile, data),
-        wasmBinary,
+        // SQLite 엔진 — 빌드가 main.js 에 싣는다(ADR-031). 디렉터리 설치는 main.js · manifest.json · styles.css
+        // 세 파일만 받으므로 플러그인 폴더의 네 번째 파일을 읽지 않는다.
+        sqlJsWasm,
       );
     } catch (error) {
       stateDbFile.release();

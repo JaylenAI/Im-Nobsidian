@@ -26,17 +26,13 @@ Submission to the Obsidian community plugin store is in progress.
 
 ### Manual
 
-Copy **four** files from a [release](https://github.com/JaylenAI/Im-Nobsidian/releases) —
-`main.js`, `manifest.json`, `styles.css` and `sql-wasm.wasm` — into
-`<vault>/.obsidian/plugins/im-notion-sync/`.
+Copy **three** files from a [release](https://github.com/JaylenAI/Im-Nobsidian/releases) —
+`main.js`, `manifest.json` and `styles.css` — into `<vault>/<config folder>/plugins/im-notion-sync/`
+(the config folder is `.obsidian` unless you changed it under Settings → Files and links).
 
-Two details are load-bearing:
-
-- **The folder must be named `im-notion-sync`** (the plugin `id` in `manifest.json`). The plugin
-  locates its SQLite WASM binary at `.obsidian/plugins/<manifest.id>/sql-wasm.wasm`, so any other
-  folder name leaves the state database unable to open.
-- **`sql-wasm.wasm` is required.** It is the SQLite engine the plugin runs on — without it the
-  plugin loads but sync never initializes.
+The SQLite engine the plugin keeps its sync state in is built into `main.js`, so there is no
+fourth file to copy. Releases up to v0.3.2 shipped it separately as `sql-wasm.wasm`; it is safe to
+delete that file from the plugin folder after updating.
 
 ## Setup
 

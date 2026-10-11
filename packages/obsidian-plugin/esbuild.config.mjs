@@ -37,6 +37,9 @@ esbuild
     alias: {
       "better-sqlite3": "./src/stubs/better-sqlite3.ts",
     },
+    // sql.js 의 SQLite 엔진(wasm)을 main.js 안에 싣는다 — 디렉터리는 main.js · manifest.json · styles.css 만
+    // 내려받는다(ADR-031).
+    loader: { ".wasm": "binary" },
     format: "cjs",
     target: "es2022",
     logLevel: "info",
@@ -50,16 +53,8 @@ esbuild
   })
   .then(() => {
     copyFileSync("src/styles/main.css", "styles.css");
-    try {
-      const wasmSrc = new URL("node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
-      copyFileSync(wasmSrc, "sql-wasm.wasm");
-    } catch {
-      try {
-        const pnpmPath = new URL("../../node_modules/.pnpm/sql.js@1.14.1/node_modules/sql.js/dist/sql-wasm.wasm", import.meta.url);
-        copyFileSync(pnpmPath, "sql-wasm.wasm");
-      } catch {
-        console.warn("sql-wasm.wasm not found — WASM must be provided manually");
-      }
-    }
+    // manifest 의 원본은 레포 루트다 — Obsidian 앱 · BRAT · 디렉터리가 루트에서 읽는다(ADR-032).
+    // 이 폴더에는 설치할 세 파일(main.js · manifest.json · styles.css)을 모으려고 옮겨 둔다.
+    copyFileSync("../../manifest.json", "manifest.json");
   })
   .catch(() => process.exit(1));
