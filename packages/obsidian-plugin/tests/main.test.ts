@@ -117,6 +117,7 @@ vi.mock("@im-nobsidian/core", async () => ({
 
 import ImNobsidianPlugin from "../src/main.js";
 import {
+  NotionClient,
   SavedStateDbError,
   StateLock,
   getLogger,
@@ -127,10 +128,21 @@ import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import { WASM_FILE } from "../src/constants.js";
 
+/** Obsidian 키체인(SecretStorage) — 이름 → 비밀. 시험이 무엇을 넣었는지 본다. */
+function keychain(entries: Record<string, string> = {}) {
+  const secrets = new Map(Object.entries(entries));
+  return {
+    secrets,
+    getSecret: (id: string) => secrets.get(id) ?? null,
+    setSecret: vi.fn((id: string, secret: string) => void secrets.set(id, secret)),
+    listSecrets: () => [...secrets.keys()],
+  };
+}
+
 /** 설정을 다 채운 플러그인 — 볼트 폴더에 sql.js wasm 이 있고, 상태 DB 파일은 `readBinary` 가 읽는다. */
 function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
   const plugin = new ImNobsidianPlugin({} as never, {} as never);
-  plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+  plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: "root" };
   const vaultPath = mkdtempSync(join(tmpdir(), "im-nobsidian-main-"));
   const pluginDir = join(vaultPath, ".obsidian", "plugins", "test-plugin");
   mkdirSync(pluginDir, { recursive: true });
@@ -157,6 +169,7 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
     rmSync(vaultPath, { recursive: true, force: true });
   });
   internals.app = {
+    secretStorage: keychain({ notion: "ntn_test" }),
     vault: {
       adapter: {
         basePath: vaultPath,
@@ -211,8 +224,10 @@ describe("ImNobsidianPlugin", () => {
 
   it("saveSettings 에러 없이 실행", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
-    plugin.settings.token = "ntn_test";
+    plugin.settings.rootPageId = "root";
     await expect(plugin.saveSettings()).resolves.not.toThrow();
+    // 기본값은 플러그인마다 사본이다 — 고친 값이 다음 플러그인으로 새지 않는다
+    expect(new ImNobsidianPlugin({} as never, {} as never).settings.rootPageId).toBe("");
   });
 
   it("onunload 에러 없이 실행", () => {
@@ -563,11 +578,15 @@ describe("ImNobsidianPlugin", () => {
     Notice.shown.splice(0);
 
     await internals.executePush();
-    plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+    plugin.settings = { ...plugin.settings, tokenSecret: "notion" };
+    await internals.executePush();
+    plugin.settings = { ...plugin.settings, rootPageId: "root" };
     await internals.executePush();
 
+    // 무엇이 비었는지 말한다 — 예전에는 「설정을 먼저 완료해주세요」 뿐이었다
     expect(Notice.shown).toEqual([
-      "Im-Nobsidian: 설정을 먼저 완료해주세요.",
+      "Im-Nobsidian: 설정이 비어 있습니다 — Notion 토큰 · 루트 페이지 ID",
+      "Im-Nobsidian: 설정이 비어 있습니다 — 루트 페이지 ID",
       "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.",
     ]);
   });
@@ -611,9 +630,12 @@ describe("ImNobsidianPlugin", () => {
 
   it("초기화는 차례로 돈다 — 설정을 칠 때마다 불러도 앞 초기화가 끝난 뒤에 다음이 DB 를 닫고 연다", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
-    plugin.settings = { ...plugin.settings, token: "ntn_test", rootPageId: "root" };
+    plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: "root" };
     // 볼트가 없어 초기화는 실패한다 — 차례만 본다. 실패 이유는 변경 패널에도 보내므로 작업 공간은 둔다.
-    (plugin as unknown as { app: unknown }).app = { workspace: { getLeavesOfType: () => [] } };
+    (plugin as unknown as { app: unknown }).app = {
+      secretStorage: keychain({ notion: "ntn_test" }),
+      workspace: { getLeavesOfType: () => [] },
+    };
     const events: string[] = [];
     let release!: () => void;
     const firstClose = new Promise<void>((resolve) => (release = resolve));
@@ -750,15 +772,162 @@ describe("ImNobsidianPlugin", () => {
   it("token 없으면 initOrchestrator 무동작", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
     plugin.settings = {
-      token: "",
+      tokenSecret: "",
       rootPageId: "",
       syncDirection: "both",
       autoSync: false,
       autoSyncInterval: 300,
       conflictStrategy: "manual",
       attachments: "attachments",
+      timeZone: "",
     };
     await plugin.initOrchestrator();
+  });
+
+  describe("U-03 토큰은 키체인에 — 볼트 설정 파일에는 이름만", () => {
+    /** 예전 설정(data.json)을 불러오는 플러그인. */
+    function legacy(data: object, secrets = keychain()) {
+      const plugin = new ImNobsidianPlugin({} as never, {} as never);
+      const saved: object[] = [];
+      Object.assign(plugin, {
+        app: { secretStorage: secrets },
+        loadData: async () => data,
+        saveData: async (value: object) => void saved.push(structuredClone(value)),
+      });
+      Notice.shown.splice(0);
+      return { plugin, saved, secrets };
+    }
+
+    it("글자 그대로 적힌 토큰을 키체인으로 옮기고 설정 파일에서 지운다", async () => {
+      const { plugin, saved, secrets } = legacy({ token: "ntn_old", rootPageId: "root" });
+
+      await plugin.loadSettings();
+
+      expect(secrets.secrets.get("im-nobsidian-notion-token")).toBe("ntn_old");
+      expect(plugin.settings.tokenSecret).toBe("im-nobsidian-notion-token");
+      expect(plugin.settings).not.toHaveProperty("token");
+      expect(saved).toHaveLength(1);
+      expect(JSON.stringify(saved[0])).not.toContain("ntn_old");
+      expect(Notice.shown[0]).toContain("키체인(이름 im-nobsidian-notion-token)으로 옮겼습니다");
+    });
+
+    it("다른 볼트가 같은 이름에 다른 토큰을 두었으면 덮지 않고 번호를 붙인다", async () => {
+      const { plugin, secrets } = legacy(
+        { token: "ntn_mine", rootPageId: "root" },
+        keychain({ "im-nobsidian-notion-token": "ntn_other", "im-nobsidian-notion-token-2": "x" }),
+      );
+
+      await plugin.loadSettings();
+
+      expect(secrets.secrets.get("im-nobsidian-notion-token")).toBe("ntn_other");
+      expect(secrets.secrets.get("im-nobsidian-notion-token-3")).toBe("ntn_mine");
+      expect(plugin.settings.tokenSecret).toBe("im-nobsidian-notion-token-3");
+    });
+
+    it("이미 옮긴 토큰과 같으면 그 이름을 그대로 쓴다", async () => {
+      const { plugin, secrets } = legacy(
+        { token: "ntn_mine", rootPageId: "root" },
+        keychain({ "im-nobsidian-notion-token": "ntn_mine" }),
+      );
+
+      await plugin.loadSettings();
+
+      expect(plugin.settings.tokenSecret).toBe("im-nobsidian-notion-token");
+      expect(secrets.listSecrets()).toEqual(["im-nobsidian-notion-token"]);
+    });
+
+    it("키체인에 넣지 못하면 토큰을 지우지 않고 까닭을 알린다", async () => {
+      const secrets = keychain();
+      secrets.setSecret.mockImplementation(() => {
+        throw new Error("Invalid secret ID");
+      });
+      const { plugin, saved } = legacy({ token: "ntn_old", rootPageId: "root" }, secrets);
+
+      await plugin.loadSettings();
+
+      expect(plugin.settings.token).toBe("ntn_old");
+      expect(saved).toEqual([]);
+      expect(Notice.shown).toEqual([
+        "Im-Nobsidian: Notion 토큰을 키체인으로 옮기지 못했습니다 — Invalid secret ID",
+      ]);
+    });
+
+    it("이 기기의 키체인에 토큰이 없으면 「설정을 먼저」 가 아니라 그 까닭으로 실패한다", async () => {
+      const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      internals.app = { ...(internals.app as object), secretStorage: keychain() };
+
+      await plugin.initOrchestrator();
+
+      expect(internals.syncController).toBeNull();
+      expect(internals.initFailure).toBe(
+        "초기화 실패: 이 기기의 키체인에 Notion 토큰(이름 notion)이 없습니다 — 설정에서 토큰을 넣으세요",
+      );
+      expect(plugin.connectionStatus()).toEqual({
+        ready: false,
+        message: internals.initFailure,
+      });
+    });
+  });
+
+  it("키체인의 토큰과 설정의 시간대로 엔진을 만든다 — 시간대가 비면 이 컴퓨터의 시간대(설정 없음)", async () => {
+    const fromConfig = vi.spyOn(NotionClient, "fromConfig");
+    const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+
+    await plugin.initOrchestrator();
+    plugin.settings.timeZone = "America/New_York";
+    await plugin.initOrchestrator();
+
+    const configs = fromConfig.mock.calls.map(([config]) => config);
+    expect(configs.map((c) => c.notion.token)).toEqual(["ntn_test", "ntn_test"]);
+    expect(configs[0]!.conversion).not.toHaveProperty("timeZone");
+    expect(configs[1]!.conversion).toMatchObject({ timeZone: "America/New_York" });
+    expect(plugin.connectionStatus()).toEqual({
+      ready: true,
+      message: "준비됨 — 동기화할 수 있습니다.",
+    });
+  });
+
+  it("초기화가 되면 자동 동기화 주기를 걸고, 연결 설정을 비우면 옛 연결을 닫고 주기를 푼다", async () => {
+    const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+    const timers = internals as unknown as { autoSyncTimer: unknown };
+    plugin.settings.autoSync = true;
+
+    await plugin.initOrchestrator();
+    expect(timers.autoSyncTimer).not.toBeNull();
+
+    plugin.settings.rootPageId = "";
+    await plugin.initOrchestrator();
+    expect(timers.autoSyncTimer).toBeNull();
+    expect(internals.syncController).toBeNull();
+    expect(internals.stateDb).toBeNull();
+  });
+
+  it("동기화 방향이 막는 동작은 0건으로 조용히 끝내지 않고 까닭을 알린다 — 단추 · 명령 · 파일 하나", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const controller = { push: vi.fn(async () => {}), pull: vi.fn(async () => {}) };
+    const internals = plugin as unknown as {
+      syncController: unknown;
+      executePush: (paths?: string[]) => Promise<void>;
+      executePull: (options?: { paths?: string[] }) => Promise<void>;
+    };
+    internals.syncController = controller;
+    Notice.shown.splice(0);
+
+    plugin.settings.syncDirection = "pull";
+    await internals.executePush();
+    await internals.executePush(["a.md"]);
+    await internals.executePull({ paths: ["a.md"] });
+    plugin.settings.syncDirection = "push";
+    await internals.executePull();
+    await internals.executePush(["a.md"]);
+
+    expect(Notice.shown).toEqual([
+      "Im-Nobsidian: 동기화 방향이 «Pull만» 이라 Push 하지 않습니다 — 설정에서 바꿀 수 있습니다.",
+      "Im-Nobsidian: 동기화 방향이 «Pull만» 이라 Push 하지 않습니다 — 설정에서 바꿀 수 있습니다.",
+      "Im-Nobsidian: 동기화 방향이 «Push만» 이라 Pull 하지 않습니다 — 설정에서 바꿀 수 있습니다.",
+    ]);
+    expect(controller.pull.mock.calls).toEqual([[["a.md"], { force: false }]]);
+    expect(controller.push.mock.calls).toEqual([[["a.md"]]]);
   });
 
   it("default export 존재", async () => {
