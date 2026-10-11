@@ -76,66 +76,121 @@ export class PluginSettingTab {
   }
 }
 
+/**
+ * 설정 줄 — 시험이 이름 · 설명 · 고르개를 읽고, 사용자가 바꾼 것처럼 부를 수 있게 적어 둔다.
+ * `Setting.rows` 는 만든 차례대로 쌓인다 — 시험이 비운다.
+ */
 export class Setting {
-  constructor(_el: unknown) {}
-  setName() {
+  static rows: Setting[] = [];
+  name = "";
+  desc = "";
+  heading = false;
+  controls: StubControl[] = [];
+  descEl = {
+    classes: new Set<string>(),
+    toggleClass(cls: string, on: boolean) {
+      if (on) this.classes.add(cls);
+      else this.classes.delete(cls);
+    },
+  };
+  constructor(_el: unknown) {
+    Setting.rows.push(this);
+  }
+  setName(name: string) {
+    this.name = name;
     return this;
   }
-  setDesc() {
+  setDesc(desc: string) {
+    this.desc = desc;
     return this;
   }
   setHeading() {
+    this.heading = true;
     return this;
   }
-  addText(cb: (t: unknown) => void) {
-    cb({
-      setPlaceholder: () => ({
-        setValue: () => ({ onChange: () => ({ inputEl: { type: "text" } }) }),
-      }),
-      setValue: () => ({ onChange: () => ({ inputEl: { type: "text" } }) }),
-      onChange: () => ({ inputEl: { type: "text" } }),
-      inputEl: { type: "text" },
-    });
+  addText(cb: (t: StubControl) => void) {
+    return this.add("text", cb);
+  }
+  addDropdown(cb: (d: StubControl) => void) {
+    return this.add("dropdown", cb);
+  }
+  addToggle(cb: (t: StubControl) => void) {
+    return this.add("toggle", cb);
+  }
+  addButton(cb: (b: StubControl) => void) {
+    return this.add("button", cb);
+  }
+  addComponent(cb: (el: unknown) => StubControl) {
+    this.controls.push(cb(createMockElement()));
     return this;
   }
-  addDropdown(cb: (d: unknown) => void) {
-    cb({
-      addOption: function () {
-        return this;
-      },
-      setValue: function () {
-        return this;
-      },
-      onChange: function () {
-        return this;
-      },
-    });
+  private add(kind: string, cb: (c: StubControl) => void) {
+    const control = new StubControl(kind);
+    cb(control);
+    this.controls.push(control);
     return this;
   }
-  addToggle(cb: (t: unknown) => void) {
-    cb({
-      setValue: function () {
-        return this;
-      },
-      onChange: function () {
-        return this;
-      },
-    });
+}
+
+/** 고르개 하나 — 값 · 고를 수 있는 것 · 바뀜 처리를 적어 둔다. */
+export class StubControl {
+  value: unknown = undefined;
+  options: [string, string][] = [];
+  placeholder = "";
+  buttonText = "";
+  disabled = false;
+  inputEl = { type: "text" };
+  private handler: ((value?: unknown) => unknown) | undefined;
+  constructor(readonly kind: string) {}
+  setValue(value: unknown) {
+    this.value = value;
     return this;
   }
-  addButton(cb: (b: unknown) => void) {
-    cb({
-      setButtonText: function () {
-        return this;
-      },
-      setCta: function () {
-        return this;
-      },
-      onClick: function () {
-        return this;
-      },
-    });
+  setPlaceholder(placeholder: string) {
+    this.placeholder = placeholder;
     return this;
+  }
+  addOption(value: string, label: string) {
+    this.options.push([value, label]);
+    return this;
+  }
+  onChange(cb: (value?: unknown) => unknown) {
+    this.handler = cb;
+    return this;
+  }
+  setButtonText(text: string) {
+    this.buttonText = text;
+    return this;
+  }
+  setCta() {
+    return this;
+  }
+  setWarning() {
+    return this;
+  }
+  setDisabled(disabled: boolean) {
+    this.disabled = disabled;
+    return this;
+  }
+  onClick(cb: () => unknown) {
+    this.handler = cb;
+    return this;
+  }
+  /** 사용자가 값을 바꾼 것처럼 — 바뀜 처리가 끝날 때까지 기다린다. */
+  async change(value: unknown) {
+    this.value = value;
+    await this.handler?.(value);
+  }
+  /** 사용자가 단추를 누른 것처럼. */
+  async click() {
+    await this.handler?.();
+  }
+}
+
+/** 키체인 고르개(1.11.1) — 고른 비밀의 «이름» 을 값으로 준다. */
+export class SecretComponent extends StubControl {
+  constructor(_app: unknown, _containerEl: unknown) {
+    super("secret");
   }
 }
 
