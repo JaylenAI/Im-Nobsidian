@@ -187,7 +187,7 @@ interface RawPendingRow {
 export class SqlJsStateDB implements IStateDB {
   private db: SqlJsDatabase;
   private dirty = false;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushTimer: number | null = null;
   private readonly flushFn: ((data: Uint8Array) => Promise<void>) | null;
   /** 파일 쓰기를 한 줄로 세운다 — 늦게 끝난 옛 사본이 새 사본을 덮지 않게 한다. */
   private writes: Promise<void> = Promise.resolve();
@@ -269,7 +269,7 @@ export class SqlJsStateDB implements IStateDB {
 
   private scheduleFlush(): void {
     if (!this.flushFn || this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
+    this.flushTimer = window.setTimeout(() => {
       this.flushTimer = null;
       // 못 쓴 것은 «바뀜» 으로 남아 다음 쓰기(다음 변경 · 닫기)가 다시 쓴다.
       this.flush().catch((error: unknown) => {
@@ -315,7 +315,7 @@ export class SqlJsStateDB implements IStateDB {
    */
   async close(): Promise<void> {
     if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
+      window.clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
     await this.flush();
@@ -330,7 +330,7 @@ export class SqlJsStateDB implements IStateDB {
    */
   async discard(): Promise<boolean> {
     if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
+      window.clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
     await this.writes;

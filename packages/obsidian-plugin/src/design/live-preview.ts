@@ -52,12 +52,12 @@ export function designLivePreview(options: RenderOptions): Extension {
 
       destroy(): void {
         this.observer.disconnect();
-        cancelAnimationFrame(this.frame);
+        window.cancelAnimationFrame(this.frame);
       }
 
       private scheduleWidgets(): void {
-        cancelAnimationFrame(this.frame);
-        this.frame = requestAnimationFrame(() => decorateWidgets(this.view, options));
+        window.cancelAnimationFrame(this.frame);
+        this.frame = window.requestAnimationFrame(() => decorateWidgets(this.view, options));
       }
     },
     { decorations: (plugin) => plugin.decorations },

@@ -4,8 +4,8 @@ import {
   MarkdownRenderChild,
   requestUrl,
   requireApiVersion,
+  TFile,
   TFolder,
-  type TFile,
 } from "obsidian";
 import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
@@ -126,9 +126,9 @@ export default class ImNobsidianPlugin extends Plugin {
   /** 상태 DB 파일과 그 잠금 — 닫으면서 푼다({@link closeStateDb}). */
   private stateDbFile: StateDbFile | null = null;
   private statusBarEl: HTMLElement | null = null;
-  private autoSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private autoSyncTimer: number | null = null;
   private initializing: Promise<void> = Promise.resolve();
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer: number | null = null;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
   /**
@@ -195,10 +195,7 @@ export default class ImNobsidianPlugin extends Plugin {
         onRefresh: () => this.refreshSidebarStatus(true),
         onResolveConflict: () => this.resolveConflicts(),
         onCancel: () => this.cancelSync(),
-        onOpenFile: (path: string) => {
-          const file = this.app.vault.getAbstractFileByPath(path);
-          if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
-        },
+        onOpenFile: (path: string) => this.openVaultFile(path),
         onPushPath: (path: string) => this.executePush([path]),
         onDiscard: (change: LocalChange) => this.discardLocal(change),
         onPullPath: (path: string) => this.executePull({ paths: [path] }),
@@ -295,7 +292,7 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   async loadSettings(): Promise<void> {
-    const data = await this.loadData();
+    const data = (await this.loadData()) as Partial<ImNobsidianSettings> | null;
     this.settings = { ...DEFAULT_SETTINGS, ...data };
     await this.moveTokenToKeychain();
   }
@@ -309,7 +306,8 @@ export default class ImNobsidianPlugin extends Plugin {
     if (!token) return;
     const secrets = this.app.secretStorage;
     let id = this.settings.tokenSecret || TOKEN_SECRET_ID;
-    // 키체인은 이 기기의 모든 볼트가 함께 쓴다 — 다른 볼트가 같은 이름에 다른 토큰을 두었으면 덮지 않는다.
+    // 사용자가 이 볼트의 키체인에 같은 이름으로 다른 토큰을 두었으면 덮지 않는다. 키체인은 볼트마다 따로다
+    // (앱이 볼트 ID 를 붙여 저장한다 — 새 볼트 창의 비밀 목록은 비어 있다, 실측 1.13.7).
     for (let n = 2; ; n++) {
       const held = secrets.getSecret(id);
       if (held === null || held === token) break;
@@ -418,14 +416,14 @@ export default class ImNobsidianPlugin extends Plugin {
         },
       };
 
-      const client = NotionClient.fromConfig(config, obsidianFetch as typeof globalThis.fetch);
+      const client = NotionClient.fromConfig(config, obsidianFetch);
 
       const orchestrator = new SyncOrchestrator(
         config,
         stateDb,
         client,
         vaultAdapter,
-        obsidianFetch as typeof globalThis.fetch,
+        obsidianFetch,
       );
       // 동기화 실행은 전부 SyncController 가 담당한다. 플러그인은 Notice/사이드바/상태바
       // 표시만 훅으로 넘겨 배선하므로, sync 로직과 Obsidian UI 가 분리된다.
@@ -546,8 +544,14 @@ export default class ImNobsidianPlugin extends Plugin {
     const leaf = this.app.workspace.getLeftLeaf(false);
     if (!leaf) return;
     await leaf.setViewState({ type: SYNC_SIDEBAR_TYPE, active: true });
-    this.app.workspace.revealLeaf(leaf);
+    await this.app.workspace.revealLeaf(leaf);
     await this.refreshSidebarStatus();
+  }
+
+  /** 볼트의 노트를 연다 — 그 경로가 없거나 폴더면 아무것도 하지 않는다. */
+  private openVaultFile(path: string): void {
+    const file = this.app.vault.getAbstractFileByPath(path);
+    if (file instanceof TFile) void this.app.workspace.getLeaf(false).openFile(file);
   }
 
   startAutoSync(): void {
@@ -555,7 +559,7 @@ export default class ImNobsidianPlugin extends Plugin {
     if (!this.settings.autoSync || !this.syncController) return;
 
     // 도는 작업이 있으면 조용히 건너뛴다 — 긴 sync 동안 주기가 겹쳐 부르지 않는다(S-09).
-    this.autoSyncTimer = setInterval(
+    this.autoSyncTimer = window.setInterval(
       () => void this.syncController?.autoSync(),
       this.settings.autoSyncInterval * 1000,
     );
@@ -563,7 +567,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   stopAutoSync(): void {
     if (this.autoSyncTimer) {
-      clearInterval(this.autoSyncTimer);
+      window.clearInterval(this.autoSyncTimer);
       this.autoSyncTimer = null;
     }
   }
@@ -607,11 +611,11 @@ export default class ImNobsidianPlugin extends Plugin {
     );
   }
 
-  private sidebarRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+  private sidebarRefreshTimer: number | null = null;
 
   private scheduleSidebarRefresh(): void {
-    if (this.sidebarRefreshTimer) clearTimeout(this.sidebarRefreshTimer);
-    this.sidebarRefreshTimer = setTimeout(() => {
+    if (this.sidebarRefreshTimer) window.clearTimeout(this.sidebarRefreshTimer);
+    this.sidebarRefreshTimer = window.setTimeout(() => {
       this.sidebarRefreshTimer = null;
       void this.refreshSidebarStatus();
     }, 500);
@@ -621,7 +625,7 @@ export default class ImNobsidianPlugin extends Plugin {
     if (!this.settings.autoSync || !this.syncController) return;
 
     this.clearVaultDebounce();
-    this.debounceTimer = setTimeout(() => {
+    this.debounceTimer = window.setTimeout(() => {
       this.debounceTimer = null;
       void this.syncController?.vaultSync();
     }, 2000);
@@ -629,7 +633,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private clearVaultDebounce(): void {
     if (this.debounceTimer) {
-      clearTimeout(this.debounceTimer);
+      window.clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
   }
@@ -894,18 +898,12 @@ export default class ImNobsidianPlugin extends Plugin {
                 props: {
                   data: newData,
                   availableViews: configs?.views ?? [],
-                  onEntryClick: (entry: { path: string }) => {
-                    const file = this.app.vault.getAbstractFileByPath(entry.path);
-                    if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
-                  },
+                  onEntryClick: (entry: { path: string }) => this.openVaultFile(entry.path),
                 },
               });
             }
           },
-          onEntryClick: (entry: { path: string }) => {
-            const file = this.app.vault.getAbstractFileByPath(entry.path);
-            if (file) void this.app.workspace.getLeaf(false).openFile(file as TFile);
-          },
+          onEntryClick: (entry: { path: string }) => this.openVaultFile(entry.path),
         },
       });
     } catch (error) {

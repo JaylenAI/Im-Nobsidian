@@ -16,12 +16,12 @@ interface ClosingRegistry {
 
 /** 상태 DB 를 닫는 일을 알린다. 닫다가 실패해도 다음 인스턴스는 그 뒤에 연다 — 실패 이유는 닫는 쪽이 알린다. */
 export function announceStateDbClose(closing: Promise<void>): void {
-  const registry = globalThis as ClosingRegistry;
+  const registry = window as ClosingRegistry;
   const earlier = registry[CLOSING] ?? Promise.resolve();
   registry[CLOSING] = Promise.allSettled([earlier, closing]).then(() => undefined);
 }
 
 /** 앞 인스턴스들이 상태 DB 를 다 닫을 때까지 기다린다 — 없으면 바로 끝난다. */
 export function previousStateDbClosed(): Promise<void> {
-  return (globalThis as ClosingRegistry)[CLOSING] ?? Promise.resolve();
+  return (window as ClosingRegistry)[CLOSING] ?? Promise.resolve();
 }
