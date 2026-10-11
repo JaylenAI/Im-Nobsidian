@@ -1,3 +1,5 @@
+import { StateField } from "@codemirror/state";
+
 export class Plugin {
   app: unknown = {};
   loadData() {
@@ -11,6 +13,8 @@ export class Plugin {
   addRibbonIcon() {}
   registerView() {}
   registerMarkdownCodeBlockProcessor() {}
+  registerMarkdownPostProcessor() {}
+  registerEditorExtension() {}
   addStatusBarItem() {
     return { setText: () => {} };
   }
@@ -200,4 +204,14 @@ export function requestUrl() {
     headers: { "content-type": "application/json" },
     arrayBuffer: new ArrayBuffer(0),
   });
+}
+
+/** 편집기가 Live Preview 인가 — Obsidian 이 편집기 상태에 싣는 필드. 시험에서는 켜진 채로 둔다. */
+export const editorLivePreviewField = StateField.define<boolean>({
+  create: () => true,
+  update: (value) => value,
+});
+
+export function requireApiVersion(): boolean {
+  return true;
 }

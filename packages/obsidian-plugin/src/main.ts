@@ -1,4 +1,12 @@
-import { Plugin, Notice, MarkdownRenderChild, requestUrl, TFolder, type TFile } from "obsidian";
+import {
+  Plugin,
+  Notice,
+  MarkdownRenderChild,
+  requestUrl,
+  requireApiVersion,
+  TFolder,
+  type TFile,
+} from "obsidian";
 import {
   NotionClient,
   SyncOrchestrator,
@@ -14,8 +22,10 @@ import type {
   RemoteChange,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import { STATE_DB_PATH, MARKER_BRAND, StateDbUnavailableError } from "@im-nobsidian/core";
+import { STATE_DB_PATH, StateDbUnavailableError } from "@im-nobsidian/core";
 import { WASM_FILE } from "./constants.js";
+import { decorateRendered } from "./design/render-dom.js";
+import { designLivePreview } from "./design/live-preview.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
 import { StateDbCopyStaleError, StateDbFile } from "./state/state-db-file.js";
@@ -217,7 +227,7 @@ export default class ImNobsidianPlugin extends Plugin {
       this.startAutoSync();
     }
 
-    this.registerColorPostProcessor();
+    this.registerDesignRenderer();
     this.registerVaultEvents();
   }
 
@@ -484,49 +494,17 @@ export default class ImNobsidianPlugin extends Plugin {
     }
   }
 
-  private registerColorPostProcessor(): void {
-    this.registerMarkdownPostProcessor((el) => {
-      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
-      const colorProbe = `%%${MARKER_BRAND}:color:`;
-      const colorRegex = new RegExp(
-        `%%${MARKER_BRAND}:color:(\\w+)%%([\\s\\S]*?)%%\\/color%%`,
-        "g",
-      );
-      const nodesToReplace: { node: Text; fragments: DocumentFragment }[] = [];
-
-      let textNode: Text | null;
-      while ((textNode = walker.nextNode() as Text | null)) {
-        const text = textNode.textContent ?? "";
-        if (!text.includes(colorProbe)) continue;
-
-        const fragment = document.createDocumentFragment();
-        let lastIndex = 0;
-        let match: RegExpExecArray | null;
-
-        colorRegex.lastIndex = 0;
-        while ((match = colorRegex.exec(text)) !== null) {
-          if (match.index > lastIndex) {
-            fragment.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
-          }
-          const span = document.createElement("span");
-          span.className = `im-nobsidian-color-${match[1]}`;
-          span.textContent = match[2]!;
-          fragment.appendChild(span);
-          lastIndex = colorRegex.lastIndex;
-        }
-
-        if (lastIndex > 0) {
-          if (lastIndex < text.length) {
-            fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
-          }
-          nodesToReplace.push({ node: textNode, fragments: fragment });
-        }
-      }
-
-      for (const { node, fragments } of nodesToReplace) {
-        node.parentNode?.replaceChild(fragments, node);
-      }
+  /** 디자인 마커(색 · 밑줄 · 멘션 · 블록 색 · 콜아웃 · 표)를 읽기 보기와 편집 화면에서 칠한다(U-01). */
+  private registerDesignRenderer(): void {
+    const options = { calloutColorIsCss: requireApiVersion("1.13.0") };
+    // 읽기 보기는 마커(주석)를 그리기 전에 지운다 — 칠할 것은 그 섹션의 원문 줄로 안다.
+    this.registerMarkdownPostProcessor((el, ctx) => {
+      const info = ctx.getSectionInfo(el);
+      if (!info) return;
+      const lines = info.text.split("\n").slice(info.lineStart, info.lineEnd + 1);
+      decorateRendered(el, lines, options);
     });
+    this.registerEditorExtension(designLivePreview(options));
   }
 
   private registerVaultEvents(): void {

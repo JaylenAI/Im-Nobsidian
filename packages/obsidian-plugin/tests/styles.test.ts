@@ -4,6 +4,8 @@
  */
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
+import { NOTION_COLOR_NAMES } from "@im-nobsidian/core";
+import { colorClass, colorRgbVar } from "../src/design/design-classes.js";
 
 const read = (relative: string): string =>
   readFileSync(new URL(relative, import.meta.url), "utf-8");
@@ -85,6 +87,18 @@ describe("플러그인 CSS", () => {
     );
 
     expect(found).toEqual([]);
+  });
+
+  it("Notion 색마다 글자색 · 배경 클래스와 RGB 변수가 있다 — 디자인 마커 렌더러가 붙이는 이름 그대로", () => {
+    const css = read("../src/styles/main.css");
+    const missing = NOTION_COLOR_NAMES.filter((name) => name !== "default").flatMap((name) => {
+      const fg = colorClass({ name, background: false });
+      const bg = colorClass({ name, background: true });
+      const rgb = colorRgbVar({ name, background: false }).replace(/^var\((.*)\)$/, "$1");
+      return [`.${fg} {`, `.${bg} {`, `${rgb}:`].filter((needle) => !css.includes(needle));
+    });
+
+    expect(missing).toEqual([]);
   });
 
   it("평소 규칙의 글색과 올려 둔 상태의 바탕이 겹치는 것도 잡는다", () => {
