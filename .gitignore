@@ -29,7 +29,8 @@ coverage/
 # Obsidian plugin build
 packages/obsidian-plugin/main.js
 packages/obsidian-plugin/main.js.map
-packages/obsidian-plugin/sql-wasm.wasm
+# 원본은 레포 루트 manifest.json — 빌드가 옮겨 둔다
+packages/obsidian-plugin/manifest.json
 
 # SQLite
 *.db

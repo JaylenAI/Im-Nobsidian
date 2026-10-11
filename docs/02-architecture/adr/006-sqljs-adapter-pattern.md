@@ -55,7 +55,7 @@ core 패키지: IStateDB 인터페이스 (24개 메서드)
 - WAL 모드 미지원 → DELETE 저널 모드 사용
 - 인메모리 DB → 디스크 persistence 별도 구현 필요 (debounce flush)
 - `Buffer` → `Uint8Array` (Buffer는 Uint8Array 서브클래스이므로 호환)
-- WASM 파일 (~1MB) 플러그인 디렉토리에 동봉
+- ~~WASM 파일 (~1MB) 플러그인 디렉토리에 동봉~~ — ADR-031 이 대신한다: main.js 에 싣는다
 
 ### 변경 범위
 

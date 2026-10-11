@@ -25,6 +25,29 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+
+      # The Obsidian plugin ships as release assets, not npm — exactly three files, which is all the
+      # community directory downloads. The SQLite engine (sql.js wasm) is inside main.js (ADR-031).
+      # manifest.json and versions.json live at the repository root, where Obsidian and BRAT read
+      # them (ADR-032). Checked before npm publish, so a release that fails here publishes nothing.
+      - name: Verify plugin assets
+        id: plugin
+        run: |
+          for f in packages/obsidian-plugin/main.js manifest.json packages/obsidian-plugin/styles.css; do
+            test -s "$f" || { echo "::error::plugin asset missing or empty: $f"; exit 1; }
+          done
+          VERSION=$(node -p "require('./manifest.json').version")
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          test "$VERSION" = "$TAG_VERSION" || {
+            echo "::error::manifest.json version ($VERSION) != tag ($TAG_VERSION)"; exit 1;
+          }
+          MIN_APP=$(node -p "require('./manifest.json').minAppVersion")
+          LISTED=$(node -p "require('./versions.json')['$VERSION'] ?? ''")
+          test "$LISTED" = "$MIN_APP" || {
+            echo "::error::versions.json[$VERSION] ($LISTED) != manifest minAppVersion ($MIN_APP)"; exit 1;
+          }
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
       - run: pnpm --filter @im-nobsidian/core publish --access public --no-git-checks
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
@@ -41,28 +64,17 @@ jobs:
           TITLE=$(grep -m1 '^# ' "$NOTES" | sed -E 's/^#[[:space:]]*//; s/^Im-Nobsidian[[:space:]]+//')
           echo "title=$TITLE" >> "$GITHUB_OUTPUT"
 
-      # The Obsidian plugin ships as release assets, not npm. All four are required:
-      # sql-wasm.wasm is the SQLite engine the plugin reads at runtime, so a release
-      # without it installs a plugin that loads but can never open its state database.
-      - name: Verify plugin assets exist
-        run: |
-          cd packages/obsidian-plugin
-          for f in main.js manifest.json styles.css sql-wasm.wasm; do
-            test -s "$f" || { echo "::error::plugin asset missing or empty: $f"; exit 1; }
-          done
-          MANIFEST_VERSION=$(node -p "require('./manifest.json').version")
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          test "$MANIFEST_VERSION" = "$TAG_VERSION" || {
-            echo "::error::manifest.json version ($MANIFEST_VERSION) != tag ($TAG_VERSION)"; exit 1;
-          }
-
+      # Obsidian downloads from releases/download/<manifest version>/ — the tag has no "v". The
+      # repository tags releases "vX.Y.Z", so the release itself goes on the bare "X.Y.Z" tag at the
+      # same commit (created here when it does not exist yet).
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.plugin.outputs.version }}
+          target_commitish: ${{ github.sha }}
           name: ${{ steps.relmeta.outputs.title }}
           body_path: docs/07-release/RELEASE_NOTES_${{ github.ref_name }}.md
           files: |
             packages/obsidian-plugin/main.js
-            packages/obsidian-plugin/manifest.json
+            manifest.json
             packages/obsidian-plugin/styles.css
-            packages/obsidian-plugin/sql-wasm.wasm

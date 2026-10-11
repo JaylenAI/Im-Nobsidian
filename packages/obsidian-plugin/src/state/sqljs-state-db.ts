@@ -200,7 +200,7 @@ export class SqlJsStateDB implements IStateDB {
   static async open(
     existingData?: Uint8Array | null,
     flushFn?: (data: Uint8Array) => Promise<void>,
-    wasmBinary?: ArrayBuffer,
+    wasmBinary?: ArrayBuffer | Uint8Array,
   ): Promise<SqlJsStateDB> {
     const opts: Record<string, unknown> = {};
     if (wasmBinary) {
