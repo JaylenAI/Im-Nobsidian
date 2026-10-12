@@ -333,12 +333,32 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
 
     const result = await makeOrchestrator().pull();
 
-    // 한 번만 기록되고, 원격 변경 경로로 처리됐으므로 updated 로 집계된다.
+    // 한 번만 기록된다. 원격 변경 경로로 받았어도 볼트에서 사라진 파일이 돌아왔으므로 복원으로 센다.
     const writes = (
       vaultFs.writeFile as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls.filter((c) => c[0] === "notes/gone.md");
     expect(writes).toHaveLength(1);
-    expect(result.restored).toBe(0);
-    expect(result.updated).toBe(1);
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+  });
+
+  it("dry-run 도 원격 변경으로 큐에 오른 사라진 파일을 복원으로 센다", async () => {
+    const rec = makeRecord();
+    stageMissingFile(rec);
+    notion.searchRecentPages.mockResolvedValue([
+      { id: rec.notionPageId, last_edited_time: "2026-05-02T00:00:00.000Z" },
+    ]);
+    notion.getPage.mockResolvedValue({
+      id: rec.notionPageId,
+      last_edited_time: "2026-05-02T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root-page-id" },
+      properties: { title: { type: "title", title: [{ plain_text: "Gone Note" }] } },
+    });
+
+    const result = await makeOrchestrator().pull({ dryRun: true });
+
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
   });
 });

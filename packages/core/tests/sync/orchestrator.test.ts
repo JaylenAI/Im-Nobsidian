@@ -709,6 +709,9 @@ describe("SyncOrchestrator", () => {
       });
 
       mockVaultFs.readFile = vi.fn().mockResolvedValue("old content");
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "existing.md", mtime: "2025-01-01T00:00:00.000Z", size: 11 },
+      ]);
 
       const result = await orchestrator.pull();
 

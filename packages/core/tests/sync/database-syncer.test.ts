@@ -265,6 +265,7 @@ describe("DatabaseSyncer", () => {
 
     it("lastEdited가 다르고 로컬 미수정이면 업데이트(덮어쓰기)", async () => {
       // 로컬 파일이 마지막 동기화 이후 변경되지 않은 경우(해시 일치) → 안전하게 덮어쓰기
+      (mockVaultFs.exists as any).mockResolvedValue(true);
       (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
@@ -578,6 +579,7 @@ describe("DatabaseSyncer", () => {
     });
 
     it("업데이트된 행의 경로를 writtenPaths 로 돌려준다", async () => {
+      (mockVaultFs.exists as any).mockResolvedValue(true);
       (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
@@ -1118,6 +1120,7 @@ describe("DatabaseSyncer", () => {
   describe("F24 — 동명 DB 폴더 분리 후 행 재배치", () => {
     it("레코드 경로가 현 DB 폴더 밖이면 원격 무변경이어도 현 폴더로 재배치한다", async () => {
       // 옛 공유 폴더의 id 접미사 파일 → 새 폴더의 자연 이름으로 이동 + 레코드/위키링크 이전
+      (mockVaultFs.exists as any).mockResolvedValue(true);
       (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {

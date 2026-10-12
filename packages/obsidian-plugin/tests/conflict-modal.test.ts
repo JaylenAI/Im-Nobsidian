@@ -63,10 +63,10 @@ describe("ConflictModal", () => {
   });
 
   /** 연 모달이 놓은 단추의 이름 · 설명과, 본문에 만든 문단 · 줄 비교. */
-  function opened(conflict: Conflict) {
+  function opened(conflict: Conflict, uploads = true) {
     const names = vi.spyOn(Setting.prototype, "setName");
     const descs = vi.spyOn(Setting.prototype, "setDesc");
-    const target = new ConflictModal({} as never, conflict, vi.fn());
+    const target = new ConflictModal({} as never, conflict, vi.fn(), uploads);
     const createEl = vi.spyOn(target.contentEl as { createEl: () => unknown }, "createEl");
     target.onOpen();
     return {
@@ -140,6 +140,34 @@ describe("ConflictModal", () => {
       "Notion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.",
     );
     expect(view.diffs).toEqual([]);
+  });
+
+  it("Pull만 하는 설정이면 Notion 에 올리지 않는다고 말한다 — 원격 유지는 그대로", () => {
+    const view = opened(mockConflict, false);
+
+    expect(view.labels).toEqual(["로컬 유지", "원격 유지", "자동 병합", "복제"]);
+    expect(view.descriptions).toEqual([
+      "Obsidian 파일을 그대로 둡니다 — Pull만 하는 설정이라 Notion 에는 올리지 않습니다",
+      "Notion 버전으로 Obsidian 파일을 덮어씁니다",
+      "두 변경을 3-way 병합해 Obsidian 파일에 씁니다 — Pull만 하는 설정이라 Notion 에는 올리지 않습니다",
+      "Obsidian 파일을 그대로 두고 Notion 버전은 .conflict 파일로 남깁니다 — Notion 에는 올리지 않습니다",
+    ]);
+  });
+
+  it("Pull만 하는 설정에서 지운 노트의 로컬 유지는 다시 만들지 않는다고 말한다", () => {
+    const view = opened(
+      {
+        ...mockConflict,
+        remoteChange: { ...mockConflict.remoteChange, type: "deleted" },
+        remoteContent: "",
+      },
+      false,
+    );
+
+    expect(view.descriptions).toEqual([
+      "Obsidian 파일을 그대로 둡니다 — Pull만 하는 설정이라 Notion 에 다시 만들지 않습니다",
+      "Notion 에서 지운 대로 Obsidian 파일도 지웁니다",
+    ]);
   });
 
   it("onOpen 에러 없이 실행", () => {
