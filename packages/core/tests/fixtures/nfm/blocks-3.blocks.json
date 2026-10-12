@@ -1,0 +1,576 @@
+{
+  "pageId": "3f713b18-d382-816d-b1f5-d8a7e0f3343c",
+  "blocks": [
+    {
+      "id": "3f713b18-d382-8119-89c9-e264a3563510",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "코드 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "코드 ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "a*b <c> |d| $e$ {f} \\g ~h~ [i] _j_ #k",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": true,
+              "color": "default"
+            },
+            "plain_text": "a*b <c> |d| $e$ {f} \\g ~h~ [i] _j_ #k",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81bc-bea5-f53a955df769",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "링크 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "링크 ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "[괄호] *별*",
+              "link": {
+                "url": "https://example.com/a_(b)?q=1&r=*"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "[괄호] *별*",
+            "href": "https://example.com/a_(b)?q=1&r=*"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81b1-9696-d635dd46aadc",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "굵은 멘션 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "굵은 멘션 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-810a-969c-fe109ae082c6"
+              }
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_child",
+            "href": "https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81ab-9fe1-eb1013a82ce6",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "색 멘션 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "색 멘션 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "date",
+              "date": {
+                "start": "2026-10-01",
+                "end": null,
+                "time_zone": null
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "red"
+            },
+            "plain_text": "2026-10-01",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81bb-9dfa-d263ee8388e5",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "equation",
+            "equation": {
+              "expression": "a$b|c"
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "a$b|c",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8107-b39b-fc196f10a440",
+      "has_children": false,
+      "type": "image",
+      "image": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "캡 *별* |파|",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "캡 *별* |파|",
+            "href": null
+          }
+        ],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/p.png"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-81de-b02b-f3abf7741d33",
+      "has_children": false,
+      "type": "code",
+      "code": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "캡",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "캡",
+            "href": null
+          }
+        ],
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "코드 *그대로* <a>",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "코드 *그대로* <a>",
+            "href": null
+          }
+        ],
+        "language": "plain text"
+      }
+    },
+    {
+      "id": "3f713b18-d382-812a-aa7a-d362f487af99",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P1 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P1 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-810a-969c-fe109ae082c6"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_child",
+            "href": "https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8159-8c82-e220d1d4f389",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P2 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P2 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-810a-969c-fe109ae082c6"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": true,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_child",
+            "href": "https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8161-94d7-f19925fe1071",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P3 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P3 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-8175-aefc-dd34abc335a0"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm2",
+            "href": "https://app.notion.com/p/3f713b18d3828175aefcdd34abc335a0"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8119-ba50-c595166d34c2",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P4 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P4 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "database",
+              "database": {
+                "id": "a5a68faa-1a21-44b6-a8ff-aff450a3ed20"
+              }
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_db",
+            "href": "https://app.notion.com/p/a5a68faa1a2144b6a8ffaff450a3ed20"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-810d-947b-f94063f1b364",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P5 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P5 ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-810a-969c-fe109ae082c6"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "blue"
+            },
+            "plain_text": "__bf_nfm_child",
+            "href": "https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-816d-86a2-f1090003f04a",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "C1 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "C1 ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "줄\n바꿈",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": true,
+              "color": "default"
+            },
+            "plain_text": "줄\n바꿈",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}
