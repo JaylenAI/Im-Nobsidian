@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { StateDB } from "../../src/state/state-db.js";
 import {
   recallUploadedMedia,
+  rememberReceivedMedia,
   rememberUploadedMedia,
   type UploadedMedia,
 } from "../../src/sync/uploaded-media.js";
@@ -69,6 +70,46 @@ describe("올린 미디어 기록(S-05)", () => {
     rememberUploadedMedia(db, PAGE_ID, [DOC]);
 
     expect([...recallUploadedMedia(db, PAGE_ID).keys()]).toEqual([DOC.fileId]);
+  });
+
+  it("파일 지문을 함께 적고 되읽는다 — 지문이 없는 옛 기록도 읽는다", () => {
+    const hashed = { ...IMG, fileHash: "ab".repeat(32) };
+    rememberUploadedMedia(db, PAGE_ID, [hashed, DOC]);
+
+    const known = recallUploadedMedia(db, PAGE_ID);
+
+    expect(known.get(IMG.fileId)).toEqual(hashed);
+    expect(known.get(DOC.fileId)).toEqual(DOC);
+    expect(JSON.parse(db.getMeta(PAGE_KEY)!)[1]).not.toHaveProperty("fileHash");
+  });
+
+  it("지문이 문자열이 아닌 줄은 버린다", () => {
+    db.setMeta(PAGE_KEY, JSON.stringify([{ ...IMG, fileHash: 7 }, DOC]));
+
+    expect([...recallUploadedMedia(db, PAGE_ID).keys()]).toEqual([DOC.fileId]);
+  });
+
+  it("받은 미디어는 적어 둔 것에 더한다 — 같은 파일이면 새로 받은 것으로 바꾼다", () => {
+    rememberUploadedMedia(db, PAGE_ID, [IMG, DOC]);
+    const received = { ...DOC, target: "attachments/계약서-1a2b.pdf|계약서.pdf", fileHash: "cd" };
+    const other: UploadedMedia = {
+      fileId: "11111111-2222-4333-8444-555555555555",
+      target: "attachments/그림-3c4d.png|그림",
+      localPath: "attachments/그림-3c4d.png",
+      fileHash: "ef",
+    };
+
+    rememberReceivedMedia(db, PAGE_ID, [received, other]);
+
+    const known = recallUploadedMedia(db, PAGE_ID);
+    expect([...known.keys()]).toEqual([IMG.fileId, DOC.fileId, other.fileId]);
+    expect(known.get(DOC.fileId)).toEqual(received);
+  });
+
+  it("받은 미디어가 없으면 적지 않는다", () => {
+    rememberReceivedMedia(db, PAGE_ID, []);
+
+    expect(db.getMeta(PAGE_KEY)).toBeNull();
   });
 
   it("적어 둔 것이 있으면 빈 목록으로 비운다 — 페이지에서 미디어가 모두 사라졌다", () => {

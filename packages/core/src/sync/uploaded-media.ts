@@ -20,6 +20,12 @@ export interface UploadedMedia {
   readonly target: string;
   /** 올린 볼트 파일(해석한 경로) — pull 이 아직 있는지 보고 되살린다. */
   readonly localPath: string;
+  /**
+   * 올린 · 받은 파일의 전체 sha256. 볼트의 그 파일이 아직 이 바이트면 본문 push 가 다시 올리지 않고
+   * Notion 의 그 블록을 둔다(`ImageHandler.keepUploadedMedia`). 이 값을 적기 전에 적은 기록에는
+   * 없다 — 그 미디어는 한 번 더 올리고 그때 적는다.
+   */
+  readonly fileHash?: string;
 }
 
 /**
@@ -33,8 +39,8 @@ function keyOf(pageId: string): string {
 /**
  * 페이지에 올린 미디어를 적는다 — 그 페이지에 적어 둔 것을 통째로 바꾼다.
  *
- * 본문 push 는 페이지의 미디어 블록을 모두 새로 만든다(replace_content 뒤 자리표시자를 하나씩
- * 올린다). 지난번에 적어 둔 파일은 페이지에서 이미 사라졌으므로 남길 까닭이 없다.
+ * 본문 push 뒤 페이지의 미디어 블록은 그대로 둔 것과 새로 올린 것뿐이다 — 호출측이 둘을 함께
+ * 넘긴다. 본문에서 빠진 미디어는 교체가 지웠으므로 남길 까닭이 없다.
  */
 export function rememberUploadedMedia(
   stateDb: IStateDB,
@@ -43,8 +49,31 @@ export function rememberUploadedMedia(
 ): void {
   const key = keyOf(pageId);
   if (media.length === 0 && stateDb.getMeta(key) === null) return;
-  const rows = media.map(({ fileId, target, localPath }) => ({ fileId, target, localPath }));
-  stateDb.setMeta(key, JSON.stringify(rows));
+  stateDb.setMeta(key, JSON.stringify(media.map(rowOf)));
+}
+
+/**
+ * 페이지에서 받은 미디어를 더 적는다 — 적어 둔 것은 두고, 같은 파일이면 새로 받은 것으로 바꾼다.
+ *
+ * pull 이 받은 미디어도 적어 두어야 그 노트를 고쳐 push 할 때 Notion 의 원래 블록을 둔다. 적지
+ * 않으면 push 가 받은 파일을 다시 올려 원래 블록을 지우고, 캡션 · 이름이 볼트의 것으로 바뀐다.
+ */
+export function rememberReceivedMedia(
+  stateDb: IStateDB,
+  pageId: string,
+  media: readonly UploadedMedia[],
+): void {
+  if (media.length === 0) return;
+  const merged = recallUploadedMedia(stateDb, pageId);
+  for (const item of media) merged.set(item.fileId, item);
+  stateDb.setMeta(keyOf(pageId), JSON.stringify([...merged.values()].map(rowOf)));
+}
+
+/** 적을 한 줄 — 지문이 없으면 키를 싣지 않는다. */
+function rowOf({ fileId, target, localPath, fileHash }: UploadedMedia): UploadedMedia {
+  return fileHash === undefined
+    ? { fileId, target, localPath }
+    : { fileId, target, localPath, fileHash };
 }
 
 /**
@@ -79,6 +108,7 @@ function isUploadedMedia(value: unknown): value is UploadedMedia {
   return (
     typeof row?.fileId === "string" &&
     typeof row.target === "string" &&
-    typeof row.localPath === "string"
+    typeof row.localPath === "string" &&
+    (row.fileHash === undefined || typeof row.fileHash === "string")
   );
 }

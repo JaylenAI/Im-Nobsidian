@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   ImageHandler,
@@ -461,7 +462,12 @@ describe("ImageHandler.materializeLocalMedia — 올린 파일의 id 를 적어 
 
     // 파일 이름만 적은 임베드는 노트 폴더에서 찾아 올린다 — 적는 경로도 찾은 그 파일이다.
     expect([...recallUploadedMedia(db, "page-1").values()]).toEqual([
-      { fileId: IMG_FILE_ID, target: "t-img.png|300", localPath: "notes/t-img.png" },
+      {
+        fileId: IMG_FILE_ID,
+        target: "t-img.png|300",
+        localPath: "notes/t-img.png",
+        fileHash: createHash("sha256").update("fake-bytes").digest("hex"),
+      },
     ]);
     // 만든 응답에 파일 URL 이 실려 오면 다시 조회하지 않는다.
     expect(getFileBlockUrl).not.toHaveBeenCalled();

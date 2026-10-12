@@ -18,6 +18,7 @@ import { loadLinkedDbMap } from "./discovered-databases.js";
 import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
+import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
 import { moveOrigin } from "./local-moves.js";
@@ -51,6 +52,16 @@ interface RowState {
   readonly properties: Readonly<Record<string, unknown>>;
   readonly title: string;
   readonly body: string | null;
+}
+
+/** 본문 교체 결과 — 미디어를 블록으로 바꾸는 단계가 이어받는다. */
+interface PushedBody {
+  /** 바꾼 뒤 원격 본문의 지문({@link remoteBodyFingerprint}). 블록 방식으로 보냈으면 null. */
+  readonly fingerprint: string | null;
+  /** 그대로 둔 미디어 — 올린 미디어 기록에 다시 적는다. */
+  readonly kept: readonly UploadedMedia[];
+  /** 보낸 본문 — 남은 자리표시자만 올린다. */
+  readonly sent: string;
 }
 
 /** push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null. */
@@ -273,11 +284,8 @@ export class PagePusher {
     refuseUnpulledBody(drift, path);
     const settles = drift === "none";
 
-    let bodyFingerprint = await this.pushUpdatePage(
-      record.notionPageId,
-      conversionResult.content,
-      record.baseSnapshot,
-    );
+    const pushed = await this.pushUpdatePage(record.notionPageId, conversionResult.content, path);
+    let bodyFingerprint = pushed.fingerprint;
 
     // 코드 · 첨부가 본문을 고쳤으면 고친 뒤의 지문을 다시 받는다.
     let touched = await this.fillCodeBlocks(
@@ -285,7 +293,9 @@ export class PagePusher {
       record.notionPageId,
       conversionResult.deferredCode,
     );
-    if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path)) touched = true;
+    if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path, pushed)) {
+      touched = true;
+    }
     if (touched) {
       bodyFingerprint = await this.drift.remoteBodyFingerprintOf(record.notionPageId);
     }
@@ -627,11 +637,14 @@ export class PagePusher {
     pageId: string,
     conversionResult: ConversionResult,
     path: string,
+    pushed?: PushedBody,
   ): Promise<boolean> {
+    // 보낸 본문으로 자리표시자가 남았는지 본다 — 모두 그대로 뒀으면 블록을 조회하지 않는다.
     const { handledTargets, touched } = await this.imageHandler.materializeLocalMedia(
       pageId,
-      conversionResult.content,
+      pushed?.sent ?? conversionResult.content,
       path,
+      pushed?.kept,
     );
     const leftovers = conversionResult.images.filter(
       (img) => !img.localPath || !handledTargets.has(img.localPath),
@@ -759,13 +772,10 @@ export class PagePusher {
         filePath: path,
         parentMode: "database",
       });
-      bodyFingerprint = await this.pushUpdatePage(
-        pageId,
-        conversionResult.content,
-        record.baseSnapshot,
-      );
+      const pushed = await this.pushUpdatePage(pageId, conversionResult.content, path);
+      bodyFingerprint = pushed.fingerprint;
       let touched = await this.fillCodeBlocks(record.id, pageId, conversionResult.deferredCode);
-      if (await this.syncEmbeddedMedia(pageId, conversionResult, path)) touched = true;
+      if (await this.syncEmbeddedMedia(pageId, conversionResult, path, pushed)) touched = true;
       if (touched) {
         bodyFingerprint = await this.drift.remoteBodyFingerprintOf(pageId);
       }
@@ -1015,22 +1025,31 @@ export class PagePusher {
    * 기존 블록을 모두 지우고 새로 붙이므로 자식까지 지우게 된다 — 자식이 있으면 보내지 않고
    * 실패로 알린다. 예전처럼 조용히 건너뛰면 동기화됨으로 기록돼 편집이 영영 가지 않는다.
    *
-   * @returns 바꾼 뒤 원격 본문의 지문({@link remoteBodyFingerprint}). 블록 방식으로 보냈으면 null.
+   * 바뀌지 않은 미디어는 다시 올리지 않고 Notion 의 그 블록을 둔다({@link ImageHandler.keepUploadedMedia}).
+   * 블록 방식은 블록을 모두 지우므로 둘 수 없다 — 예전처럼 모두 다시 올린다.
+   *
+   * @returns 보낸 본문 · 그 지문 · 그대로 둔 미디어({@link PushedBody})
    */
   private async pushUpdatePage(
     pageId: string,
     markdownContent: string,
-    _baseSnapshot?: Buffer | null,
-  ): Promise<string | null> {
+    notePath: string,
+  ): Promise<PushedBody> {
     if (this.config.conversion.preferMarkdownApi !== false) {
-      const enhanced = obsidianToNotionEnhanced(markdownContent);
-      const written = await replacePageBody(this.notionClient, pageId, enhanced, {
+      const { markdown, kept } = await this.imageHandler.keepUploadedMedia(
+        pageId,
+        obsidianToNotionEnhanced(markdownContent),
+        notePath,
+      );
+      const written = await replacePageBody(this.notionClient, pageId, markdown, {
         databaseIdsOfBase: (basePath) => this.databaseIdsOfBase(basePath),
       });
       // 응답의 본문은 다시 받은 본문과 같다 — 잘렸으면 온전한 본문을 다시 받는다.
-      return written.truncated || (written.unknown_block_ids ?? []).length > 0
-        ? this.drift.remoteBodyFingerprintOf(pageId)
-        : remoteBodyFingerprint(written.markdown);
+      const fingerprint =
+        written.truncated || (written.unknown_block_ids ?? []).length > 0
+          ? await this.drift.remoteBodyFingerprintOf(pageId)
+          : remoteBodyFingerprint(written.markdown);
+      return { fingerprint, kept, sent: markdown };
     }
 
     // 휴지통 자식은 children.list 에 잡히지 않으므로 여기 보이는 자식은 모두 살아 있다.
@@ -1057,7 +1076,7 @@ export class PagePusher {
         }
       }),
     );
-    return null;
+    return { fingerprint: null, kept: [], sent: markdownContent };
   }
 
   /**

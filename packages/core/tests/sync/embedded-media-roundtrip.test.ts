@@ -265,9 +265,13 @@ describe("임베드 미디어 왕복(S-05 · S-19)", () => {
 
     const pushed = await pushLocalEdit();
 
-    expect(pushed.sort()).toEqual(["a.png", "계약서.pdf"]);
+    // 이미지는 다시 올리지 않고 그 블록을 둔다 — 캡션은 노트의 새 설명으로 간다. 파일은 내부 참조로
+    // 받아 그대로 실을 수 없어 다시 올린다.
+    expect(pushed).toEqual(["계약서.pdf"]);
     expect(mediaLines()).toHaveLength(2);
-    expect(mediaLines()[0]).toMatch(/^!\[새 설명\]\(/);
+    expect(mediaLines()[0]).toMatch(
+      /^!\[새 설명\]\(https:\/\/[^/]+\/[^/]+\/0{8}-0000-4000-9000-0{11}1\//,
+    );
   });
 
   it("Notion 에서 같은 이름의 다른 파일로 바꾸면 사본을 받는다 — 옛 로컬 파일로 되돌리지 않는다", async () => {
@@ -332,7 +336,7 @@ describe("임베드 미디어 왕복(S-05 · S-19)", () => {
 
     const pushed = await pushLocalEdit();
 
-    expect(pushed.sort()).toEqual(["a.png", "계약서.pdf"]);
+    expect(pushed).toEqual(["계약서.pdf"]);
     expect(mediaLines()).toHaveLength(2);
     expect(notion.pages.get(pageId)!.body).not.toContain("im-nobsidian");
   });
