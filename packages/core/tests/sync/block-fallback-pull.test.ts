@@ -60,13 +60,7 @@ describe("블록 API 폴백 pull — 볼트 모양", () => {
 
   /** 블록 API 가 돌려줄 본문을 정한다. */
   function blocksOf(results: unknown[]): void {
-    notion.client.getInternalClient.mockReturnValue({
-      blocks: {
-        children: {
-          list: vi.fn().mockResolvedValue({ results, next_cursor: null, has_more: false }),
-        },
-      },
-    });
+    notion.client.getBlockTree.mockResolvedValue(results);
   }
 
   it("페이지 멘션은 제목 위키링크 · 날짜 멘션은 짝 마커 · 북마크는 이 페이지의 자리 주소", async () => {
@@ -124,8 +118,13 @@ describe("블록 API 폴백 pull — 볼트 모양", () => {
         bookmark: { url: "https://example.com/a", caption: [] },
       },
     ]);
-    const puller = (build(false) as unknown as { puller: PagePuller }).puller;
-    const { content } = await puller.fetchPageMarkdown(pageA);
+    const orchestrator = build(false) as unknown as {
+      puller: PagePuller;
+      discovery: { collectInlineDbRefs: (pageId: string, markdown: string) => void };
+    };
+    const collect = vi.spyOn(orchestrator.discovery, "collectInlineDbRefs");
+    const fetched = await orchestrator.puller.fetchPageMarkdown(pageA);
+    const { content } = fetched;
 
     expect(content).toContain("보기 [[B]] %%im-nobsidian:mention-date:start=2026-09-26%%");
     const placeholder = `https://app.notion.com/p/${compact(pageA)}#${compact(BOOKMARK_ID)}`;
@@ -133,5 +132,9 @@ describe("블록 API 폴백 pull — 볼트 모양", () => {
       `%%im-nobsidian:unknown:id=${encodeURIComponent(placeholder)}&type=bookmark%%`,
     );
     expect(notion.client.getPageMarkdown).not.toHaveBeenCalledWith(pageA);
+    // 옮긴 NFM 은 압축형이다 — Markdown API 경로처럼 블록 사이 간격을 다시 맞춘다. 지문은 남기지 않는다.
+    expect([fetched.compact, fetched.fingerprint]).toEqual([true, null]);
+    // 인라인 DB 수집은 옮긴 NFM 으로 한다 — 본문 속 자식 DB 를 발견하는 유일한 신호다.
+    expect(collect).toHaveBeenCalledWith(pageA, expect.stringContaining('alt="bookmark"'));
   });
 });

@@ -1,0 +1,461 @@
+{
+  "pageId": "3f713b18-d382-8191-bbc3-fad7506c94a4",
+  "blocks": [
+    {
+      "id": "eb8ae228-c2f3-4233-a74c-a3de069f2f1d",
+      "has_children": true,
+      "type": "column_list",
+      "column_list": {},
+      "children": [
+        {
+          "id": "eb4f6cda-0546-45d8-b869-d25496f08df3",
+          "has_children": true,
+          "type": "column",
+          "column": {
+            "width_ratio": 0.33
+          },
+          "children": [
+            {
+              "id": "0c7c9ec2-6df1-4ea6-86b5-174fec4afca9",
+              "has_children": false,
+              "type": "callout",
+              "callout": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "1단계",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": true,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "1단계",
+                    "href": null
+                  }
+                ],
+                "icon": {
+                  "type": "emoji",
+                  "emoji": "1️⃣"
+                },
+                "color": "default"
+              }
+            }
+          ]
+        },
+        {
+          "id": "0b0f96d9-b31f-4564-a593-fc7d3bbcef5f",
+          "has_children": true,
+          "type": "column",
+          "column": {
+            "width_ratio": 0.67
+          },
+          "children": [
+            {
+              "id": "9a853ed5-2867-4702-8358-f098b4eb2b9c",
+              "has_children": true,
+              "type": "toggle",
+              "toggle": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "2단계 상세",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "2단계 상세",
+                    "href": null
+                  }
+                ],
+                "color": "default"
+              },
+              "children": [
+                {
+                  "id": "4548d055-b6f4-46ea-b453-39eb3772e9b1",
+                  "has_children": true,
+                  "type": "table",
+                  "table": {
+                    "table_width": 2,
+                    "has_column_header": false,
+                    "has_row_header": false
+                  },
+                  "children": [
+                    {
+                      "id": "3d322fad-280b-4671-a9db-f46e6fa75e21",
+                      "has_children": false,
+                      "type": "table_row",
+                      "table_row": {
+                        "cells": [
+                          [
+                            {
+                              "type": "text",
+                              "text": {
+                                "content": "순서",
+                                "link": null
+                              },
+                              "annotations": {
+                                "bold": false,
+                                "italic": false,
+                                "strikethrough": false,
+                                "underline": false,
+                                "code": false,
+                                "color": "default"
+                              },
+                              "plain_text": "순서",
+                              "href": null
+                            }
+                          ],
+                          [
+                            {
+                              "type": "text",
+                              "text": {
+                                "content": "작업",
+                                "link": null
+                              },
+                              "annotations": {
+                                "bold": false,
+                                "italic": false,
+                                "strikethrough": false,
+                                "underline": false,
+                                "code": false,
+                                "color": "default"
+                              },
+                              "plain_text": "작업",
+                              "href": null
+                            }
+                          ]
+                        ]
+                      }
+                    },
+                    {
+                      "id": "eddf3a93-3bac-4c5f-afb4-eef700b479c9",
+                      "has_children": false,
+                      "type": "table_row",
+                      "table_row": {
+                        "cells": [
+                          [
+                            {
+                              "type": "text",
+                              "text": {
+                                "content": "1",
+                                "link": null
+                              },
+                              "annotations": {
+                                "bold": false,
+                                "italic": false,
+                                "strikethrough": false,
+                                "underline": false,
+                                "code": false,
+                                "color": "default"
+                              },
+                              "plain_text": "1",
+                              "href": null
+                            }
+                          ],
+                          [
+                            {
+                              "type": "text",
+                              "text": {
+                                "content": "스냅샷 확보",
+                                "link": null
+                              },
+                              "annotations": {
+                                "bold": false,
+                                "italic": false,
+                                "strikethrough": false,
+                                "underline": false,
+                                "code": false,
+                                "color": "default"
+                              },
+                              "plain_text": "스냅샷 확보",
+                              "href": null
+                            }
+                          ]
+                        ]
+                      }
+                    }
+                  ]
+                },
+                {
+                  "id": "9caed97b-64f9-4971-8a16-58aefa36442d",
+                  "has_children": false,
+                  "type": "callout",
+                  "callout": {
+                    "rich_text": [
+                      {
+                        "type": "text",
+                        "text": {
+                          "content": "스냅샷 없이 진행하면 되돌릴 수 없다.",
+                          "link": null
+                        },
+                        "annotations": {
+                          "bold": false,
+                          "italic": false,
+                          "strikethrough": false,
+                          "underline": false,
+                          "code": false,
+                          "color": "default"
+                        },
+                        "plain_text": "스냅샷 없이 진행하면 되돌릴 수 없다.",
+                        "href": null
+                      }
+                    ],
+                    "icon": {
+                      "type": "emoji",
+                      "emoji": "⚠️"
+                    },
+                    "color": "default"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "7d15b7e8-bc9e-4df0-aaff-aee83bce4af2",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "상위 목록",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "상위 목록",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "029c4e47-6e8e-41a6-a82a-79e8ad963f60",
+          "has_children": true,
+          "type": "bulleted_list_item",
+          "bulleted_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "하위 목록",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "하위 목록",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "1288dbec-6d7a-423b-9b25-f2afebc1faec",
+              "has_children": true,
+              "type": "bulleted_list_item",
+              "bulleted_list_item": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "더 깊은 목록에서도 본문이 살아 있어야 한다",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "더 깊은 목록에서도 본문이 살아 있어야 한다",
+                    "href": null
+                  }
+                ],
+                "color": "default"
+              },
+              "children": [
+                {
+                  "id": "0a4d3209-5001-483f-a39a-1f4a14036c65",
+                  "has_children": false,
+                  "type": "numbered_list_item",
+                  "numbered_list_item": {
+                    "rich_text": [
+                      {
+                        "type": "text",
+                        "text": {
+                          "content": "번호 목록",
+                          "link": null
+                        },
+                        "annotations": {
+                          "bold": false,
+                          "italic": false,
+                          "strikethrough": false,
+                          "underline": false,
+                          "code": false,
+                          "color": "default"
+                        },
+                        "plain_text": "번호 목록",
+                        "href": null
+                      }
+                    ],
+                    "color": "default",
+                    "list_format": "numbers"
+                  }
+                },
+                {
+                  "id": "f1d0228e-9bdf-48e8-aed8-6c678c4dc4be",
+                  "has_children": false,
+                  "type": "numbered_list_item",
+                  "numbered_list_item": {
+                    "rich_text": [
+                      {
+                        "type": "text",
+                        "text": {
+                          "content": "두 번째 항목",
+                          "link": null
+                        },
+                        "annotations": {
+                          "bold": false,
+                          "italic": false,
+                          "strikethrough": false,
+                          "underline": false,
+                          "code": false,
+                          "color": "default"
+                        },
+                        "plain_text": "두 번째 항목",
+                        "href": null
+                      }
+                    ],
+                    "color": "default",
+                    "list_format": "numbers"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "91e4405c-5ae4-4990-b708-3a02cf87f414",
+      "has_children": false,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "다음 상위 항목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "다음 상위 항목",
+            "href": null
+          }
+        ],
+        "color": "default"
+      }
+    },
+    {
+      "id": "647bcd8d-25e8-42e5-940a-999e94502b9d",
+      "has_children": false,
+      "type": "quote",
+      "quote": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "인용문 안에서도 문장이 온전히 남아야 한다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "인용문 안에서도 문장이 온전히 남아야 한다.",
+            "href": null
+          }
+        ],
+        "color": "default"
+      }
+    },
+    {
+      "id": "c2e31ec3-316a-4fba-b830-c253c0433093",
+      "has_children": false,
+      "type": "divider",
+      "divider": {}
+    },
+    {
+      "id": "1d857562-85a5-471c-a3d0-4b0c0296e5e4",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "마지막 문단이다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "마지막 문단이다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}

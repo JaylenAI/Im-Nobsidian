@@ -217,7 +217,6 @@ export class SyncOrchestrator {
       notionClient,
       vaultFs,
       pipeline,
-      blockConverter,
       imageHandler,
       propertyMapper,
       this.databaseSyncer,

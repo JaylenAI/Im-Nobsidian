@@ -1,7 +1,6 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
-import type { BlockConverter } from "../converter/block-converter.js";
 import { hasBodyBesidesChildren } from "../converter/child-tags.js";
-import { notionBodyToObsidian } from "./page-body.js";
+import { notionBodyToObsidian, pageBlocksToObsidian } from "./page-body.js";
 import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
@@ -56,7 +55,6 @@ export class PagePuller {
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
     private readonly pipeline: ConversionPipeline,
-    private readonly blockConverter: BlockConverter,
     private readonly imageHandler: ImageHandler,
     private readonly propertyMapper: PropertyMapper,
     private readonly databaseSyncer: DatabaseSyncer,
@@ -482,14 +480,15 @@ export class PagePuller {
         );
       }
     }
-    // blocks-API 폴백 산출물은 이미 표준 간격 — 재간격 불필요.
-    // 폴백 변환기도 child-database 보존 마커를 발행하므로 인라인 DB 수집을 이어간다.
-    // 멘션은 Markdown API 경로처럼 `[[notion:<id>]]` 로 내려온다 — 같은 역조회로 제목 위키링크로 되돌린다.
-    const fallback = this.resolveNotionIdWikilinks(
-      await this.blockConverter.notionBlocksToMarkdown(pageId),
-    );
-    this.discovery.collectInlineDbRefs(pageId, fallback);
-    return { content: fallback, compact: false, fingerprint: null };
+    // 블록을 Notion 의 export 와 같은 모양으로 옮겨 위와 같은 변환을 거친다. 지문은 남기지 않는다 —
+    // 지문은 Markdown API 의 본문끼리만 견준다.
+    const fallback = await pageBlocksToObsidian(this.notionClient, pageId);
+    this.discovery.collectInlineDbRefs(pageId, fallback.markdown);
+    return {
+      content: this.resolveNotionIdWikilinks(fallback.content),
+      compact: isCompactExport(fallback.markdown),
+      fingerprint: null,
+    };
   }
 
   /**

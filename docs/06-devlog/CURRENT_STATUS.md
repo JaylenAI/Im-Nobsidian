@@ -102,6 +102,7 @@
 | 4 뒤 | `fix/media-reupload`                         | 본문을 고쳐 push 하면 그 페이지의 미디어를 바뀌지 않은 것까지 모두 다시 올림 (ADR-020 제약) — 바뀐 미디어만 올림                                                                                                                   | 완료 `15bfd2f` |
 | 4 뒤 | `fix/remote-deletion-guards`                 | Notion 에서 지운 페이지에 push 가 영어 오류만 되풀이 · 받기 전용 해소가 Notion 에 씀 · 되살린 파일을 업데이트로 셈 · 복제 사본이 새 페이지로 올라감                                                                                | 완료 `f2472ef` |
 | 4 뒤 | `fix/block-fallback`                         | 블록 API 로 받은 노트의 멘션 · 북마크 · 임베드가 글 · 링크가 됨 · 블록 방식 push 가 `$` 를 수식으로 · 마커를 글자로 보냄                                                                                                           | 완료 `986c942` |
+| 4 뒤 | `fix/block-fallback-nfm`                     | 블록 API 로 받은 노트가 토글 · 콜아웃 자식 · 접는 제목 · 색 · 표 · 칼럼 비율을 잃음 — 그 노트를 push 하면 Notion 에서 그 블록이 지워짐                                                                                             | 완료 `07d00ab` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

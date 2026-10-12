@@ -5,11 +5,14 @@ import {
   extractChildTags,
   restoreChildTags,
 } from "../converter/child-tags.js";
+import { blocksToNfm, type NfmSourceBlock } from "../converter/blocks-to-nfm.js";
 import { bookmarkBlockIds } from "../converter/bookmark.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
 import { mentionUserIds } from "../converter/mention.js";
 import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
 import { isNotionValidationError, type NotionClient } from "../notion/client.js";
+import type { BookmarkTarget } from "../types/convert.js";
+import { compactNotionId } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 
 type PageBodyClient = Pick<NotionClient, "replacePageMarkdown" | "getPageMarkdown">;
@@ -108,6 +111,67 @@ export async function notionBodyToObsidian(
   const bookmarkIds = bookmarkBlockIds(markdown);
   const bookmarks = bookmarkIds.length > 0 ? await client.getBookmarks(bookmarkIds) : undefined;
   return notionEnhancedToObsidian(markdown, { userNames, codeTexts, bookmarks });
+}
+
+/**
+ * 블록 API 로 받은 본문을 볼트 마크다운으로 — Markdown API 로 받지 못한 페이지(잘린 export · 오류 ·
+ * `preferMarkdownApi: false`)의 폴백.
+ *
+ * 블록을 Notion 이 내보내는 것과 같은 NFM 으로 옮긴 뒤({@link blocksToNfm}) Markdown API 경로와 같은 변환을
+ * 거친다 — 받는 길에 따라 같은 페이지가 다른 노트가 되면, 그 노트를 push 할 때 차이만큼 Notion 이 바뀐다.
+ * 코드 글 · 북마크는 블록에 이미 있어 다시 묻지 않는다. 블록을 하나라도 읽지 못하면 던진다.
+ *
+ * @returns `markdown` 은 옮긴 NFM(인라인 DB 수집 · 압축형 판정용), `content` 는 볼트 마크다운.
+ */
+export async function pageBlocksToObsidian(
+  client: Pick<NotionClient, "getBlockTree" | "getUserNames">,
+  pageId: string,
+): Promise<{ markdown: string; content: string }> {
+  const tree = await client.getBlockTree(pageId);
+  const markdown = blocksToNfm(tree, { pageId });
+  const content = await notionBodyToObsidian(
+    {
+      getUserNames: (ids) => client.getUserNames(ids),
+      getCodeBlockTexts: () => Promise.resolve(blocksOfType(tree, "code").map(plainTextOf)),
+      getBookmarks: () => Promise.resolve(bookmarksOf(tree)),
+    },
+    markdown,
+    pageId,
+  );
+  return { markdown, content };
+}
+
+function blocksOfType(blocks: readonly NfmSourceBlock[], type: string): NfmSourceBlock[] {
+  return blocks.flatMap((b) => [
+    ...(b.type === type ? [b] : []),
+    ...blocksOfType(b.children ?? [], type),
+  ]);
+}
+
+function bodyOf(block: NfmSourceBlock): Record<string, unknown> {
+  return ((block as unknown as Record<string, unknown>)[block.type] ?? {}) as Record<
+    string,
+    unknown
+  >;
+}
+
+function plainTextOf(block: NfmSourceBlock): string {
+  const items = (bodyOf(block).rich_text ?? []) as Array<{ plain_text?: string }>;
+  return items.map((t) => t.plain_text ?? "").join("");
+}
+
+/** 북마크 블록의 주소 · 캡션 — 하이픈 없는 블록 id 로({@link bookmarkBlockIds} 와 같은 열쇠). */
+function bookmarksOf(blocks: readonly NfmSourceBlock[]): Map<string, BookmarkTarget> {
+  return new Map(
+    blocksOfType(blocks, "bookmark").map((b) => {
+      const body = bodyOf(b);
+      const caption = (body.caption ?? []) as Array<{ plain_text?: string }>;
+      return [
+        compactNotionId(b.id),
+        { url: String(body.url ?? ""), caption: caption.map((t) => t.plain_text ?? "").join("") },
+      ];
+    }),
+  );
 }
 
 function messageOf(error: unknown): string {

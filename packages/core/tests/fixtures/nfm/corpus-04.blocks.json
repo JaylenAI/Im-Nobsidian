@@ -1,0 +1,179 @@
+{
+  "pageId": "3f713b18-d382-8197-a68d-eb6a8454fa65",
+  "blocks": [
+    {
+      "id": "ee41912c-8ded-4b01-95e5-c1dad6485470",
+      "has_children": false,
+      "type": "table_of_contents",
+      "table_of_contents": {
+        "color": "gray"
+      }
+    },
+    {
+      "id": "ebd3f2fc-ab0c-49a0-8c4c-193fc2276229",
+      "has_children": false,
+      "type": "heading_1",
+      "heading_1": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "참고 자료 모음",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "참고 자료 모음",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "default"
+      }
+    },
+    {
+      "id": "f858880f-20a9-4c0b-959b-4e946a12762e",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "임베드는 여는 태그와 닫는 태그로 오지만 내부는 항상 비어 있다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "임베드는 여는 태그와 닫는 태그로 오지만 내부는 항상 비어 있다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "07b0f136-7b04-4c8a-8425-ab0adaebb2eb",
+      "has_children": false,
+      "type": "embed",
+      "embed": {
+        "caption": [],
+        "url": "https://example.com/watch?v=abc&t=90"
+      }
+    },
+    {
+      "id": "b1ffd624-df6a-462f-ba38-4845e237ad45",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "괄호가 들어간 주소도 링크 짝 경계를 무너뜨리지 않아야 한다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "괄호가 들어간 주소도 링크 짝 경계를 무너뜨리지 않아야 한다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "e860abb8-f9d4-4e95-91d5-ffe32cf05b92",
+      "has_children": false,
+      "type": "embed",
+      "embed": {
+        "caption": [],
+        "url": "https://example.com/docs/a(b)c"
+      }
+    },
+    {
+      "id": "2b020b5e-c69c-4994-8193-e485e00cb49a",
+      "has_children": false,
+      "type": "heading_2",
+      "heading_2": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "이름 붙은 섹션",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "이름 붙은 섹션",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "default"
+      }
+    },
+    {
+      "id": "abc477dd-653a-426a-a47e-5aea3495e21b",
+      "has_children": false,
+      "type": "table_of_contents",
+      "table_of_contents": {
+        "color": "default"
+      }
+    },
+    {
+      "id": "93275bb9-31dc-473a-a867-8882eb2cf216",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "본문 마지막 줄이다. 앞의 어떤 태그도 이 줄을 삼키면 안 된다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "본문 마지막 줄이다. 앞의 어떤 태그도 이 줄을 삼키면 안 된다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}
