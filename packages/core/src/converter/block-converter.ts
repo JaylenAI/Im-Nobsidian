@@ -4,7 +4,8 @@ import type { Client } from "@notionhq/client";
 import type { BlockObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { NotionBlockBuilder } from "../notion/block-builder.js";
 import type { NotionBlock } from "../notion/block-builder.js";
-import { richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
+import { markMentions, richTextToPlain, richTextToMarkdown } from "./rich-text-converter.js";
+import type { RichTextAnnotated } from "./rich-text-converter.js";
 import type { RichTextItem } from "./rich-text-converter.js";
 import { codeFingerprint } from "./code-fence.js";
 import { notionCodeLanguage, type NotionCodeLanguage } from "./code-language.js";
@@ -13,7 +14,17 @@ import { fenceBarAbove } from "./nested-code-fence.js";
 import { stripTableMarkers } from "./table.js";
 import { calloutTypeOf } from "./callout-types.js";
 import {
+  BOOKMARK_PAGE_SLOT,
+  bookmarkOfVaultLink,
+  bookmarkVaultLink,
+  fillBookmarkPage,
+} from "./bookmark.js";
+import { embedVaultLink } from "./degrade-link.js";
+import { escapeLiteralDollars } from "./literal-dollar.js";
+import {
   MARKER_BRAND,
+  MARKER_PAYLOAD_CHAR,
+  MARKER_TOKEN_RE,
   compactMarker,
   TOGGLE_START,
   TOGGLE_END,
@@ -24,7 +35,7 @@ import {
   TOC_MARKER,
   BREADCRUMB_MARKER,
 } from "../constants/markers.js";
-import { scanCodeFences } from "../utils/md-regions.js";
+import { mapOutsideCode, scanCodeFences } from "../utils/md-regions.js";
 
 /**
  * 색을 실은 목차 마커 — `%%im-nobsidian:toc:color=gray%%`.
@@ -36,6 +47,28 @@ const TOC_COLOR_MARKER_RE = new RegExp(`^%%${MARKER_BRAND}:toc:color=([a-z_]+)%%
 const TRULY_UNSUPPORTED_BLOCK_TYPES = ["unsupported", "template"] as const;
 
 const DIVIDER_PLACEHOLDER = "​%%IM-NOBSIDIAN_DIVIDER%%​";
+
+/**
+ * 볼트 링크 한 쌍(`degrade-link.ts`)이 한 줄을 차지할 때 — 그룹 1 = 링크 이름, 2 = 링크 주소, 3 = 마커 몸.
+ * 블록 방식은 마커로 Notion 의 블록을 가리킬 수 없어, 쌍이 실은 주소로 블록을 새로 만든다.
+ */
+const LINK_PAIR_LINE_RE = new RegExp(
+  `^[ \\t]*(?:\\[((?:\\\\.|[^\\\\\\]])*)\\]\\(([^)]*)\\))?%%${MARKER_BRAND}:((?:embed:src|unknown:id)=${MARKER_PAYLOAD_CHAR}+)%%[ \\t]*$`,
+  "gm",
+);
+const EMBED_BODY_RE = /^embed:src=(.+)$/;
+const BOOKMARK_BODY_RE = /^unknown:id=([^&]+)&type=bookmark$/;
+
+/** 블록 방식이 블록으로 되돌리는 마커 — 그 밖의 마커는 글자만 남지 않게 걷는다. */
+const STRUCTURAL_MARKERS: ReadonlySet<string> = new Set([
+  TOGGLE_START,
+  TOGGLE_END,
+  COLUMN_LIST_START,
+  COLUMN_LIST_END,
+  TOC_MARKER,
+  BREADCRUMB_MARKER,
+]);
+const COLUMN_SEP_TOKEN_RE = new RegExp(`^${columnSepSource("ignore")}$`);
 
 const VIDEO_URL_PATTERNS = [
   /^https?:\/\/(www\.)?youtube\.com\/watch/,
@@ -58,6 +91,49 @@ const EMBED_URL_PATTERNS = [
   /^https?:\/\/(www\.)?soundcloud\.com\//,
 ];
 
+/**
+ * 한 줄 링크 쌍이 가리키는 블록 — 임베드는 마커의 주소로, 북마크는 링크의 주소 · 이름으로 만든다.
+ * 원래 주소를 모르는 북마크면 null.
+ */
+function linkPairBlock(
+  label: string | undefined,
+  url: string | undefined,
+  body: string,
+): NotionBlock | null {
+  const embed = EMBED_BODY_RE.exec(body);
+  if (embed) return NotionBlockBuilder.embed(decodeURIComponent(embed[1]!));
+  const bookmark = BOOKMARK_BODY_RE.exec(body);
+  if (!bookmark || label === undefined || url === undefined) return null;
+  const target = bookmarkOfVaultLink(label, url, decodeURIComponent(bookmark[1]!));
+  if (target === null) return null;
+  return NotionBlockBuilder.bookmark(target.url, target.caption || undefined);
+}
+
+/**
+ * 블록마다 멘션을 볼트 글로 바꿔 넘기는 notion-to-md — 기본 렌더 · 사용자 변환기 · 표 칸이 모두
+ * `blockToMarkdown` 을 거친다({@link markMentions}).
+ */
+class VaultNotionToMarkdown extends NotionToMarkdown {
+  override async blockToMarkdown(block: Parameters<NotionToMarkdown["blockToMarkdown"]>[0]) {
+    return super.blockToMarkdown(withMarkedMentions(block));
+  }
+}
+
+/** 블록 본문(`rich_text` · 옛 `text`)의 멘션을 바꾼 얕은 사본. 바꿀 것이 없으면 그 블록. */
+function withMarkedMentions<B>(block: B): B {
+  const type = (block as { type?: string }).type;
+  const body = type ? (block as Record<string, unknown>)[type] : undefined;
+  if (typeof body !== "object" || body === null) return block;
+  const content = body as { rich_text?: RichTextAnnotated[]; text?: RichTextAnnotated[] };
+  const key = Array.isArray(content.rich_text)
+    ? "rich_text"
+    : Array.isArray(content.text)
+      ? "text"
+      : null;
+  if (key === null || !content[key]!.some((t) => t.type === "mention")) return block;
+  return { ...block, [type!]: { ...body, [key]: markMentions(content[key]!) } } as B;
+}
+
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -68,7 +144,7 @@ export class BlockConverter {
 
   initNotionToMd(client: Client): void {
     this.client = client;
-    this.n2m = new NotionToMarkdown({ notionClient: client });
+    this.n2m = new VaultNotionToMarkdown({ notionClient: client });
     this.registerCustomTransformers();
   }
 
@@ -253,18 +329,19 @@ export class BlockConverter {
     });
   }
 
+  /**
+   * 북마크는 Markdown API 로 받은 것과 같은 링크 · 마커 한 쌍으로 내린다(`bookmark.ts`) — push 가 마커로
+   * Notion 의 원래 블록을 남긴다. 마커의 페이지 자리는 변환을 부른 쪽이 채운다({@link fillBookmarkPage}).
+   */
   private registerBookmarkTransformer(): void {
     if (!this.n2m) return;
     this.n2m.setCustomTransformer("bookmark", async (block) => {
       const b = block as unknown as {
+        id: string;
         bookmark: { url: string; caption?: RichTextItem[] };
       };
-      const url = b.bookmark?.url ?? "";
-      const caption = richTextToPlain(b.bookmark?.caption);
-      if (caption) {
-        return `[${caption}](${url})`;
-      }
-      return `[${url}](${url})`;
+      const target = { url: b.bookmark?.url ?? "", caption: richTextToPlain(b.bookmark?.caption) };
+      return bookmarkVaultLink(BOOKMARK_PAGE_SLOT, b.id, target);
     });
   }
 
@@ -412,9 +489,8 @@ export class BlockConverter {
       const b = block as unknown as {
         embed: { url: string; caption?: RichTextItem[] };
       };
-      const url = b.embed?.url ?? "";
-      const caption = b.embed?.caption ? richTextToMarkdown(b.embed.caption as never) : "";
-      return `[${caption || url}](${url})`;
+      // Markdown API 로 받은 것과 같은 링크 · 마커 한 쌍 — push 가 임베드 블록으로 되돌린다.
+      return embedVaultLink(b.embed?.url ?? "");
     });
   }
 
@@ -459,17 +535,27 @@ export class BlockConverter {
   private toggleCounter = 0;
   private columnCounter = 0;
 
+  private linkBlocks: Map<number, NotionBlock> = new Map();
+
   private preProcessMarkdown(markdown: string): string {
     this.toggleContents.clear();
     this.columnContents.clear();
+    this.linkBlocks.clear();
     this.toggleCounter = 0;
     this.columnCounter = 0;
 
-    let processed = this.extractToggleBlocks(markdown);
+    // 글 줄 정리는 토글 · 칼럼을 떼기 전에 한다 — 떼어 낸 안쪽은 따로 martian 에 들어간다.
+    let processed = mapOutsideCode(markdown, (segment) =>
+      escapeLiteralDollars(
+        this.stripLeftoverMarkers(
+          this.extractLinkBlocks(this.stripInlineAnnotationMarkers(segment)),
+        ),
+      ),
+    );
+    processed = this.extractToggleBlocks(processed);
     processed = this.extractColumnBlocks(processed);
     processed = this.replaceDividers(processed);
     processed = processed.replace(/<unknown[^>]*\/>/g, "");
-    processed = this.stripInlineAnnotationMarkers(processed);
     return processed;
   }
 
@@ -486,6 +572,38 @@ export class BlockConverter {
     return stripTableMarkers(stripMentionMarkers(markdown))
       .replace(new RegExp(`%%${MARKER_BRAND}:underline%%([\\s\\S]*?)%%\\/underline%%`, "g"), "$1")
       .replace(new RegExp(`%%${MARKER_BRAND}:color:[^%]+%%([\\s\\S]*?)%%\\/color%%`, "g"), "$1");
+  }
+
+  /**
+   * 한 줄을 차지한 임베드 · 북마크 링크 쌍을 블록 자리표시로 — {@link postProcessBlocks} 가 임베드 ·
+   * 북마크 블록으로 바꾼다. 예전에는 링크 문단이 되고 마커 글자가 본문에 남았다. 원래 주소를 모르는
+   * 북마크(`🔖 Bookmark`)와 글 사이의 쌍은 링크로 둔다 — 마커는 {@link stripLeftoverMarkers} 가 걷는다.
+   */
+  private extractLinkBlocks(markdown: string): string {
+    return markdown.replace(
+      LINK_PAIR_LINE_RE,
+      (line: string, label: string | undefined, url: string | undefined, body: string) => {
+        const block = linkPairBlock(label, url, body);
+        if (block === null) return line;
+        const id = this.linkBlocks.size;
+        this.linkBlocks.set(id, block);
+        return `%%IM-NOBSIDIAN_BLOCK_${id}%%`;
+      },
+    );
+  }
+
+  /**
+   * 블록으로 되돌리지 못한 보존 마커를 걷는다 — 토글 제목 · 콜아웃 모양 · 자리 태그 · 인라인 멘션 같은
+   * 마커가 글자 그대로 Notion 본문에 남았다(코퍼스 10장 중 6장, 2026-10-12 실측). 보이는 글은 남는다.
+   */
+  private stripLeftoverMarkers(markdown: string): string {
+    return markdown.replace(MARKER_TOKEN_RE, (token) =>
+      STRUCTURAL_MARKERS.has(token) ||
+      COLUMN_SEP_TOKEN_RE.test(token) ||
+      TOC_COLOR_MARKER_RE.test(token)
+        ? token
+        : "",
+    );
   }
 
   private replaceDividers(markdown: string): string {
@@ -592,6 +710,12 @@ export class BlockConverter {
         continue;
       }
 
+      const linkBlock = this.convertLinkBlockPlaceholder(block);
+      if (linkBlock) {
+        result.push(linkBlock);
+        continue;
+      }
+
       const markerConverted = this.convertSingleLineMarker(block);
       if (markerConverted) {
         result.push(markerConverted);
@@ -637,7 +761,12 @@ export class BlockConverter {
       .join("\n")
       .trim();
 
-    const children = childMd ? (markdownToBlocks(childMd) as Array<Record<string, unknown>>) : [];
+    // 칼럼 안처럼 자리표시(구분선 · 링크 블록 · 목차)를 블록으로 되돌린다.
+    const children = childMd
+      ? (this.postProcessBlocks(
+          markdownToBlocks(childMd) as Array<Record<string, unknown>>,
+        ) as Array<Record<string, unknown>>)
+      : [];
 
     return NotionBlockBuilder.toggle(
       NotionBlockBuilder.richText(title),
@@ -670,6 +799,16 @@ export class BlockConverter {
     // Notion 이 기존 폭을 유지하게 하는 편이 낫다. 비율 왕복은 NFM 경로가 담당한다
     // (`enhanced-md-converter` 의 `reassembleColumns`).
     return NotionBlockBuilder.columnList(columnBlocks);
+  }
+
+  private convertLinkBlockPlaceholder(block: Record<string, unknown>): NotionBlock | null {
+    if (block.type !== "paragraph") return null;
+    const para = block.paragraph as
+      { rich_text?: Array<{ text?: { content: string } }> } | undefined;
+    const texts = para?.rich_text ?? [];
+    if (texts.length !== 1) return null;
+    const match = /^%%IM-NOBSIDIAN_BLOCK_(\d+)%%$/.exec((texts[0]?.text?.content ?? "").trim());
+    return match ? (this.linkBlocks.get(Number(match[1])) ?? null) : null;
   }
 
   private convertDividerPlaceholder(block: Record<string, unknown>): unknown | null {
@@ -880,7 +1019,7 @@ export class BlockConverter {
 
     const mdBlocks = await this.n2m.pageToMarkdown(pageId);
     const result = this.n2m.toMarkdownString(mdBlocks);
-    return result.parent ?? "";
+    return fillBookmarkPage(result.parent ?? "", pageId);
   }
 
   /**
@@ -889,15 +1028,20 @@ export class BlockConverter {
    * 전혀 건드리지 않는다 → 고정 픽스처로 **오프라인 결정론** 블록 라운드트립(I2)을 잠글 수 있는
    * 정식 테스트 시임. children 이 있는 블록(table 행·callout 자식 등)은 클라이언트를 호출하므로
    * 호출 측이 평면 블록만 넣어야 오프라인이 보장된다.
+   *
+   * @param pageId 블록이 든 페이지 — 북마크 마커가 싣는다. 모르면 북마크는 링크만 남는다.
    */
-  async notionBlockArrayToMarkdown(blocks: Array<Record<string, unknown>>): Promise<string> {
+  async notionBlockArrayToMarkdown(
+    blocks: Array<Record<string, unknown>>,
+    pageId: string | null = null,
+  ): Promise<string> {
     if (!this.n2m) {
       throw new Error(
         "NotionToMarkdown이 초기화되지 않았습니다. initNotionToMd()를 먼저 호출하세요.",
       );
     }
     const mdBlocks = await this.n2m.blocksToMarkdown(blocks as never);
-    return this.n2m.toMarkdownString(mdBlocks).parent ?? "";
+    return fillBookmarkPage(this.n2m.toMarkdownString(mdBlocks).parent ?? "", pageId);
   }
 }
 

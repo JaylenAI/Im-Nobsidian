@@ -484,7 +484,10 @@ export class PagePuller {
     }
     // blocks-API 폴백 산출물은 이미 표준 간격 — 재간격 불필요.
     // 폴백 변환기도 child-database 보존 마커를 발행하므로 인라인 DB 수집을 이어간다.
-    const fallback = await this.blockConverter.notionBlocksToMarkdown(pageId);
+    // 멘션은 Markdown API 경로처럼 `[[notion:<id>]]` 로 내려온다 — 같은 역조회로 제목 위키링크로 되돌린다.
+    const fallback = this.resolveNotionIdWikilinks(
+      await this.blockConverter.notionBlocksToMarkdown(pageId),
+    );
     this.discovery.collectInlineDbRefs(pageId, fallback);
     return { content: fallback, compact: false, fingerprint: null };
   }

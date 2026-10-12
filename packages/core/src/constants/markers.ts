@@ -145,6 +145,15 @@ export function embedMarker(src: string): string {
 }
 
 /**
+ * 자리 태그로만 오는 블록의 보존 마커 — `<unknown url="…" alt="bookmark"/>` 처럼 Markdown API 가
+ * 주소 하나로만 가리키는 블록. push 가 이 url 을 그대로 돌려보내면 Notion 이 원래 블록을 남긴다.
+ * url 을 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ */
+export function unknownUrlMarker(url: string, type: string): string {
+  return compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${type}`);
+}
+
+/**
  * 인라인 미지원 멘션 보존 마커 — 커스텀 이모지처럼 `notion://` 스킴이라 마크다운으로
  * 표현할 길이 없는 것들.
  *
