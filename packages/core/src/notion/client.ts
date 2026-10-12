@@ -133,6 +133,9 @@ export interface RecentDataSource {
   readonly databaseId: string | null;
 }
 
+/** 블록 API 의 블록 하나 — 자식이 있으면 `children` 에 담겨 온다({@link NotionClient.getBlockTree}). */
+export type BlockTreeNode = BlockObjectResponse & { children?: BlockTreeNode[] };
+
 /**
  * DB 하나를 한 번 받은 것 — 행 조회 · 스키마 · 제목이 같은 것을 다시 받지 않고 이것을 읽는다. 예전에는 DB 하나를
  * 받는 데 같은 DB 를 서너 번 다시 받아(요청 6~8회) 발견 DB 166개의 pull 이 분 단위였다.
@@ -874,6 +877,23 @@ export class NotionClient {
     }
 
     return allBlocks;
+  }
+
+  /**
+   * 블록 트리 — 자식이 있는 블록은 `children` 에 자식을 담는다. 자식 페이지 · DB 는 열지 않는다. 동기화
+   * 참조 블록은 Notion 이 원본의 자식을 돌려주므로 그대로 담는다(Markdown API 도 원본 내용을 싣는다).
+   *
+   * 블록 하나라도 읽지 못하면 던진다 — 빠진 채로 노트를 쓰면 다음 push 가 그 블록을 Notion 에서 지운다.
+   */
+  async getBlockTree(blockId: string): Promise<BlockTreeNode[]> {
+    const blocks: BlockTreeNode[] = await this.fetchAllChildren(blockId);
+    for (const block of blocks) {
+      if (!block.has_children || block.type === "child_page" || block.type === "child_database") {
+        continue;
+      }
+      block.children = await this.getBlockTree(block.id);
+    }
+    return blocks;
   }
 
   /**
