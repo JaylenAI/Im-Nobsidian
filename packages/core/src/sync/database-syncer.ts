@@ -494,10 +494,14 @@ export class DatabaseSyncer {
     if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) return "skip";
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
-    if (misplaced || this.remoteVerdict(record, page) !== "unchanged") return "pull";
-    if (await this.outdatedDateForm(record, page)) return "reform";
-    if (this.config.sync.deleteSync) return "skip";
-    return (await this.vaultFs.exists(record.obsidianPath)) ? "skip" : "restore";
+    const changed = misplaced || this.remoteVerdict(record, page) !== "unchanged";
+    if (!changed && (await this.outdatedDateForm(record, page))) return "reform";
+    // 원격도 바뀐 행이라도 볼트에서 사라진 것이면 되살린 것이다 — 받는 일은 같고 세는 칸만 다르다.
+    // 예전에는 «업데이트» 로 세어, 지운 파일이 돌아온다는 것을 결과가 말하지 않았다.
+    if (this.config.sync.deleteSync || (await this.vaultFs.exists(record.obsidianPath))) {
+      return changed ? "pull" : "skip";
+    }
+    return "restore";
   }
 
   /**

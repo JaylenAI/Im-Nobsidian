@@ -672,7 +672,11 @@ export class SyncOrchestrator {
         lastEdited: r.notionLastEdited ?? r.updatedAt,
         previousEdited: r.notionLastEdited,
       }));
-    const restoreIds = new Set(restoreChanges.map((c) => c.pageId));
+    // 원격도 바뀌어 이미 큐에 오른 페이지라도 볼트에서 사라진 것이면 되살린 것으로 센다. 예전에는
+    // «업데이트» 로 세어, 지운 파일이 돌아온다는 것을 결과가 말하지 않았다.
+    const restoreIds: ReadonlySet<string> = new Set(
+      missingLocal.flatMap((r) => (r.notionPageId === null ? [] : [r.notionPageId])),
+    );
     const workItems = restoreChanges.length > 0 ? [...filtered, ...restoreChanges] : filtered;
 
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
@@ -681,6 +685,7 @@ export class SyncOrchestrator {
       return this.pullPlanner.planPull(
         filtered,
         restoreChanges,
+        restoreIds,
         localPlan,
         options,
         startTime,

@@ -50,6 +50,7 @@ export class PullPlanner {
   async planPull(
     filtered: RemoteChange[],
     restoreChanges: RemoteChange[],
+    restoreIds: ReadonlySet<string>,
     localPlan: LocalPlan | null,
     options: PullOptions,
     startTime: number,
@@ -97,16 +98,20 @@ export class PullPlanner {
     items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
 
     const count = (type: RemoteChange["type"]) => planned.filter((c) => c.type === type).length;
+    // 원격도 바뀐 페이지라도 볼트에서 사라진 것이면 되살린 것으로 센다 — 실제 pull 과 같다.
+    const restoredModified = planned.filter(
+      (c) => c.type === "modified" && restoreIds.has(c.pageId),
+    ).length;
     const rowCount = (operation: PlannedRow["operation"], restore = false) =>
       rows.filter((row) => row.operation === operation && (row.restore ?? false) === restore)
         .length;
     return {
       created: count("created") + rowCount("create"),
-      updated: count("modified") + rowCount("update"),
+      updated: count("modified") - restoredModified + rowCount("update"),
       deleted: count("deleted") + rowCount("delete"),
       // 복원은 updated 에 섞지 않는다 — dry-run 이 "수정 N건" 이라고만 말하면
       // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
-      restored: restoreChanges.length + rowCount("update", true),
+      restored: restoreChanges.length + restoredModified + rowCount("update", true),
       conflicts: [],
       writtenPaths: [],
       failed,
