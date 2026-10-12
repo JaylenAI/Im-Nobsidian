@@ -75,11 +75,19 @@ describe("rich-text-converter", () => {
       );
     });
 
-    it("date 멘션 — 시작/종료", () => {
-      expect(formatMention({ type: "date", date: { start: "2026-05-30" } }, "")).toBe("2026-05-30");
+    it("date 멘션 — Markdown API 경로와 같은 짝 마커(시작/종료)", () => {
+      expect(formatMention({ type: "date", date: { start: "2026-05-30" } }, "")).toBe(
+        "%%im-nobsidian:mention-date:start=2026-05-30%%2026-05-30%%/mention%%",
+      );
       expect(
         formatMention({ type: "date", date: { start: "2026-05-01", end: "2026-05-30" } }, ""),
-      ).toBe("2026-05-01 → 2026-05-30");
+      ).toBe(
+        "%%im-nobsidian:mention-date:start=2026-05-01&end=2026-05-30%%2026-05-01 → 2026-05-30%%/mention%%",
+      );
+    });
+
+    it("date 멘션 — 읽지 못하는 날짜는 예전처럼 글", () => {
+      expect(formatMention({ type: "date", date: { start: "어제" } }, "")).toBe("어제");
     });
 
     it("user 멘션 — 이름 있으면 @이름, 없으면 plainText 폴백", () => {
