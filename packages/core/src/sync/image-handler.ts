@@ -8,6 +8,7 @@ import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
 import { getMimeType, isNotionUploadable } from "../utils/mime.js";
+import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import {
   fileUrlOfBlock,
   isNotionHostedFileUrl,
@@ -17,6 +18,7 @@ import {
 import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 import {
   recallUploadedMedia,
+  rememberReceivedMedia,
   rememberUploadedMedia,
   type UploadedMedia,
 } from "./uploaded-media.js";
@@ -36,6 +38,8 @@ export interface ImageDownloadResult {
   readonly localPath: string;
   readonly hash: string;
   readonly size: number;
+  /** 받은 파일의 전체 sha256 — 받은 미디어 기록에 적어 push 가 그 파일이 그대로인지 본다. */
+  readonly fileHash?: string;
 }
 
 /** 다운로드는 됐지만 아직 디스크에 쓰지 않은 이미지 — D6 dedup 판정 후 persist 한다. */
@@ -203,6 +207,8 @@ export function captionOfEmbed(target: string): string {
  * - 캡션이 그대로다(push 가 단 설명 · 옛 push 가 단 대상 전체) → 적어 둔 대상 그대로
  * - 파일 이름만 보인다 → 그대로. 파일 블록은 캡션 대신 이름을 보여 줄 수 있어, 설명을 지운
  *   것인지 가를 수 없다 — 지우지 않는 쪽을 고른다
+ * - 캡션이 없고 별칭이 올라간 이름이다 → 그대로. 캡션 없는 파일을 받으면 올라간 이름을 별칭으로
+ *   적는다({@link fileNameOf}) — 다시 받을 때 그 별칭을 지우면 임베드가 바뀐다
  * - 캡션을 비웠다 → 경로(+ 크기)
  * - 캡션을 고쳤다 → 경로|새 설명. 크기는 원래 설명과 함께 적혀 있었을 때만 잇는다 — 크기만
  *   있던 임베드에 설명을 붙이는 모양(`a.png|설명|300`)은 사용자가 쓴 적이 없는 모양이다
@@ -216,6 +222,7 @@ export function embedTargetFromCaption(
 ): string {
   const { path, description, size } = splitEmbedTarget(target);
   if (caption === description || caption === target || caption === uploadedName) return target;
+  if (!caption && uploadedName && description === toWikilinkAlias(uploadedName)) return target;
   const sized = (base: string): string => (size ? `${base}|${size}` : base);
   const alias = toWikilinkAlias(caption);
   if (!alias) return sized(path);
@@ -255,7 +262,26 @@ function fileNameOf(caption: string, url: string): string {
  * (`초안]]최종.pdf`)가 임베드를 끝내거나 나누지 않는다. 남는 글자가 없으면 자리 이름 `file`.
  */
 function fileEmbedOf(localPath: string, name: string): string {
-  return `![[${localPath}|${toWikilinkAlias(name) || "file"}]]`;
+  return `![[${fileEmbedTargetOf(localPath, name)}]]`;
+}
+
+/** {@link fileEmbedOf} 의 임베드 대상 — `경로|별칭`. */
+function fileEmbedTargetOf(localPath: string, name: string): string {
+  return `${localPath}|${toWikilinkAlias(name) || "file"}`;
+}
+
+/**
+ * 받은 미디어 한 건을 받은 미디어 기록의 한 줄로 — Notion 의 그 파일과 노트에 쓴 임베드를 잇는다.
+ * 파일 id 를 읽지 못하거나 지문이 없으면 null(적지 않는다 — 그 노트를 push 하면 예전처럼 올린다).
+ */
+function receivedMediaOf(
+  url: string,
+  download: ImageDownloadResult,
+  target: string,
+): UploadedMedia | null {
+  const fileId = notionFileIdOf(url) ?? notionFileIdOf(download.originalUrl);
+  if (!fileId || !download.fileHash) return null;
+  return { fileId, target, localPath: download.localPath, fileHash: download.fileHash };
 }
 
 /** Notion 이 호스팅한 미디어 URL — 서명 URL 이거나 markdown API 의 내부 참조(`file://`). */
@@ -313,6 +339,33 @@ interface PlaceholderHit {
   readonly target: string;
   /** 자리표시자 아래에 다른 블록이 묶였는가 — Notion 이 깊이 들여쓴 뒷줄을 자식으로 묶는다(S-33). */
   readonly hasChildren: boolean;
+}
+
+/**
+ * 본문의 자리표시자 한 줄 — 앞 들여쓰기 · 종류 · 퍼센트 인코딩된 대상. push 는 자리표시자를 줄 단독으로
+ * 심는다(`EmbedResolver` 의 `isolate`) — 콜아웃 안이면 탭, 목록 안이면 공백으로 들인다.
+ */
+const PLACEHOLDER_LINE_RE = new RegExp(
+  `^([ \\t]*)>[ \\t]*📎[^\\n]*?%%\\s*${MARKER_BRAND_RE}:local-(image|file):(${MARKER_PAYLOAD_CHAR}+?)\\s*%%[ \\t]*$`,
+  "gmu",
+);
+
+/**
+ * 그대로 실을 수 있는 캡션 — markdown 서식 · 태그로 읽힐 글자가 없다. 올릴 때는 캡션을 글자 그대로
+ * 싣는데({@link mediaBlock}) 본문 markdown 에 실으면 Notion 이 서식으로 읽는다. 이런 캡션의 미디어는
+ * 예전처럼 다시 올린다.
+ */
+const PLAIN_CAPTION_RE = /^[^\\[\]()<>&*_`~$=#|\n\r]*$/u;
+
+/** 본문 markdown 에 그대로 실을 수 있는 파일 URL — 괄호 · 따옴표 · 꺾쇠 · 공백이 없다. */
+const PLAIN_URL_RE = /^https:\/\/[^\s()<>"']+$/;
+
+/** {@link ImageHandler.keepUploadedMedia} 의 결과. */
+export interface KeptMedia {
+  /** 보낼 본문 — 다시 올리지 않아도 되는 자리표시자를 Notion 의 그 파일로 바꿨다. */
+  readonly markdown: string;
+  /** 그대로 둔 미디어 — 본문을 보낸 뒤 올린 미디어 기록에 다시 적는다. */
+  readonly kept: readonly UploadedMedia[];
 }
 
 /** 제자리 교체 결과 — 어떤 임베드 대상이 처리됐는지 호출자가 알아야 중복 업로드를 막는다. */
@@ -517,6 +570,7 @@ export class ImageHandler {
       localPath: fetched.localPath,
       hash: fetched.hash,
       size: fetched.buffer.length,
+      fileHash: fetched.fullHash,
     };
   }
 
@@ -630,6 +684,7 @@ export class ImageHandler {
 
     const sema = new Sema(this.concurrency);
     const downloads: ImageDownloadResult[] = [];
+    const received: Array<UploadedMedia | null> = [];
     let result = markdown;
 
     const httpResults = await Promise.allSettled(
@@ -656,10 +711,11 @@ export class ImageHandler {
       const download = await this.persistImage(fetched);
       downloads.push(download);
       const alias = toWikilinkAlias(span.label);
-      const obsidianEmbed = `![[${download.localPath}${alias ? `|${alias}` : ""}]]`;
+      const target = `${download.localPath}${alias ? `|${alias}` : ""}`;
       // 캡션에 `$` 가 있어도(`가격 $& 표`) 치환 패턴으로 읽지 않도록 함수로 넘긴다 — 원래 링크(서명
       // URL)가 별칭에 들어간다.
-      result = result.replace(span.full, () => obsidianEmbed);
+      result = result.replace(span.full, () => `![[${target}]]`);
+      received.push(receivedMediaOf(span.url, download, target));
     }
 
     for (const span of internalMatches) {
@@ -682,8 +738,9 @@ export class ImageHandler {
         const download = await this.persistImage(fetched);
         downloads.push(download);
         const alias = toWikilinkAlias(span.label);
-        const obsidianEmbed = `![[${download.localPath}${alias ? `|${alias}` : ""}]]`;
-        result = result.replace(span.full, () => obsidianEmbed);
+        const target = `${download.localPath}${alias ? `|${alias}` : ""}`;
+        result = result.replace(span.full, () => `![[${target}]]`);
+        received.push(receivedMediaOf(realUrl, download, target));
       } catch (error) {
         getLogger().warn(`내부 이미지 다운로드 실패: ${error}`);
       } finally {
@@ -691,6 +748,7 @@ export class ImageHandler {
       }
     }
 
+    this.rememberReceived(pageId, received);
     return { content: result, downloads };
   }
 
@@ -750,16 +808,144 @@ export class ImageHandler {
 
     if (imageBlocks.length > 0) {
       // 자리표시자가 없어 제자리 교체가 불가능한 잔여분만 여기로 온다(R1 이후). 페이지 끝에
-      // 붙이는 폴백이며, 정상 경로는 materializeLocalMedia 가 본문 자리에서 처리한다.
-      // replace_content(기본 push)는 노트 블록을 매번 wipe 하므로 임베드 이미지 블록은
-      // 노트 본문이 바뀔 때마다 재업로드가 불가피하다(file_upload 1회용 + atomic replace).
-      // 이는 블록 더블링/데이터 손실이 아니며, 무변경 재sync 는 변경감지가 스킵해
-      // 재업로드 0 을 보장한다.
+      // 붙이는 폴백이며, 정상 경로는 materializeLocalMedia 가 본문 자리에서 처리한다. 바뀌지
+      // 않은 미디어는 keepUploadedMedia 가 본문에 Notion 의 그 파일로 실어 여기까지 오지 않는다.
       await this.notionClient.appendChildren(pageId, imageBlocks);
       this.registerUploads(pageId, results);
     }
 
     return results;
+  }
+
+  /**
+   * 본문을 보내기 전에, 다시 올리지 않아도 되는 미디어 자리표시자를 Notion 에 이미 있는 그 파일로
+   * 바꾼다.
+   *
+   * 본문 push 는 자리표시자를 심어 본문을 통째로 바꾸고, 바꾼 뒤 자리표시자를 하나씩 올려 블록으로
+   * 바꾼다({@link materializeLocalMedia}). 그래서 글 한 줄만 고쳐도 그 페이지의 미디어를 모두 다시
+   * 올렸다 — 업로드 요청이 미디어마다 셋이고, Notion 의 블록 · 파일이 새로 바뀌었다. 받은 본문의 미디어
+   * URL 을 그대로 실어 본문을 바꾸면 Notion 은 그 블록을 그대로 둔다 — 블록 id · 파일이 같고 캡션만
+   * 실은 글로 바뀐다. 자리를 옮겨도, 서명(쿼리)을 떼도 같다(2026-10-12 실측).
+   *
+   * 둘 다 맞는 자리표시자만 바꾼다 — 나머지는 예전처럼 올린다.
+   * - 그 페이지의 미디어 기록에 같은 경로의 임베드가 있고, 받은 본문에 그 파일이 지금 있다
+   * - 볼트의 그 파일이 적어 둔 지문과 같다 — 같은 이름에 다른 내용이면 올려야 한다
+   *
+   * 기록이 없거나(이 기능 이전에 올린 미디어) 본문을 읽지 못하면 아무것도 바꾸지 않는다 — 다시 올릴
+   * 뿐 잃는 것은 없다.
+   *
+   * @param markdown 보낼 본문(Notion markdown) — 자리표시자가 줄 단독으로 있다
+   */
+  async keepUploadedMedia(pageId: string, markdown: string, notePath?: string): Promise<KeptMedia> {
+    const unchanged: KeptMedia = { markdown, kept: [] };
+    if (!this.notionClient) return unchanged;
+    LOCAL_MARKER_RE.lastIndex = 0;
+    if (!LOCAL_MARKER_RE.test(markdown)) return unchanged;
+    const known = recallUploadedMedia(this.stateDb, pageId);
+    if (![...known.values()].some((media) => media.fileHash)) return unchanged;
+
+    let remote: string;
+    try {
+      remote = (await this.notionClient.getPageMarkdown(pageId)).markdown;
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 본문을 읽지 못해 미디어를 그대로 두지 못함 (${notePath ?? pageId}) — 다시 올린다: ` +
+          messageOf(error),
+      );
+      return unchanged;
+    }
+
+    // 받은 본문에 지금 있는 미디어 — 임베드한 경로마다 본문 차례대로. 같은 파일을 두 번 임베드하면
+    // 둘을 따로 올렸으므로 둘 다 있다. 설명 · 크기는 견주지 않는다 — Notion 에서 캡션을 고쳐 받은
+    // 노트는 임베드의 설명만 바뀌고, 보낼 캡션은 노트의 것이다.
+    const onPage = new Map<string, Array<{ media: UploadedMedia; span: NotionMediaSpan }>>();
+    for (const span of notionMediaSpans(remote)) {
+      const fileId = notionFileIdOf(span.url);
+      const media = fileId ? known.get(fileId) : undefined;
+      if (!media?.fileHash) continue;
+      const path = stripAlias(media.target);
+      const list = onPage.get(path) ?? [];
+      list.push({ media, span });
+      onPage.set(path, list);
+    }
+    if (onPage.size === 0) return unchanged;
+
+    const placeholders: Array<{
+      start: number;
+      end: number;
+      lead: string;
+      kind: string;
+      target: string;
+    }> = [];
+    mapOutsideCodeFences(markdown, (segment, base) => {
+      for (const m of segment.matchAll(PLACEHOLDER_LINE_RE)) {
+        placeholders.push({
+          start: base + m.index,
+          end: base + m.index + m[0].length,
+          lead: m[1]!,
+          kind: m[2]!,
+          target: decodeMarkerTarget(m[3]!),
+        });
+      }
+      return segment;
+    });
+
+    const noteFolder = folderOf(notePath);
+    const kept: UploadedMedia[] = [];
+    let result = "";
+    let cursor = 0;
+    for (const placeholder of placeholders) {
+      const found = onPage.get(stripAlias(placeholder.target))?.shift();
+      const line = found && (await this.keptMediaLine(placeholder, found, noteFolder));
+      if (!line) continue;
+      result += markdown.slice(cursor, placeholder.start) + line;
+      cursor = placeholder.end;
+      kept.push({ ...found.media, target: placeholder.target });
+    }
+    if (kept.length === 0) return unchanged;
+    return { markdown: result + markdown.slice(cursor), kept };
+  }
+
+  /**
+   * 자리표시자 자리에 실을 Notion 미디어 한 줄. 종류 · 캡션 · URL 을 그대로 실을 수 없거나 볼트의 파일이
+   * 올린 것과 다르면 null — 그 자리표시자는 다시 올린다.
+   */
+  private async keptMediaLine(
+    placeholder: { lead: string; kind: string; target: string },
+    found: { media: UploadedMedia; span: NotionMediaSpan },
+    noteFolder: string | undefined,
+  ): Promise<string | null> {
+    const isImage = placeholder.kind === "image";
+    if (isImage !== found.span.full.startsWith("![")) return null;
+    if (!isImage && !found.span.full.startsWith("<file ")) return null;
+    const caption = this.keptCaptionOf(placeholder.target, found.span);
+    const url = found.span.url.split("?")[0]!;
+    if (!PLAIN_CAPTION_RE.test(caption) || !PLAIN_URL_RE.test(url)) return null;
+    try {
+      const { buffer, resolvedPath } = await this.readImageFromVault(
+        stripAlias(placeholder.target),
+        noteFolder,
+      );
+      if (resolvedPath !== found.media.localPath) return null;
+      if (createHash("sha256").update(buffer).digest("hex") !== found.media.fileHash) return null;
+    } catch {
+      // 볼트에서 못 찾으면 자리표시자를 둔다 — 올리는 쪽이 같은 사유로 알린다.
+      return null;
+    }
+    return isImage
+      ? `${placeholder.lead}![${caption}](${url})`
+      : `${placeholder.lead}<file src="${url}">${caption}</file>`;
+  }
+
+  /**
+   * 그대로 둔 미디어에 실을 캡션 — 임베드의 설명. 캡션 없는 파일을 받으면 올라간 이름을 별칭으로
+   * 적으므로({@link fileNameOf}), Notion 에 캡션이 없고 별칭이 그 이름이면 캡션을 비운 채 둔다 — 실으면
+   * 받은 파일마다 이름이 캡션으로 붙는다.
+   */
+  private keptCaptionOf(target: string, span: NotionMediaSpan): string {
+    const caption = captionOfEmbed(target);
+    if (captionOfLabel(span.label)) return caption;
+    return caption === toWikilinkAlias(this.uploadedNameOf(span.url)) ? "" : caption;
   }
 
   /**
@@ -783,12 +969,23 @@ export class ImageHandler {
     pageId: string,
     pushedMarkdown: string,
     notePath?: string,
+    kept: readonly UploadedMedia[] = [],
   ): Promise<MaterializeResult> {
-    const empty: MaterializeResult = { uploaded: [], handledTargets: new Set(), touched: false };
+    // 그대로 둔 미디어도 처리된 임베드다 — 호출측이 페이지 끝에 또 붙이지 않는다.
+    const handledTargets = new Set<string>();
+    for (const media of kept) {
+      handledTargets.add(media.target);
+      handledTargets.add(stripAlias(media.target));
+      handledTargets.add(media.localPath);
+    }
+    const empty: MaterializeResult = { uploaded: [], handledTargets, touched: false };
     if (!this.notionClient) return empty;
     // 마커가 없는 페이지에서는 블록 조회조차 하지 않는다 — 대부분의 페이지가 여기서 끝난다.
     LOCAL_MARKER_RE.lastIndex = 0;
-    if (!LOCAL_MARKER_RE.test(pushedMarkdown)) return empty;
+    if (!LOCAL_MARKER_RE.test(pushedMarkdown)) {
+      if (kept.length > 0) this.rememberUploads(pageId, kept);
+      return empty;
+    }
 
     let hits: PlaceholderHit[];
     try {
@@ -797,12 +994,14 @@ export class ImageHandler {
       getLogger().warn(`미디어 자리표시자 조회 실패 (${pageId}): ${messageOf(error)}`);
       return empty;
     }
-    if (hits.length === 0) return empty;
+    if (hits.length === 0) {
+      if (kept.length > 0) this.rememberUploads(pageId, kept);
+      return empty;
+    }
 
     const noteFolder = folderOf(notePath);
     const uploaded: ImageUploadResult[] = [];
-    const handledTargets = new Set<string>();
-    const remembered: UploadedMedia[] = [];
+    const remembered: UploadedMedia[] = [...kept];
     const unsupported: string[] = [];
     const holding: string[] = [];
     let attempted = false;
@@ -838,7 +1037,12 @@ export class ImageHandler {
         handledTargets.add(result.localPath);
         const fileId = created ? await this.storedFileIdOf(created) : null;
         if (fileId) {
-          remembered.push({ fileId, target: hit.target, localPath: result.localPath });
+          remembered.push({
+            fileId,
+            target: hit.target,
+            localPath: result.localPath,
+            fileHash: result.fileHash,
+          });
         } else {
           // 블록은 제자리에 있다. 다만 pull 이 이 임베드를 알아보지 못해 사본을 받는다.
           getLogger().warn(
@@ -941,13 +1145,34 @@ export class ImageHandler {
    * 올린 미디어를 임베드와 함께 적어 둔다(S-05). 적지 못해도 push 는 깨뜨리지 않는다 — 블록은
    * 이미 제자리에 있고, 다음 pull 이 그 파일을 알아보지 못해 사본을 받을 뿐이다.
    */
-  private rememberUploads(pageId: string, media: UploadedMedia[]): void {
+  private rememberUploads(pageId: string, media: readonly UploadedMedia[]): void {
     if (!this.stateDb) return;
     try {
       rememberUploadedMedia(this.stateDb, pageId, media);
     } catch (error) {
       getLogger().warn(
         `[Im-Nobsidian] 올린 미디어 기록 실패 (${pageId}) — 다음 pull 이 사본을 받을 수 있다: ` +
+          messageOf(error),
+      );
+    }
+  }
+
+  /**
+   * 받은 미디어를 그 페이지의 미디어 기록에 더한다 — 그 노트를 고쳐 push 할 때 Notion 의 원래 블록을
+   * 둔다({@link keepUploadedMedia}). 적지 못해도 pull 은 깨뜨리지 않는다 — 그 노트를 push 하면 예전처럼
+   * 다시 올릴 뿐이다.
+   */
+  private rememberReceived(
+    pageId: string | undefined,
+    received: ReadonlyArray<UploadedMedia | null>,
+  ): void {
+    const media = received.filter((item): item is UploadedMedia => item !== null);
+    if (!pageId || !this.stateDb || media.length === 0) return;
+    try {
+      rememberReceivedMedia(this.stateDb, pageId, media);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 받은 미디어 기록 실패 (${pageId}) — 그 노트를 올리면 미디어를 다시 올린다: ` +
           messageOf(error),
       );
     }
@@ -996,6 +1221,7 @@ export class ImageHandler {
   async downloadAllFiles(
     markdown: string,
     pageTitle: string,
+    pageId?: string,
   ): Promise<{ content: string; downloads: ImageDownloadResult[] }> {
     // F14: 캡션 중첩 링크 대응 — 괄호 균형 스캔 후 파일 라벨(이모지 프리픽스)만 취한다.
     const fileLinks = scanMarkdownLinks(markdown).filter(
@@ -1027,6 +1253,7 @@ export class ImageHandler {
 
     const sema = new Sema(this.concurrency);
     const downloads: ImageDownloadResult[] = [];
+    const received: Array<UploadedMedia | null> = [];
     let result = markdown;
 
     for (const span of notionHttpMatches) {
@@ -1040,6 +1267,9 @@ export class ImageHandler {
         const obsidianLink = fileEmbedOf(download.localPath, caption);
         // 이름 · 캡션에 `$` 가 있어도(`가격$&.pdf`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
         result = result.replace(span.full, () => obsidianLink);
+        received.push(
+          receivedMediaOf(span.url, download, fileEmbedTargetOf(download.localPath, caption)),
+        );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
       } finally {
@@ -1065,6 +1295,9 @@ export class ImageHandler {
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(span.full, () => obsidianLink);
+        received.push(
+          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+        );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
       } finally {
@@ -1082,6 +1315,9 @@ export class ImageHandler {
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(match[0]!, () => obsidianLink);
+        received.push(
+          receivedMediaOf(url, download, fileEmbedTargetOf(download.localPath, caption)),
+        );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
       } finally {
@@ -1107,6 +1343,9 @@ export class ImageHandler {
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, caption);
         result = result.replace(match[0]!, () => obsidianLink);
+        received.push(
+          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+        );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
       } finally {
@@ -1114,6 +1353,7 @@ export class ImageHandler {
       }
     }
 
+    this.rememberReceived(pageId, received);
     return { content: result, downloads };
   }
 
@@ -1168,7 +1408,8 @@ export class ImageHandler {
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
-        const hash = createHash("sha256").update(buffer).digest("hex").slice(0, 12);
+        const fileHash = createHash("sha256").update(buffer).digest("hex");
+        const hash = fileHash.slice(0, 12);
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const safeName = caption
@@ -1181,7 +1422,7 @@ export class ImageHandler {
         await this.vaultFs.ensureFolder(this.attachmentFolder);
         await this.vaultFs.writeBinary(localPath, buffer);
 
-        return { originalUrl: url, localPath, hash, size: buffer.length };
+        return { originalUrl: url, localPath, hash, size: buffer.length, fileHash };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }

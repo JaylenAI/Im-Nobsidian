@@ -909,7 +909,7 @@ export class DatabaseSyncer {
 
     if (downloadMedia && markdown) {
       try {
-        const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+        const fileResult = await this.imageHandler.downloadAllFiles(markdown, title, page.id);
         markdown = fileResult.content;
       } catch (error) {
         getLogger().warn(`[DB Sync] 파일 다운로드 실패 (${title}):`, error);

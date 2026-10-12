@@ -152,7 +152,7 @@ export class PagePuller {
       this._pullImageCount += imageResult.downloads.length;
     }
 
-    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title);
+    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title, pageId);
     processedMarkdown = fileResult.content;
     this._pullFileCount += fileResult.downloads.length;
 
@@ -426,7 +426,7 @@ export class PagePuller {
     }
 
     if (downloadMedia) {
-      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title);
+      const fileResult = await this.imageHandler.downloadAllFiles(markdown, title, pageId);
       markdown = fileResult.content;
       this._pullFileCount += fileResult.downloads.length;
     }
