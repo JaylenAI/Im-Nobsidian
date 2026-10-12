@@ -13,6 +13,9 @@ import { compactNotionId } from "../utils/id.js";
  * 채우지 않으면 잘린 블록은 로컬에서 북마크 링크로 바뀌어 보이고, 본문 상당수가 빠진 사본이
  * 동기화 완료로 기록된다.
  *
+ * 다시 받은 블록 안의 블록 주소(`…/p/<페이지>#<블록>`)는 그 블록을 페이지로 삼아 온다(실측: 바로가기 ·
+ * 경로 블록이 `p/<블록>#<블록>`). 처음부터 받았으면 받는 페이지가 들어갈 자리라 페이지 id 로 되돌린다.
+ *
  * 404 는 권한이 닿지 않는 블록이다 — 태그를 그대로 둔다. 되돌려 보낸 태그는 Notion 이 원래
  * 블록을 남기는 신호다(북마크 태그로 실측). 그 밖의 실패는 던진다 — 반쯤 채운 본문을
  * 완성본처럼 쓰지 않는다.
@@ -113,7 +116,10 @@ async function complete(
         return;
       }
       // 다시 받은 블록도 잘릴 수 있다 — 같은 규칙으로 채운다.
-      const inner = await complete(sub, state);
+      const inner = await complete(
+        { ...sub, markdown: withPageInBlockUrls(sub.markdown, id, state.rootId) },
+        state,
+      );
       unresolved.push(...inner.unresolved);
       filled.set(id, inner.markdown.replace(/\n+$/, ""));
     }),
@@ -149,6 +155,14 @@ function collectCandidates(response: PageMarkdownResponse): string[] {
     }
   }
   return [...ids];
+}
+
+/** 다시 받은 블록 `fetchedId` 를 페이지로 삼은 블록 주소를 받는 페이지 `rootId` 의 주소로 바꾼다. */
+function withPageInBlockUrls(markdown: string, fetchedId: string, rootId: string): string {
+  const fetched = compactNotionId(fetchedId);
+  const root = compactNotionId(rootId);
+  if (fetched === root) return markdown;
+  return markdown.replace(new RegExp(`/p/${fetched}#`, "gi"), `/p/${root}#`);
 }
 
 function indentLines(body: string, indent: string): string {

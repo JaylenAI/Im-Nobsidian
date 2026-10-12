@@ -124,6 +124,24 @@ describe("잘린 블록을 제자리에 채운다", () => {
     expect(refetched).toBe(2);
   });
 
+  it("다시 받은 블록 안의 블록 주소는 받는 페이지의 주소로 되돌린다 — 처음부터 받은 export 와 같게", async () => {
+    // 실측(바로가기 · 경로 블록): 다시 받으면 그 블록을 페이지로 삼아 p/<블록>#<블록> 이 온다.
+    const own = (id: string, block: string) =>
+      `<unknown url="https://app.notion.com/p/${compact(id)}#${compact(block)}" alt="alias"/>`;
+    // 블록 자체를 가리키는 링크(`#` 없음)는 그대로 둔다.
+    const link = `[링크](https://app.notion.com/p/${compact(A)})`;
+    const root = response(PAGE, `${tag(A)}\n${tag(C)}`, [A, C]);
+    const fetch = vi.fn(async (id: string) =>
+      id === compact(A)
+        ? response(A, `${own(A, A)}\n${own(A, B)}\n${link}`)
+        : response(C, own(C, C)),
+    );
+
+    const { response: out } = await completeTruncatedMarkdown(root, fetch, OPTIONS);
+
+    expect(out.markdown).toBe(`${own(PAGE, A)}\n${own(PAGE, B)}\n${link}\n${own(PAGE, C)}`);
+  });
+
   it("같은 블록을 두 번 받지 않는다 — 자기 자신을 잘렸다고 돌려줘도 멈춘다", async () => {
     const root = response(PAGE, tag(A), [A]);
     const fetch = vi.fn(async (id: string) => response(id, tag(A), [A]));
