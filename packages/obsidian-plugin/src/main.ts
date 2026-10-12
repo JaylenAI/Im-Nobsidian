@@ -795,7 +795,12 @@ export default class ImNobsidianPlugin extends Plugin {
     signal: AbortSignal,
   ): Promise<ResolutionChoice | null> {
     return new Promise((resolve) => {
-      const modal = new ConflictModal(this.app, conflict, resolve);
+      const modal = new ConflictModal(
+        this.app,
+        conflict,
+        resolve,
+        this.settings.syncDirection !== "pull",
+      );
       signal.addEventListener("abort", () => modal.close(), { once: true });
       modal.open();
     });

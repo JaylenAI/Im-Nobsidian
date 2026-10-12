@@ -242,6 +242,24 @@ export class PagePusher {
   }
 
   /**
+   * 올릴 페이지를 읽는다. Notion 에서 지웠으면(휴지통 · 보관 · 없음) 충돌로 남기고 던진다.
+   *
+   * 지운 것을 알아채는 것은 deleteSync 를 켠 pull 의 전체 대조뿐이다. 꺼 두면 지운 페이지를 계속 고쳐
+   * 보내다 Notion 의 영어 오류(«This page is in the trash») 로 매번 실패했고, 사용자가 고를 길이
+   * 없었다. 충돌이면 해결에서 로컬 유지(새 페이지로 다시 만들기)와 원격 유지(볼트에서 지우기) 가운데
+   * 고른다 — 어느 쪽도 묻지 않고 하지 않는다.
+   */
+  private async livePage(record: SyncRecord): Promise<PageObjectResponse> {
+    const presence = await remotePresence(this.notionClient, record.notionPageId!);
+    if (presence.kind === "alive") return presence.page;
+    this.stateDb.updateStatus(record.id, "conflict");
+    throw new Error(
+      `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남겼다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
+        `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${record.obsidianPath}`,
+    );
+  }
+
+  /**
    * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파 · 입양한 행).
    *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link RemoteDriftChecker.overwritesRemote}). DB 행은
    *   비교 기준도 달라진다(pushRowUpdate).
@@ -275,12 +293,13 @@ export class PagePusher {
 
     // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
     // 쓰되 수정 시각을 올리지 않는다 — 원격의 제목 변경은 다음 pull 이 받는다.
+    const remote = await this.livePage(record);
     const drift: RemoteDrift = this.drift.overwritesRemote(
       record,
       options?.overwriteRemote === true,
     )
       ? "none"
-      : await this.drift.remoteDrift(record, await this.notionClient.getPage(record.notionPageId));
+      : await this.drift.remoteDrift(record, remote);
     refuseUnpulledBody(drift, path);
     const settles = drift === "none";
 
@@ -726,7 +745,7 @@ export class PagePusher {
     }
 
     const mapper = await this.rowSchemas.mapperFor(databaseId);
-    const remote = await this.notionClient.getPage(pageId);
+    const remote = await this.livePage(record);
     const drift: RemoteDrift = options.overwriteRemote
       ? "none"
       : await this.drift.remoteDrift(record, remote);
@@ -876,7 +895,7 @@ export class PagePusher {
     let written: RemotePageStamp | null = null;
     let remoteChanged = false;
     if (newParent !== null || change.title) {
-      const remote = await this.notionClient.getPage(pageId);
+      const remote = await this.livePage(record);
       // 같은 분 안의 편집도 «바뀜» 으로 본다(N-05) — 옮기기와 제목은 그래도 반영한다.
       remoteChanged = this.observation.verdict(record, remote) !== "unchanged";
       const title = change.title ? change.title(this.notionClient.extractTitle(remote)) : null;

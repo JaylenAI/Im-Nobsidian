@@ -240,6 +240,26 @@ describe("삭제된 DB 행 복원 (R13)", () => {
     expect(result.restored).toBe(1);
   });
 
+  it("원격도 바뀐 행이라도 볼트에서 사라졌으면 복원으로 센다", async () => {
+    const changed = "2026-07-28T00:00:00.000Z";
+    notionClient.queryAllDatabasePages.mockResolvedValue([
+      {
+        id: ROW_ID,
+        last_edited_time: changed,
+        properties: { Name: { type: "title", title: [{ plain_text: ROW_TITLE }] } },
+      },
+    ]);
+    notionClient.getPage.mockResolvedValue({ id: ROW_ID, last_edited_time: changed });
+    vaultFs.exists = vi.fn().mockResolvedValue(false);
+    vaultFs.readFile = vi.fn().mockRejectedValue(new Error("ENOENT"));
+
+    const result = await syncer.pullDatabase(dbConfig);
+
+    expect(rowWrites(vaultFs)).toEqual([ROW_PATH]);
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+  });
+
   /**
    * deleteSync 가 켜져 있으면 볼트에서 지운 것은 Notion 에서도 지우라는 뜻이다 — 되살리면 뒤이은
    * push 가 지울 것을 잃는다. 페이지 경로(`detectMissingLocalFiles`)와 같은 규칙이다.

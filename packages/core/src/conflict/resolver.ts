@@ -2,6 +2,7 @@ import type { Conflict, ConflictStrategy } from "../types/sync.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { VaultFS } from "../sync/vault-fs.js";
 import { removeTrackedNote } from "../sync/remote-deletion.js";
+import { conflictCopyPath } from "./conflict-copy.js";
 import { threeWayMerge } from "./merger.js";
 import { computeHash } from "../utils/hash.js";
 import { formatUnifiedDiff, lineDiff } from "../utils/line-diff.js";
@@ -169,9 +170,7 @@ export class ConflictResolver {
 
   private async resolveDuplicate(conflict: Conflict): Promise<ResolutionResult> {
     const originalPath = conflict.syncRecord.obsidianPath;
-    const ext = originalPath.endsWith(".md") ? ".md" : "";
-    const baseName = originalPath.replace(/\.md$/, "");
-    const conflictPath = `${baseName}.conflict${ext}`;
+    const conflictPath = conflictCopyPath(originalPath);
 
     await this.vaultFs.writeFile(conflictPath, conflict.remoteContent);
 

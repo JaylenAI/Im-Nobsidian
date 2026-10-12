@@ -99,6 +99,22 @@ export class RunObservation {
   }
 
   /**
+   * 실행 밖(충돌 해소)에서 방금 읽은 원격을 적는다. 본 시각은 이 실행의 기준이 아니라 읽기 직전의
+   * 시각(`seenAt`)이다 — 해소는 push · pull 처럼 기준을 정하고 시작하지 않는다.
+   */
+  recordSeenAt(
+    recordId: string,
+    page: RemotePageStamp,
+    seenAt: string,
+    bodyFingerprint: string | null,
+  ): void {
+    this.stateDb.setRemoteObservation(recordId, {
+      ...observationOf(page, seenAt),
+      bodyFingerprint,
+    });
+  }
+
+  /**
    * 지금 본 원격 페이지를 레코드에 적는다.
    *
    * @param bodyFingerprint 본문 지문. undefined 면 적지 않는다 — 본문을 건드리지 않은 관측.

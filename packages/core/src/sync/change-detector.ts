@@ -1,3 +1,4 @@
+import { isConflictCopyPath } from "../conflict/conflict-copy.js";
 import type { LocalChange, SyncRecord } from "../types/sync.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { FileStatInfo } from "./vault-fs.js";
@@ -129,8 +130,10 @@ export class ChangeDetector {
       existing.add(file.path);
       const { record, hash } = file;
       if (!hasRemotePage(record)) {
-        if (record === null) untracked.push({ path: file.path, hash: hash! });
-        else
+        if (record === null) {
+          // 「복제」 해소의 원격 사본은 올리지 않는다 — 원격 본문이 Notion 에 한 벌 더 생긴다.
+          if (!isConflictCopyPath(file.path)) untracked.push({ path: file.path, hash: hash! });
+        } else
           changes.push({
             path: file.path,
             type: "created",

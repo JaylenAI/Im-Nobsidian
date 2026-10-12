@@ -15,6 +15,7 @@ const {
   mockResolveConflict,
   mockGenerateDiff,
   mockClose,
+  mockSync,
 } = vi.hoisted(() => ({
   mockListConflicts: vi.fn(),
   mockClearStale: vi.fn(),
@@ -22,6 +23,8 @@ const {
   mockResolveConflict: vi.fn(),
   mockGenerateDiff: vi.fn(),
   mockClose: vi.fn(),
+  /** 설정의 동기화 방향 — 받기 전용 시험이 바꾼다. */
+  mockSync: { direction: "both" as "both" | "pull" | "push" },
 }));
 
 // 무거운 것만 갈아 끼우고 나머지 core export 는 원본을 그대로 편다 — 손으로 나열하면
@@ -33,6 +36,7 @@ vi.mock("@im-nobsidian/core", async (importOriginal) => ({
     load: vi.fn().mockResolvedValue({
       notion: { token: "ntn_test" },
       paths: {},
+      sync: mockSync,
       advanced: { concurrency: 3, timeoutMs: 30000 },
     }),
   })),
@@ -88,6 +92,7 @@ beforeEach(() => {
   mockClearStale.mockReturnValue([]);
   mockResolveAll.mockResolvedValue([]);
   mockGenerateDiff.mockReturnValue("");
+  mockSync.direction = "both";
   process.exitCode = undefined;
 });
 
@@ -231,6 +236,42 @@ describe("resolve command", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("Notion 에서 삭제된 노트입니다"));
     expect(spy).toHaveBeenCalledWith(
       expect.stringContaining("gone.md → 로컬 유지 (Notion 에 새 페이지로 다시 만들기)"),
+    );
+    spy.mockRestore();
+  });
+
+  it("받기 전용이면 해결 결과를 Notion 에 올리지 않는다고 먼저 알리고, 지운 노트를 다시 만든다고 하지 않는다", async () => {
+    mockSync.direction = "pull";
+    const restore = asTerminal();
+    mockListConflicts.mockResolvedValueOnce([conflict("gone.md", "deleted")]);
+    mockResolveConflict.mockResolvedValueOnce({ path: "gone.md", choice: "local", success: true });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      await runResolve();
+    } finally {
+      restore();
+    }
+    const { choices } = vi.mocked(select).mock.calls[0]![0] as {
+      choices: Array<{ name: string; value: string }>;
+    };
+    expect(choices[0]).toEqual({
+      name: "로컬 유지 (Obsidian 파일만 두기 — 받기 전용이라 Notion 에 만들지 않음)",
+      value: "local",
+    });
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("받기 전용(direction: pull) — 해결 결과는 Obsidian 에만 두고"),
+    );
+    spy.mockRestore();
+  });
+
+  it("받기 전용의 일괄 해결은 지운 노트의 파일을 그대로 둔다고 알린다", async () => {
+    mockSync.direction = "pull";
+    mockListConflicts.mockResolvedValueOnce([conflict("gone.md", "deleted")]);
+    mockResolveAll.mockResolvedValueOnce([{ path: "gone.md", choice: "local", success: true }]);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runResolve("--strategy", "local-first", "--yes");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining("Notion 에서 삭제된 노트 1건 — Obsidian 파일을 그대로 둡니다"),
     );
     spy.mockRestore();
   });
