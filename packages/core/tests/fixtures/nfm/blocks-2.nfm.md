@@ -1,26 +1,20 @@
 ## 색 접는 제목 {toggle="true" color="purple"}
-
-    안
-
-**굵게 _*다음* 기울임_ ~~ 양쪽 ~~끝
-**`코드굵게`** [`코드링크`](https://example.com/c) _~~취소기울임~~_ <span color="green" underline="true">**밑굵색**</span> <span color="red_bg">`배경코드`</span>
-글자 \*\* 와 \<br\> 와 \$\`x\`\$ 와 \{color="blue"\} 와 탭 와 😀
-앞 공백 글
+	안
+**굵게 **다음* 기울임* ~~  양쪽  ~~끝
+**`코드굵게`** [`코드링크`](https://example.com/c) *~~취소기울임~~* <span color="green" underline="true">**밑굵색**</span> <span color="red_bg">`배경코드`</span>
+글자 \*\* 와 \<br\> 와 \$\`x\`\$ 와 \{color="blue"\} 와 	탭 와 😀
+  앞 공백 글
 인접한조각
 <empty-block/>
-
 > 여러 줄<br>인용
-
 1. 가
 2. 나
-   - 나-점
-     1. 나-점-1
-     2. 나-점-2
-        끊는 문단
-3. 다시 하나
-
+	- 나-점
+		1. 나-점-1
+		2. 나-점-2
+끊는 문단
+1. 다시 하나
 - [ ] 색 할 일 {color="orange_bg"}
-
 <details>
 <summary>수식 토글</summary>
 	$$

@@ -1,67 +1,53 @@
 <page url="https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6">__bf_nfm_child</page>
 <database url="https://app.notion.com/p/a5a68faa1a2144b6a8ffaff450a3ed20" inline="true" data-source-url="collection://3fa279f0-010a-4df9-a799-40aa09ec522e">__bf_nfm_db</database>
-
 # 제목 하나
-
 ## 파란 제목 {color="blue"}
-
 ### 세 번째
-
-**굵게** _기울임_ ~~취소~~ <span underline="true">밑줄</span> `코드` _**굵은기울임**_
+**굵게** *기울임* ~~취소~~ <span underline="true">밑줄</span> `코드` ***굵은기울임***
 <span color="blue">파랑</span> · <span color="yellow_bg">노랑배경</span> · <span color="red" underline="true">**빨강굵게밑줄**</span> · [링크](https://example.com/x?a=1&b=2) · [**굵은링크**](https://example.com/y)
 특수 \* _ # \| \< \> \` \~ \[ \] \\ \$5 와 \$10 · \<b\>태그\</b\> · &amp; · 1. 숫자
-
 # 줄 머리 샵
-
 - 줄 머리 대시
 \> 줄 머리 꺾쇠
 첫 줄<br>둘째 줄(soft)
 수식 $`x^2 + y`$ 와 $`\frac{a}{b}`$
-U <mention-user url="user://00000000-0000-4000-8000-000000000001"/> B
+U <mention-user url="user://00000000-0000-4000-8000-000000000001"/> B 
 D <mention-date start="2026-09-26"/> <mention-date start="2026-09-26" end="2026-09-27"/> <mention-date start="2026-09-26" startTime="09:00" timeZone="Etc/GMT-9"/> <mention-date start="2026-09-26" startTime="09:00" timeZone="Asia/Calcutta"/>
 P <mention-page url="https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6">__bf_nfm_child</mention-page> DB <mention-database url="https://app.notion.com/p/a5a68faa1a2144b6a8ffaff450a3ed20">__bf_nfm_db</mention-database>
 배경 문단 {color="gray_bg"}
 <empty-block/>
-
 ---
-
 - 하나
-  - 하나-가
-    - 하나-가-ㄱ
-      하나 아래 문단
+	- 하나-가
+		- 하나-가-ㄱ
+	하나 아래 문단
 - **둘** {color="red"}
-
 1. 첫째
-   1. 첫째-1
+	1. 첫째-1
 2. 둘째
-
 - [ ] 할 일
-  - [x] 끝낸 일
+	- [x] 끝낸 일
 - [x] 끝
-
 > 인용
-> 인용 안 문단
+	인용 안 문단
 > 갈색 인용 {color="brown_bg"}
-> <callout icon="💡" color="gray_bg">
-
-    알림 **굵게**
-
-    알림 안 문단
-    - 알림 안 목록
-    ```bash
-
+<callout icon="💡" color="gray_bg">
+	알림 **굵게**
+	알림 안 문단
+	- 알림 안 목록
+	```bash
 echo hi
-```
-<details>
-<summary>알림 안 토글</summary>
-깊은 문단
-</details>
+	```
+	<details>
+	<summary>알림 안 토글</summary>
+		깊은 문단
+	</details>
 </callout>
 <callout icon="⚠️" color="red_bg">
-경고
+	경고
 </callout>
 <callout icon="💡">
-아이콘 없는 알림
+	아이콘 없는 알림
 </callout>
 <details>
 <summary>토글</summary>

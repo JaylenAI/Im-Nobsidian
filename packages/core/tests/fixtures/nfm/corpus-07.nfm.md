@@ -8,10 +8,10 @@
 일정은 \<mention-date start="2026-07-28"\>\</mention-date\> 이고, 기간은
 \<mention-date start="2026-08-01" end="2026-08-05"\>\</mention-date\> 이다.
 <tabs>
-<tab>
-핵심만 세 줄로 적는다.
-</tab>
-<tab>
-배경과 근거를 모두 적는다.
-</tab>
+	<tab>
+		핵심만 세 줄로 적는다.
+	</tab>
+	<tab>
+		배경과 근거를 모두 적는다.
+	</tab>
 </tabs>
