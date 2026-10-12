@@ -1,6 +1,6 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-10-11
+> 마지막 업데이트: 2026-10-12
 > 버전: **v0.3.2 릴리스 완료** · **v0.4.0 트랙 진행 중** — 심층 QA 결함 23건 봉합 +
 > Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
 
@@ -99,7 +99,7 @@
 | 3    | `feature/settings-status`                    | U-03 설정 화면 — 토큰이 볼트 파일에 글자 그대로 · 칠 때마다 재연결 · 설명과 실제 동작 다름 · 방향이 막아도 조용함 — 키체인 · 닫을 때 연결 · 즉시 적용                                                                              | 완료 `11f73e3` |
 | 4    | `fix/plugin-distribution`                    | U-04 SQLite 엔진(wasm)이 네 번째 파일 · `.obsidian` 고정 경로라 디렉터리 설치(세 파일) · 다른 설정 폴더에서 못 염 · U-05 manifest 가 디렉터리 검사에 걸림 · 루트에 manifest 없음 — wasm 을 main.js 에 · manifest 를 루트로         | 완료 `ad0e47e` |
 | 4    | `fix/plugin-review-lint`                     | 디렉터리 스캐너 lint — 오류 2(콜아웃 아이콘 `style.display` 대입 · core 의 설명 없는 eslint-disable) · stylelint `column-gap` · 플러그인 경고 · 키체인 범위 주석이 틀림                                                            | 완료 `db6a7ba` |
-| 4 뒤 | `fix/media-reupload`                         | 본문을 고쳐 push 하면 그 페이지의 미디어를 바뀌지 않은 것까지 모두 다시 올림 (ADR-020 제약) — 바뀐 미디어만 올림                                                                                                                   | 대기           |
+| 4 뒤 | `fix/media-reupload`                         | 본문을 고쳐 push 하면 그 페이지의 미디어를 바뀌지 않은 것까지 모두 다시 올림 (ADR-020 제약) — 바뀐 미디어만 올림                                                                                                                   | 완료 `15bfd2f` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
