@@ -100,6 +100,7 @@
 | 4    | `fix/plugin-distribution`                    | U-04 SQLite 엔진(wasm)이 네 번째 파일 · `.obsidian` 고정 경로라 디렉터리 설치(세 파일) · 다른 설정 폴더에서 못 염 · U-05 manifest 가 디렉터리 검사에 걸림 · 루트에 manifest 없음 — wasm 을 main.js 에 · manifest 를 루트로         | 완료 `ad0e47e` |
 | 4    | `fix/plugin-review-lint`                     | 디렉터리 스캐너 lint — 오류 2(콜아웃 아이콘 `style.display` 대입 · core 의 설명 없는 eslint-disable) · stylelint `column-gap` · 플러그인 경고 · 키체인 범위 주석이 틀림                                                            | 완료 `db6a7ba` |
 | 4 뒤 | `fix/media-reupload`                         | 본문을 고쳐 push 하면 그 페이지의 미디어를 바뀌지 않은 것까지 모두 다시 올림 (ADR-020 제약) — 바뀐 미디어만 올림                                                                                                                   | 완료 `15bfd2f` |
+| 4 뒤 | `fix/remote-deletion-guards`                 | Notion 에서 지운 페이지에 push 가 영어 오류만 되풀이 · 받기 전용 해소가 Notion 에 씀 · 되살린 파일을 업데이트로 셈 · 복제 사본이 새 페이지로 올라감                                                                                | 진행 중        |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

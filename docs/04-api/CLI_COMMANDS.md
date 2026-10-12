@@ -188,7 +188,7 @@ nobsi fetch
 nobsi resolve                            # 대화형 (파일별 선택)
 nobsi resolve --strategy local-first     # 로컬 우선 (일괄)
 nobsi resolve --strategy remote-first    # Notion 우선 (일괄)
-nobsi resolve --strategy duplicate       # 양쪽 보존 (.conflict 파일 생성)
+nobsi resolve --strategy duplicate       # 양쪽 보존 (.conflict 사본 생성 — 올리지 않음)
 ```
 
 | 옵션                        | 설명                                                   |

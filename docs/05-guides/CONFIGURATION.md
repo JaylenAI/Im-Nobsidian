@@ -67,7 +67,8 @@ https://www.notion.so/My-Page-abc123def456...
 
 - `"both"` — 양방향 동기화 (Pull → Push, 기본값)
 - `"push"` — Obsidian → Notion만
-- `"pull"` — Notion → Obsidian만
+- `"pull"` — Notion → Obsidian만. 충돌을 풀어도 결과를 Notion 에 올리지 않습니다 — 고른 것은 Obsidian 에만
+  남고, 그 뒤의 Notion 편집은 다시 받습니다
 
 ### conflictStrategy
 
@@ -76,12 +77,16 @@ https://www.notion.so/My-Page-abc123def456...
 - `"local-first"` — 항상 Obsidian 버전 유지
 - `"remote-first"` — 항상 Notion 버전 유지
 - `"manual"` — 충돌 마커 삽입 후 수동 해결 (기본값)
-- `"duplicate"` — 양쪽 버전을 모두 보존 (`.conflict` 파일 생성)
+- `"duplicate"` — 양쪽 버전을 모두 보존 (`노트.conflict.md` 사본 생성 — 이 사본은 Notion 에 올리지 않습니다.
+  올리려면 이름을 바꾸세요)
 
 ### deleteSync
 
 - `false` (기본값) — 삭제는 동기화하지 않음 (안전)
 - `true` — 한쪽에서 삭제 시 반대쪽에서도 삭제
+
+어느 쪽이든 Notion 에서 지운 페이지(휴지통 · 보관)의 노트를 고쳐 push 하면 올리지 않고 충돌로 남깁니다. 충돌
+해결에서 로컬 유지(Notion 에 새 페이지로 다시 만들기)나 삭제 따르기(Obsidian 파일도 지우기)를 고르세요.
 
 ## Path Settings / 경로 설정
 
