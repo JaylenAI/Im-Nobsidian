@@ -2,6 +2,7 @@ import type { ConflictResolver, ResolutionChoice, ResolutionResult } from "../co
 import { choiceForStrategy, isRemoteDeletion } from "../conflict/resolver.js";
 import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import type { Config } from "../types/config.js";
 import type {
   Conflict,
   ConflictStrategy,
@@ -10,11 +11,13 @@ import type {
   SyncRecord,
 } from "../types/sync.js";
 import { computeHash } from "../utils/hash.js";
+import { getLogger } from "../utils/logger.js";
 import type { ChangeDetector } from "./change-detector.js";
 import type { LocalPlanner } from "./local-planner.js";
 import type { PagePuller } from "./page-puller.js";
 import type { PagePusher } from "./page-pusher.js";
 import { remoteDeletionChange, remoteDeletionConflict, remotePresence } from "./remote-deletion.js";
+import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RunObservation } from "./run-observation.js";
 import type { VaultFS } from "./vault-fs.js";
 
@@ -29,6 +32,7 @@ import type { VaultFS } from "./vault-fs.js";
  */
 export class ConflictWorkflow {
   constructor(
+    private readonly config: Config,
     private readonly stateDb: IStateDB,
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
@@ -269,6 +273,8 @@ export class ConflictWorkflow {
    *   변환·이미지·속성·해시·notionLastEdited 를 한 트랜잭션으로 재조정) → 무손실 수렴.
    * - 원격에서 지운 노트: local 은 새 페이지로 만들고(pushCreate), remote 는 볼트에서 지운 것으로
    *   끝난다.
+   * - 받기 전용(`direction: "pull"`): Notion 에 쓰지 않는다. 고른 결과를 볼트에 두고 원격은 본 것으로
+   *   적는다 — 예전에는 해소가 이 방향에서도 올려, push 를 끈 사용자의 Notion 을 바꿨다.
    */
   private async propagateResolution(
     conflict: Conflict,
@@ -280,22 +286,58 @@ export class ConflictWorkflow {
 
     // 원격에서 지운 노트 — «원격 유지» 는 볼트에서 지운 것으로 끝났다. «로컬 유지» 는 추적을 놓은
     // 파일을 새 페이지로 만든다(지운 페이지는 휴지통에 그대로 둔다).
+    const uploads = this.config.sync.direction !== "pull";
     if (isRemoteDeletion(conflict)) {
-      if (choice === "local") await this.pusher.pushCreate(record.obsidianPath);
+      if (choice !== "local") return;
+      if (uploads) await this.pusher.pushCreate(record.obsidianPath);
+      else keptOnlyInVault(record.obsidianPath);
       return;
     }
+
+    // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
+    if (choice !== "remote" && !result.success) return;
 
     if (choice === "remote") {
       this.observation.recordUnverified(record.id, conflict.remoteChange.lastEdited);
       return;
     }
-
-    // merge 가 충돌 마커를 남긴 경우(자동 병합 실패) → push 하지 않고 conflict 상태 유지.
-    if (!result.success) return;
+    if (!uploads) {
+      await this.recordRemoteSeen(record, conflict.remoteChange.lastEdited);
+      keptOnlyInVault(record.obsidianPath);
+      return;
+    }
 
     // local / merge(성공) / duplicate: 해소된 로컬 본문을 Notion 으로 재push. 해소가 지난
     // 동기화 사본을 해소 결과로 바꿔 두었으므로 «사본과 달라진 것» 은 없다 — 원격에 맞춰
     // 보내도록 알린다(DB 행).
     await this.pusher.pushUpdate(record.obsidianPath, { overwriteRemote: true });
   }
+
+  /**
+   * 받기 전용에서 로컬 쪽(로컬 · 병합 · 복제)을 골랐을 때 원격을 본 것으로 적는다 — 그 원격 본문의
+   * 지문까지. 해소가 지난 동기화 사본을 해소 결과로 바꿔 두었으므로, 수정 시각만 적으면 다음 pull 이
+   * «로컬은 그대로 · 원격은 확인 안 됨» 으로 보고 고른 로컬을 원격으로 덮는다.
+   *
+   * 충돌을 본 뒤 Notion 이 또 바뀌었으면 그 변경은 본 것으로 적지 않는다 — 다음 pull 이 받는다.
+   */
+  private async recordRemoteSeen(record: SyncRecord, conflictEdited: string): Promise<void> {
+    const pageId = record.notionPageId!;
+    const seenAt = new Date().toISOString();
+    const page = await this.notionClient.getPage(pageId);
+    if (page.last_edited_time !== conflictEdited) {
+      this.observation.recordUnverified(record.id, conflictEdited);
+      return;
+    }
+    const fingerprint = remoteBodyFingerprint(
+      (await this.notionClient.getPageMarkdown(pageId)).markdown,
+    );
+    this.observation.recordSeenAt(record.id, page, seenAt, fingerprint);
+  }
+}
+
+/** 받기 전용이라 해소 결과를 Notion 에 올리지 않았다는 것을 남긴다 — 조용히 건너뛰지 않는다. */
+function keptOnlyInVault(path: string): void {
+  getLogger().info(
+    `[Im-Nobsidian] 받기 전용(direction: pull)이라 해소 결과를 Notion 에 올리지 않음 — 볼트에만 둠: ${path}`,
+  );
 }

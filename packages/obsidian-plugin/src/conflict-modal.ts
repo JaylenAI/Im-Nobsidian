@@ -14,10 +14,12 @@ export class ConflictModal extends Modal {
    * @param onResolve 고른 것을 한 번 알린다. 고르지 않고 닫으면(Esc · 바깥 클릭) null — 예전에는
    *   아무것도 알리지 않아, 기다리던 해결 흐름이 멈추고 남은 충돌을 묻지 않았다(N-06).
    */
+  /** @param uploads 해소 결과를 Notion 에 올리는 설정인가 — Pull만 하는 설정이면 false. */
   constructor(
     app: App,
     private readonly conflict: Conflict,
     private readonly onResolve: (choice: ResolutionChoice | null) => void,
+    private readonly uploads = true,
   ) {
     super(app);
   }
@@ -55,7 +57,7 @@ export class ConflictModal extends Modal {
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
 
     for (const choice of applicableChoices(this.conflict)) {
-      const { label, description } = choiceText(this.conflict, choice);
+      const { label, description } = choiceText(this.conflict, choice, this.uploads);
       new Setting(buttonContainer)
         .setName(label)
         .setDesc(description)

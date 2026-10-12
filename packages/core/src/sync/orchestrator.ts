@@ -250,6 +250,7 @@ export class SyncOrchestrator {
       this.recovery,
     );
     this.conflictWorkflow = new ConflictWorkflow(
+      config,
       stateDb,
       vaultFs,
       notionClient,
