@@ -217,6 +217,119 @@ export function mentionsToMarkers(
   );
 }
 
+// ─── 블록 API 폴백 pull ───
+
+/**
+ * 블록 API 의 사용자 멘션을 짝 마커로 — Markdown API 로 받은 것({@link mentionsToMarkers})과 같은 모양이다.
+ * 예전 블록 폴백은 `@이름` 평문을 내려, 그 노트를 push 하면 Notion 의 멘션이 글이 됐다(A3).
+ *
+ * @returns 사용자 id 가 아니면 null — 호출측이 보이는 글로 둔다.
+ */
+export function userMentionText(userId: string, name: string | undefined): string | null {
+  if (!isNotionId(userId)) return null;
+  const attrs: NfmAttrs = [["url", `user://${userId}`]];
+  return `${mentionMarker("user", attrs)}${labelOf("user", attrs, name, undefined)}${MENTION_END}`;
+}
+
+/** 블록 API 날짜의 한쪽 — `2026-09-26` 또는 `2026-09-26T09:00:00.000+09:00`(실측 — 시각에는 늘 오프셋). */
+const BLOCK_DATE_RE =
+  /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
+
+interface BlockDateSide {
+  readonly date: string;
+  readonly time?: string;
+  /** 분 단위 오프셋. 시각이 없거나 오프셋이 없으면 undefined. */
+  readonly offset?: number;
+}
+
+function blockDateSide(value: string): BlockDateSide | null {
+  const m = BLOCK_DATE_RE.exec(value);
+  if (!m) return null;
+  const [, date, time, zone] = m;
+  if (!time) return { date: date! };
+  if (!zone) return { date: date!, time };
+  const offset =
+    zone === "Z"
+      ? 0
+      : (zone[0] === "-" ? -1 : 1) * (Number(zone.slice(1, 3)) * 60 + Number(zone.slice(4)));
+  return { date: date!, time, offset };
+}
+
+/** 오프셋을 바꿔 적은 같은 순간 — `offset` 분 앞선 곳의 벽시계. */
+function shiftSide(side: BlockDateSide, offset: number): BlockDateSide {
+  const [y, mo, d] = side.date.split("-").map(Number) as [number, number, number];
+  const [h, mi] = side.time!.split(":").map(Number) as [number, number];
+  const at = new Date(Date.UTC(y, mo - 1, d, h, mi) - (side.offset! - offset) * 60_000);
+  const iso = at.toISOString();
+  return { date: iso.slice(0, 10), time: iso.slice(11, 16), offset };
+}
+
+/**
+ * 오프셋의 시간대 이름 — Markdown API 가 오프셋만 있는 날짜에 붙이는 것과 같다(`+09:00` → `Etc/GMT-9`,
+ * `+00:00` → `UTC`, 실측 2026-10-12). 시 단위가 아니면 null — Notion 은 `+05:30` 에 `Asia/Calcutta` 같은
+ * 지역 이름을 붙이는데, 오프셋만으로는 어느 지역인지 모른다.
+ */
+function offsetTimeZone(offset: number): string | null {
+  if (offset === 0) return "UTC";
+  if (offset % 60 !== 0) return null;
+  const hours = offset / 60;
+  return `Etc/GMT${hours > 0 ? "-" : "+"}${Math.abs(hours)}`;
+}
+
+/**
+ * 블록 API 의 날짜 멘션을 NFM 날짜 속성으로 — Markdown API 가 같은 멘션에 내보내는 모양이다.
+ *
+ * 블록 API 는 시간대 이름을 버리고 오프셋만 준다(`Asia/Seoul` 로 만든 멘션도 `+09:00`, 실측). 그래서
+ * 시간대는 오프셋에서 다시 짓는다 — 순간은 같고 이름만 다를 수 있다. 시 단위가 아닌 오프셋은 UTC 로
+ * 옮겨 적는다. 읽지 못하는 모양이면 null — 호출측이 보이는 글로 둔다.
+ */
+export function blockDateAttrs(date: {
+  start: string;
+  end?: string | null;
+  time_zone?: string | null;
+}): NfmAttrs | null {
+  const start = blockDateSide(date.start);
+  const end = date.end ? blockDateSide(date.end) : undefined;
+  if (!start || end === null) return null;
+  if (end && Boolean(start.time) !== Boolean(end.time)) return null;
+
+  let timeZone: string | undefined;
+  let from = start;
+  let to = end;
+  if (start.time) {
+    if (start.offset === undefined) {
+      // 오프셋 없는 시각은 시간대 이름이 함께 올 때만 읽는다(문서상 모양 — 실측에서는 오지 않았다).
+      if (!date.time_zone || (end && end.offset !== undefined)) return null;
+      timeZone = date.time_zone;
+    } else {
+      const named = offsetTimeZone(start.offset);
+      timeZone = named ?? "UTC";
+      const offset = named === null ? 0 : start.offset;
+      from = shiftSide(start, offset);
+      if (end) {
+        if (end.offset === undefined) return null;
+        to = shiftSide(end, offset);
+      }
+    }
+  }
+
+  const attrs: Array<[string, string]> = [["start", from.date]];
+  if (from.time) attrs.push(["startTime", from.time]);
+  if (to) {
+    attrs.push(["end", to.date]);
+    if (to.time) attrs.push(["endTime", to.time]);
+  }
+  if (timeZone) attrs.push(["timeZone", timeZone]);
+  return attrs;
+}
+
+/** 블록 API 의 날짜 멘션을 짝 마커로. 읽지 못하는 날짜면 null. */
+export function dateMentionText(date: Parameters<typeof blockDateAttrs>[0]): string | null {
+  const attrs = blockDateAttrs(date);
+  if (attrs === null) return null;
+  return `${mentionMarker("date", attrs)}${dateMentionLabel(attrs)}${MENTION_END}`;
+}
+
 // ─── push ───
 
 function restoreDate(attrs: NfmAttrs, label: string): string {

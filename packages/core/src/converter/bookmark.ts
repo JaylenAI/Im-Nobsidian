@@ -1,6 +1,8 @@
+import { MARKER_BRAND_RE, unknownUrlMarker } from "../constants/markers.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { compactNotionId } from "../utils/id.js";
 import { mapOutsideCode } from "../utils/md-regions.js";
+import { DEGRADE_LINK_SOURCE, degradeLink } from "./degrade-link.js";
 
 /**
  * F-09 — 북마크를 볼트에 그 주소로 보인다.
@@ -55,4 +57,85 @@ function linkText(text: string): string {
     .trim()
     .replace(/%%+/g, "%")
     .replace(/[\\[\]`]/g, "\\$&");
+}
+
+/** 볼트 링크 이름의 머리 — {@link bookmarkLabel} 이 붙인다. */
+const LABEL_HEAD = "🔖 ";
+
+/**
+ * Markdown API 가 북마크 블록 자리에 보내는 주소 — `https://app.notion.com/p/<페이지>#<블록>`(하이픈 없이).
+ * 토글 안처럼 중첩된 북마크도 블록의 부모가 아니라 페이지를 싣는다(실측 2026-10-12).
+ */
+const PLACEHOLDER_URL_PREFIX = "https://app.notion.com/p/";
+
+/**
+ * 블록 변환기가 북마크를 내릴 때 페이지 자리에 넣어 두는 글자 — notion-to-md 의 블록 변환은 어느 페이지를
+ * 받는지 모르고, 페이지들을 동시에 받으므로 변환기에 페이지를 적어 둘 수도 없다. 변환을 부른 쪽이
+ * {@link fillBookmarkPage} 로 채운다.
+ */
+export const BOOKMARK_PAGE_SLOT = "page";
+
+/** 자리를 채우지 않은 북마크 마커 · 그 앞 링크 — 그룹 1 = 링크, 그룹 2 = 마커. */
+const SLOT_PAIR_RE = new RegExp(
+  `(${DEGRADE_LINK_SOURCE})(%%${MARKER_BRAND_RE}:unknown:id=${escapeRegExp(
+    encodeURIComponent(`${PLACEHOLDER_URL_PREFIX}${BOOKMARK_PAGE_SLOT}#`),
+  )}[0-9a-f]+&type=bookmark%%)`,
+  "g",
+);
+
+/** 받은 페이지로 북마크 자리를 채운다. 페이지를 모르면 마커를 빼고 링크만 둔다. */
+export function fillBookmarkPage(markdown: string, pageId: string | null): string {
+  const slot = encodeURIComponent(`${PLACEHOLDER_URL_PREFIX}${BOOKMARK_PAGE_SLOT}#`);
+  return markdown.replace(SLOT_PAIR_RE, (_m, link: string, marker: string) =>
+    pageId === null
+      ? link
+      : link +
+        marker.replace(
+          slot,
+          encodeURIComponent(`${PLACEHOLDER_URL_PREFIX}${compactNotionId(pageId)}#`),
+        ),
+  );
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/** 그 페이지의 북마크 블록 자리 주소 — Markdown API 가 보내는 것과 같은 글자. */
+export function bookmarkPlaceholderUrl(pageId: string, blockId: string): string {
+  return `${PLACEHOLDER_URL_PREFIX}${compactNotionId(pageId)}#${compactNotionId(blockId)}`;
+}
+
+/**
+ * 블록 API 로 받은 북마크의 볼트 모양 — Markdown API 로 받은 것(`enhanced-md-converter` 의 자리 태그 +
+ * `linkBookmarks`)과 같은 링크 · 마커 한 쌍이다. 예전 블록 폴백은 마커 없는 `[캡션](주소)` 를 내려,
+ * 그 노트를 push 하면 북마크가 문단 링크로 바뀌었다(C10).
+ */
+export function bookmarkVaultLink(pageId: string, blockId: string, target: BookmarkTarget): string {
+  const marker = unknownUrlMarker(bookmarkPlaceholderUrl(pageId, blockId), "bookmark");
+  return degradeLink(bookmarkLabel(target), target.url, marker);
+}
+
+/**
+ * 볼트 링크 한 쌍을 북마크로 되읽는다 — 마커로 Notion 의 블록을 가리킬 수 없는 블록 방식 push 전용.
+ * 블록을 읽지 못해 Notion 자리 주소를 가리키는 링크(`🔖 Bookmark`)면 원래 주소를 모른다 — null.
+ *
+ * @param label 링크 이름 — 대괄호 안, escape 그대로
+ * @param url 링크 주소 — {@link degradeLink} 가 괄호를 인코딩해 둔 것
+ * @param placeholderUrl 마커가 실은 자리 주소
+ */
+export function bookmarkOfVaultLink(
+  label: string,
+  url: string,
+  placeholderUrl: string,
+): BookmarkTarget | null {
+  if (url === placeholderUrl) return null;
+  const text = (label.startsWith(LABEL_HEAD) ? label.slice(LABEL_HEAD.length) : label).replace(
+    /\\([\\[\]`])/g,
+    "$1",
+  );
+  // degradeLink 가 링크 짝 경계 때문에 인코딩한 괄호를 푼다 — 그대로 보내면 Notion 의 북마크 주소가
+  // `a%28b%29` 로 바뀐다(실측 2026-10-12). 캡션 없는 북마크는 이름이 그 주소다.
+  const plainUrl = url.replace(/%28/g, "(").replace(/%29/g, ")");
+  return { url: plainUrl, caption: text === plainUrl ? "" : text };
 }

@@ -7,6 +7,7 @@
  */
 import { compactMarker } from "../constants/markers.js";
 import { compactNotionId } from "../utils/id.js";
+import { dateMentionText, userMentionText } from "./mention.js";
 
 /** caption 등 서식 없는 rich_text 의 최소 형태. */
 export type RichTextItem = { plain_text: string; href?: string | null };
@@ -19,8 +20,9 @@ export interface RichTextAnnotated extends RichTextItem {
   mention?: {
     type: string;
     page?: { id: string };
-    date?: { start: string; end?: string | null };
-    user?: { id: string; name?: string };
+    date?: { start: string; end?: string | null; time_zone?: string | null };
+    /** `type` 은 `person` · `bot`. */
+    user?: { id: string; name?: string; type?: string };
     database?: { id: string };
   };
 }
@@ -70,9 +72,11 @@ export function richTextToMarkdown(richText: RichTextAnnotated[] | undefined): s
 }
 
 /**
- * 멘션을 마크다운으로 환원한다. page·database 는 위키링크, date 는 날짜 문자열,
- * user 는 `@이름`. 그 외(link_preview·template_mention·custom_emoji 등)는 빈 문자열로
- * 버리면 본문이 소실되므로 Notion 이 채워주는 plain_text(예: URL, "@오늘")로 보존한다.
+ * 멘션을 마크다운으로 환원한다. page·database 는 위키링크, 사람 · 날짜는 Markdown API 로 받은 것과
+ * 같은 짝 마커(`mention.ts`) — push 가 멘션으로 되돌린다. 짝 마커로 싣지 못하는 사용자 · 날짜는 예전처럼
+ * `@이름` · 날짜 글로 둔다. 봇은 글로 둔다 — Markdown API 는 봇 멘션을 아예 내보내지 않는다(실측
+ * 2026-10-12). 그 외(link_preview·template_mention·custom_emoji 등)는 빈 문자열로 버리면 본문이
+ * 소실되므로 Notion 이 채워주는 plain_text(예: URL, "@오늘")로 보존한다.
  */
 export function formatMention(
   mention: NonNullable<RichTextAnnotated["mention"]>,
@@ -86,14 +90,43 @@ export function formatMention(
       return mention.page ? `[[notion:${compactNotionId(mention.page.id)}]]` : plainText;
     case "date": {
       if (!mention.date) return plainText;
+      const marked = dateMentionText(mention.date);
+      if (marked !== null) return marked;
       const start = mention.date.start;
       return mention.date.end ? `${start} → ${mention.date.end}` : start;
     }
-    case "user":
-      return mention.user?.name ? `@${mention.user.name}` : plainText || "@user";
+    case "user": {
+      const user = mention.user;
+      const marked =
+        user && user.type !== "bot" ? userMentionText(user.id, user.name ?? undefined) : null;
+      if (marked !== null) return marked;
+      return user?.name ? `@${user.name}` : plainText || "@user";
+    }
     case "database":
       return mention.database ? `[[notion:${compactNotionId(mention.database.id)}]]` : plainText;
     default:
       return plainText;
   }
+}
+
+/**
+ * 멘션 조각을 볼트 글({@link formatMention})을 담은 글 조각으로 바꾼다 — 블록 폴백(notion-to-md)이 받는
+ * 블록에 쓴다. notion-to-md 의 기본 렌더는 멘션을 보이는 글(`@이름` · `2026-09-26T09:00:00.000+09:00` ·
+ * 제목 링크)로만 내려, 그 노트를 push 하면 Notion 의 멘션이 글 · 링크가 됐다(A3). 서식은 그대로 둔다.
+ * 볼트 글이 보이는 글과 같은 멘션(봇 · 그 밖의 종류)은 건드리지 않는다.
+ */
+export function markMentions<T extends RichTextAnnotated>(richText: readonly T[]): T[] {
+  return richText.map((t) => {
+    if (t.type !== "mention" || !t.mention) return t;
+    const text = formatMention(t.mention, t.plain_text);
+    if (text === t.plain_text) return t;
+    return {
+      ...t,
+      type: "text",
+      text: { content: text, link: null },
+      mention: undefined,
+      plain_text: text,
+      href: null,
+    };
+  });
 }
