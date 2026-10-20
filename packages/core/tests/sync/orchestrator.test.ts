@@ -1331,7 +1331,7 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       ),
     ).rejects.toThrow(/자식까지 지워져 보내지 않음/);
     expect(notion.deleteBlock).not.toHaveBeenCalled();
-    expect(notion.appendChildren).not.toHaveBeenCalled();
+    expect(notion.appendBlockTree).not.toHaveBeenCalled();
     expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
   });
 
@@ -1353,7 +1353,7 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
       "# Leaf\n\n본문.\n",
     );
 
-    expect(notion.appendChildren).toHaveBeenCalledTimes(1);
+    expect(notion.appendBlockTree).toHaveBeenCalledTimes(1);
     expect(notion.deleteBlock).toHaveBeenCalledWith("para-1");
   });
 });

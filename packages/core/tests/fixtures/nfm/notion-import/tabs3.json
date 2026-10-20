@@ -1,0 +1,11 @@
+{
+  "markdown": "<tabs>\n\t<tab title=\"첫 탭\">\n\t\tA\n\t</tab>\n\t<tab title=\"둘째\">\n\t\tB\n\t\t- li\n\t</tab>\n</tabs>\n<tab title=\"홀로\">solo body\nsecond</tab>",
+  "notion": [
+    "tab {} ",
+    "  paragraph {} T\"A\"",
+    "  paragraph {} T\"B\"",
+    "    bulleted_list_item {} T\"li\"",
+    "paragraph {} T\"<tab title=\\\"홀로\\\">solo body\"",
+    "paragraph {} T\"second</tab>\""
+  ]
+}

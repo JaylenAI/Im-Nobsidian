@@ -1,0 +1,25 @@
+{
+  "markdown": "<callout icon=\"💡\">\n\t- item\n\t\t```js\n\t\tx\n\t\t```\n</callout>\n<callout>\n\tcolored {color=\"red\"}\n\tsecond\n</callout>\n<callout>\n\tfirst\n\t\tdeeper\n</callout>\n<callout>\n\t## head first\n</callout>",
+  "notion": [
+    "callout {\"icon\":{\"type\":\"emoji\",\"emoji\":\"💡\"}} ",
+    "  bulleted_list_item {} T\"item\"",
+    "    code {\"language\":\"javascript\"} T\"x\"",
+    "callout {} T\"colored\"",
+    "  paragraph {} T\"second\"",
+    "callout {} T\"first\"",
+    "callout {} ",
+    "  heading_2 {} T\"head first\""
+  ],
+  "ours": [
+    "callout {\"icon\":{\"type\":\"emoji\",\"emoji\":\"💡\"}} ",
+    "  bulleted_list_item {} T\"item\"",
+    "    code {\"language\":\"javascript\"} T\"x\"",
+    "callout {} T\"colored\"",
+    "  paragraph {} T\"second\"",
+    "callout {} T\"first\"",
+    "  paragraph {} T\"deeper\"",
+    "callout {} ",
+    "  heading_2 {} T\"head first\""
+  ],
+  "why": "Notion 은 콜아웃 첫 줄 아래 더 깊은 줄을 블록 트리에서 잃는다 — 블록 방식은 콜아웃의 자식으로 남긴다."
+}

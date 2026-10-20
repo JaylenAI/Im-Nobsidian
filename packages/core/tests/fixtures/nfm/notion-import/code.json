@@ -1,0 +1,28 @@
+{
+  "markdown": "```ts\nconst a = 1;\n\tindented();\n```\n- list\n\t```python\nprint(1)\n```\n```plain text\nx\n```\n````markdown\n```js\ny\n```\n````\n```\nno lang\n```\n$$\na^2\n\\\\b\n$$\n- li\n\t$$\n\tx\n\t$$",
+  "notion": [
+    "code {\"language\":\"typescript\"} T\"const a = 1;\\n\\tindented();\"",
+    "bulleted_list_item {} T\"list\"",
+    "  code {\"language\":\"python\"} T\"print(1)\"",
+    "code {\"language\":\"plain text\"} T\"x\"",
+    "code {\"language\":\"javascript\"} ",
+    "paragraph {} T\"y\"",
+    "code {\"language\":\"javascript\"} ",
+    "code {\"language\":\"javascript\"} T\"no lang\"",
+    "equation {\"expression\":\"a^2\\n\\\\\\\\b\"} ",
+    "bulleted_list_item {} T\"li\"",
+    "  equation {\"expression\":\"x\"} "
+  ],
+  "ours": [
+    "code {\"language\":\"typescript\"} T\"const a = 1;\\n\\tindented();\"",
+    "bulleted_list_item {} T\"list\"",
+    "  code {\"language\":\"python\"} T\"print(1)\"",
+    "code {\"language\":\"plain text\"} T\"x\"",
+    "code {\"language\":\"markdown\"} T\"```js\\ny\\n```\"",
+    "code {\"language\":\"plain text\"} T\"no lang\"",
+    "equation {\"expression\":\"a^2\\n\\\\\\\\b\"} ",
+    "bulleted_list_item {} T\"li\"",
+    "  equation {\"expression\":\"x\"} "
+  ],
+  "why": "Notion 은 백틱 넷 이상 펜스를 셋으로 끊어 읽는다 — 블록 방식은 여는 펜스 길이 이상의 줄에서만 닫는다."
+}

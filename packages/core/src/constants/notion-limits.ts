@@ -10,3 +10,18 @@ export const RICH_TEXT_CONTENT_MAX = 2000;
 
 /** rich text 배열 하나의 최대 원소 수. */
 export const RICH_TEXT_ARRAY_MAX = 100;
+
+/** 블록 자식 배열 하나(append 요청 · 블록의 `children`)의 최대 원소 수. */
+export const BLOCK_CHILDREN_MAX = 100;
+
+/**
+ * append 요청 하나가 품는 자식의 깊이 — 요청에 담은 블록 아래로 두 단계까지(칼럼 묶음의 칼럼은 세지
+ * 않는다). SDK 요청 타입도 그만큼만 자식을 받는다.
+ */
+export const BLOCK_NESTING_MAX = 2;
+
+/** 요청 하나에 담는 블록(자식 · 표의 행 포함)의 최대 수. */
+export const REQUEST_BLOCKS_MAX = 1000;
+
+/** 요청 본문의 최대 크기(바이트). */
+export const REQUEST_BYTES_MAX = 500_000;

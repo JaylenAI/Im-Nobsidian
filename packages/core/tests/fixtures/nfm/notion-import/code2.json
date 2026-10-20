@@ -1,0 +1,12 @@
+{
+  "markdown": "<callout icon=\"💡\">\n\t```js\n\tindented content\n\t\tmore\n\t```\n</callout>\n<callout icon=\"💡\">\n\t```js\ncol0 content\n\t\ttabbed\n\t```\n</callout>\n- li\n\t```python\n\tx = 1\n\t```\n`a<br>b` and `<span>` and `x\\*y`",
+  "notion": [
+    "callout {\"icon\":{\"type\":\"emoji\",\"emoji\":\"💡\"}} ",
+    "  code {\"language\":\"javascript\"} T\"indented content\\n\\tmore\"",
+    "callout {\"icon\":{\"type\":\"emoji\",\"emoji\":\"💡\"}} ",
+    "  code {\"language\":\"javascript\"} T\"col0 content\\n\\t\\ttabbed\"",
+    "bulleted_list_item {} T\"li\"",
+    "  code {\"language\":\"python\"} T\"x = 1\"",
+    "paragraph {} T\"a\\nb\"/c + T\" and \" + T\"<span>\"/c + T\" and \" + T\"x\\\\*y\"/c"
+  ]
+}

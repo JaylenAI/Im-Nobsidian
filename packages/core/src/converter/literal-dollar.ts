@@ -72,8 +72,11 @@ function escapeLine(line: string): string {
   return out;
 }
 
-/** `open` 의 `$` 가 여는 인라인 수식의 닫는 `$` 자리. 수식이 아니면 null. */
-function mathCloseAt(line: string, open: number): number | null {
+/**
+ * `open` 의 `$` 가 여는 인라인 수식의 닫는 `$` 자리. 수식이 아니면 null — 블록 방식 push 의 NFM 글 변환
+ * (`nfm-inline`)도 같은 규칙으로 수식을 가른다.
+ */
+export function mathCloseAt(line: string, open: number): number | null {
   const before = line[open - 1];
   const after = line[open + 1];
   if (before !== undefined && WORD_CHAR_RE.test(before)) return null;

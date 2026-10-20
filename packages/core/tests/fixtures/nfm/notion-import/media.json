@@ -1,0 +1,13 @@
+{
+  "markdown": "![alt text](https://www.gstatic.com/webp/gallery/1.png)\n![](https://www.gstatic.com/webp/gallery/2.png)\n<video src=\"https://www.w3schools.com/html/mov_bbb.mp4\">cap v</video>\n<audio src=\"https://www.w3schools.com/html/horse.mp3\"></audio>\n<pdf src=\"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf\"></pdf>\n<file src=\"https://example.com/data.csv\">데이터</file>\n<embed src=\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"></embed>\n<embed src=\"https://example.com/page\">cap e</embed>",
+  "notion": [
+    "image {\"external\":\"https://www.gstatic.com/webp/gallery/1.png\",\"type\":\"external\"}  cap:T\"alt text\"",
+    "image {\"external\":\"https://www.gstatic.com/webp/gallery/2.png\",\"type\":\"external\"} ",
+    "video {\"external\":\"https://www.w3schools.com/html/mov_bbb.mp4\",\"type\":\"external\"}  cap:T\"cap v\"",
+    "audio {\"external\":\"https://www.w3schools.com/html/horse.mp3\",\"type\":\"external\"} ",
+    "pdf {\"external\":\"https://www.w3.org/WAI/ER/tests/xhtml/testfiles/resources/pdf/dummy.pdf\",\"type\":\"external\"} ",
+    "file {\"external\":\"https://example.com/data.csv\",\"type\":\"external\"}  cap:T\"데이터\"",
+    "embed {\"url\":\"https://www.youtube.com/watch?v=dQw4w9WgXcQ\"} ",
+    "embed {\"url\":\"https://example.com/page\"}  cap:T\"cap e\""
+  ]
+}

@@ -1,0 +1,8 @@
+{
+  "markdown": "<span color=\"red\">a **b** c</span> and [a\\]b](https://example.com/x_(y)) and $`a$b|c`$ and $5 and $10 and snake_case_name and *a*b and **a**b\n<span color=\"yellow_bg\">bg</span> <span color=\"red\"><span underline=\"true\">nested</span></span> [**bold link**](https://example.com) ~~**sb**~~\na\\\\b and \\<span\\> and \\`x\\` and \\~\\~no\\~\\~ and \\{x\\} and \\| and \\_u\\_ and _a_b_",
+  "notion": [
+    "paragraph {} T\"a \"/red + T\"b\"/b/red + T\" c\"/red + T\" and \" + T\"a]b\"→https://example.com/x_(y) + T\" and \" + EQ[a$b|c] + T\" and $5 and $10 and snake_case_name and \" + T\"a\"/i + T\"b and \" + T\"a\"/b + T\"b\"",
+    "paragraph {} T\"bg\"/yellow_background + T\" \" + T\"nested\"/u/red + T\"</span> \" + T\"bold link\"→https://example.com//b + T\" \" + T\"sb\"/bs",
+    "paragraph {} T\"a\\\\b and <span> and `x` and ~~no~~ and {x} and | and _u_ and \" + T\"a_b\"/i"
+  ]
+}

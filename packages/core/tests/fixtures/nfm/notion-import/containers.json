@@ -1,0 +1,21 @@
+{
+  "markdown": "<details>\n<summary>same indent</summary>\nbody1\n- li\n</details>\n<details color=\"blue_bg\">\n<summary>tab indent</summary>\n\tbody2\n\t\tdeeper\n</details>\n<details>\n<summary></summary>\n</details>\n<callout icon=\"💡\" color=\"gray_bg\">\n\ttext line\n\tchild 1\n\t- child li\n</callout>\n<callout icon=\"/icons/drafts_lightgray.svg\">\n\t- first is list\n</callout>\n<callout>\n</callout>\n<callout icon=\"⚠️\">\n\t**bold** text\n\t<details>\n\t<summary>in callout</summary>\n\tinner body\n\t</details>\n</callout>",
+  "notion": [
+    "toggle {} T\"same indent\"",
+    "  paragraph {} T\"body1\"",
+    "  bulleted_list_item {} T\"li\"",
+    "toggle {\"color\":\"blue_background\"} T\"tab indent\"",
+    "  paragraph {} T\"body2\"",
+    "    paragraph {} T\"deeper\"",
+    "toggle {} ",
+    "callout {\"color\":\"gray_background\",\"icon\":{\"type\":\"emoji\",\"emoji\":\"💡\"}} T\"text line\"",
+    "  paragraph {} T\"child 1\"",
+    "  bulleted_list_item {} T\"child li\"",
+    "callout {\"icon\":{\"type\":\"icon\",\"icon\":{\"name\":\"drafts\",\"color\":\"lightgray\"}}} ",
+    "  bulleted_list_item {} T\"first is list\"",
+    "callout {} ",
+    "callout {\"icon\":{\"type\":\"emoji\",\"emoji\":\"⚠️\"}} T\"bold\"/b + T\" text\"",
+    "  toggle {} T\"in callout\"",
+    "    paragraph {} T\"inner body\""
+  ]
+}

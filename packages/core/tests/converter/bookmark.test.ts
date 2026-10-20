@@ -5,7 +5,7 @@
  * 가시 링크에 주소와 캡션을 넣고, 왕복은 뒤따르는 마커가 맡는다 — push 는 받은 태그를 그대로 돌려보낸다.
  */
 import { describe, it, expect } from "vitest";
-import { bookmarkBlockId, bookmarkBlockIds } from "../../src/converter/bookmark.js";
+import { bookmarkBlockId, bookmarkBlockIds, vaultBookmarks } from "../../src/converter/bookmark.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -126,5 +126,29 @@ describe("다시 보내기 — 받은 태그 그대로", () => {
   it("예전에 받은 「🔖 Bookmark」 링크도 그대로 태그로 돌아간다", () => {
     const old = `[🔖 Bookmark](${tagUrl(A)})${marker(A)}`;
     expect(push(old)).toBe(tag(A));
+  });
+});
+
+describe("vaultBookmarks — 블록 방식 push 가 북마크를 새로 만들 주소", () => {
+  it("받은 노트의 북마크 링크를 자리 주소 → 주소 · 캡션으로 — 괄호도 원래대로", () => {
+    const note = pull(
+      `${tag(A)}\n\n- 항목\n\t${tag(B)}`,
+      targets([
+        [A, "https://example.com/a(b)c", "캡션 [안]"],
+        [B, "https://example.net/"],
+      ]),
+    );
+    expect(vaultBookmarks(note)).toEqual(
+      new Map([
+        [tagUrl(A), { url: "https://example.com/a(b)c", caption: "캡션 [안]" }],
+        [tagUrl(B), { url: "https://example.net/", caption: "" }],
+      ]),
+    );
+  });
+
+  it("주소를 모르는 「🔖 Bookmark」 링크와 코드 속 링크는 뺀다", () => {
+    const old = `[🔖 Bookmark](${tagUrl(A)})${marker(A)}`;
+    const fenced = "```\n[🔖 x](https://example.com/x)" + marker(B) + "\n```";
+    expect(vaultBookmarks(`${old}\n\n${fenced}`).size).toBe(0);
   });
 });

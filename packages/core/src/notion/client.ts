@@ -29,6 +29,7 @@ import type { AbortLike } from "../utils/pool.js";
 import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
+import { shapeAppendRequests, type BlockRequest } from "./block-tree.js";
 import { richTextChunks } from "./rich-text.js";
 
 /**
@@ -940,6 +941,50 @@ export class NotionClient {
       if (after && blocks.length > 0) after = blocks[blocks.length - 1]!.id;
     }
     return created;
+  }
+
+  /**
+   * 깊이 제한 없는 블록 트리를 맨 끝에 덧붙인다 — 요청 한도(깊이 두 단계 · 100 개 · 1000 블록)를 넘는
+   * 자식은 부모를 만든 뒤 그 아래에 마저 붙인다({@link shapeAppendRequests}). 더 깊은 블록의 id 는
+   * 응답에 없어 부모의 자식 목록을 읽어 찾는다.
+   *
+   * 중간에 실패하면 그때까지 만든 블록은 남는다 — 호출측이 실패로 알린다.
+   */
+  async appendBlockTree(parentId: string, blocks: readonly BlockRequest[]): Promise<void> {
+    const listed = new Map<string, string[]>();
+    const childIds = async (id: string): Promise<string[]> => {
+      let ids = listed.get(id);
+      if (ids === undefined) {
+        ids = (await this.fetchAllChildren(id)).map((b) => b.id);
+        listed.set(id, ids);
+      }
+      return ids;
+    };
+    const queue: Array<{ parentId: string; blocks: readonly BlockRequest[] }> = [
+      { parentId, blocks },
+    ];
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      for (const request of shapeAppendRequests(next.blocks)) {
+        const created = await this.appendChildren(
+          next.parentId,
+          request.map((shaped) => shaped.body),
+        );
+        for (const [k, shaped] of request.entries()) {
+          for (const pending of shaped.pending) {
+            let id = created[k]!;
+            for (const step of pending.path) {
+              const ids = await childIds(id);
+              if (ids[step] === undefined) {
+                throw new Error(`방금 만든 블록의 자식을 찾지 못함 (${id} 의 ${step + 1}번째)`);
+              }
+              id = ids[step]!;
+            }
+            queue.push({ parentId: id, blocks: pending.children });
+          }
+        }
+      }
+    }
   }
 
   async deleteBlock(blockId: string): Promise<void> {

@@ -1,0 +1,22 @@
+{
+  "markdown": "- $$ x $$\n$$ unmatched\ntext $$x$$ inline\n> $$\n> y\n> $$\n$$\nnever closed",
+  "notion": [
+    "bulleted_list_item {} EQ[] + T\" x \" + EQ[]",
+    "paragraph {} EQ[] + T\" unmatched\"",
+    "paragraph {} T\"text \" + EQ[x] + T\" inline\"",
+    "quote {} EQ[]",
+    "quote {} T\"y\"",
+    "quote {} EQ[]",
+    "equation {\"expression\":\"never closed\"} "
+  ],
+  "ours": [
+    "bulleted_list_item {} T\"$$ x $$\"",
+    "paragraph {} T\"$$ unmatched\"",
+    "paragraph {} T\"text \" + EQ[x] + T\" inline\"",
+    "quote {} T\"$$\"",
+    "quote {} T\"y\"",
+    "quote {} T\"$$\"",
+    "equation {\"expression\":\"never closed\"} "
+  ],
+  "why": "블록 API 는 빈 인라인 수식을 거부한다(실측) — Notion 이 빈 수식으로 읽는 $$ 는 글자로 둔다."
+}

@@ -1,0 +1,40 @@
+{
+  "markdown": "<empty-block/>\n<table_of_contents/>\n<table_of_contents color=\"gray\"/>\n<columns>\n\t<column>\n\t\tleft\n\t</column>\n\t<column>\n\t\tright\n\t\t- r li\n\t</column>\n</columns>\n<table header-row=\"true\">\n\t<tr>\n\t\t<td>H1</td>\n\t\t<td>H2</td>\n\t</tr>\n\t<tr>\n\t\t<td>**a** \\| b</td>\n\t\t<td></td>\n\t</tr>\n</table>\n<table header-column=\"true\">\n<tr><td>x</td><td>y</td></tr>\n</table>\n<mention-page url=\"https://www.notion.so/00000002000040008000000000000000\"/> and <mention-date start=\"2026-09-26\"/> and <mention-date start=\"2026-09-26\" startTime=\"09:00\" timeZone=\"Asia/Seoul\"/> and <mention-date start=\"2026-09-26\" end=\"2026-09-27\"/>\n\tindented under nothing",
+  "notion": [
+    "paragraph {} ",
+    "table_of_contents {} ",
+    "table_of_contents {\"color\":\"gray\"} ",
+    "column_list {} ",
+    "  column {} ",
+    "    paragraph {} T\"left\"",
+    "  column {} ",
+    "    paragraph {} T\"right\"",
+    "    bulleted_list_item {} T\"r li\"",
+    "table {\"has_column_header\":true,\"table_width\":2} ",
+    "  row T\"H1\" | T\"H2\"",
+    "  row T\"a\"/b + T\" | b\" | ",
+    "table {\"has_row_header\":true,\"table_width\":2} ",
+    "  row T\"x\" | T\"y\"",
+    "paragraph {} @page + T\" and \" + @date{\"start\":\"2026-09-26\",\"end\":null} + T\" and \" + @date{\"start\":\"2026-09-26T09:00:00.000+09:00\",\"end\":null} + T\" and \" + @date{\"start\":\"2026-09-26\",\"end\":\"2026-09-27\"}",
+    "  paragraph {} T\"indented under nothing\""
+  ],
+  "ours": [
+    "paragraph {} ",
+    "table_of_contents {} ",
+    "table_of_contents {\"color\":\"gray\"} ",
+    "column_list {} ",
+    "  column {} ",
+    "    paragraph {} T\"left\"",
+    "  column {} ",
+    "    paragraph {} T\"right\"",
+    "    bulleted_list_item {} T\"r li\"",
+    "table {\"has_column_header\":true,\"table_width\":2} ",
+    "  row T\"H1\" | T\"H2\"",
+    "  row T\"a\"/b + T\" | b\" | ",
+    "table {\"has_row_header\":true,\"table_width\":2} ",
+    "  row T\"x\" | T\"y\"",
+    "paragraph {} @page + T\" and \" + @date{\"start\":\"2026-09-26\",\"end\":null} + T\" and \" + @date{\"start\":\"2026-09-26T09:00:00\",\"end\":null} + T\" and \" + @date{\"start\":\"2026-09-26\",\"end\":\"2026-09-27\"}",
+    "  paragraph {} T\"indented under nothing\""
+  ],
+  "why": "시간 있는 날짜 멘션은 시간대(time_zone)와 함께 보낸다 — Notion 의 가져오기는 오프셋을 붙인 시각으로 바꾼다."
+}

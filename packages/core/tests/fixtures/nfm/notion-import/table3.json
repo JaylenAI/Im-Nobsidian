@@ -1,0 +1,14 @@
+{
+  "markdown": "<table fit-page-width=\"true\" header-row=\"true\">\n<colgroup>\n<col width=\"120\">\n<col color=\"blue_bg\">\n</colgroup>\n<tr color=\"red_bg\">\n<td color=\"blue\">a</td>\n<td>b</td>\n</tr>\n<tr>\n<td>only one</td>\n</tr>\n</table>",
+  "notion": [
+    "table {\"has_column_header\":true,\"table_width\":1} ",
+    "  row T\"a\"",
+    "  row T\"only one\""
+  ],
+  "ours": [
+    "table {\"has_column_header\":true,\"table_width\":2} ",
+    "  row T\"a\" | T\"b\"",
+    "  row T\"only one\" | "
+  ],
+  "why": "Notion 은 행마다 칸 수가 다르면 표 너비를 1 로 만들어 칸을 잃는다 — 가장 긴 행으로 맞추고 빈 칸을 채운다."
+}
