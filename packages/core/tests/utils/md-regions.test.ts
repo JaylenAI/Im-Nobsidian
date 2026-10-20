@@ -248,6 +248,14 @@ describe("nextCodeSpan", () => {
     expect(nextCodeSpan("a `b` c `d`", 3)).toEqual([4, 9]);
   });
 
+  it("escape 한 백틱은 코드를 열지 않는다 — 백슬래시가 짝수면 백틱이 연다", () => {
+    const content = "글자 \\` 와 `코드` 끝";
+    expect(nextCodeSpan(content, 0)).toEqual([8, 12]);
+    expect(nextCodeSpan("\\\\`코드`", 0)).toEqual([2, 6]);
+    // 코드 안의 백슬래시는 글자다 — 닫는 백틱은 escape 되지 않는다(CommonMark).
+    expect(nextCodeSpan("`a\\` b`", 0)).toEqual([0, 4]);
+  });
+
   it("짝 없는 백틱은 건너뛰고 다음 짝을 찾는다", () => {
     expect(nextCodeSpan("홑 `` 하나 `코드`", 0)).toEqual([8, 12]);
   });

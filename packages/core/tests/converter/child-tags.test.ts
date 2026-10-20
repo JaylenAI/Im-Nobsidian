@@ -132,6 +132,12 @@ describe("restoreChildTags — 자식을 가리키던 줄에 태그를 되돌린
     expect(r.markdown).toBe(`${md.trimEnd()}\n\n${PAGE_TAG}\n`);
   });
 
+  it("코드 속 ```bash 줄은 코드를 닫지 않는다 — 그 아래 줄도 코드다", () => {
+    const md = "```md\n```bash\n[[S03 자식 페이지]]\n```\n```\n";
+    const r = restoreChildTags(md, [PAGE]);
+    expect(r.markdown).toBe(`${md.trimEnd()}\n\n${PAGE_TAG}\n`);
+  });
+
   it("한 자식은 먼저 나온 한 줄에만 — 두 번째 줄은 그대로 둔다", () => {
     const md = `[[S03 자식 페이지]]\n\n[[S03 자식 페이지]]\n`;
     expect(restoreChildTags(md, [PAGE]).markdown).toBe(`${PAGE_TAG}\n\n[[S03 자식 페이지]]\n`);
@@ -214,6 +220,11 @@ describe("childLayout — 자식이 놓인 자리(차례 · 감싼 컨테이너)
       `<callout>\n\t${first}\n</callout>\n글\n<callout>\n\t${second}\n</callout>`;
     expect(childLayout(callouts(DB_TAG, "둘째"))).toEqual([`${DB_ID}@callout#1`]);
     expect(childLayout(callouts("첫째", DB_TAG))).toEqual([`${DB_ID}@callout#2`]);
+  });
+
+  it("짧은 펜스 줄로 닫지 않는다 — 네 백틱 코드 속 세 백틱 줄 아래 태그도 코드다", () => {
+    const md = ["````", "```", DB_TAG, "````", PAGE_TAG].join("\n");
+    expect(childLayout(md)).toEqual([`${PAGE_ID}@+0`]);
   });
 
   it("코드 블록 속 태그 글자는 자식이 아니다", () => {

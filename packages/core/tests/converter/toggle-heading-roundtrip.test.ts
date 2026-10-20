@@ -63,6 +63,31 @@ describe("토글 헤딩 왕복", () => {
     expect(restoreToggleHeadings(pulled)).toContain('## 빈 토글 헤딩 {toggle="true"}');
   });
 
+  it("색 있는 토글 헤딩 — 색은 블록 색 마커로, 자식은 접혀 왕복한다", () => {
+    const raw = [
+      `### 색 토글 {toggle="true" color="red_bg"}`,
+      `${T}안쪽`,
+      `- 항목`,
+      `${T}## 목록 속 {toggle="true" color="gray"}`,
+      `${T}${T}깊은 자식`,
+      `## 다음`,
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(raw);
+
+    expect(pulled).not.toContain("toggle=");
+    expect(pulled).not.toContain("color=");
+    expect(pulled).toContain(
+      `### 색 토글 %%im-nobsidian:block-color:red_bg%% ${TOGGLE_HEADING_START}\n안쪽\n${TOGGLE_HEADING_END}`,
+    );
+    expect(obsidianToNotionEnhanced(pulled).replace(/\n\n/g, "\n")).toBe(raw);
+  });
+
+  it("색만 있는 제목은 토글 헤딩이 아니다", () => {
+    expect(convertToggleHeadings('## 색 {color="blue"}\n\t자식')).toBe(
+      '## 색 {color="blue"}\n\t자식',
+    );
+  });
+
   it("중첩 토글 헤딩이 깊이를 유지한 채 왕복한다", () => {
     const raw = [
       `## 바깥 {toggle="true"}`,

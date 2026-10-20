@@ -257,6 +257,17 @@ describe("blocksToNfm — 블록", () => {
     ).toBe('### t {toggle="true" color="purple"}');
   });
 
+  it("제목 4 는 #### — 접으면 자식을 들여 쓴다(2026-10-20 export 실측)", () => {
+    expect(nfm(block("heading_4", { rich_text: [text("h4")], color: "default" }))).toBe("#### h4");
+    expect(
+      nfm(
+        block("heading_4", { rich_text: [text("h4")], is_toggleable: true, color: "default" }, [
+          para(text("under h4")),
+        ]),
+      ),
+    ).toBe('#### h4 {toggle="true"}\n\tunder h4');
+  });
+
   it("글이 없는 콜아웃은 아이콘 · 색 줄과 자식만, 아이콘 모양별 표기", () => {
     const callout = (icon: unknown, color = "default") =>
       nfm(block("callout", { rich_text: [], icon, color }, [para(text("자"))]));
