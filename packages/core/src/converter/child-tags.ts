@@ -1,6 +1,7 @@
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { compactNotionId } from "../utils/id.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
+import { codeLineMask } from "../utils/md-regions.js";
 import { decodeMarkerTarget } from "./marker-url.js";
 
 /**
@@ -95,7 +96,6 @@ export interface ChildTagRestore {
   readonly appended: readonly ChildTag[];
 }
 
-const FENCE_RE = /^[ \t>]*(`{3,}|~{3,})/;
 const LINE_RE = /^([ \t]*(?:>[ \t]*)*)(.*?)[ \t\r]*$/;
 /** push 가 해석된 `[[자식]]` 을 바꿔 놓는 멘션 — `<mention-page url="…"/>`. */
 const MENTION_LINE_RE =
@@ -225,19 +225,13 @@ function indentLevel(line: string): number {
   return Math.ceil(width / 4);
 }
 
-/** 코드 블록 밖의 줄과 그 번호 — 펜스 줄 자체도 뺀다. */
+/**
+ * 코드 블록 밖의 줄과 그 번호 — 펜스 줄 자체도 뺀다. 펜스 판정은 push 와 같은 {@link codeLineMask} 다 —
+ * 예전에는 따로 판정해 코드 속 ```` ```bash ```` 줄에서 블록을 닫았다(C12).
+ */
 function* linesOutsideFences(lines: readonly string[]): Generator<[number, string]> {
-  let fence: string | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i]!;
-    const fenceRun = FENCE_RE.exec(line)?.[1];
-    if (fenceRun) {
-      if (fence === null) fence = fenceRun;
-      else if (fenceRun[0] === fence[0] && fenceRun.length >= fence.length) fence = null;
-      continue;
-    }
-    if (fence === null) yield [i, line];
-  }
+  const inCode = codeLineMask(lines.join("\n"));
+  for (let i = 0; i < lines.length; i++) if (!inCode[i]) yield [i, lines[i]!];
 }
 
 /** 아직 자리를 못 찾은 자식들. 한 자식은 한 줄에만, 먼저 나온 줄에 놓는다. */

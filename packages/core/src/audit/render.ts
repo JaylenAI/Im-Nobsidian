@@ -71,7 +71,6 @@ export interface RenderFinding {
  */
 export const SEPARATOR_BODY = "[ \\t:|-]*-{3,}";
 const SEPARATOR_RE = new RegExp(`^[\\t ]*>?[\\t ]*\\|${SEPARATOR_BODY}[ \\t:|-]*\\|`);
-const FENCE_RE = /^[\t ]*(?:>[\t ]*)*```/;
 
 /** 4칸 넘게 들여쓴 코드펜스 — 목록 밖이면 들여쓰기 코드블록이 되어 펜스가 글자로 보인다. */
 const DEEP_FENCE_RE = /^ {4,}```/;
@@ -234,9 +233,10 @@ export function lintRenderedMarkdown(markdown: string): RenderFinding[] {
     }
   }
 
-  // ⑧ 코드펜스 홀수 — 짝이 안 맞으면 그 아래 문서 전체가 코드블록으로 먹힌다.
-  if (lines.filter((l) => FENCE_RE.test(l)).length % 2 !== 0) {
-    findings.push({ code: "⑧", label: "코드펜스 홀수(문서 잔여분 삼킴)", line: 0 });
+  // ⑧ 닫히지 않은 코드펜스 — 그 아래 문서 전체가 코드블록으로 먹힌다. 펜스 모양 줄의 개수로 세면 코드 속
+  // ```bash 줄 때문에 짝이 맞아 보여도 새는 문서 · 짝이 안 맞아 보여도 정상인 문서를 틀리게 봤다(C11).
+  if (blocks.some((b) => b.end >= lines.length)) {
+    findings.push({ code: "⑧", label: "닫히지 않은 코드펜스(문서 잔여분 삼킴)", line: 0 });
   }
 
   // ⑱ 목록 안 코드가 목록 밖으로 샌다 — 코드 줄이 항목 내용보다 얕으면 Obsidian 은 그 줄에서

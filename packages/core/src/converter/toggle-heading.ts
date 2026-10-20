@@ -25,7 +25,11 @@
  * dedent/indent 는 {@link ./container-indent.js} SSOT 를 그대로 쓴다 — 토글/콜아웃/칼럼과
  * 같은 기준이어야 코드펜스·테이블의 비대칭 들여쓰기에서 왕복이 수렴한다.
  */
-import { TOGGLE_HEADING_END, TOGGLE_HEADING_START } from "../constants/markers.js";
+import {
+  blockColorMarker,
+  TOGGLE_HEADING_END,
+  TOGGLE_HEADING_START,
+} from "../constants/markers.js";
 import {
   containerBlockEnds,
   dedentContainerBody,
@@ -41,8 +45,12 @@ import {
  * `<callout>` → 문단(`\t`) → 토글 헤딩(`\t\t`) 이 실제로 나온다. 열 0 에만 앵커하면
  * 그런 헤딩은 조용히 무동작이 되어 `{toggle="true"}` 가 본문에 노출되고, 자식이
  * 접히지 않은 채 흩어진다(실측: 2건·1노트).
+ *
+ * 색은 같은 중괄호에 `{toggle="true" color="gray_bg"}` 로 온다(export 실측). 색을 모르면 속성 글이
+ * 제목에 남고 자식이 접히지 않았다(실볼트 3노트 · 3곳) — 그룹 4 = 색.
  */
-const NFM_TOGGLE_HEADING_RE = /^([\t ]*)(#{1,6})[ \t]+(.*?)[ \t]*\{toggle="true"\}[ \t]*$/;
+const NFM_TOGGLE_HEADING_RE =
+  /^([\t ]*)(#{1,6})[ \t]+(.*?)[ \t]*\{toggle="true"(?:[ \t]+color="([a-z_]+)")?\}[ \t]*$/;
 
 /**
  * 볼트 산출물의 토글 헤딩(시작 마커가 붙은 제목).
@@ -55,6 +63,12 @@ const NFM_TOGGLE_HEADING_RE = /^([\t ]*)(#{1,6})[ \t]+(.*?)[ \t]*\{toggle="true"
 const MARKED_TOGGLE_HEADING_RE = new RegExp(
   `^([\\t ]*)(#{1,6})[ \\t]+(.*?)[ \\t]*${TOGGLE_HEADING_START}[ \\t]*$`,
 );
+
+/**
+ * 제목 끝의 블록 색 — push 는 색 마커를 토글 헤딩보다 먼저 `{color="…"}` 로 되돌린다
+ * (`restoreBlockColorMarkers`). 토글 속성과 한 중괄호로 합쳐야 Notion 이 둘 다 읽는다.
+ */
+const TRAILING_COLOR_RE = /[ \t]*\{color="([a-z_]+)"\}$/;
 
 /** 일반 제목 — push 폴백에서 본문 경계를 정할 때 쓴다. */
 const ANY_HEADING_RE = /^(#{1,6})[ \t]/;
@@ -88,7 +102,15 @@ function convertLevel(lines: readonly string[]): string[] {
       continue;
     }
 
-    const [, indent, hashes, title] = match as unknown as [string, string, string, string];
+    const [, indent, hashes, plain, color] = match as unknown as [
+      string,
+      string,
+      string,
+      string,
+      string | undefined,
+    ];
+    // 색은 일반 제목과 같은 색 마커로 둔다 — 토글 마커는 줄 끝에 있어야 push 가 찾는다.
+    const title = color === undefined ? plain : `${plain} ${blockColorMarker(color)}`;
 
     // 자식 구간: 제목보다 **한 단계 더** 들여쓴 줄이 이어지는 동안(사이 빈 줄 허용).
     // 제목과 같은 깊이의 비어있지 않은 줄이 나오면 형제이므로 거기서 끊는다 — NFM 이
@@ -153,7 +175,10 @@ function restoreLevel(lines: readonly string[]): string[] {
       continue;
     }
 
-    const [, indent, hashes, title] = match as unknown as [string, string, string, string];
+    const [, indent, hashes, marked] = match as unknown as [string, string, string, string];
+    const color = TRAILING_COLOR_RE.exec(marked.trim())?.[1];
+    const title = marked.trim().replace(TRAILING_COLOR_RE, "");
+    const attrs = color === undefined ? '{toggle="true"}' : `{toggle="true" color="${color}"}`;
     const bound = findBodyEnd(lines, i + 1, hashes.length);
     // 본문은 제목과 같은 깊이에 있다(pull 대칭). 열 0 으로 내려 재귀시킨 뒤 제목보다 한
     // 단계 깊게 되입히면 NFM 의 "제목 + 한 단계 들여쓴 자식" 구조가 그대로 복원된다.
@@ -161,7 +186,7 @@ function restoreLevel(lines: readonly string[]): string[] {
     const inner = restoreLevel(raw.split("\n"));
     const body = inner.join("\n").replace(/^\n+/, "").replace(/\n+$/, "");
 
-    out.push(indent + headingLine(hashes, title, '{toggle="true"}'));
+    out.push(indent + headingLine(hashes, title, attrs));
     if (body.trim() !== "") out.push(...indentContainerBody(body, `${indent}\t`).split("\n"));
     i = bound.consumed;
   }
