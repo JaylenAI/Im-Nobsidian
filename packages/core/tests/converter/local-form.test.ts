@@ -93,6 +93,12 @@ describe("pull — Notion 에 같은 모양으로 올라가는 자리는 로컬 
       "> [!hint]- 팁\n> 첫 문단\n>\n> 둘째 문단\n",
       "> [!tip] 팁\n> 첫 문단\n> 둘째 문단",
     ],
+    [
+      "목록 자식의 두 칸 들여쓰기 — 임베드 · 문단",
+      "- 항목\n\t![](https://example.com/a.png)\n\t자식 문단\n- 다음",
+      "- 항목\n  ![](https://example.com/a.png)\n  자식 문단\n- 다음",
+      "- 항목\n    ![](https://example.com/a.png)\n    자식 문단\n- 다음",
+    ],
   ];
 
   it.each(FORMS)("%s", (_name, exported, local, canonical) => {
@@ -280,6 +286,19 @@ describe("sentForm — push 가 Notion 에 보낼 꼴", () => {
       sent(`${columns}\n\n문단 하나\n문단 둘`),
     );
     expect(sent("문단 하나\n\n문단 둘")).toBe(sent("문단 하나\n문단 둘"));
+  });
+
+  it("들여쓰기는 깊이만 본다 — Notion 은 앞 블록보다 깊은지만 읽는다", () => {
+    expect(sent("- 항목\n  자식")).toBe(sent("- 항목\n    자식"));
+    expect(sent("- 항목\n  자식")).toBe(sent("- 항목\n\t자식"));
+    expect(sent("- 항목\n  자식\n    손자")).toBe(sent("- 항목\n\t자식\n\t\t손자"));
+    // 깊이가 다르면 다른 블록 트리다 — 손자와 형제.
+    expect(sent("- 항목\n  자식\n    손자")).not.toBe(sent("- 항목\n  자식\n  손자"));
+    expect(sent("- 항목\n  자식")).not.toBe(sent("- 항목\n자식"));
+  });
+
+  it("코드 줄의 들여쓰기는 그대로 견준다 — 코드의 글이다", () => {
+    expect(sent("```\n  x\n```")).not.toBe(sent("```\n    x\n```"));
   });
 
   it("코드 · 수식 속 빈 줄은 글이다", () => {

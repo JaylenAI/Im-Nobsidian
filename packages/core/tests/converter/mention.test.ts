@@ -81,6 +81,13 @@ describe("pull — 멘션 태그를 짝 마커로", () => {
     const names = new Map([[USER, "이름%%\n둘째 줄"]]);
     expect(mentionsToMarkers(USER_TAG, names)).toBe(USER_MARKER("@이름% 둘째 줄"));
   });
+
+  it("`%` 가 셋 이상 이어져도 `%%` 를 남기지 않는다", () => {
+    for (const name of ["a%%%b", "a%%%%b", "%%%"]) {
+      const marker = mentionsToMarkers(USER_TAG, new Map([[USER, name]]));
+      expect(marker).toBe(USER_MARKER(`@${name.replace(/%+/g, "%")}`));
+    }
+  });
 });
 
 describe("mentionUserIds — 이름을 물을 사용자", () => {

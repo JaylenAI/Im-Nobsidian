@@ -285,3 +285,21 @@ describe("왕복 — 받은 노트에서도 임베드가 컨테이너 안에 있
     expect(roundTrip(once)).toBe(once);
   });
 });
+
+describe("동영상 이미지 링크 — Notion 의 동영상 블록으로", () => {
+  // 2026-10-20 실측: `<video src>` 는 동영상 블록, 이미지 링크 그대로는 그림 블록이 된다.
+  const Y = "https://www.youtube.com/watch?v=abc";
+
+  it("대체 글은 캡션으로 — 인라인 코드가 들어도 · 목록 자식이어도", () => {
+    expect(sent(`![\`데모\` 영상](${Y})`)).toBe(`<video src="${Y}">\`데모\` 영상</video>`);
+    expect(sent(`- 항목\n  ![영상](${Y})`)).toBe(`- 항목\n  <video src="${Y}">영상</video>`);
+  });
+
+  it("대체 글이 없으면 캡션도 없다", () => {
+    expect(sent(`![](${Y})`)).toBe(`<video src="${Y}"></video>`);
+  });
+
+  it("마커 글을 Notion 에 올리지 않는다", () => {
+    expect(sent(`![영상](${Y})`)).not.toContain("im-nobsidian");
+  });
+});

@@ -105,7 +105,9 @@ function renderBlock(
     }
     case "heading_1":
     case "heading_2":
-    case "heading_3": {
+    case "heading_3":
+    case "heading_4": {
+      // 제목 4 — 블록 API 가 내준다. export 는 `####` 로 쓴다(2026-10-20 실측).
       const level = Number(block.type.slice(-1));
       const attrs = [
         body.is_toggleable === true ? 'toggle="true"' : "",

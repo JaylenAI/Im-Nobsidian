@@ -61,7 +61,8 @@ function userIdOf(attrs: NfmAttrs): string | undefined {
 
 /** 보이는 글은 마커 사이 한 줄에 산다 — 줄바꿈과 마커 구분자(`%%`)를 들이지 않는다. */
 function safeLabel(text: string): string {
-  return text.replace(/\s*\n\s*/g, " ").replace(/%%/g, "%");
+  // `%%+` 로 한 번에 — `/%%/g` 는 `%%%` 를 `%` + `%` = `%%` 로 남겼다(C7).
+  return text.replace(/\s*\n\s*/g, " ").replace(/%%+/g, "%");
 }
 
 // ─── 날짜 ───

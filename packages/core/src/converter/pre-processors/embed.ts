@@ -6,7 +6,12 @@ import {
   MARKER_TOKEN_RE,
   spacedMarker,
 } from "../../constants/markers.js";
-import { mapOutsideCode, mapOutsideCodeFences } from "../../utils/md-regions.js";
+import {
+  inlineCodeRanges,
+  mapOutsideCode,
+  mapOutsideCodeFences,
+  mapOutsideInlineCode,
+} from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
 import { pushContainerKind } from "../container-head.js";
 
@@ -55,8 +60,17 @@ export class EmbedResolver implements Processor {
     // 임베드로 그리지 않는다. 예전에는 여기서도 자리표시자로 바꿨다. 펜스 안이면 Notion 의 코드에
     // `> 📎 …` 가 보였고, 인라인 코드는 둘로 쪼개져 그 사이에 자리표시자 줄이 들어갔다 — 다시
     // 받으면 노트의 그 줄이 쪼개진 채로 돌아왔다.
-    const content = mapOutsideCode(source, (segment, base) =>
-      this.resolveMarkdownImages(this.resolveEmbeds(segment, base, source, isPush, images), images),
+    //
+    // 이미지 링크는 인라인 코드 «안에서 시작하는» 것만 건너뛴다 — 대체 글에 인라인 코드가 든 링크
+    // (``![`데모` 영상](https://youtu.be/…)``)를 코드 조각마다 나누면 링크가 쪼개져 동영상 마커로
+    // 바뀌지 않았다(C8).
+    const content = mapOutsideCodeFences(source, (block, blockBase) =>
+      this.resolveMarkdownImages(
+        mapOutsideInlineCode(block, (segment, inner) =>
+          this.resolveEmbeds(segment, blockBase + inner, source, isPush, images),
+        ),
+        images,
+      ),
     );
 
     return {
@@ -111,16 +125,24 @@ export class EmbedResolver implements Processor {
   }
 
   /** `![설명](url)` — 동영상 URL 은 임베드 마커로, 외부 이미지는 목록에 모은다. */
-  private resolveMarkdownImages(segment: string, images: ImageReference[]): string {
-    return segment.replace(MARKDOWN_IMAGE_REGEX, (_match, alt: string, url: string) => {
-      if (isVideoUrl(url)) {
-        return `${spacedMarker(`embed:type=video&url=${encodeURIComponent(url)}`)}\n[${alt || "Video"}](${url})`;
-      }
-      if (isExternalUrl(url)) {
-        images.push({ url, isExternal: true });
-      }
-      return `![${alt}](${url})`;
-    });
+  private resolveMarkdownImages(block: string, images: ImageReference[]): string {
+    const code = inlineCodeRanges(block);
+    return block.replace(
+      MARKDOWN_IMAGE_REGEX,
+      (match, alt: string, url: string, offset: number) => {
+        if (code.some(([start, end]) => offset >= start && offset < end)) return match;
+        if (isVideoUrl(url)) {
+          // 볼트의 동영상 표기로 — push 가 Notion 의 동영상 블록(`<video>`)으로 보낸다(`restoreMediaTags`).
+          // 예전에는 보존 마커를 붙였는데 읽는 곳이 없어 Notion 에 마커 글이 문단으로 올라갔다. 이미지
+          // 링크 그대로 보내면 Notion 은 그림 블록을 만든다(2026-10-20 실측).
+          return `[🎬 ${alt || "video"}](${url})`;
+        }
+        if (isExternalUrl(url)) {
+          images.push({ url, isExternal: true });
+        }
+        return `![${alt}](${url})`;
+      },
+    );
   }
 }
 

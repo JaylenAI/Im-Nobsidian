@@ -316,6 +316,11 @@ export function mapOutsideInlineCode(content: string, fn: SegmentMapper): string
 export function nextCodeSpan(content: string, from: number): readonly [number, number] | null {
   let i = content.indexOf("`", from);
   while (i !== -1) {
+    // `\`` 는 글자 백틱이다 — 코드를 열지 않는다(CommonMark). 닫는 쪽은 코드 안이라 escape 가 없다.
+    if (escapedAt(content, i)) {
+      i = content.indexOf("`", i + 1);
+      continue;
+    }
     let run = 1;
     while (content[i + run] === "`") run += 1;
     const close = content.indexOf("`".repeat(run), i + run);
@@ -325,6 +330,13 @@ export function nextCodeSpan(content: string, from: number): readonly [number, n
     i = content.indexOf("`", i + run);
   }
   return null;
+}
+
+/** `i` 의 글자가 백슬래시로 escape 됐는가 — 앞의 백슬래시가 홀수 개. */
+function escapedAt(content: string, i: number): boolean {
+  let n = 0;
+  while (i - n - 1 >= 0 && content[i - n - 1] === "\\") n += 1;
+  return n % 2 === 1;
 }
 
 /**

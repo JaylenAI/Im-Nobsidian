@@ -180,13 +180,30 @@ describe("EmbedResolver", () => {
     expect(result.content).toBe("Embed: ![[other-note.md]]");
   });
 
-  it("YouTube URL → video preserve marker", () => {
+  it("YouTube URL → 볼트의 동영상 표기 — push 가 <video> 로 보낸다", () => {
     const result = processor.process({
       content: "![video](https://youtube.com/watch?v=abc123)",
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toContain("im-nobsidian:embed:type=video");
+    // 예전 보존 마커는 읽는 곳이 없어 Notion 에 마커 글이 올라갔다.
+    expect(result.content).toBe("[🎬 video](https://youtube.com/watch?v=abc123)");
+    expect(result.metadata.images ?? []).toEqual([]);
+  });
+
+  it("대체 글에 인라인 코드가 든 동영상 링크도 동영상으로 — 코드 안에서 시작한 링크는 그대로", () => {
+    const run = (content: string) =>
+      processor.process({ content, metadata: {}, context: pushContext });
+
+    const url = "https://youtu.be/abc123";
+    expect(run(`![\`데모\` 영상](${url})`).content).toBe(`[🎬 \`데모\` 영상](${url})`);
+    const inCode = `\`![video](${url})\``;
+    expect(run(inCode).content).toBe(inCode);
+    const external = run("![`a` 그림](https://example.com/a.png)");
+    expect(external.metadata.images).toEqual([
+      { url: "https://example.com/a.png", isExternal: true },
+    ]);
+    expect(run("`![x](https://example.com/b.png)`").metadata.images ?? []).toEqual([]);
   });
 });
 
