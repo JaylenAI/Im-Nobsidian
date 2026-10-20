@@ -1,7 +1,8 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
-import type { BlockConverter } from "../converter/block-converter.js";
+import { vaultBookmarks } from "../converter/bookmark.js";
 import { obsidianToNotionEnhanced } from "../converter/enhanced-md-converter.js";
+import { nfmToBlocks, type NfmBlock } from "../converter/nfm-to-blocks.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { NotionClient } from "../notion/client.js";
 import type { PropertyMapper } from "../notion/property-mapper.js";
@@ -89,7 +90,6 @@ export class PagePusher {
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
     private readonly pipeline: ConversionPipeline,
-    private readonly blockConverter: BlockConverter,
     private readonly imageHandler: ImageHandler,
     private readonly rowSchemas: RowSchemaCache,
     private readonly observation: RunObservation,
@@ -940,7 +940,7 @@ export class PagePusher {
       return { page, markdown };
     }
 
-    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
+    const { blocks } = blockModeBody(markdownContent);
     const page = await this.notionClient.createPage({
       parentId,
       parentType,
@@ -948,7 +948,7 @@ export class PagePusher {
       properties,
     });
     if (blocks.length > 0) {
-      await this.notionClient.appendChildren(page.id, blocks);
+      await this.notionClient.appendBlockTree(page.id, blocks);
     }
     return { page, markdown: null };
   }
@@ -1080,9 +1080,9 @@ export class PagePusher {
       );
     }
 
-    const blocks = this.blockConverter.markdownToNotionBlocks(markdownContent);
+    const { nfm, blocks } = blockModeBody(markdownContent);
     if (blocks.length > 0) {
-      await this.notionClient.appendChildren(pageId, blocks);
+      await this.notionClient.appendBlockTree(pageId, blocks);
     }
     const deleteSema = new Sema(this.config.advanced.concurrency);
     await Promise.all(
@@ -1095,7 +1095,7 @@ export class PagePusher {
         }
       }),
     );
-    return { fingerprint: null, kept: [], sent: markdownContent };
+    return { fingerprint: null, kept: [], sent: nfm };
   }
 
   /**
@@ -1130,4 +1130,13 @@ export class PagePusher {
       throw error;
     }
   }
+}
+
+/**
+ * 블록 방식 push 의 본문 — Markdown API 경로와 같은 NFM 을 Notion 이 그 NFM 을 읽는 규칙대로 블록으로
+ * 만든다(ADR-035). 북마크는 볼트의 링크 쌍에서 주소를 받아 새로 만든다.
+ */
+function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock[] } {
+  const nfm = obsidianToNotionEnhanced(markdownContent);
+  return { nfm, blocks: nfmToBlocks(nfm, { bookmarks: vaultBookmarks(markdownContent) }) };
 }

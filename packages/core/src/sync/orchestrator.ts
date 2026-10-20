@@ -240,7 +240,6 @@ export class SyncOrchestrator {
       notionClient,
       vaultFs,
       pipeline,
-      blockConverter,
       imageHandler,
       this.rowSchemas,
       this.observation,

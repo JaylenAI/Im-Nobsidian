@@ -139,3 +139,26 @@ export function bookmarkOfVaultLink(
   const plainUrl = url.replace(/%28/g, "(").replace(/%29/g, ")");
   return { url: plainUrl, caption: text === plainUrl ? "" : text };
 }
+
+/** 볼트의 북마크 링크 쌍 — 그룹 1 = 이름, 2 = 주소, 3 = 마커가 실은 자리 주소(인코딩). */
+const VAULT_BOOKMARK_PAIR_RE = new RegExp(
+  `\\[((?:\\\\.|[^\\\\\\]])*)\\]\\(([^)]*)\\)%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=bookmark%%`,
+  "g",
+);
+
+/**
+ * 볼트 노트의 북마크 — 자리 주소(`<unknown url>` 에 실리는 글자) → 원래 주소 · 캡션. 블록 방식 push 는 Notion
+ * 의 블록을 남길 수 없어 이 주소로 북마크를 새로 만든다(`nfmToBlocks`). 원래 주소를 모르는 링크는 뺀다.
+ */
+export function vaultBookmarks(markdown: string): Map<string, BookmarkTarget> {
+  const bookmarks = new Map<string, BookmarkTarget>();
+  mapOutsideCode(markdown, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) {
+      const placeholder = decodeURIComponent(m[3]!);
+      const target = bookmarkOfVaultLink(m[1]!, m[2]!, placeholder);
+      if (target !== null) bookmarks.set(placeholder, target);
+    }
+    return segment;
+  });
+  return bookmarks;
+}
