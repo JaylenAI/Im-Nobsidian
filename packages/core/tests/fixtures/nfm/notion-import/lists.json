@@ -1,0 +1,20 @@
+{
+  "markdown": "* star\n+ plus\n1) paren\n3. three\n4. four\n1. one\n- [ ] todo\n- [x] done\n- item {color=\"green\"}\n1. num {color=\"red_bg\"}\n- [ ] td {color=\"blue\"}\n> quote {color=\"gray\"}\n---\n***\n___",
+  "notion": [
+    "bulleted_list_item {} T\"star\"",
+    "bulleted_list_item {} T\"plus\"",
+    "paragraph {} T\"1) paren\"",
+    "numbered_list_item {} T\"three\"",
+    "numbered_list_item {} T\"four\"",
+    "numbered_list_item {} T\"one\"",
+    "to_do {} T\"todo\"",
+    "to_do {\"checked\":true} T\"done\"",
+    "bulleted_list_item {\"color\":\"green\"} T\"item\"",
+    "numbered_list_item {\"color\":\"red_background\"} T\"num\"",
+    "to_do {\"color\":\"blue\"} T\"td\"",
+    "quote {\"color\":\"gray\"} T\"quote\"",
+    "divider {} ",
+    "divider {} ",
+    "divider {} "
+  ]
+}
