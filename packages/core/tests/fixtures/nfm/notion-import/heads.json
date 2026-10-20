@@ -1,0 +1,17 @@
+{
+  "markdown": "# h1\n## h2\n### h3\n#### h4\n##### h5\n# colored {color=\"blue\"}\n## tog {toggle=\"true\"}\n\tinside\n### tog color {toggle=\"true\" color=\"red_bg\"}\n\tinside2\nSetext\n===",
+  "notion": [
+    "heading_1 {} T\"h1\"",
+    "heading_2 {} T\"h2\"",
+    "heading_3 {} T\"h3\"",
+    "heading_4 {} T\"h4\"",
+    "heading_4 {} T\"h5\"",
+    "heading_1 {\"color\":\"blue\"} T\"colored\"",
+    "heading_2 {\"is_toggleable\":true} T\"tog\"",
+    "  paragraph {} T\"inside\"",
+    "heading_3 {\"color\":\"red_background\",\"is_toggleable\":true} T\"tog color\"",
+    "  paragraph {} T\"inside2\"",
+    "paragraph {} T\"Setext\"",
+    "paragraph {} T\"===\""
+  ]
+}
