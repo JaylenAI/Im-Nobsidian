@@ -8,6 +8,7 @@ import {
 import { blocksToNfm, type NfmSourceBlock } from "../converter/blocks-to-nfm.js";
 import { bookmarkBlockIds } from "../converter/bookmark.js";
 import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js";
+import { replaceMissingUnknownTags, unknownTagKeys } from "../converter/unknown-tag-fallback.js";
 import { mentionUserIds } from "../converter/mention.js";
 import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
 import { isNotionValidationError, type NotionClient } from "../notion/client.js";
@@ -24,6 +25,11 @@ export interface ReplacePageBodyOptions {
    * 다시 보낼 때만 부른다.
    */
   readonly databaseIdsOfBase?: (basePath: string) => Promise<readonly string[]>;
+  /**
+   * 볼트 노트의 자리 블록이 Notion 에 없을 때 보낼 모양(`unknownTagFallbacks`). 주면 거절된 본문의
+   * 자리 태그 가운데 지금 본문에 없는 블록의 것을 이 모양으로 바꿔 다시 보낸다(N6).
+   */
+  readonly unknownTagFallbacks?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -31,7 +37,8 @@ export interface ReplacePageBodyOptions {
  *
  * 먼저 그대로 보낸다. 자식이 없는 페이지(대부분)는 여기서 끝나 추가 요청이 없다. 자식이
  * 있으면 Notion 이 삭제를 거절하므로(`validation_error`, 적용 안 됨) 지금 본문에서 자식
- * 태그를 받아 push 본문의 자식 자리에 되돌려 놓고 한 번 더 보낸다.
+ * 태그를 받아 push 본문의 자식 자리에 되돌려 놓고 한 번 더 보낸다. 지금 본문에 없는 블록을
+ * 가리키는 자리 태그도 Notion 이 거절한다 — 그 태그는 볼트에 보이는 모양으로 바꾼다(N6).
  *
  * 예전에는 자식이 있는 페이지의 본문 push 를 통째로 건너뛰고도 동기화됨으로 기록해,
  * 폴더 노트에서 고친 내용이 Notion 에 영영 가지 않았다.
@@ -50,6 +57,14 @@ export async function replacePageBody(
     if (!isNotionValidationError(error)) throw error;
 
     const remote = (await client.getPageMarkdown(pageId)).markdown;
+    const sendable = options.unknownTagFallbacks
+      ? replaceMissingUnknownTags(markdown, unknownTagKeys(remote), options.unknownTagFallbacks)
+      : { nfm: markdown, replaced: 0 };
+    if (sendable.replaced > 0) {
+      getLogger().warn(
+        `[Im-Nobsidian] Notion 페이지에 없는 블록을 가리키는 자리 ${sendable.replaced}개를 볼트의 링크 · 북마크로 보냄 (${pageId})`,
+      );
+    }
     const children = extractChildTags(remote);
     const baseIds = new Map<string, readonly string[]>();
     if (options.databaseIdsOfBase && children.some((c) => c.kind === "database")) {
@@ -57,10 +72,10 @@ export async function replacePageBody(
         baseIds.set(path, await options.databaseIdsOfBase(path));
       }
     }
-    const restored = restoreChildTags(markdown, children, {
+    const restored = restoreChildTags(sendable.nfm, children, {
       databaseIdsOfBase: (path) => baseIds.get(path) ?? [],
     });
-    // 되돌릴 자식이 없으면 거절 사유가 자식이 아니다 — Notion 이 말한 그대로 올린다.
+    // 되돌릴 자식도 바꿀 자리 태그도 없으면 거절 사유가 그것이 아니다 — Notion 이 말한 그대로 올린다.
     if (restored.markdown === markdown) throw error;
 
     let written: PageMarkdownResponse;

@@ -2,6 +2,10 @@ import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoint
 import { Sema } from "async-sema";
 import { vaultBookmarks } from "../converter/bookmark.js";
 import { obsidianToNotionEnhanced } from "../converter/enhanced-md-converter.js";
+import {
+  replaceMissingUnknownTags,
+  unknownTagFallbacks,
+} from "../converter/unknown-tag-fallback.js";
 import { nfmToBlocks, type NfmBlock } from "../converter/nfm-to-blocks.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { NotionClient } from "../notion/client.js";
@@ -929,7 +933,12 @@ export class PagePusher {
     properties?: Record<string, unknown>,
   ): Promise<CreatedPage> {
     if (this.config.conversion.preferMarkdownApi !== false) {
-      const markdown = obsidianToNotionEnhanced(markdownContent);
+      // 새 페이지에는 아무 블록도 없다 — 자리 태그는 모두 Notion 이 거절한다(N6).
+      const markdown = replaceMissingUnknownTags(
+        obsidianToNotionEnhanced(markdownContent),
+        new Set(),
+        unknownTagFallbacks(markdownContent),
+      ).nfm;
       const page = await this.notionClient.createPageWithMarkdown({
         parentId,
         parentType,
@@ -1062,6 +1071,7 @@ export class PagePusher {
       );
       const written = await replacePageBody(this.notionClient, pageId, markdown, {
         databaseIdsOfBase: (basePath) => this.databaseIdsOfBase(basePath),
+        unknownTagFallbacks: unknownTagFallbacks(markdownContent),
       });
       // 응답의 본문은 다시 받은 본문과 같다 — 잘렸으면 온전한 본문을 다시 받는다.
       const fingerprint =
