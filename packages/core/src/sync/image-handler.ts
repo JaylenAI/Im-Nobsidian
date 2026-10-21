@@ -1108,7 +1108,12 @@ export class ImageHandler {
    * 없으면 블록을 한 번 조회한다. 끝내 모르면 null — 던지지 않는다(블록은 이미 제자리에 있다).
    */
   private async storedFileIdOf(block: { id: string; type?: string }): Promise<string | null> {
-    const url = fileUrlOfBlock(block) ?? (await this.notionClient?.getFileBlockUrl(block.id));
+    const url =
+      fileUrlOfBlock(block) ??
+      (await this.notionClient?.getFileBlockUrl(block.id).catch((error: unknown) => {
+        getLogger().warn(`[Im-Nobsidian] 올린 파일 블록 조회 실패(${block.id}): ${error}`);
+        return null;
+      }));
     return url ? notionFileIdOf(url) : null;
   }
 
@@ -1311,7 +1316,10 @@ export class ImageHandler {
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
-        if (!realUrl) continue;
+        if (!realUrl) {
+          getLogger().warn(`[Im-Nobsidian] 파일 Block URL 조회 실패: ${fileName}`);
+          continue;
+        }
 
         const caption = savedNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
@@ -1359,7 +1367,10 @@ export class ImageHandler {
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
-        if (!realUrl) continue;
+        if (!realUrl) {
+          getLogger().warn(`[Im-Nobsidian] 파일 Block URL 조회 실패: ${fileName}`);
+          continue;
+        }
 
         const caption = savedNameOf(match[2] ?? "", fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);

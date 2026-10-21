@@ -782,14 +782,19 @@ export class NotionClient {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
 
+  /**
+   * 파일 블록의 지금 받을 수 있는 주소. 블록이 없거나 볼 수 없으면 null 이다.
+   * 그 밖의 실패(일시 오류 등)는 던진다 — 예전에는 모두 null 로 삼켜 이유가 남지 않았다.
+   */
   async getFileBlockUrl(blockId: string): Promise<string | null> {
     try {
       const block = await this.withRateLimit(() =>
         this.client.blocks.retrieve({ block_id: blockId }),
       );
       return fileUrlOfBlock(block as { type?: string });
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) return null;
+      throw error;
     }
   }
 
