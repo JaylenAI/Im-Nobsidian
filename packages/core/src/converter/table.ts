@@ -415,8 +415,3 @@ export function pipeTablesToNfmTables(content: string): string {
   }
   return out.join("\n");
 }
-
-/** 표 마커를 걷는다 — 블록 방식 push(martian)는 표 속성을 싣지 못한다. */
-export function stripTableMarkers(content: string): string {
-  return content.replace(TABLE_MARKER_RE, "");
-}

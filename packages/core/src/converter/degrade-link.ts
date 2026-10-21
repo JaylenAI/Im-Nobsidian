@@ -1,7 +1,7 @@
 /**
  * 마크다운 표현이 없는 블록(북마크 · 임베드 · 자리 태그로만 오는 블록)의 볼트 모양 — 보이는 링크와
- * 뒤따르는 보존 마커 한 쌍. Markdown API 로 받은 본문(`enhanced-md-converter`)과 블록 API 폴백
- * (`block-converter`)이 같은 모양을 쓴다 — 어느 길로 받았든 push 가 같은 블록으로 되돌린다.
+ * 뒤따르는 보존 마커 한 쌍. Markdown API 로 받은 본문(`enhanced-md-converter`)이 쓴다 — 블록 API 폴백도
+ * NFM 으로 바꿔 같은 변환을 지나므로(ADR-034) 어느 길로 받았든 push 가 같은 블록으로 되돌린다.
  */
 import { embedMarker } from "../constants/markers.js";
 
