@@ -62,6 +62,7 @@ import { resolveNotionLinks } from "./notion-link-pass.js";
 import { notesWithResolvableWikilinks } from "./push-link-pass.js";
 import { PullPlanner } from "./pull-planner.js";
 import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
+import { rerenderTargets } from "./rerender-targets.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
@@ -730,7 +731,20 @@ export class SyncOrchestrator {
     const restoreIds: ReadonlySet<string> = new Set(
       missingLocal.flatMap((r) => (r.notionPageId === null ? [] : [r.notionPageId])),
     );
-    const workItems = restoreChanges.length > 0 ? [...filtered, ...restoreChanges] : filtered;
+    // `--rerender` — 바뀌지 않은 받아 둔 노트도 지금 변환기로 다시 그린다(B14). 쓸지는 받는 쪽이
+    // 내용으로 정한다 — 같으면 쓰지 않고, 볼트에서 고친 노트는 덮지 않는다. dry-run 은 이것을 받지 않고
+    // 아래에서 끝난다 — 다시 그려 봐야 바뀌는지 안다.
+    const rerenderChanges = options?.rerender
+      ? rerenderTargets(this.stateDb, {
+          localChangedPaths: localPlan
+            ? new Set(localPlan.scan.changes.map((change) => change.path))
+            : null,
+          queued: new Set([...queuedIds, ...restoreIds]),
+          adopting,
+          paths: options.paths,
+        })
+      : [];
+    const workItems = [...filtered, ...restoreChanges, ...rerenderChanges];
 
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
     // 예전에는 페이지 변경이 없으면 dry-run 도 아래 DB 경로로 가 행을 실제로 썼다(N-01).
@@ -835,14 +849,16 @@ export class SyncOrchestrator {
       };
     };
 
-    // 단일 변경을 적용하고 진행률 표시용 경로를 돌려준다. 실패는 throw 로 호출자에 위임.
-    const applyChange = async (change: RemoteChange): Promise<string | undefined> => {
+    // 단일 변경을 적용하고 진행률 표시용 경로와 쓸 것이 없었는지를 돌려준다. 실패는 throw 로 호출자에 위임.
+    const applyChange = async (
+      change: RemoteChange,
+    ): Promise<{ readonly path?: string; readonly unchanged: boolean }> => {
       switch (change.type) {
         case "created": {
           const path = await this.puller.pullCreate(change.pageId);
           writtenPaths.push(path);
           counts.created++;
-          return path;
+          return { path, unchanged: false };
         }
         case "modified": {
           const outcome = await this.puller.pullUpdate(change);
@@ -855,16 +871,19 @@ export class SyncOrchestrator {
           }
           // unchanged(받을 것이 없음 — I5) · skipped(local-first 가 로컬을 지킴)는 받은 것이 아니다.
           // 세지 않고, sync 의 이어지는 push 에서도 빼지 않는다(F-h).
-          return outcome.path;
+          return {
+            path: outcome.path,
+            unchanged: outcome.action === "unchanged" || outcome.action === "skipped",
+          };
         }
         case "deleted": {
           const outcome = await this.puller.pullDelete(change);
           if (outcome.action === "deleted") counts.deleted++;
           else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
-          return outcome.path;
+          return { path: outcome.path, unchanged: false };
         }
         default:
-          return undefined;
+          return { unchanged: true };
       }
     };
 
@@ -875,21 +894,25 @@ export class SyncOrchestrator {
       async (change) => {
         if (options?.signal?.aborted) return;
         try {
-          const resultPath = await withDeadline(
+          const outcome = await withDeadline(
             () => applyChange(change),
             this.config.advanced.itemTimeoutMs,
             `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
           );
           applied.add(change);
           const record = this.stateDb.getByNotionId(change.pageId);
-          const displayPath = resultPath ?? record?.obsidianPath ?? change.pageId;
+          const displayPath = outcome.path ?? record?.obsidianPath ?? change.pageId;
           const op =
             change.type === "created"
               ? ("create" as const)
               : change.type === "deleted"
                 ? ("delete" as const)
                 : ("update" as const);
-          options?.onProgress?.(++pullCompleted, pullTotal, { path: displayPath, operation: op });
+          options?.onProgress?.(++pullCompleted, pullTotal, {
+            path: displayPath,
+            operation: op,
+            ...(outcome.unchanged ? { unchanged: true } : {}),
+          });
         } catch {
           retryQueue.push(change);
         }

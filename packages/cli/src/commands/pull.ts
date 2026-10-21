@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import {
   ConfigManager,
   StateDB,
@@ -31,6 +31,13 @@ export const pullCommand = new Command("pull")
     "--force",
     "증분 감지를 건너뛰고 전체 스캔 (search 인덱싱 지연으로 누락된 신규 페이지·DB 복구)",
   )
+  // 다시 그려 봐야 바뀌는지 안다 — 미리 보기로는 보일 것이 없다(B14).
+  .addOption(
+    new Option(
+      "--rerender",
+      "Notion 에서 바뀌지 않은 받아 둔 노트도 지금 변환기로 다시 그림 (볼트에서 고친 노트는 그대로)",
+    ).conflicts("dryRun"),
+  )
   .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
     const json = options.json === true;
@@ -55,9 +62,12 @@ export const pullCommand = new Command("pull")
         dryRun: options.dryRun,
         paths: options.path,
         force: options.force,
+        rerender: options.rerender,
         onProgress: json
           ? undefined
           : (current, total, item) => {
+              // 받아 봤지만 바뀌지 않은 노트 — 다시 그리기는 받아 둔 노트를 모두 받아 본다(B14).
+              if (item.unchanged) return;
               const icon = operationIcon(item.operation);
               const label = operationLabel(item.operation);
               const prog = progress(current, total);

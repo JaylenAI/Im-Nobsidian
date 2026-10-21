@@ -101,6 +101,12 @@ export interface ProgressItem {
   readonly operation: "create" | "update" | "delete" | "move";
   /** 받기(pull) · 올리기(push) 중 어느 쪽 항목인가 — `sync` 만 채운다. 둘을 한 번에 돌려 가를 수 없다. */
   readonly direction?: "pull" | "push";
+  /**
+   * 받아 봤지만 볼트에 쓰지 않았다(pull) — 바뀐 것이 없거나 로컬을 지켰다. 진행 수에는 들지만 화면이 바뀐
+   * 노트로 적지 않는다. 다시 그리기(B14)는
+   * 받아 둔 노트를 모두 받아 보므로, 적으면 바뀌지 않은 노트마다 「updated」 줄이 찍혔다.
+   */
+  readonly unchanged?: boolean;
 }
 
 export type ProgressCallback = (current: number, total: number, item: ProgressItem) => void;
@@ -124,7 +130,13 @@ export interface PushOptions extends BaseSyncOptions {
   readonly excludePaths?: string[];
 }
 
-export type PullOptions = BaseSyncOptions;
+export interface PullOptions extends BaseSyncOptions {
+  /**
+   * Notion 에서 바뀌지 않은 받아 둔 노트도 지금 변환기로 다시 그린다(B14, `sync/rerender-targets.ts`).
+   * 볼트에서 고친 노트는 건드리지 않는다. dry-run 에서는 쓰지 않는다 — 다시 그려 봐야 바뀌는지 안다.
+   */
+  readonly rerender?: boolean;
+}
 
 export type SyncOptions = BaseSyncOptions;
 

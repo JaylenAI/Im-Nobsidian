@@ -2,6 +2,7 @@ import { codeLineMask, indentedCodeLineMask } from "../utils/md-regions.js";
 import { alignLines } from "../utils/line-diff.js";
 import { alignNoteLines } from "./comments.js";
 import { continuesListParagraph } from "./lazy-continuation.js";
+import { bookmarkLinks } from "./bookmark.js";
 
 /**
  * 받은 글에서 Notion 에 같은 모양으로 올라가는 자리를 로컬 노트의 표기로 되돌린다(F-06 · S-30).
@@ -17,7 +18,8 @@ import { continuesListParagraph } from "./lazy-continuation.js";
  * {@link TRIAL_LIMIT} 까지, 긴 노트는 {@link TRIAL_LINE_LIMIT} 이 정한 만큼이다 — 넘으면 남은 자리는 받은
  * 글 그대로다.
  *
- * 보낼 꼴이 같아도 Obsidian 이 Notion 과 다르게 읽는 줄이 다르면 받은 글을 쓴다({@link misreadLines}).
+ * 보낼 꼴이 같아도 Notion 이 정하는 북마크 링크({@link bookmarkLinks})나 Obsidian 이 Notion 과 다르게 읽는 줄이
+ * 다르면 받은 글을 쓴다({@link misreadLines}).
  * 빈 줄은 Notion 이 버려 보낼 꼴이 같은데, Obsidian 에서는 그 빈 줄이 블록을 가른다. 옛 pull 이 그렇게 써 둔
  * 노트가 받을 때마다 로컬 글로 남아 계속 다르게 보였다.
  *
@@ -28,7 +30,7 @@ export function restoreLocalForm(
   local: string,
   sentForm: (note: string) => string,
 ): string {
-  const sent = (note: string) => `${sentForm(note)}\n${misreadLines(note)}`;
+  const sent = (note: string) => `${sentForm(note)}\n${misreadLines(note)}\n${bookmarkLinks(note)}`;
   // 받은 글은 LF 다 — CRLF 노트도 받으면 LF 로 쓰인다.
   const note = pulled.includes("\r") ? local : local.replace(/\r\n/g, "\n");
   if (note === pulled) return pulled;
