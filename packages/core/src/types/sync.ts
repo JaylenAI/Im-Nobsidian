@@ -114,6 +114,12 @@ export interface BaseSyncOptions {
   readonly signal?: AbortSignal;
 }
 
+/** 원격까지 보는 상태 확인(`status`)의 옵션. */
+export interface StatusOptions {
+  /** 취소하면 원격을 훑다 멈추고 {@link OperationAbortedError} 를 던진다 — 반쯤 본 상태를 돌려주지 않는다. */
+  readonly signal?: AbortSignal;
+}
+
 export interface PushOptions extends BaseSyncOptions {
   readonly excludePaths?: string[];
 }

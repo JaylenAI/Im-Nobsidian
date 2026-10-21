@@ -69,8 +69,19 @@ describe("증분 pull — 새 하위 트리 (S-08)", () => {
     // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
     vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([PAGES.get(OLD)!]);
+    // search 는 페이지 객체를 통째로 준다 — 부모 · 제목도.
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
-      recent.map((id) => ({ id, last_edited_time: EDITED })),
+      recent.map((id) => {
+        const page = PAGES.get(id)!;
+        return {
+          id,
+          last_edited_time: EDITED,
+          last_edited_by: null,
+          parentDatabaseId: null,
+          parent: page.parent,
+          title: client.extractTitle(page),
+        };
+      }),
     );
     // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
     vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);

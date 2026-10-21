@@ -1,6 +1,7 @@
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { noteNameFromPath } from "../utils/markdown-path.js";
 
 /**
  * 노트의 Notion 제목을 정하는 규칙 — 페이지와 DB 행이 같은 규칙을 쓴다.
@@ -110,9 +111,7 @@ export function titleMayChange(
 
 /** 경로의 파일 이름 — 확장자 `.md` 를 뗀다. */
 export function extractTitle(filePath: string): string {
-  const parts = filePath.split("/");
-  const filename = parts[parts.length - 1] ?? "";
-  return filename.replace(/\.md$/, "");
+  return noteNameFromPath(filePath);
 }
 
 /** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */

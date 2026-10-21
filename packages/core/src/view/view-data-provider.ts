@@ -6,6 +6,7 @@ import { getVisibleProperties } from "./filter-engine.js";
 import { DB_VIEWS_PATH } from "../constants/paths.js";
 import { selectDbRowFiles } from "../utils/db-row-path.js";
 import { splitFrontmatter } from "../utils/frontmatter.js";
+import { noteNameFromPath } from "../utils/markdown-path.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -127,7 +128,7 @@ function parseEntry(path: string, content: string): DBEntry | null {
   try {
     const fm = splitFrontmatter(content).data;
 
-    const title = coerceString(fm.title) ?? extractTitleFromPath(path);
+    const title = coerceString(fm.title) ?? noteNameFromPath(path);
     const icon = coerceString(fm.icon);
     const cover = coerceCover(fm.cover);
 
@@ -225,12 +226,6 @@ function normalizePropertyValue(value: unknown): PropertyValue {
   }
 
   return String(value);
-}
-
-function extractTitleFromPath(filePath: string): string {
-  const parts = filePath.split("/");
-  const filename = parts[parts.length - 1] ?? "";
-  return filename.replace(/\.md$/, "");
 }
 
 function collectPropertyNames(entries: DBEntry[]): string[] {

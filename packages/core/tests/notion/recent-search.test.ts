@@ -32,24 +32,28 @@ describe("바뀐 것 찾기 (ADR-027)", () => {
             last_edited_time: "2026-09-28T10:02:00.000Z",
             last_edited_by: { id: "u1" },
             parent: { type: "data_source_id", data_source_id: "ds-1", database_id: "db-1" },
+            properties: { 이름: { type: "title", title: [{ plain_text: "행" }] } },
           },
           {
             id: "row-2",
             last_edited_time: "2026-09-28T10:01:00.000Z",
             last_edited_by: { id: "u1" },
             parent: { type: "database_id", database_id: "db-2" },
+            properties: { 이름: { type: "title", title: [{ plain_text: "행" }] } },
           },
           {
             id: "page-1",
             last_edited_time: "2026-09-28T10:00:30.000Z",
             last_edited_by: { id: "u1" },
             parent: { type: "page_id", page_id: "root" },
+            properties: { title: { type: "title", title: [{ plain_text: "새 글" }] } },
           },
           {
             id: "old",
             last_edited_time: "2026-09-28T09:00:00.000Z",
             last_edited_by: { id: "u1" },
             parent: { type: "page_id", page_id: "root" },
+            properties: { title: { type: "title", title: [{ plain_text: "옛 글" }] } },
           },
         ],
         next_cursor: null,
@@ -62,6 +66,11 @@ describe("바뀐 것 찾기 (ADR-027)", () => {
         ["row-2", "db-2"],
         ["page-1", null],
       ]);
+      // 새 페이지를 받을지 가르는 부모 · 제목도 싣는다 — 다시 읽지 않는다(B8).
+      expect(recent[2]).toMatchObject({
+        parent: { type: "page_id", page_id: "root" },
+        title: "새 글",
+      });
     });
 
     it("취소됐으면 search 를 보내지 않는다", async () => {

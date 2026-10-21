@@ -14,6 +14,7 @@ import {
   createMockVaultFs,
   MOCK_BOT_USER_ID,
 } from "./mock-orchestrator.js";
+import { isMarkdownPath } from "../../src/utils/markdown-path.js";
 
 /** 메모리 볼트 — 이름을 바꿔도 내용 · 수정 시각은 그대로다(파일 시스템의 rename 처럼). */
 export class MemoryVault {
@@ -59,7 +60,8 @@ export class MemoryVault {
 
   fs(): VaultFS {
     const fs = createMockVaultFs();
-    const markdown = () => [...this.files.keys()].filter((path) => path.endsWith(".md")).sort();
+    // Obsidian 의 노트 목록처럼 `.MD` 도 노트다(B15).
+    const markdown = () => [...this.files.keys()].filter((path) => isMarkdownPath(path)).sort();
     fs.listMarkdownFileStats.mockImplementation(async () => markdown().map((p) => this.stat(p)!));
     fs.listMarkdownFiles.mockImplementation(async () =>
       markdown().map((path) => ({
@@ -331,14 +333,16 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
   client.archivePage.mockImplementation(async (id: string) => {
     touch(id).archived = true;
   });
-  client.searchRecentPages.mockImplementation(async () =>
-    [...pages.values()].map((page) => ({
-      id: page.id,
-      last_edited_time: page.lastEdited,
-      last_edited_by: { id: page.lastEditedBy },
-      parentDatabaseId: page.parentType === "database" ? page.parent : null,
-    })),
-  );
+  // search 의 한 줄 — 페이지 객체를 통째로 주므로 부모 · 제목도 싣는다(실측 2026-10-21).
+  const recent = (page: MemoryPage) => ({
+    id: page.id,
+    last_edited_time: page.lastEdited,
+    last_edited_by: { id: page.lastEditedBy },
+    parentDatabaseId: page.parentType === "database" ? page.parent : null,
+    parent: view(page).parent,
+    title: page.title,
+  });
+  client.searchRecentPages.mockImplementation(async () => [...pages.values()].map(recent));
   // 전체 대조(deleteSync)의 순회 — 루트 아래의 휴지통이 아닌 페이지. Notion 은 부모를 휴지통에
   // 넣으면 그 아래도 함께 넣는다 — 시험이 둘 다 표시한다.
   client.getChildPagesRecursive.mockImplementation(async (rootId: string) => {
@@ -386,5 +390,5 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   ]);
-  return { client, pages, add, touch, edit };
+  return { client, pages, add, touch, edit, recent };
 }

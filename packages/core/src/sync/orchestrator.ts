@@ -2,6 +2,7 @@ import type {
   PushOptions,
   PushResult,
   PullOptions,
+  StatusOptions,
   PullResult,
   SyncOptions,
   SyncResult,
@@ -31,7 +32,7 @@ import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js
 import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
 import { getLogger } from "../utils/logger.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
-import { runPool } from "../utils/pool.js";
+import { runPool, type AbortLike } from "../utils/pool.js";
 import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
@@ -44,7 +45,7 @@ import {
   PENDING_DATABASES_META_KEY,
   remoteScanInfo,
 } from "./remote-scan.js";
-import { OperationAbortedError } from "../utils/abort.js";
+import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -959,12 +960,16 @@ export class SyncOrchestrator {
     };
   }
 
-  /** 원격까지 본다 — 이번 실행의 원격 기준을 정하므로 다른 작업과 겹치지 않는다. */
-  async status(): Promise<StatusResult> {
-    return this.gate.run("status", () => this.executeStatus());
+  /**
+   * 원격까지 본다 — 이번 실행의 원격 기준을 정하므로 다른 작업과 겹치지 않는다. 원격을 훑는 데 분 단위가
+   * 걸릴 수 있어 취소를 받는다. 취소하면 {@link OperationAbortedError} 를 던진다.
+   */
+  async status(options?: StatusOptions): Promise<StatusResult> {
+    return this.gate.run("status", () => this.executeStatus(options?.signal));
   }
 
-  private async executeStatus(): Promise<StatusResult> {
+  private async executeStatus(signal?: AbortLike): Promise<StatusResult> {
+    throwIfAborted(signal);
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
@@ -973,9 +978,10 @@ export class SyncOrchestrator {
     // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
     const scan = this.detector.remoteScan({ force: false, deferDue: true });
-    const detection = await this.detector.detectRemote(scan, { databases: false });
-    const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes);
+    const detection = await this.detector.detectRemote(scan, { signal, databases: false });
+    const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes, signal);
     const conflictRecords = this.stateDb.getByStatus("conflict");
+    throwIfAborted(signal);
 
     const conflicts: Conflict[] = await this.conflictWorkflow.buildConflictsFromRecords(
       conflictRecords,
@@ -1112,9 +1118,12 @@ export class SyncOrchestrator {
   // API 로 이어 주고, 해소 · 되돌리기는 다른 작업과 겹치지 않게 돌린다(S-09).
   // ──────────────────────────────────────────────────────────────────────────
 
-  /** 해소 대상 충돌 목록 — 원격 본문을 pull 과 같은 파이프라인으로 렌더해 담는다. */
+  /**
+   * 해소 대상 충돌 목록 — 원격 본문을 pull 과 같은 파이프라인으로 렌더해 담는다. 렌더가 첨부를 볼트에
+   * 내려받고 경로를 고르므로 다른 작업과 겹치지 않게 돌린다 — 도는 sync 와 같은 첨부 · 경로를 두고 다툰다.
+   */
   async listConflicts(): Promise<Conflict[]> {
-    return this.conflictWorkflow.listConflicts();
+    return this.gate.run("resolve", () => this.conflictWorkflow.listConflicts());
   }
 
   /**

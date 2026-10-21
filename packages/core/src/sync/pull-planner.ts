@@ -58,7 +58,7 @@ export class PullPlanner {
     ledger: DatabasePullLedger,
   ): Promise<PullResult> {
     // 받지 않으니 «확인 안 됨» 은 내용으로 가른다 — 같은 분 안에 바뀐 것이 없으면 세지 않는다.
-    const unchangedDropped = await this.drift.withoutUnchangedRemotes(filtered);
+    const unchangedDropped = await this.drift.withoutUnchangedRemotes(filtered, options.signal);
     // 지울 것은 실제 pull 과 같게 가른다 — 폴더 레코드는 추적만 놓고, 올리지 않은 로컬 편집이
     // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
     const planned: RemoteChange[] = [];

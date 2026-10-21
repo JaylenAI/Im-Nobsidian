@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { setIcon } from "obsidian";
+  import { noteNameFromPath, stripMarkdownExtension } from "@im-nobsidian/core";
   import type { LocalChange, FolderMoveChange, RemoteChange, SyncRecord } from "@im-nobsidian/core";
 
   interface SyncProgress {
@@ -239,7 +240,7 @@
   }
 
   function fileName(path: string): string {
-    return path.split("/").pop()?.replace(/\.md$/, "") ?? path;
+    return noteNameFromPath(path);
   }
 
   function folderOf(path: string): string {
@@ -249,7 +250,7 @@
   /** 옮긴 노트는 어디서 왔는지를 보인다 — 새 이름만 보이면 새 노트와 구분되지 않는다. */
   function localWhere(change: LocalChange): string {
     return change.type === "moved" && change.movedFrom
-      ? `← ${change.movedFrom.replace(/\.md$/, "")}`
+      ? `← ${stripMarkdownExtension(change.movedFrom)}`
       : folderOf(change.path);
   }
 

@@ -1,3 +1,5 @@
+import { noteNameFromPath } from "./markdown-path.js";
+
 /**
  * Obsidian 위키링크가 실제로 해소하는 대상 이름(파일 basename, `.md` 제거)을 경로에서 도출한다.
  *
@@ -11,7 +13,7 @@
  * 깨진/이중 위키링크가 됐다(M4). 두 경로 모두 이 함수를 통과시켜 불일치를 차단한다.
  */
 export function wikilinkTitleFromPath(obsidianPath: string): string {
-  return obsidianPath.replace(/\.md$/i, "").split("/").pop() ?? "";
+  return noteNameFromPath(obsidianPath);
 }
 
 /**

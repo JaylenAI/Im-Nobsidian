@@ -7,7 +7,7 @@ import type { NotionClient } from "../notion/client.js";
  */
 export async function extractParentId(
   notionClient: NotionClient,
-  page: PageObjectResponse,
+  page: Pick<PageObjectResponse, "parent">,
 ): Promise<string | null> {
   const parent = page.parent as {
     type: string;

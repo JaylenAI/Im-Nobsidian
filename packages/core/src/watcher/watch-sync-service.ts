@@ -2,6 +2,7 @@ import type { SyncOrchestrator } from "../sync/orchestrator.js";
 import type { SyncResult } from "../types/sync.js";
 import { FileWatcher } from "./file-watcher.js";
 import type { WatchEvent } from "./file-watcher.js";
+import { isMarkdownPath } from "../utils/markdown-path.js";
 
 /** 한 번의 sync 가 무엇을 보나 — 바뀐 파일만(파일 변경) · 볼트 전체(주기 sync). */
 export type WatchSyncScope = "changes" | "full";
@@ -114,7 +115,7 @@ export class WatchSyncService {
 
   private handleFileChange(event: WatchEvent, path: string): void {
     // 감시를 멈추는 동안(파일 감시를 닫는 사이)에 온 이벤트는 받지 않는다 — 멈춘 뒤에 sync 가 돈다.
-    if (!this.running || !path.endsWith(".md")) return;
+    if (!this.running || !isMarkdownPath(path)) return;
 
     this.pendingChanges.set(path, event);
     this.options.onFileChange?.(event, path);

@@ -231,13 +231,7 @@ describe("dry-run 은 세기만 한다", () => {
       const { b } = await seedRows(orchestrator);
       // Notion 검색은 휴지통 · 보관 페이지를 돌려주지 않는다(I10) — 메모리 Notion 도 그렇게 한다.
       notion.client.searchRecentPages.mockImplementation(async () =>
-        [...notion.pages.values()]
-          .filter((page) => !page.archived)
-          .map((page) => ({
-            id: page.id,
-            last_edited_time: page.lastEdited,
-            last_edited_by: { id: page.lastEditedBy },
-          })),
+        [...notion.pages.values()].filter((page) => !page.archived).map(notion.recent),
       );
       notion.edit(b.id, (page) => {
         page.archived = true;

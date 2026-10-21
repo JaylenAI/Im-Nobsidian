@@ -8,6 +8,7 @@ export type {
   Conflict,
   BaseSyncOptions,
   PushOptions,
+  StatusOptions,
   PullOptions,
   SyncOptions,
   PushResult,
@@ -252,6 +253,7 @@ export type {
 export { computeHash, computeBufferHash } from "./utils/hash.js";
 export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
+export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./utils/markdown-path.js";
 export { systemTimeZone } from "./utils/zoned-time.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
 export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";

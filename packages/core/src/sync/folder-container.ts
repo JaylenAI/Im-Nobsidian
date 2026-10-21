@@ -1,3 +1,5 @@
+import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
+
 /**
  * 볼트 폴더가 Notion 에서 무엇인가 — push 가 새 노트를 어디에 만들고, 어떤 폴더를 페이지로
  * 만들어야 하는지 정한다(S-04).
@@ -30,7 +32,7 @@ export interface FolderLookup {
 export function isFolderNotePath(filePath: string): boolean {
   const parts = filePath.split("/");
   if (parts.length < 2) return false;
-  return parts[parts.length - 1]!.replace(/\.md$/, "") === parts[parts.length - 2];
+  return stripMarkdownExtension(parts[parts.length - 1]!) === parts[parts.length - 2];
 }
 
 /** 폴더의 폴더 노트 경로 — 폴더 이름과 같은 이름의 노트(`A/B` → `A/B/B.md`). */
@@ -45,7 +47,7 @@ export function isFolderRecord(record: {
 }): boolean {
   return (
     (record.fileType === "folder-note" || record.fileType === "folder-only") &&
-    !record.obsidianPath.endsWith(".md")
+    !isMarkdownPath(record.obsidianPath)
   );
 }
 

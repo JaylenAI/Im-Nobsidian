@@ -68,12 +68,7 @@ describe.each([
     notion.client.searchRecentPages.mockImplementation(async (since: string) =>
       [...notion.pages.values()]
         .filter((page) => !page.archived && Date.parse(page.lastEdited) > Date.parse(since))
-        .map((page) => ({
-          id: page.id,
-          last_edited_time: page.lastEdited,
-          last_edited_by: { id: page.lastEditedBy },
-          parentDatabaseId: page.parentType === "database" ? page.parent : null,
-        })),
+        .map(notion.recent),
     );
     if (!configured) db.setMeta("discovered_dbs", JSON.stringify(DATABASES));
   });
@@ -622,12 +617,7 @@ describe("빠른 변경 감지 — 새로 발견한 DB", () => {
     notion.client.searchRecentPages.mockImplementation(async (since: string) =>
       [...notion.pages.values()]
         .filter((page) => !page.archived && Date.parse(page.lastEdited) > Date.parse(since))
-        .map((page) => ({
-          id: page.id,
-          last_edited_time: page.lastEdited,
-          last_edited_by: { id: page.lastEditedBy },
-          parentDatabaseId: page.parentType === "database" ? page.parent : null,
-        })),
+        .map(notion.recent),
     );
     db.setMeta("discovered_dbs", JSON.stringify([DATABASES[0]]));
   });
