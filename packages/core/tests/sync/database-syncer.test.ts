@@ -1120,7 +1120,10 @@ describe("DatabaseSyncer", () => {
   describe("F24 — 동명 DB 폴더 분리 후 행 재배치", () => {
     it("레코드 경로가 현 DB 폴더 밖이면 원격 무변경이어도 현 폴더로 재배치한다", async () => {
       // 옛 공유 폴더의 id 접미사 파일 → 새 폴더의 자연 이름으로 이동 + 레코드/위키링크 이전
-      (mockVaultFs.exists as any).mockResolvedValue(true);
+      // 볼트에는 옛 파일만 있다 — 새 폴더의 자연 이름은 비어 있다.
+      (mockVaultFs.exists as any).mockImplementation(
+        async (p: string) => p === "databases/tasks-shared/Task One (0db13b18).md",
+      );
       (mockVaultFs.readFile as any).mockResolvedValue("LOCAL UNCHANGED");
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         {
