@@ -1,5 +1,10 @@
 # 시스템 아키텍처
 
+> **v0.4.0 기준 실제 경로** — 이 문서는 2026-05 설계다. 문서 복잡도로 경로를 고르지 않는다. 기본은 Notion Markdown API(NFM) ↔ 볼트
+> (`converter/enhanced-md-converter.ts` + 전처리기 · 후처리기)이고, Markdown API 로 받지 못했거나 `conversion.preferMarkdownApi: false`
+> 면 블록 ↔ NFM(`blocks-to-nfm` · `nfm-to-blocks`, [ADR-034](adr/034-block-fallback-via-nfm.md) ·
+> [ADR-035](adr/035-block-push-via-nfm.md)) 뒤 같은 변환을 거친다. notion-to-md 는 v0.4.0 에서 뺐고, martian 은 글 조각의 rich text 에만 쓴다.
+
 > 작성일: 2026-05-08
 > 상태: complete
 
@@ -27,8 +32,8 @@ flowchart TD
         subgraph Convert["변환 엔진"]
             PreProcessor["PreProcessor<br/>전처리기 체인"]
             PostProcessor["PostProcessor<br/>후처리기 체인"]
-            Martian["@tryfabric/martian<br/>MD→Notion"]
-            NotionToMd["notion-to-md<br/>Notion→MD"]
+            Martian["nfm-to-blocks<br/>NFM→블록 (블록 방식)"]
+            NotionToMd["blocks-to-nfm<br/>블록→NFM (블록 방식)"]
             MarkdownAPI["MarkdownAPI<br/>Notion MD API"]
         end
 
@@ -259,7 +264,7 @@ sequenceDiagram
         NC-->>Orch: { properties, blocks }
 
         Orch->>Pipe: convertToMarkdown(properties, blocks)
-        Note over Pipe: 1. notion-to-md 또는 MD API 변환<br/>2. 후처리 (멘션→위키링크, 색상→span...)<br/>3. properties → frontmatter
+        Note over Pipe: 1. MD API 의 NFM(블록 방식은 blocks-to-nfm) 변환<br/>2. 후처리 (멘션→위키링크, 색상→span...)<br/>3. properties → frontmatter
 
         Pipe->>IMG: downloadImages(imageBlocks)
         IMG-->>Pipe: localPaths[]
