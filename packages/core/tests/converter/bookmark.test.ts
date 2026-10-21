@@ -152,3 +152,41 @@ describe("vaultBookmarks — 블록 방식 push 가 북마크를 새로 만들 �
     expect(vaultBookmarks(`${old}\n\n${fenced}`).size).toBe(0);
   });
 });
+
+describe("받아 둔 노트의 북마크 링크 — 로컬 표기 유지와 함께(B14)", () => {
+  /** 받기 직전의 로컬 노트를 알고 받는다 — 로컬 표기 유지(`local-form.ts`)가 돈다. */
+  const repull = (nfm: string, local: string, bookmarks?: ReadonlyMap<string, BookmarkTarget>) =>
+    createDefaultPipeline().convertToMarkdown(notionEnhancedToObsidian(nfm, { bookmarks }), PULL, {
+      localContent: local,
+    });
+  const oldLink = `[🔖 Bookmark](${tagUrl(A)})${marker(A)}`;
+  const readLink = `[🔖 예시](https://example.com/)${marker(A)}`;
+
+  it("옛 링크(Notion 블록 주소)는 북마크를 읽어 받으면 새 링크가 된다", () => {
+    const nfm = `글\n${tag(A)}`;
+    const local = `글\n\n${oldLink}\n`;
+    expect(repull(nfm, local, targets([[A, "https://example.com/", "예시"]]))).toBe(
+      `글\n\n${readLink}\n`,
+    );
+  });
+
+  it("Notion 에서 캡션이 바뀌면 받은 캡션이 이긴다", () => {
+    const local = `글\n\n${readLink}\n`;
+    expect(
+      repull(`글\n${tag(A)}`, local, targets([[A, "https://example.com/", "새 캡션"]])),
+    ).toContain("[🔖 새 캡션](https://example.com/)");
+  });
+
+  it("이번에 블록을 읽지 못했으면 볼트의 링크를 지킨다", () => {
+    const local = `글\n\n${readLink}\n`;
+    expect(repull(`글\n${tag(A)}`, local)).toBe(local);
+  });
+
+  it("다른 줄의 로컬 표기는 그대로 지킨다", () => {
+    const local = `> [!faq]- 질문\n> 답\n\n${oldLink}\n`;
+    const nfm = `<callout icon="❓">\n\t질문\n\t답\n</callout>\n${tag(A)}`;
+    expect(repull(nfm, local, targets([[A, "https://example.com/", "예시"]]))).toBe(
+      `> [!faq]- 질문\n> 답\n\n${readLink}\n`,
+    );
+  });
+});

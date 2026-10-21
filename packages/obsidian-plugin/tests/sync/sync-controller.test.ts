@@ -348,6 +348,17 @@ describe("SyncController", () => {
       expect(mock.pull.mock.calls[1][0]).not.toHaveProperty("force");
       expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: Pull(전체 확인) 시작...");
     });
+
+    it("다시 그리기 pull 은 받아 둔 노트를 다시 그리라고 넘기고 그렇게 알린다(B14)", async () => {
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull(undefined, { rerender: true });
+      await controller.pull();
+
+      expect(mock.pull.mock.calls[0][0]).toMatchObject({ rerender: true });
+      expect(mock.pull.mock.calls[1][0]).not.toHaveProperty("rerender");
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: Pull(다시 그리기) 시작...");
+    });
   });
 
   describe("받은 원격 변경은 목록에서 빠진다", () => {

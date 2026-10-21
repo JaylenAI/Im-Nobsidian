@@ -686,8 +686,8 @@ describe("ImNobsidianPlugin", () => {
     await internals.executePull();
 
     expect(controller.pull.mock.calls).toEqual([
-      [undefined, { force: true }],
-      [undefined, { force: false }],
+      [undefined, { force: true, rerender: false }],
+      [undefined, { force: false, rerender: false }],
     ]);
   });
 
@@ -710,8 +710,9 @@ describe("ImNobsidianPlugin", () => {
     await plugin.onload();
     await commands.get("im-nobsidian-pull-full")!();
     await commands.get("im-nobsidian-pull")!();
+    await commands.get("im-nobsidian-pull-rerender")!();
 
-    expect(executePull.mock.calls).toEqual([[{ force: true }], []]);
+    expect(executePull.mock.calls).toEqual([[{ force: true }], [], [{ rerender: true }]]);
   });
 
   it("상태 알림은 마지막 전체 확인을 적고, 바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 덧붙인다", async () => {
@@ -942,7 +943,7 @@ describe("ImNobsidianPlugin", () => {
       "Im-Nobsidian: 동기화 방향이 «Pull만» 이라 Push 하지 않습니다 — 설정에서 바꿀 수 있습니다.",
       "Im-Nobsidian: 동기화 방향이 «Push만» 이라 Pull 하지 않습니다 — 설정에서 바꿀 수 있습니다.",
     ]);
-    expect(controller.pull.mock.calls).toEqual([[["a.md"], { force: false }]]);
+    expect(controller.pull.mock.calls).toEqual([[["a.md"], { force: false, rerender: false }]]);
     expect(controller.push.mock.calls).toEqual([[["a.md"]]]);
   });
 
