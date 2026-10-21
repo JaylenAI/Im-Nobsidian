@@ -1,5 +1,4 @@
 export { ConversionPipeline } from "./pipeline.js";
-export { BlockConverter } from "./block-converter.js";
 
 // Pre-processors (Push: MD → Notion)
 export { FrontmatterExtractor } from "./pre-processors/frontmatter.js";

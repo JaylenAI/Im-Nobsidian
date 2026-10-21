@@ -21,7 +21,6 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
-import { BlockConverter } from "../converter/block-converter.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
@@ -134,7 +133,6 @@ export class SyncOrchestrator {
     const pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
-    const blockConverter = new BlockConverter();
     const imageHandler = new ImageHandler(
       vaultFs,
       config.paths.attachments,
@@ -264,8 +262,6 @@ export class SyncOrchestrator {
       this.pusher,
     );
     this.inspector = new ChangeInspector(stateDb, vaultFs, notionClient, this.planner, this.puller);
-
-    blockConverter.initNotionToMd(this.notionClient.getInternalClient());
   }
 
   /** 도는 작업 — 없으면 null(S-09). 부른 쪽이 겹칠 요청을 미리 거를 때 쓴다. */

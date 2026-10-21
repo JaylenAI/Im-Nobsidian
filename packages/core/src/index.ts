@@ -134,7 +134,6 @@ export type {
 // Converter
 export {
   ConversionPipeline,
-  BlockConverter,
   FrontmatterExtractor,
   WikilinkResolver,
   CalloutTransformer,

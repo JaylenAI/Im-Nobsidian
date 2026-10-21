@@ -101,9 +101,6 @@ importers:
       gray-matter:
         specifier: ^4.0.0
         version: 4.0.3
-      notion-to-md:
-        specifier: ^3.1.0
-        version: 3.1.9
       zod:
         specifier: ^3.23.0
         version: 3.25.76
@@ -3729,13 +3726,6 @@ packages:
       encoding:
         optional: true
 
-  notion-to-md@3.1.9:
-    resolution:
-      {
-        integrity: sha512-SsYhhigh+jOv06QOiFynOQATPMl96CspWDIL3Q5klzp4eaZ1dYaPI3ELoly80G1K0jf730u3ItvfwskzPKK41g==,
-      }
-    engines: { node: ">=12" }
-
   object-assign@4.1.1:
     resolution:
       {
@@ -6924,13 +6914,6 @@ snapshots:
   node-fetch@2.7.0:
     dependencies:
       whatwg-url: 5.0.0
-
-  notion-to-md@3.1.9:
-    dependencies:
-      markdown-table: 2.0.0
-      node-fetch: 2.7.0
-    transitivePeerDependencies:
-      - encoding
 
   object-assign@4.1.1: {}
 
