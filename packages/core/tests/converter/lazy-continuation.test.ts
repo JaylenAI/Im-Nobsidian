@@ -5,7 +5,10 @@
  * 안에 그렸다(2026-10-04 실측).
  */
 import { describe, it, expect } from "vitest";
-import { separateLazyContinuations } from "../../src/converter/lazy-continuation.js";
+import {
+  continuesListParagraph,
+  separateLazyContinuations,
+} from "../../src/converter/lazy-continuation.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -130,5 +133,35 @@ describe("변환 전체 왕복", () => {
     const pulled = notionEnhancedToObsidian(raw);
     expect(pulled).not.toMatch(/^>$/m);
     expect(obsidianToNotionEnhanced(pulled)).toBe(raw);
+  });
+});
+
+describe("continuesListParagraph — 목록에서 앞 항목 문단에 이어 붙는 줄 (C3)", () => {
+  it.each([
+    ["    - b", "    text"],
+    ["        - c", "    text"],
+    ["        child", "    text"],
+    ["\t- b", "\ttext"],
+    ["\t\tchild", "    text"],
+    ["\t\t- c", "    text"],
+    ["    child", "text"],
+  ])("%j 뒤 %j 는 이어 붙는다", (previous, line) => {
+    expect(continuesListParagraph(previous, line)).toBe(true);
+  });
+
+  it.each([
+    ["- a", "    text", "항목의 자식"],
+    ["    p1", "    p2", "같은 깊이 글"],
+    ["    - b", "    - c", "목록 항목"],
+    ["    -", "    text", "글 없는 항목"],
+    ["        ```", "    text", "닫는 펜스"],
+    ["    ## 제목", "    text", "제목"],
+    ["    - b", "    > 인용", "인용"],
+    ["    - b", "    %%im-nobsidian:x%%", "보존 마커"],
+    ["> - b", "> text", "인용 안 — separateLazyContinuations 가 다룬다"],
+    ["", "    text", "빈 줄 뒤"],
+    ["  - b", "\ttext", "더 깊은 줄 — 탭은 4칸"],
+  ])("%j 뒤 %j 는 이어 붙지 않는다 — %s", (previous, line) => {
+    expect(continuesListParagraph(previous, line)).toBe(false);
   });
 });

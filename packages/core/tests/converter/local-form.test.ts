@@ -500,3 +500,38 @@ function remoteEdit(random: () => number, pulled: string): string {
   else lines[at] = `${lines[at]} 고침`;
   return head + lines.join("\n");
 }
+
+describe("pull — Obsidian 이 Notion 과 다르게 읽는 로컬 표기는 남기지 않는다 (C5 · C3)", () => {
+  it.each([
+    [
+      "인용의 자식을 네 칸으로 쓴 옛 노트",
+      "> 인용\n\t자식\n문단",
+      "> 인용\n\n    자식\n\n문단\n",
+      "  자식",
+    ],
+    ["문단의 자식 목록", "문단\n\t- 항목\n다음", "문단\n\n    - 항목\n\n다음\n", "  - 항목"],
+    [
+      "이미지 뒤 목록",
+      "![](https://x.test/a.png)\n\t- 항목",
+      "![](https://x.test/a.png)\n\n    - 항목\n",
+      "  - 항목",
+    ],
+  ])("%s — 들여쓴 코드로 보이던 줄을 받은 글로 (C5)", (_name, exported, local, line) => {
+    // 보낼 꼴은 같다 — Notion 은 빈 줄을 버리고 들여쓰기가 깊은지만 본다. Obsidian 은 빈 줄 뒤 네 칸을 코드로 그린다.
+    expect(sent(local)).toBe(sent(pull(exported)));
+    const restored = pull(exported, local);
+    expect(restored.split("\n")).toContain(line);
+    expect(restored).not.toMatch(/^ {4}\S/m);
+  });
+
+  it("더 깊은 항목 뒤 얕은 글을 빈 줄 없이 쓴 노트 — 받은 글의 빈 줄을 쓴다 (C3)", () => {
+    const local = "- a\n    - b\n    text\n- c\n";
+    expect(sent(local)).toBe(sent(pull("- a\n\t- b\n\ttext\n- c")));
+    expect(pull("- a\n\t- b\n\ttext\n- c", local)).toBe("- a\n    - b\n\n    text\n- c\n");
+  });
+
+  it("Obsidian 이 같게 읽는 차이는 그대로 로컬 표기 — frontmatter 목록 · 탭 들여쓰기", () => {
+    const local = "- a\n\t- b\n\n\ttext\n- c\n";
+    expect(pull("- a\n\t- b\n\ttext\n- c", local)).toBe(local);
+  });
+});

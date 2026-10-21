@@ -11,7 +11,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { vaultBookmarks } from "../../src/converter/bookmark.js";
 import { obsidianToNotionEnhanced } from "../../src/converter/enhanced-md-converter.js";
-import { nfmToBlocks, type NfmBlock } from "../../src/converter/nfm-to-blocks.js";
+import {
+  nfmToBlocks,
+  startsWithParagraph,
+  type NfmBlock,
+} from "../../src/converter/nfm-to-blocks.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { RICH_TEXT_CONTENT_MAX } from "../../src/constants/notion-limits.js";
 import { blockOutline } from "../helpers/block-outline.js";
@@ -206,5 +210,30 @@ describe("볼트 노트 → 블록 방식 push 의 블록", () => {
     expect(texts.map((t) => t.text.content).join("")).toBe(
       "📎 a.png %% im-nobsidian:local-image:a.png %%",
     );
+  });
+});
+
+describe("startsWithParagraph — 콜아웃의 첫 줄이 글이 되는 조건", () => {
+  it.each([["글"], ['글 {color="red"}'], ["**굵게** [링크](https://x.test)"], ["글\n\t자식"]])(
+    "%j 는 맨 문단이다",
+    (nfm) => expect(startsWithParagraph(nfm.split("\n"))).toBe(true),
+  );
+
+  it.each([
+    ["![](https://x.test/a.png)"],
+    ['<video src="https://x.test/v.mp4"></video>'],
+    ["- a"],
+    ["1. a"],
+    ["- [ ] t"],
+    ["## h"],
+    ["> q"],
+    ["---"],
+    ["```js\nx\n```"],
+    ["$$\nx\n$$"],
+    ["<table>\n<tr><td>a</td></tr>\n</table>"],
+    ["<empty-block/>"],
+    [""],
+  ])("%j 는 아니다 — 글 없는 콜아웃의 자식", (nfm) => {
+    expect(startsWithParagraph(nfm.split("\n"))).toBe(false);
   });
 });

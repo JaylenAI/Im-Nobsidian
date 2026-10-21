@@ -333,3 +333,36 @@ describe("BlockSpacer 프로세서", () => {
     expect(new BlockSpacer().process(input).content).toBe("a\nb");
   });
 });
+
+describe("목록 안 얕은 글 — 앞 항목 문단에 이어 붙지 않게 (C3 · N9)", () => {
+  it("더 깊은 항목 바로 뒤의 얕은 글은 빈 줄로 끊는다 — Obsidian 은 빈 줄만 이어 붙이기를 끊는다", () => {
+    expect(respace("- a\n\t- b\n\ttext\n- c\n")).toBe("- a\n    - b\n\n    text\n- c\n");
+  });
+
+  it("두 단계 얕은 글 · 깊은 항목의 자식 글 뒤의 얕은 글도 끊는다", () => {
+    expect(respace("- a\n\t- b\n\t\t- c\n\ttext\n- d\n")).toBe(
+      "- a\n    - b\n        - c\n\n    text\n- d\n",
+    );
+    expect(respace("- a\n\t- b\n\t\tchild\n\ttext\n- c\n")).toBe(
+      "- a\n    - b\n        child\n\n    text\n- c\n",
+    );
+  });
+
+  it("같은 깊이 글 · 항목의 자식 글 · 닫는 펜스 뒤 글은 끊지 않는다 — 목록이 느슨해지지 않게", () => {
+    expect(respace("- a\n\tp1\n\tp2\n- b\n")).toBe("- a\n    p1\n    p2\n- b\n");
+    expect(respace("- a\n\t- b\n\t\tchild\n- c\n")).toBe("- a\n    - b\n        child\n- c\n");
+    expect(respace("- a\n\t- b\n\t\t```\n\t\tx\n\t\t```\n\ttext\n")).toBe(
+      "- a\n    - b\n        ```\n        x\n        ```\n    text\n",
+    );
+  });
+
+  it("두 단계 이상 깊은 자식 글도 목록에 붙고 탭을 편다 (N9)", () => {
+    // 예전에는 탭 둘 줄이 목록에서 떨어져 앞뒤에 빈 줄이 들어가고 탭이 남았다.
+    expect(respace("- item\n\t- sub\n\t\ttext\n- next\n")).toBe(
+      "- item\n    - sub\n        text\n- next\n",
+    );
+    expect(respace("- a\n\t- b\n\t\t- c\n\t\t\ttext\n- d\n")).toBe(
+      "- a\n    - b\n        - c\n            text\n- d\n",
+    );
+  });
+});

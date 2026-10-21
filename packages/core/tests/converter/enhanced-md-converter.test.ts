@@ -998,3 +998,72 @@ describe("인접 블록 융합 방지 (P2 — 실 push 왕복 실측 회귀가�
     expect(back2).toBe(back1);
   });
 });
+
+describe("글 없는 콜아웃의 첫 자식은 제목 줄로 올리지 않는다 (C4)", () => {
+  const callout = (...body: string[]) => ['<callout icon="💡">', ...body, "</callout>"].join("\n");
+
+  it.each([
+    ["이미지", "\t![](https://x.test/a.png)", "> ![](https://x.test/a.png)"],
+    ["캡션 이미지", "\t![캡션](https://x.test/a.png)", "> ![캡션](https://x.test/a.png)"],
+    ["목록", "\t- a", "> - a"],
+    ["할 일", "\t- [ ] t", "> - [ ] t"],
+    ["제목", "\t## h", "> ## h"],
+    ["구분선", "\t---", "> ---"],
+    [
+      "동영상",
+      '\t<video src="https://x.test/v.mp4"></video>',
+      "> [🎬 video](https://x.test/v.mp4)",
+    ],
+  ])("%s — 머리 줄은 비고 자식 줄로 남는다", (_kind, child, line) => {
+    const pulled = notionEnhancedToObsidian(callout(child, "\t본문"));
+    expect(pulled.split("\n")[0]).toBe("> [!tip]");
+    expect(pulled).toContain(`\n${line}\n`);
+  });
+
+  it("코드 · 표가 첫 자식이어도 push 가 같은 글을 보낸다 — 예전에는 몸통 줄만 한 단계 깊어졌다", () => {
+    const code = callout("\t```javascript", "\tx", "\t```");
+    expect(obsidianToNotionEnhanced(notionEnhancedToObsidian(code))).toBe(code);
+    const table = notionEnhancedToObsidian(
+      callout("\t<table>", "\t<tr><td>a</td></tr>", "\t</table>"),
+    );
+    expect(table.split("\n")[0]).toBe("> [!tip]");
+    expect(table).toContain("> | %%im-nobsidian:table:header-row=false%%a |");
+  });
+
+  it("빈 블록이 첫 자식이면 `<br>` 로 받는다 — 제목에 태그가 남지 않는다", () => {
+    const pulled = notionEnhancedToObsidian(callout("\t<empty-block/>", "\t글"));
+    expect(pulled).not.toContain("empty-block");
+    expect(pulled).toContain("> <br>");
+  });
+
+  it("맨 문단으로 시작하면 그 줄이 제목이다", () => {
+    expect(notionEnhancedToObsidian(callout("\t글", "\t자식"))).toBe("> [!tip] 글\n> 자식");
+  });
+});
+
+describe("미디어 태그는 줄머리 들여쓰기를 지킨다 (N7)", () => {
+  it.each([
+    ["video", '<video src="https://x.test/v.mp4">cap</video>', "[🎬 cap](https://x.test/v.mp4)"],
+    ["audio", '<audio src="https://x.test/a.mp3">cap</audio>', "[🔊 cap](https://x.test/a.mp3)"],
+    ["pdf", '<pdf src="https://x.test/d.pdf">cap</pdf>', "[📄 cap](https://x.test/d.pdf)"],
+    ["file", '<file src="https://x.test/f.zip">f.zip</file>', "[📎 f.zip](https://x.test/f.zip)"],
+  ])("%s — 목록 자식으로 남고 왕복한다", (_kind, tag, link) => {
+    const nfm = `- item\n\t${tag}\n- next`;
+    const pulled = notionEnhancedToObsidian(nfm);
+    expect(pulled).toBe(`- item\n\t${link}\n- next`);
+    expect(obsidianToNotionEnhanced(pulled)).toBe(nfm);
+  });
+
+  it("콜아웃 안 목록 자식 미디어가 push 때 콜아웃 밖으로 빠지지 않는다", () => {
+    const nfm = [
+      '<callout icon="💡">',
+      "\t제목",
+      "\t- item",
+      '\t\t<video src="https://x.test/v.mp4">cap</video>',
+      "</callout>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(nfm);
+    expect(pulled).toBe("> [!tip] 제목\n> - item\n>   [🎬 cap](https://x.test/v.mp4)");
+    expect(obsidianToNotionEnhanced(pulled)).toBe(nfm);
+  });
+});
