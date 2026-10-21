@@ -335,7 +335,7 @@ due: 2026-06-30 # → Date 속성
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.3.2 (릴리스 자산 / BRAT)                                                                                 |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.4.0 (릴리스 자산 / BRAT)                                                                                 |
 
 ### 라이브러리로 사용하기
 
@@ -401,6 +401,11 @@ await orchestrator.sync({ dryRun: false });
 ## 로드맵
 
 ```
+v0.4.0 ✅ Obsidian Git 식 증분 동기화(노트마다 올리기 · 받기 · 되돌리기, 줄 비교,
+        주기 전체 대조, pull --rerender, --json), 데이터 안전(심층 QA 결함 23건과
+        그 뒤 찾은 결함 — 편집 유실 · 페이지 중복 · 변경 누락), 블록 방식도
+        NFM 변환 경로, 플러그인 파일 3개, 키체인 토큰, 실볼트 사본 E2E(3,235 파일 · 실패 0 ·
+        반복 변화 0), 3980개 테스트
 v0.3.2 ✅ 렌더 충실도(토글/표/콜아웃/코드펜스 — 결함 15종 + 본문 삼킴 코드펜스 봉합),
         동기화 견고성(pull 정지, 네트워크 시간상한, Retry-After, 링크 4종,
         CLI 종료코드), 삭제된 DB 행 복원,
