@@ -142,6 +142,19 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     expect([signedTag, internal, internalTag]).toEqual([signed, signed, signed]);
   });
 
+  it("캡션 단 파일은 서명 URL · 내부 참조 어느 쪽으로 와도 같은 이름 · 별칭(B11)", async () => {
+    const signed = await pull(`[📎 3분기 보고](${signedUrl("분석 노트.ipynb")})`);
+    const internal = await pull(`[📎 3분기 보고](${internalFileUrl("분석 노트.ipynb")})`);
+    const internalTag = await pull(
+      `<file src="${internalFileUrl("분석 노트.ipynb")}">3분기 보고</file>`,
+    );
+
+    // 내부 참조의 서명 URL 은 getFileBlockUrl 이 주는 것 — 확장자는 그 URL 에서 읽는다.
+    expect(signed).toBe(`![[attachments/3분기-보고-${SHA12}.ipynb|3분기 보고]]`);
+    expect(internal).toBe(`![[attachments/3분기-보고-${SHA12}.pdf|3분기 보고]]`);
+    expect(internalTag).toBe(internal);
+  });
+
   it("이름에 별칭으로 남는 글자가 없으면 별칭은 자리 이름 file", async () => {
     const content = await pull(`[📎 file](${signedUrl("[](x)")})`);
 

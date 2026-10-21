@@ -184,6 +184,40 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
     expect(result.uploaded).toHaveLength(1);
   });
 
+  it.each([
+    ["docs/계약서.pdf", "pdf"],
+    ["media/발표.MP4", "video"],
+    ["media/녹음.m4a", "audio"],
+  ])("%s 는 %s 블록으로 올린다 — 이름 칸 없이(B12)", async (path, type) => {
+    const line = marker("file", path);
+    const { client, appendChildBlocks } = createTreeClient({ "page-1": [quote("blk-ph", line)] });
+    const handler = new ImageHandler(mockFs, "attachments", client);
+
+    await handler.materializeLocalMedia("page-1", `> ${line}\n`);
+
+    // Notion 은 PDF · 동영상 · 소리 블록의 name 을 거절한다(실측 2026-10-21).
+    expect(appendChildBlocks).toHaveBeenCalledWith(
+      "page-1",
+      [{ type, [type]: { type: "file_upload", file_upload: { id: "upload-1" }, caption: [] } }],
+      { after: "blk-ph" },
+    );
+  });
+
+  it("미리보기 블록이 없는 형식은 파일 블록 · 이름으로 올린다", async () => {
+    const line = marker("file", "docs/묶음.zip");
+    const { client, appendChildBlocks } = createTreeClient({ "page-1": [quote("blk-ph", line)] });
+    const handler = new ImageHandler(mockFs, "attachments", client);
+
+    await handler.materializeLocalMedia("page-1", `> ${line}\n`);
+
+    const block = appendChildBlocks.mock.calls[0]![1][0] as {
+      type: string;
+      file: { name: string };
+    };
+    expect(block.type).toBe("file");
+    expect(block.file.name).toBe("묶음.zip");
+  });
+
   it("`|크기` 별칭은 볼트 경로로 올리고 캡션에 싣지 않는다 — 크기는 Obsidian 이 그릴 너비다", async () => {
     const sized = marker("image", "assets/t-img.png|300");
     const { client, appendChildBlocks } = createTreeClient({ "page-1": [quote("blk-ph", sized)] });
