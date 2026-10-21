@@ -20,6 +20,12 @@ import {
   openCodeFence,
 } from "../utils/md-regions.js";
 
+/**
+ * 컨테이너 태그 누수(③)의 규칙 번호. `<details>` · `<summary>` 는 사용자가 볼트에 적는 HTML 이기도 하다 —
+ * 받은 글을 로컬 표기로 되돌릴 때(`restoreLocalForm`) 이 규칙은 깨짐으로 보지 않는다.
+ */
+export const CONTAINER_TAG_RULE = "③";
+
 /** 한 줄만 보고 판정할 수 있는 렌더 결함. */
 export interface RenderLineRule {
   readonly code: string;
@@ -42,7 +48,7 @@ export const RENDER_LINE_RULES: readonly RenderLineRule[] = [
     re: /\{toggle="true"\}/,
   },
   {
-    code: "③",
+    code: CONTAINER_TAG_RULE,
     label: "NFM 컨테이너 태그 누수",
     re: /<\/?(?:details|summary|callout|columns|column)\b/,
   },
