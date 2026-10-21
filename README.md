@@ -169,6 +169,8 @@ That's it. Your vault and Notion workspace are now linked.
 
 `push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` runs a full scan now instead of fetching only what changed — it applies deletions made in Notion and recovers pages missed by Notion's search indexing lag (see [Pull](#pull-notion--obsidian)).
 
+`pull --rerender` re-renders notes you already pulled with the current converter, even when the Notion page has not changed — it fixes notes left in an older form after an update (such as `🔖 Bookmark` links pointing at the Notion block). Notes you edited in the vault and notes in conflict are left alone. It reads every note from Notion, so a large vault takes a while (narrow it with `--path`). In the plugin, run the command **Pull from Notion (받아 둔 노트 다시 그리기)**.
+
 `verify` answers a different question from `status`: not "is anything out of date?" but **"is anything
 missing?"**. It compares _sets_ of ids, not counts, on two axes — database rows (per database) and pages
 (under the root) — and exits non-zero when something exists in Notion but not locally. Idempotency checks

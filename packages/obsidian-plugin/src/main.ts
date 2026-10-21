@@ -161,6 +161,13 @@ export default class ImNobsidianPlugin extends Plugin {
       callback: () => this.executePull({ force: true }),
     });
 
+    // 변환기가 나아져도 받아 둔 노트는 Notion 에서 바뀔 때까지 옛 모양이다 — 손으로 다시 그린다(B14).
+    this.addCommand({
+      id: "im-nobsidian-pull-rerender",
+      name: "Pull from Notion (받아 둔 노트 다시 그리기)",
+      callback: () => this.executePull({ rerender: true }),
+    });
+
     this.addCommand({
       id: "im-nobsidian-sync",
       name: "Sync (양방향)",
@@ -680,8 +687,13 @@ export default class ImNobsidianPlugin extends Plugin {
   /** Pull. `force` 는 원격을 전체 대조한다 — Notion 에서 지운 노트를 바로 반영한다. */
   private async executePull({
     force = false,
+    rerender = false,
     paths,
-  }: { readonly force?: boolean; readonly paths?: string[] } = {}): Promise<void> {
+  }: {
+    readonly force?: boolean;
+    readonly rerender?: boolean;
+    readonly paths?: string[];
+  } = {}): Promise<void> {
     if (!this.syncController) {
       new Notice(this.notReadyReason());
       return;
@@ -691,7 +703,7 @@ export default class ImNobsidianPlugin extends Plugin {
       new Notice(blocked);
       return;
     }
-    await this.syncController.pull(paths, { force });
+    await this.syncController.pull(paths, { force, rerender });
   }
 
   private async executeSync(): Promise<void> {

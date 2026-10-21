@@ -5,6 +5,7 @@ import type {
   ProcessorOutput,
 } from "../../types/convert.js";
 import { restoreLocalForm } from "../local-form.js";
+import { keepReadBookmarkLinks } from "../bookmark.js";
 import { splitFrontmatter } from "../../utils/frontmatter.js";
 
 /** 노트를 push 가 보낼 꼴로 — 파이프라인이 자기로 만들어 넘긴다(`sentForm`). */
@@ -37,7 +38,9 @@ export class LocalFormRestorer implements Processor {
     }
     // 줄을 섞어 본 노트의 frontmatter 가 깨질 수 있다 — push 의 눈으로 보지 않고 맞지 않는 노트로 친다.
     // 보면 파이프라인이 실패를 적는다. 받은 노트는 읽히므로 그 꼴(JSON 배열)과 같을 수 없다.
-    const content = restoreLocalForm(input.content, local, (note) =>
+    // 북마크 블록을 이번에 읽지 못했으면 볼트에 이미 있는 그 북마크의 링크를 쓴다 — 아래 비교는 링크를 Notion
+    // 의 것으로 맞춘다(B14).
+    const content = restoreLocalForm(keepReadBookmarkLinks(input.content, local), local, (note) =>
       readable(note) ? this.sent(note, input.context) : UNREADABLE,
     );
     return { content, metadata: input.metadata };

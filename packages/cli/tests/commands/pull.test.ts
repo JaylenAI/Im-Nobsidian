@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Command } from "commander";
 
-const mockPull = vi.fn().mockResolvedValue({
+const BASE_RESULT = {
   created: 3,
   updated: 1,
   deleted: 0,
@@ -12,7 +12,8 @@ const mockPull = vi.fn().mockResolvedValue({
   imageCount: 0,
   fileCount: 0,
   linkCount: 0,
-});
+};
+const mockPull = vi.fn().mockResolvedValue(BASE_RESULT);
 
 vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
@@ -71,6 +72,38 @@ describe("pull command", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("Pull complete"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 created"));
     spy.mockRestore();
+  });
+
+  it("--rerender 옵션 전달 (B14)", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull("--rerender");
+    expect(mockPull).toHaveBeenLastCalledWith(expect.objectContaining({ rerender: true }));
+    spy.mockRestore();
+  });
+
+  it("받아 봤지만 바뀌지 않은 노트는 진행 줄을 찍지 않는다 (B14)", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    mockPull.mockImplementationOnce(async (options) => {
+      options.onProgress(1, 2, { path: "그대로.md", operation: "update", unchanged: true });
+      options.onProgress(2, 2, { path: "다시.md", operation: "update" });
+      return BASE_RESULT;
+    });
+    await runPull("--rerender");
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    expect(lines.some((line) => line.includes("다시.md"))).toBe(true);
+    expect(lines.some((line) => line.includes("그대로.md"))).toBe(false);
+    spy.mockRestore();
+  });
+
+  it("--rerender 는 --dry-run 과 함께 쓸 수 없다", async () => {
+    mockPull.mockClear();
+    const program = new Command();
+    program.exitOverride();
+    program.addCommand(pullCommand.exitOverride().configureOutput({ writeErr: () => {} }));
+    await expect(
+      program.parseAsync(["node", "cli", "pull", "--rerender", "--dry-run"]),
+    ).rejects.toThrow(/cannot be used with option '--dry-run'/);
+    expect(mockPull).not.toHaveBeenCalled();
   });
 
   it("dry-run 옵션 전달", async () => {

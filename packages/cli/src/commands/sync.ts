@@ -59,6 +59,7 @@ export const syncCommand = new Command("sync")
         dryRun: options.dryRun,
         onProgress: (_current, _total, item) => {
           if (item.direction === "push") showPush();
+          if (item.unchanged) return;
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);
           log(`    ${icon} ${item.path} ${label}`);

@@ -275,16 +275,20 @@ export class SyncController {
    */
   async pull(
     paths?: string[],
-    { force = false }: { readonly force?: boolean } = {},
+    {
+      force = false,
+      rerender = false,
+    }: { readonly force?: boolean; readonly rerender?: boolean } = {},
   ): Promise<void> {
     await this.runUserOperation(
       "pull",
-      force ? "Pull(전체 확인)" : "Pull",
+      rerender ? "Pull(다시 그리기)" : force ? "Pull(전체 확인)" : "Pull",
       (options) =>
         this.orchestrator.pull({
           ...options,
           ...(paths ? { paths } : {}),
           ...(force ? { force } : {}),
+          ...(rerender ? { rerender } : {}),
         }),
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,

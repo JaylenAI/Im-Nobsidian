@@ -113,6 +113,7 @@
 | 4 뒤 | `fix/remote-scan-gate`                       | 상태 확인을 취소하지 못함 · 충돌 목록이 작업 잠금 밖 · 증분 훑기가 루트 · 루트 밖 페이지를 하나씩 다시 읽음 · CLI 가 `.MD` 노트를 첨부로 봄                                                                                        | 완료 `a45cd2b` |
 | 4 뒤 | `fix/media-kinds`                            | PDF · 동영상 · 소리를 일반 파일 블록으로 올림 · 내부 참조로 받은 파일만 올라간 이름을 캡션보다 앞세움                                                                                                                              | 완료 `0f8ab45` |
 | 4 뒤 | `fix/notion-text-forms`                      | Notion 의 글 `$a$` 가 볼트에서 수식이 되고 push 하면 Notion 수식이 됨 · 코드 블록 안 `\$` 가 바뀜                                                                                                                                  | 완료 `3684db7` |
+| 4 뒤 | `feature/pull-rerender`                      | 받아 둔 노트가 Notion 에서 바뀌기 전까지 옛 모양(옛 북마크 등) · 로컬 표기 유지가 옛 북마크 링크를 지킴                                                                                                                            | 완료 `7c34e0b` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

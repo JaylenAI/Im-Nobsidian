@@ -162,3 +162,39 @@ export function vaultBookmarks(markdown: string): Map<string, BookmarkTarget> {
   });
   return bookmarks;
 }
+
+/**
+ * 노트의 북마크 링크 글자 — 로컬 표기 유지(`local-form.ts`)가 보낼 꼴에 덧붙여 견준다. Markdown API push 는
+ * 링크를 버려 보낼 꼴이 같지만, 링크의 이름 · 주소는 Notion 의 북마크에서 온다. 견주지 않으면 받아 둔 옛
+ * 링크(Notion 블록을 가리키는 `🔖 Bookmark`)가 받을 때마다 로컬 표기로 남았다(B14).
+ */
+export function bookmarkLinks(note: string): string {
+  const links: string[] = [];
+  mapOutsideCode(note, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) links.push(`[${m[1]}](${m[2]})`);
+    return segment;
+  });
+  return links.join("\n");
+}
+
+/**
+ * 받은 글의 북마크 링크 가운데 블록을 읽지 못해 Notion 자리 주소를 가리키는 것을 로컬 노트의 같은 북마크
+ * 링크로 바꾼다 — 한 번 읽지 못했다고({@link bookmarkLabel}) 볼트의 링크가 옛 모양으로 돌아가지 않게.
+ * 코드 안은 건드리지 않는다.
+ */
+export function keepReadBookmarkLinks(pulled: string, local: string): string {
+  const read = new Map<string, string>();
+  mapOutsideCode(local, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) {
+      read.set(m[3]!, `[${m[1]}](${m[2]})`);
+    }
+    return segment;
+  });
+  if (read.size === 0) return pulled;
+  return mapOutsideCode(pulled, (segment) =>
+    segment.replace(VAULT_BOOKMARK_PAIR_RE, (pair, _label, url: string, placeholder: string) => {
+      const link = url === decodeURIComponent(placeholder) ? read.get(placeholder) : undefined;
+      return link === undefined ? pair : link + pair.slice(pair.indexOf(")%%") + 1);
+    }),
+  );
+}
