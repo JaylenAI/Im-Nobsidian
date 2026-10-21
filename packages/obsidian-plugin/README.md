@@ -37,7 +37,7 @@ delete that file from the plugin folder after updating.
 ## Setup
 
 1. Open Settings → **Im-Notion Sync**.
-2. Enter your Notion integration token and root page ID.
+2. Enter your Notion integration token and the root page — paste the page's address, or its 32-character ID.
 3. Use the sidebar dashboard or the ribbon icon to Push / Pull / Sync.
 
 Requires Obsidian v1.7.0+. Desktop only.
