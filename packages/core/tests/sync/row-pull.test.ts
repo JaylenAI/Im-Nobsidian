@@ -5,6 +5,7 @@
  * B5: 행을 받아 쓴 뒤 파일 수정 시각 · 크기를 적지 않아, 다음 변경 확인이 받은 행을 모두 다시 읽었다.
  * B13: 행 노트는 기간을 두 키(`기간` · `기간_end`)로 적는데 `.base` 보기에 끝 열이 없어 끝 날짜가 보이지 않았다.
  * B10: 같은 이름의 새 행 둘 가운데 누가 자연 이름을 얻는지가 Notion 이 돌려준 차례에 달렸다.
+ * 로컬 파일: 새 행이 DB 폴더의 같은 이름 로컬 파일(상태 DB 에 없는 것)을 덮어써 그 글이 사라졌다.
  *
  * 실제 StateDB(임시 파일)와 메모리 볼트 · 메모리 Notion(configured-db-row-push 와 같은 하니스).
  */
@@ -204,6 +205,49 @@ describe("DB 행 받기 (Phase 4)", () => {
           .sort(),
       );
       expect(new Set(planned).size).toBe(2);
+    });
+  });
+
+  describe("같은 이름의 추적하지 않는 로컬 파일", () => {
+    const LOCAL = "---\n진척: 9\n---\n아직 올리지 않은 내 글\n";
+
+    it("새 행은 그 파일을 덮어쓰지 않고 ID 조각을 붙인 경로를 얻는다", async () => {
+      vault.write("Tasks/같은.md", LOCAL);
+      const row = addRow("같은", 1);
+
+      expect(await build().pull()).toMatchObject({ created: 1, failed: [] });
+
+      expect(vault.read("Tasks/같은.md")).toBe(LOCAL);
+      const path = db.getByNotionId(row.id)!.obsidianPath;
+      expect(path).toBe(`Tasks/같은 (${row.id.replace(/-/g, "").slice(0, 8)}).md`);
+      expect(vault.read(path)).toContain("본문");
+    });
+
+    it("dry-run 도 그 파일의 경로를 보이지 않는다", async () => {
+      vault.write("Tasks/같은.md", LOCAL);
+      addRow("같은", 1);
+
+      const planned: string[] = [];
+      await build().pull({
+        dryRun: true,
+        onProgress: (_done, _total, item) => {
+          if (item?.path.startsWith("Tasks/같은")) planned.push(item.path);
+        },
+      });
+
+      expect(planned).toHaveLength(1);
+      expect(planned[0]).not.toBe("Tasks/같은.md");
+    });
+
+    it("다음 push 는 그 로컬 파일을 새 행으로 올리고, 받은 행은 그대로다", async () => {
+      vault.write("Tasks/같은.md", LOCAL);
+      const row = addRow("같은", 1);
+      await build().pull();
+
+      expect(await build().push()).toMatchObject({ created: 1, failed: [] });
+
+      expect(db.getByPath("Tasks/같은.md")!.notionPageId).not.toBe(row.id);
+      expect(vault.read("Tasks/같은.md")).toBe(LOCAL);
     });
   });
 
