@@ -60,4 +60,4 @@ notion-to-md 의 변환기를 하나씩 고치는 길은 끝이 없다. 두 길�
 - Notion 의 export 규칙을 우리가 다시 구현한다. Notion 이 export 모양을 바꾸면 폴백만 옛 모양을 낸다. 짝 픽스처가
   그때 다시 잴 근거다.
 - notion-to-md 의 pull 쪽(`BlockConverter.notionBlocksToMarkdown` 과 그 변환기들)은 제품 경로에서 쓰이지 않게 됐다.
-  지우는 것은 별도 작업이다 — 오프라인 왕복 시험들이 아직 그것을 쓴다.
+  v0.4.0 에서 그 시험들과 함께 지웠다(`refactor/remove-legacy-converters`) — 의존성 `notion-to-md` 도 뺐다.

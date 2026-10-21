@@ -116,6 +116,7 @@
 | 4 뒤 | `feature/pull-rerender`                      | 받아 둔 노트가 Notion 에서 바뀌기 전까지 옛 모양(옛 북마크 등) · 로컬 표기 유지가 옛 북마크 링크를 지킴                                                                                                                            | 완료 `7c34e0b` |
 | 4 뒤 | `refactor/pull-render`                       | 새로 받기 · 다시 받기의 노트 렌더가 두 벌(B9)                                                                                                                                                                                      | 완료 `f44fece` |
 | 4 뒤 | `fix/plugin-settings-actions`                | 플러그인 설정에 Notion 주소 넣으면 연결 실패 · 방향이 막는 단추가 무반응 · 목록 못 읽음 숨김 · 받기 뒤 자동 동기화 한 번 더 · 상태 DB 스키마 베낌                                                                                  | 완료 `edc644c` |
+| 4 뒤 | `refactor/remove-legacy-converters`          | 제품이 부르지 않는 옛 블록 변환기(notion-to-md · martian 블록)와 그것만 쓰던 도우미 · 시험 · 의존성이 남음(N2)                                                                                                                     | 완료 `e46226d` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

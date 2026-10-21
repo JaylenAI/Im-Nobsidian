@@ -46,8 +46,9 @@ pnpm typecheck        # 타입 체크
 
 ### 변환 레이어
 
-- MD→Notion: `@tryfabric/martian` + 커스텀 전처리기
-- Notion→MD: `notion-to-md` + 커스텀 후처리기
+- 기본: Notion Markdown API(NFM) ↔ 볼트 마크다운 — `converter/enhanced-md-converter.ts` + 전처리기 · 후처리기
+- 블록 방식(Markdown API 실패 · `preferMarkdownApi: false`): 블록 ↔ NFM(`blocks-to-nfm` · `nfm-to-blocks`) 뒤 같은 변환
+  (ADR-034 · 035). 글 조각의 rich text 만 `@tryfabric/martian` 이 만든다
 - 변환 불가 기능은 preserve marker로 보존
 
 ### 테스트
