@@ -19,9 +19,11 @@ import type {
   RenameKind,
   ResolutionChoice,
   StatusResult,
+  SyncDirection,
   SyncRecord,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
+import { directionBlocks, type DirectionBlocks } from "./direction.js";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
 export type SyncPhase = "ready" | "syncing" | "error" | "conflict";
@@ -47,6 +49,8 @@ export interface SyncDashboardState {
   progress: { current: number; total: number; currentPath: string } | null;
   errorMessage: string | null;
   completionSummary: string | null;
+  /** 동기화 방향이 막는 Push · Pull — 패널은 그 단추를 끄고 까닭을 보인다. */
+  blocked: DirectionBlocks;
 }
 
 export type SyncStatePatch = Partial<SyncDashboardState>;
@@ -106,6 +110,8 @@ export class SyncController {
   private vaultSyncPending = false;
   /** {@link shutdown} 뒤 — 어떤 작업도 받지 않는다. */
   private closed = false;
+  /** 패널에 보인 목록 읽기 실패 — 다음에 읽으면 걷는다({@link refreshLocal}). */
+  private listReadError: string | null = null;
   /** 마지막 원격 확인이 본 원격 변경 — 받은 것을 목록에서 빼려고 둔다({@link dropPulled}). */
   private remoteChanges: RemoteChange[] = [];
   /** 패널에 보낸 단계 — 목록만 다시 읽는 새로고침은 이것을 덮지 않고 다시 싣는다({@link refreshLocal}). */
@@ -116,10 +122,16 @@ export class SyncController {
     errorMessage: null,
   };
 
+  /** 동기화 방향이 막는 동작 — 목록을 보낼 때 함께 싣는다(새로 연 패널도 받는다). */
+  private readonly blocked: DirectionBlocks;
+
   constructor(
     private readonly orchestrator: SyncOrchestrator,
     private readonly hooks: SyncControllerHooks = {},
-  ) {}
+    direction: SyncDirection = "both",
+  ) {
+    this.blocked = directionBlocks(direction);
+  }
 
   /** 작업이 도는 중인지 — 취소한 작업도 실제로 멈출 때까지 돈다. */
   isSyncing(): boolean {
@@ -448,16 +460,36 @@ export class SyncController {
     let status: StatusResult;
     try {
       status = await this.orchestrator.statusLocal();
-    } catch {
-      // 사이드바 새로고침은 best-effort — 실패해도 무시.
+    } catch (error) {
+      // 읽지 못한 것을 「바뀐 것 없음」 으로 두지 않는다 — 예전에는 버려, 패널이 옛 목록을 까닭 없이 보였다.
+      // 도는 작업이 있으면 그 작업이 끝나며 다시 읽는다 — 그 진행을 덮지 않는다.
+      if (this.closed || (!settle && this.active)) return;
+      const message = `변경 목록을 읽지 못했습니다: ${errorMessage(error)}`;
+      if (settle) {
+        // 방금 끝난 작업은 이미 단계를 정했다(충돌이면 충돌 · 해결 단추). 그 단계를 지키고 알리기만 한다.
+        this.hooks.onNotice?.(`Im-Nobsidian: ${message}`, ACTIONABLE_NOTICE_MS);
+        return;
+      }
+      this.listReadError = message;
+      this.hooks.onStatusBar?.("error");
+      this.emitState({
+        syncState: "error",
+        operationType: null,
+        progress: null,
+        errorMessage: this.listReadError,
+      });
       return;
     }
-    if (settle || (!this.active && this.shown.syncState !== "error")) {
+    // 보이는 오류가 지난번 목록 읽기의 것이면 다시 읽은 지금 걷는다 — 작업의 실패 이유는 그대로 둔다.
+    const listErrorShown =
+      this.shown.syncState === "error" && this.shown.errorMessage === this.listReadError;
+    this.listReadError = null;
+    if (settle || (!this.active && (this.shown.syncState !== "error" || listErrorShown))) {
       this.settle(status);
       return;
     }
     // 단계는 그대로 다시 싣는다 — 작업 중에 새로 연 패널도 진행 · 오류를 받는다.
-    this.emitState({ ...listsOf(status), ...this.shown });
+    this.emitState({ ...listsOf(status), blocked: this.blocked, ...this.shown });
   }
 
   /** 끝났다 — 충돌이 남았으면 충돌, 아니면 준비됨. 패널과 상태바가 같은 단계를 보인다. */
@@ -466,6 +498,7 @@ export class SyncController {
     this.hooks.onStatusBar?.(phase);
     this.emitState({
       ...listsOf(status),
+      blocked: this.blocked,
       ...patch,
       syncState: phase,
       operationType: null,

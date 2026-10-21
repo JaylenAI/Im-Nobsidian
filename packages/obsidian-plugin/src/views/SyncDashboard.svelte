@@ -3,6 +3,7 @@
   import { setIcon } from "obsidian";
   import { noteNameFromPath, stripMarkdownExtension } from "@im-nobsidian/core";
   import type { LocalChange, FolderMoveChange, RemoteChange, SyncRecord } from "@im-nobsidian/core";
+  import type { DirectionBlocks } from "../sync/direction.js";
 
   interface SyncProgress {
     current: number;
@@ -22,6 +23,7 @@
     progress: SyncProgress | null;
     errorMessage: string | null;
     completionSummary: string | null;
+    blocked: DirectionBlocks;
   }
 
   interface Props {
@@ -38,6 +40,8 @@
     progress: SyncProgress | null;
     errorMessage: string | null;
     completionSummary: string | null;
+    /** 동기화 방향이 막는 Push · Pull — 그 단추를 끄고 까닭을 설명으로 보인다. */
+    blocked: DirectionBlocks;
     onReady: (updater: (state: SyncStateUpdate) => void) => void;
     onPull: () => void;
     onPush: () => void;
@@ -66,6 +70,7 @@
     progress: initialProgress,
     errorMessage: initialErrorMessage,
     completionSummary: initialCompletionSummary,
+    blocked: initialBlocked,
     onReady,
     onPull,
     onPush,
@@ -92,6 +97,7 @@
   let progress: SyncProgress | null = $state(initialProgress);
   let errorMessage: string | null = $state(initialErrorMessage);
   let completionSummary: string | null = $state(initialCompletionSummary);
+  let blocked: DirectionBlocks = $state(initialBlocked);
   let completionVisible = $state(false);
   let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -106,6 +112,7 @@
     operationType = s.operationType ?? null;
     progress = s.progress;
     errorMessage = s.errorMessage;
+    blocked = s.blocked;
 
     if (s.completionSummary && s.completionSummary !== completionSummary) {
       completionSummary = s.completionSummary;
@@ -398,10 +405,20 @@
 
   <!-- Action Buttons -->
   <div class="im-sync-actions">
-    <button class="im-sync-btn im-sync-btn-pull" onclick={onPull} disabled={isSyncing}>
+    <button
+      class="im-sync-btn im-sync-btn-pull"
+      onclick={onPull}
+      disabled={isSyncing || blocked.pull !== null}
+      title={blocked.pull}
+    >
       ↓ Pull
     </button>
-    <button class="im-sync-btn im-sync-btn-push" onclick={onPush} disabled={isSyncing}>
+    <button
+      class="im-sync-btn im-sync-btn-push"
+      onclick={onPush}
+      disabled={isSyncing || blocked.push !== null}
+      title={blocked.push}
+    >
       ↑ Push
     </button>
     <button class="im-sync-btn im-sync-btn-sync" onclick={onSync} disabled={isSyncing}>
@@ -433,9 +450,9 @@
               <span class="im-sync-file-actions">
                 {@render action(
                   ICON.push,
-                  "이 폴더의 이동을 Notion 에 올리기",
+                  blocked.push ?? "이 폴더의 이동을 Notion 에 올리기",
                   () => onPushPath(move.to),
-                  isSyncing,
+                  isSyncing || blocked.push !== null,
                 )}
               </span>
             </div>
@@ -463,9 +480,9 @@
                 {/if}
                 {@render action(
                   ICON.push,
-                  "이 노트만 Notion 에 올리기",
+                  blocked.push ?? "이 노트만 Notion 에 올리기",
                   () => onPushPath(change.path),
-                  isSyncing,
+                  isSyncing || blocked.push !== null,
                 )}
                 {#if change.type === "modified" || change.type === "deleted"}
                   {@render action(
@@ -529,9 +546,9 @@
                   {@render action(ICON.open, "노트 열기", () => onOpenFile(path), false)}
                   {@render action(
                     ICON.pull,
-                    remotePullLabel(change),
+                    blocked.pull ?? remotePullLabel(change),
                     () => onPullPath(path),
-                    isSyncing,
+                    isSyncing || blocked.pull !== null,
                   )}
                 </span>
               {/if}

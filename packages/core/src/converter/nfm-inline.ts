@@ -22,7 +22,7 @@
 import { markdownToRichText } from "@tryfabric/martian";
 import type { ApiColor } from "@notionhq/client";
 import { RICH_TEXT_CONTENT_MAX } from "../constants/notion-limits.js";
-import { isNotionId, normalizeNotionId } from "../utils/id.js";
+import { isNotionId, normalizeNotionId, notionIdOfUrl } from "../utils/id.js";
 import { mathCloseAt } from "./literal-dollar.js";
 import { nfmAttrValue, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
 
@@ -351,7 +351,7 @@ function mentionOf(kind: string, attrs: NfmAttrs): NfmMention | null {
   switch (kind) {
     case "page":
     case "database": {
-      const id = idOfUrl(url);
+      const id = notionIdOfUrl(url);
       if (id === null) return null;
       return kind === "page"
         ? { type: "page", page: { id } }
@@ -366,15 +366,6 @@ function mentionOf(kind: string, attrs: NfmAttrs): NfmMention | null {
     default:
       return null;
   }
-}
-
-/** 주소 끝의 Notion id — `…/p/<32자리>` · `…/<제목>-<32자리>`. */
-function idOfUrl(url: string): string | null {
-  const m =
-    /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[?#].*)?$/i.exec(
-      url,
-    );
-  return m ? normalizeNotionId(m[1]!.toLowerCase()) : null;
 }
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;

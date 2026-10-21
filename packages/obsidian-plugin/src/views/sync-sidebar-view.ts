@@ -42,6 +42,7 @@ export class SyncSidebarView extends ItemView {
     progress: null,
     errorMessage: null,
     completionSummary: null,
+    blocked: { push: null, pull: null },
   };
 
   constructor(leaf: WorkspaceLeaf) {

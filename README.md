@@ -187,7 +187,7 @@ that cries wolf gets ignored. Page verification is skipped in database mode (the
 ### Non-interactive mode (CI / scripts)
 
 ```bash
-nobsi init --token ntn_xxx --root-page-id abc123 --non-interactive
+nobsi init --token ntn_xxx --root-page-id "https://www.notion.so/myspace/Notes-0123456789abcdef0123456789abcdef" --non-interactive
 nobsi sync --dry-run
 ```
 

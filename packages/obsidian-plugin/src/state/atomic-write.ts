@@ -6,7 +6,7 @@
  * 도중에 죽으면 잘린 파일이 남고, 동기화 기록을 잃는다. Obsidian 어댑터의 이름 바꾸기는 대상이 있으면 던져 덮어
  * 쓰지 못하므로 Node 의 `fs` 로 쓴다 — 플러그인은 데스크톱 전용이다(manifest `isDesktopOnly`).
  */
-import { mkdir, open, rename } from "node:fs/promises";
+import { mkdir, open, rename, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";
 
 export async function writeFileAtomically(path: string, data: Uint8Array): Promise<void> {
@@ -21,4 +21,26 @@ export async function writeFileAtomically(path: string, data: Uint8Array): Promi
     await file.close();
   }
   await rename(temporary, path);
+  await syncDirectory(dirname(path));
+}
+
+/**
+ * 이름 바꾸기를 디스크에 내린다 — 파일 내용만 내리고 폴더를 내리지 않으면, 전원이 나갔을 때 바뀐 이름이 사라져
+ * 옛 파일로 돌아갈 수 있다(POSIX). Windows 는 폴더를 열 수 없고, 일부 파일 시스템은 폴더 내리기를 거절한다 —
+ * 그때는 건너뛴다. 이름 바꾸기는 이미 끝났고, 파일은 옛 것이거나 새 것이다.
+ */
+async function syncDirectory(directory: string): Promise<void> {
+  let handle: FileHandle;
+  try {
+    handle = await open(directory, "r");
+  } catch {
+    return;
+  }
+  try {
+    await handle.sync();
+  } catch {
+    // 위와 같다 — 내리지 못해도 쓰기는 끝났다.
+  } finally {
+    await handle.close();
+  }
 }

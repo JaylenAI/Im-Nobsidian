@@ -4,7 +4,38 @@ import type { VaultFS, FileInfo, FileStatInfo, NonMdFileInfo } from "@im-nobsidi
 import { isInternalPath } from "@im-nobsidian/core";
 
 export class ObsidianVaultAdapter implements VaultFS {
+  /** 지금 이 어댑터가 쓰는 · 지우는 · 옮기는 경로 — 경로마다 겹친 호출 수. */
+  private readonly changing = new Map<string, number>();
+
   constructor(private readonly vault: Vault) {}
+
+  /**
+   * 이 볼트 이벤트가 이 어댑터가 부른 쓰기의 것인가. Obsidian 은 `create` · `modify` · `rename` · `delete` 이벤트를
+   * 그 호출이 끝나기 전에 보낸다(1.13.7 실측) — 그래서 호출하는 동안만 경로를 적어 두면 가릴 수 있다. 폴더를 옮기면
+   * 안의 노트도 이벤트를 받으므로 그 아래 경로도 이 어댑터의 것이다.
+   *
+   * 동기화가 받아 쓴 노트의 이벤트가 동기화를 또 불렀다 — 끝나면 한 번 더 돌아 Notion 에 다시 물었다(D4).
+   */
+  isOwnChange(path: string): boolean {
+    const normalized = normalizePath(path);
+    for (const own of this.changing.keys()) {
+      if (normalized === own || normalized.startsWith(`${own}/`)) return true;
+    }
+    return false;
+  }
+
+  private async changingPaths<T>(paths: readonly string[], run: () => Promise<T>): Promise<T> {
+    for (const path of paths) this.changing.set(path, (this.changing.get(path) ?? 0) + 1);
+    try {
+      return await run();
+    } finally {
+      for (const path of paths) {
+        const left = this.changing.get(path)! - 1;
+        if (left === 0) this.changing.delete(path);
+        else this.changing.set(path, left);
+      }
+    }
+  }
 
   async readFile(path: string): Promise<string> {
     const file = this.vault.getAbstractFileByPath(normalizePath(path));
@@ -25,6 +56,10 @@ export class ObsidianVaultAdapter implements VaultFS {
 
   async writeFile(path: string, content: string): Promise<void> {
     const normalized = normalizePath(path);
+    await this.changingPaths([normalized], () => this.writeText(normalized, content));
+  }
+
+  private async writeText(normalized: string, content: string): Promise<void> {
     const existing = this.vault.getAbstractFileByPath(normalized);
 
     if (existing && existing instanceof TFile) {
@@ -40,6 +75,10 @@ export class ObsidianVaultAdapter implements VaultFS {
 
   async writeBinary(path: string, data: Buffer): Promise<void> {
     const normalized = normalizePath(path);
+    await this.changingPaths([normalized], () => this.writeBytes(normalized, data));
+  }
+
+  private async writeBytes(normalized: string, data: Buffer): Promise<void> {
     const existing = this.vault.getAbstractFileByPath(normalized);
 
     if (existing && existing instanceof TFile) {
@@ -62,7 +101,7 @@ export class ObsidianVaultAdapter implements VaultFS {
   async deleteFile(path: string): Promise<void> {
     const file = this.vault.getAbstractFileByPath(normalizePath(path));
     if (file) {
-      await this.vault.trash(file, true);
+      await this.changingPaths([file.path], () => this.vault.trash(file, true));
     }
   }
 
@@ -77,7 +116,8 @@ export class ObsidianVaultAdapter implements VaultFS {
       await this.ensureFolder(toDir);
     }
 
-    await this.vault.rename(file, normalizePath(to));
+    const target = normalizePath(to);
+    await this.changingPaths([file.path, target], () => this.vault.rename(file, target));
   }
 
   async exists(path: string): Promise<boolean> {

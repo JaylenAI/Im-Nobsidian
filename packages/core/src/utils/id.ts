@@ -19,6 +19,35 @@ export function isNotionId(value: string): boolean {
   return NOTION_ID_RE.test(value);
 }
 
+/** 주소 끝의 Notion id — `…/p/<32자리>` · `…/<제목>-<32자리>`. 없으면 null. */
+export function notionIdOfUrl(url: string): string | null {
+  const m =
+    /([0-9a-f]{32}|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(?:[?#].*)?$/i.exec(
+      url,
+    );
+  return m ? normalizeNotionId(m[1]!.toLowerCase()) : null;
+}
+
+/**
+ * 사용자가 넣은 페이지 — ID(대시 있거나 없거나) 또는 Notion 주소(브라우저 주소창 · 「링크 복사」). 주소창에
+ * 보이는 것을 그대로 붙여 넣어도 되게 한다. 못 찾으면 null.
+ *
+ * 데이터베이스 보기에서 연 페이지 주소는 `…/<DB>?v=<보기>&p=<페이지>` 다 — 연 페이지는 `p` 이고, `v` 는 보기다.
+ */
+export function notionIdFromInput(input: string): string | null {
+  const value = input.trim();
+  if (isNotionId(value)) return normalizeNotionId(value.toLowerCase());
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  const opened = url.searchParams.get("p");
+  if (opened !== null) return isNotionId(opened) ? normalizeNotionId(opened.toLowerCase()) : null;
+  return notionIdOfUrl(url.pathname);
+}
+
 export function notionIdsEqual(a: string, b: string): boolean {
   return a.replace(/-/g, "") === b.replace(/-/g, "");
 }

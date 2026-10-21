@@ -1,4 +1,6 @@
 export { StateDB } from "./state-db.js";
+export { STATE_DB_MIGRATIONS } from "./migrations/index.js";
+export type { StateDbMigration } from "./migrations/index.js";
 export { StateDbUnavailableError } from "./state-db-unavailable.js";
 export { SavedStateDbError, SAVED_STATE_TABLES_QUERY } from "./saved-state-db-error.js";
 export { StateLock, StateDbLockedError, stateDbLockPath } from "./state-lock.js";

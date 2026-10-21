@@ -58,7 +58,7 @@ nobsi init
 ### Non-interactive mode / 비대화형 모드 (CI/스크립트용)
 
 ```bash
-nobsi init --token ntn_xxx --root-page-id abc123 --non-interactive
+nobsi init --token ntn_xxx --root-page-id "https://www.notion.so/myspace/Notes-0123456789abcdef0123456789abcdef" --non-interactive
 ```
 
 ## Step 4: Sync / 동기화

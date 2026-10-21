@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { PluginSettingTab, SecretComponent, Setting } from "obsidian";
-import { systemTimeZone } from "@im-nobsidian/core";
+import { notionIdFromInput, systemTimeZone } from "@im-nobsidian/core";
 import { AUTO_SYNC_INTERVAL_MINUTES } from "./constants.js";
 import type ImNobsidianPlugin from "./main.js";
 import type { ImNobsidianSettings } from "./main.js";
@@ -57,18 +57,32 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
         }),
       );
 
-    new Setting(containerEl)
-      .setName("루트 페이지 ID")
-      .setDesc("동기화할 Notion 루트 페이지의 ID — 페이지 주소 끝의 32자리입니다.")
-      .addText((text) =>
-        text
-          .setPlaceholder("페이지 ID")
-          .setValue(settings.rootPageId)
-          .onChange(async (value) => {
-            settings.rootPageId = value.trim();
-            await this.changeConnection();
-          }),
+    const rootRow = new Setting(containerEl).setName("루트 페이지 ID");
+    const showRoot = (value: string) => {
+      const id = notionIdFromInput(value);
+      rootRow.setDesc(
+        id !== null
+          ? `동기화할 Notion 루트 페이지 — ID ${id} 로 씁니다.`
+          : value === ""
+            ? "동기화할 Notion 루트 페이지 — 페이지 주소를 붙여 넣거나 주소 끝의 32자리 ID 를 넣으세요."
+            : "주소나 ID 에서 Notion 페이지 ID(32자리)를 찾지 못했습니다 — 페이지 주소를 그대로 붙여 넣으세요.",
       );
+      rootRow.descEl.toggleClass("mod-warning", id === null && value !== "");
+    };
+    showRoot(settings.rootPageId);
+    rootRow.addText((text) =>
+      text
+        .setPlaceholder("https://www.notion.so/… 또는 페이지 ID")
+        .setValue(settings.rootPageId)
+        .onChange(async (value) => {
+          // 주소를 붙여 넣으면 그 안의 ID 만 적는다. 알아볼 수 없는 값도 적어 두되 연결하지 않는다 — 고칠 때까지
+          // 연결 상태가 그 까닭을 보인다.
+          const trimmed = value.trim();
+          settings.rootPageId = notionIdFromInput(trimmed) ?? trimmed;
+          showRoot(trimmed);
+          await this.changeConnection();
+        }),
+    );
 
     this.connectionRow(containerEl);
 
@@ -77,7 +91,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("동기화 방향")
       .setDesc(
-        "Push만이면 Pull 단추 · 명령이 아무것도 받지 않고, Pull만이면 Push 가 아무것도 보내지 않습니다. " +
+        "Push만이면 변경 패널의 Pull 단추가 꺼지고 명령은 까닭을 알립니다 — Pull만이면 Push 가 그렇습니다. " +
           "Sync 와 자동 동기화도 이 방향을 따릅니다.",
       )
       .addDropdown((dropdown) => {

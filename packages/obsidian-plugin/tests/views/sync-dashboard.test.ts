@@ -22,6 +22,7 @@ interface SyncStateUpdate {
   progress: { current: number; total: number; currentPath: string } | null;
   errorMessage: string | null;
   completionSummary: string | null;
+  blocked: { push: string | null; pull: string | null };
 }
 
 let m: Mounted | null = null;
@@ -32,6 +33,9 @@ afterEach(() => {
   m = null;
   updater = null;
 });
+
+/** 동기화 방향이 막는 동작 없음 — 양방향. */
+const NOT_BLOCKED = { push: null, pull: null };
 
 function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
   return {
@@ -45,6 +49,7 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     progress: null,
     errorMessage: null,
     completionSummary: null,
+    blocked: NOT_BLOCKED,
     onReady: (fn: (s: SyncStateUpdate) => void) => {
       updater = fn;
     },
@@ -134,6 +139,7 @@ describe("SyncDashboard (I9 마운트)", () => {
       progress: null,
       errorMessage: null,
       completionSummary: null,
+      blocked: NOT_BLOCKED,
     });
     m.flush();
 
@@ -156,6 +162,7 @@ describe("SyncDashboard (I9 마운트)", () => {
       progress: null,
       errorMessage: null,
       completionSummary: "Pull 완료 · 5개 생성",
+      blocked: NOT_BLOCKED,
     });
     m.flush();
 
@@ -273,6 +280,42 @@ describe("변경 패널 — 항목별 동작", () => {
     m.target.querySelector<HTMLElement>(".im-sync-file-item")!.click();
     expect(props.onShowLocalDiff).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["push", "↑ Push", "↓ Pull"],
+    ["pull", "↓ Pull", "↑ Push"],
+  ] as const)(
+    "동기화 방향이 %s 를 막으면 그 단추와 항목 동작을 끄고 까닭을 보인다 (D2)",
+    (action, blockedLabel, openLabel) => {
+      const reason = `방향이 ${action} 를 막음`;
+      const localChanges = [{ path: "노트.md", type: "modified" }];
+      m = renderComponent(
+        SyncDashboard,
+        baseProps({
+          remoteChanges,
+          localChanges,
+          blocked: { ...NOT_BLOCKED, [action]: reason },
+        }),
+      );
+      const button = (label: string) =>
+        [...m!.target.querySelectorAll<HTMLButtonElement>(".im-sync-btn")].find(
+          (b) => normText(b) === label,
+        )!;
+
+      expect(button(blockedLabel).disabled).toBe(true);
+      expect(button(blockedLabel).title).toBe(reason);
+      expect(button(openLabel).disabled).toBe(false);
+      expect(button("⇅ Sync").disabled).toBe(false);
+      // 항목 동작은 설명(툴팁)이 까닭으로 바뀌고 꺼진다 — 다른 방향 동작은 그대로다
+      const items = [
+        ...m.target.querySelectorAll<HTMLButtonElement>(`button[aria-label="${reason}"]`),
+      ];
+      expect(items.length).toBeGreaterThan(0);
+      expect(items.every((b) => b.disabled)).toBe(true);
+      const other = action === "push" ? PULL : PUSH;
+      expect(m.target.querySelector<HTMLButtonElement>(other)!.disabled).toBe(false);
+    },
+  );
 
   it("올리기는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 되돌리기가 없다", () => {
     const localChanges = [
@@ -446,6 +489,7 @@ describe("변경 패널 — 항목별 동작", () => {
       progress: null,
       errorMessage: null,
       completionSummary: null,
+      blocked: NOT_BLOCKED,
     });
     m.flush();
     expect(value()).toBe("5분 전");

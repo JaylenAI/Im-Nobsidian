@@ -17,6 +17,7 @@ import {
   EntryEditor,
   getLogger,
   isMarkdownPath,
+  notionIdFromInput,
 } from "@im-nobsidian/core";
 import type {
   Config,
@@ -41,6 +42,7 @@ import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
 import { SyncController } from "./sync/sync-controller.js";
+import { directionBlock } from "./sync/direction.js";
 import type { SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
 
 function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
@@ -130,6 +132,8 @@ export default class ImNobsidianPlugin extends Plugin {
   private autoSyncTimer: number | null = null;
   private initializing: Promise<void> = Promise.resolve();
   private debounceTimer: number | null = null;
+  /** 동기화 엔진이 쓰는 볼트 어댑터 — 그 쓰기의 볼트 이벤트를 가린다({@link scheduleVaultSyncFor}). */
+  private syncVault: ObsidianVaultAdapter | null = null;
   private viewProvider: ViewDataProvider | null = null;
   private entryEditor: EntryEditor | null = null;
   /**
@@ -359,14 +363,22 @@ export default class ImNobsidianPlugin extends Plugin {
 
   /** Notion 에 닿을 설정(토큰 이름 · 루트 페이지)을 다 채웠나. */
   private hasConnectionSettings(): boolean {
-    return Boolean(this.settings.tokenSecret && this.settings.rootPageId);
+    return this.missingSettings().length === 0;
   }
 
-  /** 비어 있는 연결 설정 — 「설정을 먼저」 대신 무엇을 넣어야 하는지 말한다. */
+  /**
+   * 비어 있거나 알아볼 수 없는 연결 설정 — 「설정을 먼저」 대신 무엇을 넣어야 하는지 말한다. 루트 페이지에서 ID 를
+   * 찾지 못하면 연결하지 않는다 — 연결하면 첫 동기화가 Notion 의 검증 오류로 끝난다.
+   */
   private missingSettings(): string[] {
+    const { tokenSecret, rootPageId } = this.settings;
     return [
-      ...(this.settings.tokenSecret ? [] : ["Notion 토큰"]),
-      ...(this.settings.rootPageId ? [] : ["루트 페이지 ID"]),
+      ...(tokenSecret ? [] : ["Notion 토큰"]),
+      ...(rootPageId === ""
+        ? ["루트 페이지 ID"]
+        : notionIdFromInput(rootPageId) !== null
+          ? []
+          : ["루트 페이지 ID(주소나 ID 에서 페이지 ID 를 찾지 못함)"]),
     ];
   }
 
@@ -398,13 +410,16 @@ export default class ImNobsidianPlugin extends Plugin {
       const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
       const stateDb = await this.openStateDb(join(basePath, STATE_DB_PATH));
 
+      // 동기화가 쓰는 어댑터는 따로 둔다 — 그 쓰기의 볼트 이벤트만 가린다. 보기 편집(EntryEditor)은 사용자의 편집이다.
       const vaultAdapter = new ObsidianVaultAdapter(this.app.vault);
+      this.syncVault = vaultAdapter;
 
       const config: Config = {
         ...DEFAULT_CONFIG,
         notion: {
           token,
-          rootPageId: this.settings.rootPageId,
+          // 예전 버전은 붙여 넣은 주소를 그대로 적었다 — 연결할 때 ID 로 읽는다(위에서 읽을 수 있는지 봤다).
+          rootPageId: notionIdFromInput(this.settings.rootPageId)!,
           parentMode: "page" as const,
           databases: [],
         },
@@ -435,13 +450,18 @@ export default class ImNobsidianPlugin extends Plugin {
       );
       // 동기화 실행은 전부 SyncController 가 담당한다. 플러그인은 Notice/사이드바/상태바
       // 표시만 훅으로 넘겨 배선하므로, sync 로직과 Obsidian UI 가 분리된다.
-      this.syncController = new SyncController(orchestrator, {
-        onState: (patch) => this.updateSidebar(patch),
-        onNotice: (message, durationMs) => new Notice(message, durationMs),
-        onStatusBar: (state) => this.updateStatusBar(state),
-      });
-      this.viewProvider = new ViewDataProvider(vaultAdapter);
-      this.entryEditor = new EntryEditor(vaultAdapter);
+      this.syncController = new SyncController(
+        orchestrator,
+        {
+          onState: (patch) => this.updateSidebar(patch),
+          onNotice: (message, durationMs) => new Notice(message, durationMs),
+          onStatusBar: (state) => this.updateStatusBar(state),
+        },
+        this.settings.syncDirection,
+      );
+      const viewVault = new ObsidianVaultAdapter(this.app.vault);
+      this.viewProvider = new ViewDataProvider(viewVault);
+      this.entryEditor = new EntryEditor(viewVault);
       this.updateStatusBar("ready");
       this.startAutoSync();
       await this.refreshSidebarStatus();
@@ -596,7 +616,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private registerVaultEvents(): void {
     const onVaultChange = (file: { path: string }) => {
       if (!isMarkdownPath(file.path)) return;
-      this.scheduleVaultSync();
+      this.scheduleVaultSyncFor(file.path);
       this.scheduleSidebarRefresh();
     };
     this.registerEvent(this.app.vault.on("modify", onVaultChange));
@@ -613,7 +633,7 @@ export default class ImNobsidianPlugin extends Plugin {
         if (!this.syncController?.onVaultRename(oldPath, file.path, file instanceof TFolder)) {
           return;
         }
-        this.scheduleVaultSync();
+        this.scheduleVaultSyncFor(file.path);
         this.scheduleSidebarRefresh();
       }),
     );
@@ -627,6 +647,12 @@ export default class ImNobsidianPlugin extends Plugin {
       this.sidebarRefreshTimer = null;
       void this.refreshSidebarStatus();
     }, 500);
+  }
+
+  /** 사용자가 바꾼 것만 동기화를 부른다 — 동기화가 쓴 노트(받기 · 충돌 풀기)의 이벤트는 건너뛴다(D4). */
+  private scheduleVaultSyncFor(path: string): void {
+    if (this.syncVault?.isOwnChange(path)) return;
+    this.scheduleVaultSync();
   }
 
   private scheduleVaultSync(): void {
@@ -650,7 +676,7 @@ export default class ImNobsidianPlugin extends Plugin {
   private notReadyReason(): string {
     const missing = this.missingSettings();
     if (missing.length > 0) {
-      return `Im-Nobsidian: 설정이 비어 있습니다 — ${missing.join(" · ")}`;
+      return `Im-Nobsidian: 설정을 채워 주세요 — ${missing.join(" · ")}`;
     }
     if (this.initFailure !== null) return `Im-Nobsidian ${this.initFailure}`;
     return "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.";
@@ -660,15 +686,9 @@ export default class ImNobsidianPlugin extends Plugin {
     this.syncController?.cancel();
   }
 
-  /**
-   * 동기화 방향이 막는 동작이면 그 까닭. 엔진은 막힌 방향을 조용히 0건으로 끝낸다 — 단추를 눌러도
-   * 아무 일이 없었고 까닭도 보이지 않았다.
-   */
   private blockedByDirection(action: "push" | "pull"): string | null {
-    const direction = this.settings.syncDirection;
-    if (direction === "both" || direction === action) return null;
-    const only = direction === "push" ? "Push만" : "Pull만";
-    return `Im-Nobsidian: 동기화 방향이 «${only}» 이라 ${action === "push" ? "Push" : "Pull"} 하지 않습니다 — 설정에서 바꿀 수 있습니다.`;
+    const reason = directionBlock(this.settings.syncDirection, action);
+    return reason === null ? null : `Im-Nobsidian: ${reason}`;
   }
 
   private async executePush(paths?: string[]): Promise<void> {

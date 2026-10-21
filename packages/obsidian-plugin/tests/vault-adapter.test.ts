@@ -229,4 +229,54 @@ describe("ObsidianVaultAdapter", () => {
       expect(nonMdFiles[0]!.path).toBe("attachments/image.png");
     });
   });
+
+  describe("이 어댑터가 부른 쓰기 (D4)", () => {
+    /** Obsidian 은 볼트 이벤트를 호출이 끝나기 전에 보낸다 — 그 자리에서 무엇을 이 어댑터의 것으로 보는지 적는다. */
+    function seenDuring(method: "modify" | "create" | "trash" | "rename", paths: string[]) {
+      const seen: boolean[] = [];
+      const original = vault[method] as (...args: unknown[]) => Promise<unknown>;
+      vault[method] = vi.fn(async (...args: unknown[]) => {
+        for (const path of paths) seen.push(adapter.isOwnChange(path));
+        return original(...args);
+      });
+      return seen;
+    }
+
+    it("쓰기 · 새로 만들기 · 지우기 동안 그 경로는 이 어댑터의 것이고, 끝나면 아니다", async () => {
+      const modified = seenDuring("modify", ["notes/hello.md", "notes/project.md"]);
+      await adapter.writeFile("notes/hello.md", "새 글");
+      const created = seenDuring("create", ["notes/new.md"]);
+      await adapter.writeFile("notes/new.md", "새 노트");
+      const trashed = seenDuring("trash", ["notes/project.md"]);
+      await adapter.deleteFile("notes/project.md");
+
+      expect(modified).toEqual([true, false]);
+      expect(created).toEqual([true]);
+      expect(trashed).toEqual([true]);
+      expect(
+        ["notes/hello.md", "notes/new.md", "notes/project.md"].map((p) => adapter.isOwnChange(p)),
+      ).toEqual([false, false, false]);
+    });
+
+    it("옮기면 옛 경로 · 새 경로와 그 아래 노트가 이 어댑터의 것이다 — 이름이 앞만 같은 이웃은 아니다", async () => {
+      const seen = seenDuring("rename", [
+        "notes/hello.md",
+        "moved/hello.md",
+        "moved/hello.md/x.md",
+        "moved/hello.mdx",
+      ]);
+      await adapter.moveFile("notes/hello.md", "moved/hello.md");
+
+      expect(seen).toEqual([true, true, true, false]);
+    });
+
+    it("쓰기가 실패해도 그 경로를 놓는다 — 다음 사용자 편집을 가리지 않는다", async () => {
+      vault.modify = vi.fn(async () => {
+        throw new Error("disk full");
+      });
+
+      await expect(adapter.writeFile("notes/hello.md", "x")).rejects.toThrow("disk full");
+      expect(adapter.isOwnChange("notes/hello.md")).toBe(false);
+    });
+  });
 });

@@ -17,120 +17,11 @@ import type {
 } from "@im-nobsidian/core";
 import {
   SAVED_STATE_TABLES_QUERY,
+  STATE_DB_MIGRATIONS,
   SavedStateDbError,
   generateId,
   getLogger,
 } from "@im-nobsidian/core";
-
-const INITIAL_MIGRATION = `
-CREATE TABLE IF NOT EXISTS sync_state (
-    id              TEXT PRIMARY KEY,
-    obsidian_path   TEXT NOT NULL,
-    notion_page_id  TEXT,
-    notion_parent_id TEXT,
-    content_hash    TEXT NOT NULL,
-    notion_last_edited TEXT,
-    local_last_modified TEXT NOT NULL,
-    sync_direction  TEXT NOT NULL DEFAULT 'both',
-    file_type       TEXT NOT NULL DEFAULT 'file',
-    status          TEXT NOT NULL DEFAULT 'pending',
-    base_snapshot   BLOB,
-    version         INTEGER NOT NULL DEFAULT 1,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_state_path ON sync_state(obsidian_path);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_state_notion ON sync_state(notion_page_id) WHERE notion_page_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sync_state_status ON sync_state(status);
-CREATE INDEX IF NOT EXISTS idx_sync_state_parent ON sync_state(notion_parent_id);
-
-CREATE TABLE IF NOT EXISTS wikilink_map (
-    obsidian_path   TEXT PRIMARY KEY,
-    notion_page_id  TEXT NOT NULL UNIQUE,
-    title           TEXT NOT NULL,
-    aliases         TEXT DEFAULT '[]',
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_wikilink_title ON wikilink_map(title);
-CREATE INDEX IF NOT EXISTS idx_wikilink_notion ON wikilink_map(notion_page_id);
-
-CREATE TABLE IF NOT EXISTS pending_operations (
-    id              TEXT PRIMARY KEY,
-    sync_state_id   TEXT NOT NULL REFERENCES sync_state(id) ON DELETE CASCADE,
-    operation       TEXT NOT NULL,
-    direction       TEXT NOT NULL,
-    payload         TEXT,
-    retry_count     INTEGER NOT NULL DEFAULT 0,
-    error_message   TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending',
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at    TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_operations(status, created_at);
-
-CREATE TABLE IF NOT EXISTS image_registry (
-    id              TEXT PRIMARY KEY,
-    sync_state_id   TEXT NOT NULL REFERENCES sync_state(id) ON DELETE CASCADE,
-    notion_file_url TEXT NOT NULL,
-    local_path      TEXT NOT NULL,
-    content_hash    TEXT NOT NULL,
-    file_size       INTEGER NOT NULL,
-    mime_type       TEXT NOT NULL,
-    expires_at      TEXT,
-    downloaded_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_image_hash ON image_registry(content_hash);
-CREATE INDEX IF NOT EXISTS idx_image_sync ON image_registry(sync_state_id);
-
-CREATE TABLE IF NOT EXISTS sync_metadata (
-    key     TEXT PRIMARY KEY,
-    value   TEXT NOT NULL
-);
-
-INSERT OR IGNORE INTO sync_metadata (key, value) VALUES ('schema_version', '1');
-`;
-
-const FILE_REGISTRY_MIGRATION = `
-CREATE TABLE IF NOT EXISTS file_registry (
-    id              TEXT PRIMARY KEY,
-    local_path      TEXT NOT NULL,
-    notion_page_id  TEXT NOT NULL,
-    file_upload_id  TEXT NOT NULL,
-    file_type       TEXT NOT NULL DEFAULT 'file',
-    file_hash       TEXT NOT NULL,
-    file_size       INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_file_registry_path ON file_registry(local_path);
-CREATE INDEX IF NOT EXISTS idx_file_registry_page ON file_registry(notion_page_id);
-
-UPDATE sync_metadata SET value = '2' WHERE key = 'schema_version';
-`;
-
-const STAT_CACHE_MIGRATION = `
-ALTER TABLE sync_state ADD COLUMN local_mtime TEXT;
-ALTER TABLE sync_state ADD COLUMN local_file_size INTEGER;
-
-UPDATE sync_metadata SET value = '3' WHERE key = 'schema_version';
-`;
-
-// core 의 004-remote-observation 과 같다 — 앞선 버전이 적은 레코드는 지금 본 것으로 적는다(ADR-017).
-const REMOTE_OBSERVATION_MIGRATION = `
-ALTER TABLE sync_state ADD COLUMN notion_last_edited_by TEXT;
-ALTER TABLE sync_state ADD COLUMN notion_seen_at TEXT;
-ALTER TABLE sync_state ADD COLUMN notion_body_fingerprint TEXT;
-
-UPDATE sync_state SET notion_seen_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
-  WHERE notion_last_edited IS NOT NULL;
-
-UPDATE sync_metadata SET value = '4' WHERE key = 'schema_version';
-`;
 
 interface RawSyncRow {
   id: string;
@@ -232,19 +123,13 @@ export class SqlJsStateDB implements IStateDB {
     }
   }
 
+  /** core 의 스키마 목록을 돈다 — CLI 와 같은 스키마(CHECK 제약 포함)다. 스키마 SQL 의 글자에는 `;` 이 없다. */
   private migrate(): void {
     const version = this.getSchemaVersion();
-    if (version < 1) this.db.run(INITIAL_MIGRATION);
-    if (version < 2) this.db.run(FILE_REGISTRY_MIGRATION);
-    if (version < 3) {
-      for (const line of STAT_CACHE_MIGRATION.split(";")) {
-        const trimmed = line.trim();
-        if (trimmed) this.db.run(trimmed);
-      }
-    }
-    if (version < 4) {
-      for (const line of REMOTE_OBSERVATION_MIGRATION.split(";")) {
-        const trimmed = line.trim();
+    for (const migration of STATE_DB_MIGRATIONS) {
+      if (version >= migration.version) continue;
+      for (const statement of migration.sql.split(";")) {
+        const trimmed = statement.trim();
         if (trimmed) this.db.run(trimmed);
       }
     }
