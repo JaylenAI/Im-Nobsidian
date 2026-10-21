@@ -149,6 +149,23 @@ describe("ImageHandler.downloadAllImages — 받은 이미지 별칭", () => {
   });
 });
 
+describe("ImageHandler — 재시도 0 설정", () => {
+  it("mediaMaxRetries 0 이어도 한 번은 받는다 — 예전에는 시도 없이 null 을 던졌다", async () => {
+    const download = vi.fn(
+      async () => new Response("png", { status: 200, headers: { "content-type": "image/png" } }),
+    );
+    const vaultFs = createMockVaultFs();
+    const handler = new ImageHandler(vaultFs, "attachments", undefined, download as never, {
+      maxRetries: 0,
+    });
+
+    const result = await handler.downloadImage("https://example.com/a.png", "노트");
+
+    expect(download).toHaveBeenCalledTimes(1);
+    expect(result.localPath).toMatch(/^attachments\/노트-[0-9a-f]{12}\.png$/);
+  });
+});
+
 // D6: push 가 페이지 끝에 append 한 임베드 이미지 사본은 pull 에서 다시 받으면 노트 꼬리에
 // 중복 ![[attachments/...]] 로 유입된다. registry 해시 + 본문 마커 파일명이 모두 일치하면
 // 사본으로 판정해 라인째 버리고 디스크에도 쓰지 않는다.

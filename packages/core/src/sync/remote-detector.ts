@@ -22,6 +22,7 @@ import {
   ALL_DATABASES,
   chooseRemoteScan,
   LAST_FULL_PULL_META_KEY,
+  LAST_PULL_META_KEY,
   PENDING_DATABASES_META_KEY,
   serializePendingDatabases,
   type DatabasePullLedger,
@@ -81,7 +82,7 @@ export class RemoteDetector {
   remoteScan(options: { readonly force: boolean; readonly deferDue: boolean }): RemoteScan {
     return chooseRemoteScan(
       {
-        lastPullAt: this.stateDb.getMeta("last_pull_at"),
+        lastPullAt: this.stateDb.getMeta(LAST_PULL_META_KEY),
         lastFullPullAt: this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
         trackedRecords: this.stateDb.getAll().length,
         databaseMode: isDatabaseMode(this.config),
@@ -115,7 +116,7 @@ export class RemoteDetector {
   async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
-    const lastPull = this.stateDb.getMeta("last_pull_at");
+    const lastPull = this.stateDb.getMeta(LAST_PULL_META_KEY);
     const syncedRecords = this.stateDb.getAll();
     const trackedPageIds = new Set(
       syncedRecords.filter((r) => r.notionPageId).map((r) => r.notionPageId!),

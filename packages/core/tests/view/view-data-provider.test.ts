@@ -14,7 +14,7 @@ function createMockVaultFs(files: Record<string, string> = {}): VaultFS {
     writeBinary: vi.fn(),
     deleteFile: vi.fn(),
     moveFile: vi.fn(),
-    exists: vi.fn(),
+    exists: vi.fn(async (path: string) => path in files),
     ensureFolder: vi.fn(),
     listMarkdownFiles: vi.fn(async () =>
       Object.keys(files)
@@ -114,6 +114,15 @@ describe("ViewDataProvider", () => {
       const emptyProvider = new ViewDataProvider(createMockVaultFs({}));
       const configs = await emptyProvider.loadAllViewConfigs();
       expect(configs).toEqual({});
+    });
+
+    it("있는데 읽지 못하면 빈 객체가 아니라 까닭을 단 오류", async () => {
+      const broken = new ViewDataProvider(
+        createMockVaultFs({ ".im-nobsidian/db-views.json": '{"db-123": ' }),
+      );
+      await expect(broken.loadAllViewConfigs()).rejects.toThrow(
+        "DB 보기 설정 파일을 읽지 못했습니다(.im-nobsidian/db-views.json)",
+      );
     });
   });
 

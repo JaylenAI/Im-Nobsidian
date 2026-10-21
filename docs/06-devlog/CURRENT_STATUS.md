@@ -119,6 +119,7 @@
 | 4 뒤 | `refactor/remove-legacy-converters`          | 제품이 부르지 않는 옛 블록 변환기(notion-to-md · martian 블록)와 그것만 쓰던 도우미 · 시험 · 의존성이 남음(N2)                                                                                                                     | 완료 `e46226d` |
 | 4 뒤 | `docs/v0.4.0-notes`                          | CHANGELOG [Unreleased] 비어 있음 · README 데이터베이스 모드 안내가 init 과 다름 · 「무손실」 표현 · 낡은 ADR-021~023 · 설계 문서의 notion-to-md                                                                                    | 완료 `ede7fc7` |
 | 4 뒤 | `fix/measured-forms`                         | 실측으로 찾은 모양 — 콜아웃 · 토글 안 목록 코드(M3) · 글 속 `$$`(M1 · M2)                                                                                                                                                          | 완료 `4f632a4` |
+| 4 뒤 | `fix/final-audit`                            | 끝 점검 — 복제 사본 덮어쓰기 · 맨 위 노트 위키링크 · 읽지 못함을 없음으로 · 재시도 0 · 토글 상한 · CLI 인자 · 흩어진 기본값                                                                                                        | 완료 `185f7a5` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

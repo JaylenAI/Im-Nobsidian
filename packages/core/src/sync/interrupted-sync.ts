@@ -6,6 +6,12 @@ import type { SyncRecord } from "../types/sync.js";
 import { getLogger } from "../utils/logger.js";
 import { isFolderNotePath } from "./folder-container.js";
 
+/** push 가 도는 동안 켜 두는 상태 메타 키 — 끝나기 전에 끊기면 다음 실행이 본다. */
+export const PUSH_IN_PROGRESS_META_KEY = "push_in_progress";
+
+/** pull 이 도는 동안 켜 두는 상태 메타 키. */
+export const PULL_IN_PROGRESS_META_KEY = "pull_in_progress";
+
 /**
  * 중단된 실행이 남긴 것을 정리한다 — 진행 중 플래그, 끝나지 않은 생성 작업(WAL, I12).
  *
@@ -20,16 +26,16 @@ export class InterruptedSyncRecovery {
   ) {}
 
   cleanupInterruptedSync(): void {
-    const pushInProgress = this.stateDb.getMeta("push_in_progress");
-    const pullInProgress = this.stateDb.getMeta("pull_in_progress");
+    const pushInProgress = this.stateDb.getMeta(PUSH_IN_PROGRESS_META_KEY);
+    const pullInProgress = this.stateDb.getMeta(PULL_IN_PROGRESS_META_KEY);
 
     if (pushInProgress === "true") {
       getLogger().warn("[Im-Nobsidian] 이전 push가 비정상 종료됨 — 플래그 정리");
-      this.stateDb.setMeta("push_in_progress", "");
+      this.stateDb.setMeta(PUSH_IN_PROGRESS_META_KEY, "");
     }
     if (pullInProgress === "true") {
       getLogger().warn("[Im-Nobsidian] 이전 pull이 비정상 종료됨 — 플래그 정리");
-      this.stateDb.setMeta("pull_in_progress", "");
+      this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "");
     }
   }
 

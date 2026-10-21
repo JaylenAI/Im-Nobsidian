@@ -4,12 +4,13 @@ import { createSqlJsMock } from "../helpers/mock-sqljs.js";
 vi.mock("sql.js", () => createSqlJsMock());
 
 vi.mock("@im-nobsidian/core", async () => {
-  // 스키마는 core 의 것을 그대로 쓴다 — 플러그인이 같은 목록을 도는지가 시험 대상이다
-  const { STATE_DB_MIGRATIONS } =
+  // 스키마 · 위키링크 조회는 core 의 것을 그대로 쓴다 — 플러그인이 같은 목록을 도는지가 시험 대상이다
+  const { STATE_DB_MIGRATIONS, WIKILINK_LOOKUPS } =
     await vi.importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core");
   let counter = 1000;
   return {
     STATE_DB_MIGRATIONS,
+    WIKILINK_LOOKUPS,
     generateId: () => `edge-id-${++counter}`,
   };
 });

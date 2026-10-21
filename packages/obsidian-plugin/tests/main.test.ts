@@ -65,6 +65,9 @@ vi.mock("@im-nobsidian/core", async () => ({
       stateDbWalPath: core.stateDbWalPath,
       notionIdFromInput: core.notionIdFromInput,
       isMarkdownPath: core.isMarkdownPath,
+      // 플러그인 기본 설정은 core 의 기본값을 읽는다 — 손으로 적은 사본이면 둘이 갈라져도 모른다
+      DEFAULT_CONFIG: core.DEFAULT_CONFIG,
+      DEFAULT_WATCH_DEBOUNCE_MS: core.DEFAULT_WATCH_DEBOUNCE_MS,
     }))),
   NotionClient: class {
     constructor() {}
@@ -110,11 +113,6 @@ vi.mock("@im-nobsidian/core", async () => ({
   },
   /** 상태 DB 파일 자리 — 볼트 폴더 안의 상대 경로. 시험은 읽기 · 쓰기가 이 자리를 쓰는지 본다. */
   STATE_DB_PATH: ".state/sync.db",
-  DEFAULT_CONFIG: {
-    notion: { token: "", rootPageId: "", parentMode: "page", databases: [] },
-    sync: { direction: "both", conflictStrategy: "manual", deleteSync: true },
-    paths: { include: ["**/*"], exclude: [], attachments: "attachments" },
-  },
 }));
 
 import ImNobsidianPlugin from "../src/main.js";

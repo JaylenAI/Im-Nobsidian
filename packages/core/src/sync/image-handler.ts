@@ -15,7 +15,8 @@ import {
   isNotionAttachmentUri,
   notionFileIdOf,
 } from "../utils/notion-file-url.js";
-import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
+import { fetchForDownload } from "../utils/download-fetch.js";
+import { DEFAULT_CONFIG } from "../types/config.js";
 import {
   recallUploadedMedia,
   rememberReceivedMedia,
@@ -483,18 +484,21 @@ export class ImageHandler {
 
   constructor(
     private readonly vaultFs: VaultFS,
-    private readonly attachmentFolder: string = "attachments",
+    private readonly attachmentFolder: string = DEFAULT_CONFIG.paths.attachments,
     private readonly notionClient?: NotionClient,
     customFetch?: typeof globalThis.fetch,
     options?: MediaOptions,
     private readonly stateDb?: IStateDB,
   ) {
     this.customFetch = customFetch;
-    this.concurrency = options?.concurrency ?? 3;
-    this.maxRetries = options?.maxRetries ?? 3;
-    this.retryBaseMs = options?.retryBaseMs ?? 1000;
-    this.maxFileSizeBytes = options?.maxFileSizeBytes ?? 100 * 1024 * 1024;
-    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    const defaults = DEFAULT_CONFIG.advanced;
+    this.concurrency = options?.concurrency ?? defaults.mediaConcurrency;
+    // 미디어의 maxRetries 는 «시도 횟수» 다(NotionClient 의 maxRetries 는 첫 시도 뒤 재시도 수). 설정은 0 을
+    // 받는데, 예전에는 0 이면 시도를 한 번도 하지 않고 null 을 던졌다 — 적어도 한 번은 받는다.
+    this.maxRetries = Math.max(1, options?.maxRetries ?? defaults.mediaMaxRetries);
+    this.retryBaseMs = options?.retryBaseMs ?? defaults.mediaRetryBaseMs;
+    this.maxFileSizeBytes = options?.maxFileSizeBytes ?? defaults.maxFileSizeBytes;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? defaults.mediaDownloadTimeoutMs;
   }
 
   private get fetchFn(): typeof globalThis.fetch {
@@ -1104,7 +1108,12 @@ export class ImageHandler {
    * 없으면 블록을 한 번 조회한다. 끝내 모르면 null — 던지지 않는다(블록은 이미 제자리에 있다).
    */
   private async storedFileIdOf(block: { id: string; type?: string }): Promise<string | null> {
-    const url = fileUrlOfBlock(block) ?? (await this.notionClient?.getFileBlockUrl(block.id));
+    const url =
+      fileUrlOfBlock(block) ??
+      (await this.notionClient?.getFileBlockUrl(block.id).catch((error: unknown) => {
+        getLogger().warn(`[Im-Nobsidian] 올린 파일 블록 조회 실패(${block.id}): ${error}`);
+        return null;
+      }));
     return url ? notionFileIdOf(url) : null;
   }
 
@@ -1307,7 +1316,10 @@ export class ImageHandler {
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
-        if (!realUrl) continue;
+        if (!realUrl) {
+          getLogger().warn(`[Im-Nobsidian] 파일 Block URL 조회 실패: ${fileName}`);
+          continue;
+        }
 
         const caption = savedNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
@@ -1355,7 +1367,10 @@ export class ImageHandler {
         const blockId = parsed.blockId;
         const fileName = parsed.fileName;
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
-        if (!realUrl) continue;
+        if (!realUrl) {
+          getLogger().warn(`[Im-Nobsidian] 파일 Block URL 조회 실패: ${fileName}`);
+          continue;
+        }
 
         const caption = savedNameOf(match[2] ?? "", fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);

@@ -19,6 +19,7 @@ import {
   SAVED_STATE_TABLES_QUERY,
   STATE_DB_MIGRATIONS,
   SavedStateDbError,
+  WIKILINK_LOOKUPS,
   generateId,
   getLogger,
 } from "@im-nobsidian/core";
@@ -419,22 +420,11 @@ export class SqlJsStateDB implements IStateDB {
   // --- wikilink_map ---
 
   resolveWikilink(text: string): WikilinkEntry | null {
-    const byTitle = this.queryOne<RawWikilinkRow>("SELECT * FROM wikilink_map WHERE title = ?", [
-      text,
-    ]);
-    if (byTitle) return this.mapWikilinkRow(byTitle);
-
-    const byAlias = this.queryOne<RawWikilinkRow>(
-      "SELECT * FROM wikilink_map WHERE aliases LIKE ?",
-      [`%"${text}"%`],
-    );
-    if (byAlias) return this.mapWikilinkRow(byAlias);
-
-    const byFilename = this.queryOne<RawWikilinkRow>(
-      "SELECT * FROM wikilink_map WHERE obsidian_path LIKE ?",
-      [`%/${text}.md`],
-    );
-    return byFilename ? this.mapWikilinkRow(byFilename) : null;
+    for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.queryOne<RawWikilinkRow>(lookup.sql, lookup.params(text));
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
   }
 
   resolvePageId(pageId: string): WikilinkEntry | null {

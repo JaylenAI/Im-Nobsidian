@@ -71,9 +71,22 @@ describe("resolveLinkedDatabase (F22)", () => {
     expect(await client.resolveLinkedDatabase(LINKED)).toBeNull();
   });
 
-  it("Views API 자체가 실패해도 throw 하지 않고 null", async () => {
-    vi.spyOn(internal.views, "list").mockRejectedValue(new Error("403") as never);
+  it.each([
+    ["권한 없음(403)", { status: 403, code: "restricted_resource" }],
+    ["없음(404)", { status: 404, code: "object_not_found" }],
+    ["거절(400)", { status: 400, code: "validation_error" }],
+  ])("Views API 가 %s 로 거절하면 해소 불가(null)", async (_name, shape) => {
+    vi.spyOn(internal.views, "list").mockRejectedValue(
+      Object.assign(new Error("거절"), shape) as never,
+    );
     expect(await client.resolveLinkedDatabase(LINKED)).toBeNull();
+  });
+
+  it("일시 오류(503)는 해소 불가로 바꾸지 않고 던진다 — 호출처가 접근 불가로 영구 거부하지 않게", async () => {
+    vi.spyOn(internal.views, "list").mockRejectedValue(
+      Object.assign(new Error("service unavailable"), { status: 503 }) as never,
+    );
+    await expect(client.resolveLinkedDatabase(LINKED)).rejects.toThrow("service unavailable");
   });
 
   it("data_source_id 없는 뷰는 건너뛰고 다음 뷰에서 해소한다", async () => {

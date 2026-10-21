@@ -15,6 +15,9 @@ import { compactNotionId } from "../utils/id.js";
 /** 마지막으로 전체 대조를 마친 pull 이 시작한 시각을 두는 상태 메타 키. */
 export const LAST_FULL_PULL_META_KEY = "last_full_pull_at";
 
+/** 다음 증분 pull 의 기준 시각(지난 pull 이 시작한 때, 받지 못한 변경 앞으로 묶음)을 두는 상태 메타 키. */
+export const LAST_PULL_META_KEY = "last_pull_at";
+
 /**
  * 다음 pull 이 바뀐 것이 없어도 조회할 DB 를 두는 상태 메타 키 — 조회하다 실패했거나 · 행을 받지
  * 못했거나 · 취소로 닿지 못한 DB. 적어 두지 않으면 그 DB 는 원격이 다시 바뀌거나 전체 대조가 돌 때까지

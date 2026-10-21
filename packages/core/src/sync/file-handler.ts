@@ -7,8 +7,9 @@ import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
 import { getBlockType, getMimeType, isNotionUploadable } from "../utils/mime.js";
 import type { NotionBlockType } from "../utils/mime.js";
-import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
-import { withDeadline, DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
+import { fetchForDownload } from "../utils/download-fetch.js";
+import { withDeadline } from "../utils/deadline.js";
+import { DEFAULT_CONFIG } from "../types/config.js";
 
 /** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface FileHandlerOptions {
@@ -57,13 +58,14 @@ export class FileHandler {
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
     private readonly stateDb: IStateDB,
-    concurrency: number = 2,
+    concurrency: number = DEFAULT_CONFIG.advanced.fileConcurrency,
     options?: FileHandlerOptions,
   ) {
     this.sema = new Sema(concurrency);
     this.customFetch = options?.fetch;
-    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
-    this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_ITEM_TIMEOUT_MS;
+    this.downloadTimeoutMs =
+      options?.downloadTimeoutMs ?? DEFAULT_CONFIG.advanced.mediaDownloadTimeoutMs;
+    this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_CONFIG.advanced.itemTimeoutMs;
   }
 
   private get fetchFn(): typeof globalThis.fetch {

@@ -153,7 +153,7 @@ export const resolveCommand = new Command("resolve")
 
       if (!isInteractive()) {
         console.error(
-          "비대화형 환경에서는 대화형 해결을 쓸 수 없습니다 — --strategy <local-first|remote-first|duplicate> --yes 를 지정하세요.",
+          `비대화형 환경에서는 대화형 해결을 쓸 수 없습니다 — --strategy <${STRATEGIES.join("|")}> --yes 를 지정하세요.`,
         );
         process.exitCode = 1;
         return;

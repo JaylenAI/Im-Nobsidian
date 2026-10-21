@@ -11,12 +11,17 @@ import { noteNameFromPath } from "../utils/markdown-path.js";
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
 
+  /** 파일이 없으면 빈 객체. 있는데 읽지 못하면 던진다 — 「보기 설정이 없다」 와 「읽지 못했다」 는 다른 말이다. */
   async loadAllViewConfigs(): Promise<Record<string, DatabaseViewsConfig>> {
+    if (!(await this.vaultFs.exists(DB_VIEWS_PATH))) return {};
+    const raw = await this.vaultFs.readFile(DB_VIEWS_PATH);
     try {
-      const raw = await this.vaultFs.readFile(DB_VIEWS_PATH);
       return JSON.parse(raw) as Record<string, DatabaseViewsConfig>;
-    } catch {
-      return {};
+    } catch (error) {
+      throw new Error(
+        `DB 보기 설정 파일을 읽지 못했습니다(${DB_VIEWS_PATH}): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     }
   }
 

@@ -7,7 +7,11 @@ const mockRequestFullSync = vi.fn();
 const mockOrchestratorSync = vi.fn();
 const mockDbClose = vi.fn();
 
-vi.mock("@im-nobsidian/core", () => ({
+vi.mock("@im-nobsidian/core", async () => ({
+  // 기본값은 진짜를 쓴다 — 옵션 기본값이 core 의 값을 읽는지가 시험 대상이다
+  DEFAULT_WATCH_DEBOUNCE_MS: (
+    await vi.importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
+  ).DEFAULT_WATCH_DEBOUNCE_MS,
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
@@ -31,6 +35,7 @@ vi.mock("@im-nobsidian/core", () => ({
   })),
 }));
 
+import { DEFAULT_WATCH_DEBOUNCE_MS } from "@im-nobsidian/core";
 import { watchCommand } from "../../src/commands/watch.js";
 
 describe("watch command", () => {
@@ -42,8 +47,33 @@ describe("watch command", () => {
   it("debounce 옵션 기본값", () => {
     const debounceOpt = watchCommand.options.find((o) => o.long === "--debounce");
     expect(debounceOpt).toBeDefined();
-    expect(debounceOpt!.defaultValue).toBe("2000");
+    expect(debounceOpt!.defaultValue).toBe(String(DEFAULT_WATCH_DEBOUNCE_MS));
   });
+
+  it.each([
+    ["--debounce", "abc"],
+    ["--debounce", "-5"],
+    ["--interval", "1.5"],
+  ])(
+    "%s %s 는 시작하지 않고 실패한다 — 숫자가 아니면 0 이나 꺼짐으로 바뀌던 것",
+    async (flag, value) => {
+      const { WatchSyncService } = await import("@im-nobsidian/core");
+      vi.mocked(WatchSyncService).mockClear();
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      const log = vi.spyOn(console, "log").mockImplementation(() => {});
+      process.exitCode = undefined;
+
+      await watchCommand.parseAsync([flag, value], { from: "user" });
+
+      expect(process.exitCode).toBe(1);
+      expect(error).toHaveBeenCalledWith(expect.stringContaining(value));
+      expect(WatchSyncService).not.toHaveBeenCalled();
+      process.exitCode = undefined;
+      // restoreAllMocks 는 모듈 모의의 구현까지 지운다 — 건 spy 만 되돌린다
+      error.mockRestore();
+      log.mockRestore();
+    },
+  );
 
   it("interval 옵션 기본값", () => {
     const intervalOpt = watchCommand.options.find((o) => o.long === "--interval");

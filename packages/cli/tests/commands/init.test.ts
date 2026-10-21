@@ -4,10 +4,13 @@ const mockInit = vi.fn().mockResolvedValue(undefined);
 const mockSearch = vi.fn().mockResolvedValue({ results: [{ id: "page-1" }] });
 
 vi.mock("@im-nobsidian/core", async () => ({
-  // 루트 페이지 입력 판정은 진짜를 쓴다 — 플러그인 설정과 같은 판정인지가 시험 대상이다
-  notionIdFromInput: (
-    await vi.importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
-  ).notionIdFromInput,
+  // 루트 페이지 입력 판정 · 토큰 머리는 진짜를 쓴다 — 플러그인 설정 · 설정 검증과 같은 판정인지가 시험 대상이다
+  ...(await vi
+    .importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core")
+    .then(({ notionIdFromInput, NOTION_TOKEN_PREFIX }) => ({
+      notionIdFromInput,
+      NOTION_TOKEN_PREFIX,
+    }))),
   ConfigManager: vi.fn().mockImplementation(() => ({
     configPath: "/mock/.im-nobsidian/config.yaml",
     dbPath: "/mock/.im-nobsidian/sync.db",
@@ -87,6 +90,8 @@ describe("init command", () => {
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Token validated"));
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Config saved"));
     expect(consoleSpy).toHaveBeenCalledWith(expect.stringContaining("Ready!"));
+    // init 은 상태 DB 를 만들지 않는다(첫 동기화가 만든다) — 만들었다고 말하지 않는다
+    expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining("State DB"));
     expect(mockInit).toHaveBeenCalledWith({ token: "ntn_valid", rootPageId: PAGE_ID });
     consoleSpy.mockRestore();
   });

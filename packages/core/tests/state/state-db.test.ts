@@ -307,6 +307,35 @@ describe("StateDB", () => {
       expect(result!.title).toBe("Project Plan");
     });
 
+    describe("파일 이름 조회 — 맨 위 노트 · 경로 붙은 링크 · LIKE 글자", () => {
+      const entry = (obsidianPath: string, title: string, aliases: string[] = []) =>
+        db.upsertWikilink({ obsidianPath, notionPageId: `page-${obsidianPath}`, title, aliases });
+
+      it.each([
+        ["볼트 맨 위 노트", "Note.md", "Note"],
+        ["경로 붙은 링크", "notes/deep/Note.md", "notes/deep/Note"],
+        ["폴더 안 노트의 이름만", "notes/deep/Note.md", "Note"],
+      ])("%s — 제목이 파일 이름과 달라도 찾는다", (_name, path, text) => {
+        entry(path, "Notion 의 다른 제목");
+
+        expect(db.resolveWikilink(text)?.obsidianPath).toBe(path);
+      });
+
+      it("`_` 는 아무 글자가 아니다", () => {
+        entry("notes/a-b.md", "AB", ["xzy"]);
+
+        expect(db.resolveWikilink("a_b")).toBeNull();
+        expect(db.resolveWikilink("x_y")).toBeNull();
+      });
+
+      it("`%` · `_` 가 든 이름 · 별칭도 그대로 찾는다", () => {
+        entry("notes/50%_off.md", "할인", ["100%"]);
+
+        expect(db.resolveWikilink("50%_off")?.title).toBe("할인");
+        expect(db.resolveWikilink("100%")?.title).toBe("할인");
+      });
+    });
+
     it("resolvePageId", () => {
       db.upsertWikilink({
         obsidianPath: "notes/project.md",

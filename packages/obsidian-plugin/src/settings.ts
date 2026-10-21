@@ -1,6 +1,6 @@
 import type { App } from "obsidian";
 import { PluginSettingTab, SecretComponent, Setting } from "obsidian";
-import { notionIdFromInput, systemTimeZone } from "@im-nobsidian/core";
+import { DEFAULT_WATCH_DEBOUNCE_MS, notionIdFromInput, systemTimeZone } from "@im-nobsidian/core";
 import { AUTO_SYNC_INTERVAL_MINUTES } from "./constants.js";
 import type ImNobsidianPlugin from "./main.js";
 import type { ImNobsidianSettings } from "./main.js";
@@ -105,7 +105,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
     new Setting(containerEl)
       .setName("자동 동기화")
       .setDesc(
-        "노트를 고치면 2초 뒤에, 그리고 아래 간격마다 동기화합니다(동기화 방향을 따름). " +
+        `노트를 고치면 ${DEFAULT_WATCH_DEBOUNCE_MS / 1000}초 뒤에, 그리고 아래 간격마다 동기화합니다(동기화 방향을 따름). ` +
           "끄면 사이드바 단추와 명령으로만 동기화합니다.",
       )
       .addToggle((toggle) =>

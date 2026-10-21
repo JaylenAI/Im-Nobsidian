@@ -6,6 +6,7 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
   WatchSyncService,
+  DEFAULT_WATCH_DEBOUNCE_MS,
 } from "@im-nobsidian/core";
 import type { SyncResult, WatchSyncScope } from "@im-nobsidian/core";
 
@@ -33,9 +34,23 @@ function syncLabel(scope: WatchSyncScope): string {
 
 export const watchCommand = new Command("watch")
   .description("파일 변경 감지 + 자동 동기화")
-  .option("-d, --debounce <ms>", "디바운스 대기 시간(ms)", "2000")
+  .option("-d, --debounce <ms>", "디바운스 대기 시간(ms)", String(DEFAULT_WATCH_DEBOUNCE_MS))
   .option("-i, --interval <seconds>", "풀 동기화 주기(초, 0이면 비활성)", "0")
   .action(async (options: { debounce: string; interval: string }) => {
+    // 숫자가 아니면 디바운스가 0 이 되거나 주기 동기화가 말없이 꺼진다 — 시작하기 전에 거절한다.
+    const debounceMs = Number(options.debounce);
+    const intervalSec = Number(options.interval);
+    if (!Number.isInteger(debounceMs) || debounceMs < 0) {
+      console.error(`--debounce 는 0 이상의 정수(ms)여야 합니다: ${options.debounce}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!Number.isInteger(intervalSec) || intervalSec < 0) {
+      console.error(`--interval 은 0 이상의 정수(초)여야 합니다: ${options.interval}`);
+      process.exitCode = 1;
+      return;
+    }
+
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -44,9 +59,6 @@ export const watchCommand = new Command("watch")
     const client = NotionClient.fromConfig(config);
     const vaultFs = new NodeVaultFS(cwd, config.paths);
     const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
-
-    const debounceMs = parseInt(options.debounce, 10);
-    const intervalSec = parseInt(options.interval, 10);
 
     const service = new WatchSyncService(cwd, orchestrator, {
       debounceMs,

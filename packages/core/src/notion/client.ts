@@ -211,9 +211,11 @@ export class NotionClient {
   private readonly userNames = new Map<string, string | null>();
 
   constructor(options: NotionClientOptions) {
+    // 빠진 값은 설정 기본값 한 벌(DEFAULT_CONFIG)에서 읽는다 — `init` 처럼 토큰만으로 만드는 경로도 같은 값.
+    const defaults = DEFAULT_CONFIG.advanced;
     this.client = new Client({
       auth: options.token,
-      timeoutMs: options.timeoutMs ?? 30000,
+      timeoutMs: options.timeoutMs ?? defaults.timeoutMs,
       logLevel: LogLevel.ERROR,
       // 재시도는 withRateLimit 한 곳에서만 한다. SDK 5.x 는 기본으로 429·529 를 2회
       // 재시도하는데, 켜 둔 채면 두 층이 곱해져 429 가 이어질 때 호출 1건이
@@ -222,15 +224,15 @@ export class NotionClient {
       retry: false,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-    this.sema = new Sema(options.concurrency ?? 3);
-    this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
-    this.maxRetries = options.maxRetries ?? 5;
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1000;
-    this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
-    this.defaultPageSize = options.pageSize ?? 100;
-    this.batchSize = options.batchSize ?? 100;
+    this.sema = new Sema(options.concurrency ?? defaults.concurrency);
+    this.minRequestInterval = options.rateLimitIntervalMs ?? defaults.rateLimitIntervalMs;
+    this.maxRetries = options.maxRetries ?? defaults.maxRetries;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? defaults.retryBaseDelayMs;
+    this.retryBackoffFactor = options.retryBackoffFactor ?? defaults.retryBackoffFactor;
+    this.defaultPageSize = options.pageSize ?? defaults.pageSize;
+    this.batchSize = options.batchSize ?? defaults.batchSize;
     this.markdownCompletionMaxBlocks =
-      options.markdownCompletionMaxBlocks ?? DEFAULT_CONFIG.advanced.markdownCompletionMaxBlocks;
+      options.markdownCompletionMaxBlocks ?? defaults.markdownCompletionMaxBlocks;
     this.propertyMapper = new PropertyMapper({ timeZone: options.timeZone });
   }
 
@@ -617,8 +619,17 @@ export class NotionClient {
         return { originalDbId, viewName: view.name ?? "" };
       }
       return null;
-    } catch {
-      return null;
+    } catch (error) {
+      // 없거나 · 권한이 없거나 · 거절된 요청만 「해소 불가」 다. 429 · 5xx · 시간 초과까지 null 로 바꾸면
+      // 호출처가 이 DB 를 접근 불가로 영구 거부 목록에 올린다(`--force` 전까지 다시 보지 않는다).
+      if (
+        isNotionObjectNotFound(error) ||
+        isNotionAccessDenied(error) ||
+        isNotionValidationError(error)
+      ) {
+        return null;
+      }
+      throw error;
     }
   }
 
@@ -771,14 +782,19 @@ export class NotionClient {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
 
+  /**
+   * 파일 블록의 지금 받을 수 있는 주소. 블록이 없거나 볼 수 없으면 null 이다.
+   * 그 밖의 실패(일시 오류 등)는 던진다 — 예전에는 모두 null 로 삼켜 이유가 남지 않았다.
+   */
   async getFileBlockUrl(blockId: string): Promise<string | null> {
     try {
       const block = await this.withRateLimit(() =>
         this.client.blocks.retrieve({ block_id: blockId }),
       );
       return fileUrlOfBlock(block as { type?: string });
-    } catch {
-      return null;
+    } catch (error) {
+      if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) return null;
+      throw error;
     }
   }
 

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { ViewRenderData, DBEntry, GroupedEntries } from "@im-nobsidian/core";
+  import type { ViewRenderData, DBEntry } from "@im-nobsidian/core";
   import IconDisplay from "./components/IconDisplay.svelte";
   import PropertyBadge from "./components/PropertyBadge.svelte";
 

@@ -150,13 +150,6 @@
       : 0
   );
 
-  const changesByType = $derived({
-    created: localChanges.filter((c) => c.type === "created"),
-    modified: localChanges.filter((c) => c.type === "modified"),
-    deleted: localChanges.filter((c) => c.type === "deleted"),
-    moved: localChanges.filter((c) => c.type === "moved"),
-  });
-
   /**
    * 충돌 중인 노트는 충돌 칸에서만 다룬다(VS Code 의 「병합 변경」 처럼) — 변경 목록에 두면 올리기는 그 노트를
    * 건너뛰어 눌러도 아무 일이 없고, 되돌리기는 거절된다. 원격 목록의 받기도 충돌을 풀지 않는다.
@@ -171,13 +164,6 @@
 
   const totalChanges = $derived(shownLocalChanges.length + folderMoves.length);
   const totalRemoteChanges = $derived(shownRemoteChanges.length);
-
-  const remoteChangesByType = $derived({
-    created: remoteChanges.filter((c) => c.type === "created"),
-    modified: remoteChanges.filter((c) => c.type === "modified"),
-    deleted: remoteChanges.filter((c) => c.type === "deleted"),
-    moved: remoteChanges.filter((c) => c.type === "moved"),
-  });
 
   const statusIcon = $derived(
     syncState === "syncing"

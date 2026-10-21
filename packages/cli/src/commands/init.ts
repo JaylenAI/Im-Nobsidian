@@ -1,5 +1,10 @@
 import { Command } from "commander";
-import { ConfigManager, NotionClient, notionIdFromInput } from "@im-nobsidian/core";
+import {
+  ConfigManager,
+  NOTION_TOKEN_PREFIX,
+  NotionClient,
+  notionIdFromInput,
+} from "@im-nobsidian/core";
 import { input, confirm } from "@inquirer/prompts";
 import ora from "ora";
 import chalk from "chalk";
@@ -28,8 +33,8 @@ export const initCommand = new Command("init")
         return;
       }
 
-      if (!options.token.startsWith("ntn_")) {
-        console.error("토큰은 ntn_으로 시작해야 합니다.");
+      if (!options.token.startsWith(NOTION_TOKEN_PREFIX)) {
+        console.error(`토큰은 ${NOTION_TOKEN_PREFIX}으로 시작해야 합니다.`);
         process.exitCode = 1;
         return;
       }
@@ -50,7 +55,6 @@ export const initCommand = new Command("init")
 
         await configManager.init({ token: options.token, rootPageId });
         console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
-        console.log(`  ${icons.success} State DB initialized`);
         console.log(
           `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
         );
@@ -73,7 +77,9 @@ export const initCommand = new Command("init")
 
     const token = await input({
       message: "Notion Integration Token:",
-      validate: (v) => v.startsWith("ntn_") || "ntn_으로 시작하는 토큰을 입력하세요",
+      validate: (v) =>
+        v.startsWith(NOTION_TOKEN_PREFIX) ||
+        `${NOTION_TOKEN_PREFIX}으로 시작하는 토큰을 입력하세요`,
     });
 
     const spinner = ora("Notion 연결 확인 중...").start();
@@ -109,7 +115,6 @@ export const initCommand = new Command("init")
 
       await configManager.init({ token, rootPageId });
       console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
-      console.log(`  ${icons.success} State DB initialized`);
       console.log(
         `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
       );
