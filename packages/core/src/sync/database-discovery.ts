@@ -23,6 +23,7 @@ import {
   parseDiscoveredDbs,
   type DiscoveredDbConfig,
 } from "./discovered-databases.js";
+import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
@@ -544,9 +545,9 @@ export class DatabaseDiscovery {
     let parentFolder = "";
     if (parentEntry?.obsidianPath) {
       const obsPath = parentEntry.obsidianPath;
-      if (obsPath.endsWith(".md")) {
+      if (isMarkdownPath(obsPath)) {
         const parts = obsPath.split("/");
-        const fileBase = (parts.pop() ?? "").replace(/\.md$/, "");
+        const fileBase = stripMarkdownExtension(parts.pop() ?? "");
         const dirName = parts[parts.length - 1] ?? "";
         // folder note(파일명==폴더명)면 그 폴더가 곧 페이지 폴더. 아니면(플레인 페이지·
         // DB row 파일) 페이지 이름의 하위 폴더로 중첩해 Notion 의 "페이지 안의 DB" 구조를
@@ -620,7 +621,7 @@ export class DatabaseDiscovery {
 
     let total = 0;
     for (const filePath of paths) {
-      if (!filePath.endsWith(".md")) continue;
+      if (!isMarkdownPath(filePath)) continue;
       try {
         const content = await this.vaultFs.readFile(filePath);
         const { content: next, rewrites } = rewriteDbPlaceholders(content, resolve);
@@ -658,7 +659,7 @@ export class DatabaseDiscovery {
   ): Promise<Array<{ dbId: string; parentPageId: string }>> {
     const refs: Array<{ dbId: string; parentPageId: string }> = [];
     for (const path of rowPaths) {
-      if (!path.endsWith(".md")) continue;
+      if (!isMarkdownPath(path)) continue;
       try {
         const ids = extractInlineDbIds(await this.vaultFs.readFile(path));
         if (ids.length === 0) continue;

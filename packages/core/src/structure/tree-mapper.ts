@@ -1,4 +1,5 @@
 import { sanitizeFileName } from "../utils/sanitize.js";
+import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 
 export interface NotionPageNode {
   readonly id: string;
@@ -98,10 +99,10 @@ export class TreeMapper {
           });
           this.planRecursive(entry.children, `placeholder:${entry.path}`, plans);
         }
-      } else if (entry.name.endsWith(".md") && !entry.name.startsWith("_")) {
+      } else if (isMarkdownPath(entry.name) && !entry.name.startsWith("_")) {
         plans.push({
           type: "leaf-page",
-          title: entry.name.replace(/\.md$/, ""),
+          title: stripMarkdownExtension(entry.name),
           parentPageId,
           contentSource: entry.path,
           hasContent: true,

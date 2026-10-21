@@ -10,6 +10,7 @@ import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { resolveFrontmatterRelations } from "./frontmatter-link-resolver.js";
 import type { VaultFS } from "./vault-fs.js";
+import { isMarkdownPath } from "../utils/markdown-path.js";
 
 /**
  * pull 이 쓴 노트의 Notion 링크를 볼트 링크로 푼다 — 모두 받은 뒤 한 번 더 보는 후처리 패스.
@@ -49,7 +50,7 @@ export async function resolveNotionLinks(
   const notionIdToPath = (id: string): string | null => idToPath.get(id.replace(/-/g, "")) ?? null;
 
   for (const filePath of paths) {
-    if (!filePath.endsWith(".md")) continue;
+    if (!isMarkdownPath(filePath)) continue;
     try {
       let content = await vaultFs.readFile(filePath);
       let changed = false;

@@ -3,6 +3,7 @@ import { compactNotionId } from "../utils/id.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import { codeLineMask } from "../utils/md-regions.js";
 import { decodeMarkerTarget } from "./marker-url.js";
+import { stripMarkdownExtension } from "../utils/markdown-path.js";
 
 /**
  * Notion Markdown API 가 본문 속 자식 페이지를 싣는 태그 — `<page url="…/<32hex>">제목</page>`.
@@ -136,7 +137,7 @@ function titleKey(title: string): string {
 function linkTargetName(target: string): string {
   const path = target.split("#")[0]!;
   const name = path.slice(path.lastIndexOf("/") + 1);
-  return name.replace(/\.md$/i, "");
+  return stripMarkdownExtension(name);
 }
 
 /**

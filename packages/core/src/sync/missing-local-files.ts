@@ -5,6 +5,7 @@ import { computeHash } from "../utils/hash.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { isFolderRecord } from "./folder-container.js";
 import type { VaultFS } from "./vault-fs.js";
+import { isMarkdownPath } from "../utils/markdown-path.js";
 
 /**
  * 추적 중(sync_state)인데 디스크에서 사라진 파일을 찾는다.
@@ -58,7 +59,7 @@ export async function detectMissingLocalFiles(
 
   const candidates: SyncRecord[] = [];
   for (const record of scoped) {
-    if (record.obsidianPath.endsWith(".md")) {
+    if (isMarkdownPath(record.obsidianPath)) {
       if (!live.has(record.obsidianPath)) candidates.push(record);
     } else if (!(await vaultFs.exists(record.obsidianPath))) {
       candidates.push(record);
