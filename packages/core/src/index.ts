@@ -66,6 +66,7 @@ export {
   StateDbUnavailableError,
   SavedStateDbError,
   SAVED_STATE_TABLES_QUERY,
+  WIKILINK_LOOKUPS,
   StateLock,
   StateDbLockedError,
   stateDbLockPath,
@@ -81,6 +82,7 @@ export type {
   StateLockClaim,
   StateLockOwner,
   StateDbMigration,
+  WikilinkLookup,
 } from "./state/index.js";
 export type {
   UpsertSyncRecord,

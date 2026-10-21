@@ -11,6 +11,7 @@ import { generateId } from "../utils/id.js";
 import { STATE_DB_MIGRATIONS } from "./migrations/index.js";
 import type { IStateDB } from "./state-db-interface.js";
 import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
+import { WIKILINK_LOOKUPS } from "./wikilink-lookup.js";
 import { StateLock, stateDbLockPath } from "./state-lock.js";
 
 export class StateDB implements IStateDB {
@@ -258,22 +259,12 @@ export class StateDB implements IStateDB {
   // --- wikilink_map ---
 
   resolveWikilink(text: string): WikilinkEntry | null {
-    const byTitle = this.db.prepare("SELECT * FROM wikilink_map WHERE title = ?").get(text) as
-      RawWikilinkRow | undefined;
-
-    if (byTitle) return this.mapWikilinkRow(byTitle);
-
-    const byAlias = this.db
-      .prepare("SELECT * FROM wikilink_map WHERE aliases LIKE ?")
-      .get(`%"${text}"%`) as RawWikilinkRow | undefined;
-
-    if (byAlias) return this.mapWikilinkRow(byAlias);
-
-    const byFilename = this.db
-      .prepare("SELECT * FROM wikilink_map WHERE obsidian_path LIKE ?")
-      .get(`%/${text}.md`) as RawWikilinkRow | undefined;
-
-    return byFilename ? this.mapWikilinkRow(byFilename) : null;
+    for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
+        RawWikilinkRow | undefined;
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
   }
 
   resolvePageId(pageId: string): WikilinkEntry | null {
