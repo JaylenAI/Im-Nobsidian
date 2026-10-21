@@ -998,6 +998,8 @@ function separateAdjacentCallouts(content: string): string {
 
 const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;
 const NOTION_BLOCK_MATH_RE = /\$\$\n```\n([\s\S]*?)\n```\n\$\$/g;
+/** 빈 인라인 수식 — Notion 이 글의 `$$` 를 이렇게 읽었다(옛 push · Notion 에서 친 `$$`). */
+const NOTION_EMPTY_MATH_RE = /\$``\$/g;
 
 /**
  * Notion 의 수식을 Obsidian 수식으로. markdown API 는 인라인 수식을 `` $`식`$ `` 로, 글의 `$` 는 `\$` 로 준다
@@ -1006,13 +1008,20 @@ const NOTION_BLOCK_MATH_RE = /\$\$\n```\n([\s\S]*?)\n```\n\$\$/g;
  * 글의 `\$` 는 수식 짝이 생길 수 있는 줄에서만 그대로 둔다({@link unescapeSafeLiteralDollars}) — Obsidian 은 `\$` 를
  * 글 `$` 로 그리고(1.13.7 실측), push 는 Notion 에 글로 보낸다. 예전에는 `\$…\$` 를 이스케이프된 수식으로 보고 `$…$` 로 풀어, Notion 의 글 `$a$` 가 볼트에서 수식이 되고 그
  * 노트를 push 하면 Notion 에서도 수식이 됐다. 코드 블록 안의 `\$x\$` 도 바뀌었다(C13).
+ *
+ * 빈 인라인 수식(`` $``$ ``)은 글 `\$\$` 로 — 옛 push 가 글의 `$$` 를 이렇게 올렸다(2026-10-21 실측). 그대로
+ * 쓰면 볼트에 `` $``$ `` 가 보이고, push 는 짝 없는 `$$` 를 `\$\$` 로 보내니(`MathNormalizer`) 로컬의 `$$` 와 받은
+ * 글이 Notion 에서 같은 꼴이 된다. 코드 펜스 안은 코드의 글이라 둔다.
  */
 function convertNotionMath(content: string): string {
   const result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
     return `$$\n${eq.trim()}\n$$`;
   });
+  const literal = mapOutsideCodeFences(result, (segment) =>
+    segment.replace(NOTION_EMPTY_MATH_RE, () => "\\$\\$"),
+  );
   return unescapeSafeLiteralDollars(
-    result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`),
+    literal.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`),
   );
 }
 

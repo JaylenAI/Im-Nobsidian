@@ -93,21 +93,53 @@ export function dedentContainerBody(text: string): string {
     min = Math.min(min, /^[\t ]*/.exec(l)![0].length);
   });
   if (!Number.isFinite(min)) min = 0;
+  const listCode = listChildCodeIndents(lines, blocks, kinds, min);
 
   // 3패스: 경계(fence)→열0 정렬, 내부(code)→원문 보존, 산문(prose)→공통 들여쓰기 제거.
+  // 목록 항목의 자식 코드는 경계 · 내부 모두 항목 안 깊이({@link listChildCodeIndents})로 둔다.
   return lines
     .map((l, i) => {
       if (l.trim() === "") return "";
-      if (kinds[i] === "code") return l;
+      const nested = listCode.get(i);
+      if (kinds[i] === "code") return nested === undefined ? l : nested + l;
       if (kinds[i] === "fence") {
         // 구조 들여쓰기만 걷어내 접두(`>`)와 언어 정보는 남기고, 폭만 갈아 끼운다.
-        const flat = l.replace(/^[\t ]+/, "");
+        const flat = (nested ?? "") + l.replace(/^[\t ]+/, "");
         const bar = widened.get(i);
         return bar === undefined ? flat : flat.replace(/`{3,}|~{3,}/, bar);
       }
       return l.slice(min);
     })
     .join("\n");
+}
+
+/**
+ * 컨테이너 본문에서 목록 항목의 자식인 코드블록 — 줄마다 내어쓴 뒤 남길 들여쓰기.
+ *
+ * 경계 펜스를 열 0 으로 당기면 콜아웃 · 토글 안 목록의 자식 코드가 항목 밖, 컨테이너 바로 아래로
+ * 빠진다 — 목록이 둘로 갈리고 그 노트를 올리면 Notion 에서도 코드가 항목 밖으로 옮겨진다. 항목의
+ * 자식이면 경계는 산문과 같이 공통 들여쓰기만 걷고, 열 0 의 코드 줄에는 경계와 같은 들여쓰기를
+ * 입힌다 — 맨 위 목록의 {@link alignNestedCodeBodies} 와 같은 모양이다. 닫는 펜스의 들여쓰기가
+ * 다르거나 탭이 아니면 어디까지가 코드인지 확신할 수 없어 예전처럼 열 0 으로 둔다.
+ */
+function listChildCodeIndents(
+  lines: readonly string[],
+  blocks: readonly ContainerBlock[],
+  kinds: readonly ContainerLineKind[],
+  min: number,
+): Map<number, string> {
+  const indents = new Map<number, string>();
+  for (const b of blocks) {
+    if (b.type !== "code" || !b.fence || b.close === null) continue;
+    const indent = b.fence.indent;
+    if (!/^\t+$/.test(indent) || indent.length <= min) continue;
+    if (matchFence(lines[b.close]!)?.indent !== indent) continue;
+    if (!isListItemChild(lines, kinds, b.open)) continue;
+
+    const kept = indent.slice(min);
+    for (let j = b.open; j <= b.close; j++) indents.set(j, kept);
+  }
+  return indents;
 }
 
 /**
