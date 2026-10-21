@@ -610,6 +610,44 @@ describe("SyncController", () => {
   });
 
   describe("refreshStatus", () => {
+    /** 취소할 때까지 끝나지 않는 원격 확인 — 취소하면 core 처럼 「취소됨」 으로 거절한다. */
+    const statusUntilCancelled = () =>
+      mock.status.mockImplementation(
+        ({ signal }: { signal: AbortSignal }) =>
+          new Promise((_, reject) =>
+            signal.addEventListener("abort", () => reject(new Error("취소됨"))),
+          ),
+      );
+
+    it("원격 확인은 취소할 수 있다 — 취소는 실패로 알리지 않는다 (B6)", async () => {
+      statusUntilCancelled();
+      const { hooks, onNotice, onState } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const refreshing = controller.refreshStatus(true);
+      await vi.waitFor(() => expect(mock.status).toHaveBeenCalled());
+      controller.cancel();
+      await refreshing;
+
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 상태 확인 취소됨");
+      expect(onNotice).not.toHaveBeenCalledWith(expect.stringContaining("실패"));
+      expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "ready" }));
+      expect(controller.isSyncing()).toBe(false);
+    });
+
+    it("상태 표시 커맨드도 취소하면 결과 없이 끝난다 (B6)", async () => {
+      statusUntilCancelled();
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      const status = controller.getStatus();
+      await vi.waitFor(() => expect(mock.status).toHaveBeenCalled());
+      controller.cancel();
+
+      await expect(status).resolves.toBeNull();
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 상태 확인 취소됨");
+    });
+
     it("fullCheck=true 면 원격까지 조회하고 remoteChanges 를 방출한다", async () => {
       mock.status.mockResolvedValue({
         lastSyncAt: "2026-05-29T00:00:00Z",

@@ -82,10 +82,20 @@ describe("증분 pull 기준 시각 — 받지 못한 변경이 다음 조회에
     vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
     vi.spyOn(client, "searchRecentPages").mockImplementation(async (since: string) => {
       searchSince.push(since);
-      return [...remote.values()]
-        .filter((p) => Date.parse(p.last_edited_time) > Date.parse(since))
-        .sort((a, b) => b.last_edited_time.localeCompare(a.last_edited_time))
-        .map((p) => ({ id: p.id, last_edited_time: p.last_edited_time }));
+      return (
+        [...remote.values()]
+          .filter((p) => Date.parse(p.last_edited_time) > Date.parse(since))
+          .sort((a, b) => b.last_edited_time.localeCompare(a.last_edited_time))
+          // search 는 페이지 객체를 통째로 준다 — 부모 · 제목도.
+          .map((p) => ({
+            id: p.id,
+            last_edited_time: p.last_edited_time,
+            last_edited_by: null,
+            parentDatabaseId: null,
+            parent: p.parent,
+            title: client.extractTitle(p),
+          }))
+      );
     });
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       const found = remote.get(id.replace(/-/g, ""));
