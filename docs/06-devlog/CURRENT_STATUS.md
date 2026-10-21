@@ -111,6 +111,7 @@
 | 4 뒤 | `fix/row-pull`                               | 받은 행의 빈 속성이 `null` 줄로 · 받은 행의 stat 을 안 적어 매번 다시 읽음 · `.base` 에 기간 끝 열 없음 · 같은 이름 새 페이지 경로가 처리 차례에 달림                                                                              | 완료 `4178c5e` |
 | 4 뒤 | `fix/row-path-local-file`                    | 새 Notion 행이 DB 폴더의 같은 이름 로컬 파일(아직 push 안 한 것)을 덮어써 로컬 글이 사라짐                                                                                                                                         | 완료 `3f5be85` |
 | 4 뒤 | `fix/remote-scan-gate`                       | 상태 확인을 취소하지 못함 · 충돌 목록이 작업 잠금 밖 · 증분 훑기가 루트 · 루트 밖 페이지를 하나씩 다시 읽음 · CLI 가 `.MD` 노트를 첨부로 봄                                                                                        | 완료 `a45cd2b` |
+| 4 뒤 | `fix/media-kinds`                            | PDF · 동영상 · 소리를 일반 파일 블록으로 올림 · 내부 참조로 받은 파일만 올라간 이름을 캡션보다 앞세움                                                                                                                              | 완료 `0f8ab45` |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
