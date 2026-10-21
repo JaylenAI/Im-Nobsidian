@@ -4,12 +4,13 @@ import { createSqlJsMock, DatabaseMock } from "../helpers/mock-sqljs.js";
 vi.mock("sql.js", () => createSqlJsMock());
 
 vi.mock("@im-nobsidian/core", async () => {
-  // 스키마는 core 의 것을 그대로 쓴다 — 플러그인이 같은 목록을 도는지가 시험 대상이다
-  const { STATE_DB_MIGRATIONS } =
+  // 스키마 · 위키링크 조회는 core 의 것을 그대로 쓴다(파일 이름 조회는 sqljs-wikilink.test.ts — 진짜 sql.js) — 플러그인이 같은 목록을 도는지가 시험 대상이다
+  const { STATE_DB_MIGRATIONS, WIKILINK_LOOKUPS } =
     await vi.importActual<typeof import("@im-nobsidian/core")>("@im-nobsidian/core");
   let counter = 0;
   return {
     STATE_DB_MIGRATIONS,
+    WIKILINK_LOOKUPS,
     generateId: () => `test-id-${++counter}`,
   };
 });
@@ -456,18 +457,6 @@ describe("SqlJsStateDB", () => {
       const found = db.resolveWikilink("meeting");
       expect(found).not.toBeNull();
       expect(found!.title).toBe("회의록");
-    });
-
-    it("파일명으로 조회", () => {
-      db.upsertWikilink({
-        obsidianPath: "notes/meeting.md",
-        notionPageId: "page-w1",
-        title: "회의록",
-        aliases: [],
-      });
-
-      const found = db.resolveWikilink("meeting");
-      expect(found).not.toBeNull();
     });
 
     it("resolvePageId로 Notion ID → 위키링크 조회", () => {

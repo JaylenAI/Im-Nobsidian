@@ -156,6 +156,18 @@ describe("ConflictResolver", () => {
       );
       expect(mockStateDb.updateStatus).toHaveBeenCalledWith("1", "synced");
     });
+
+    it("앞서 남긴 사본이 있으면 덮지 않고 번호 붙은 새 사본을 쓴다", async () => {
+      mockVaultFs.exists.mockImplementation(async (path: string) => path === "test.conflict.md");
+
+      await resolver.resolve(createConflict(), "duplicate");
+
+      expect(mockVaultFs.writeFile).not.toHaveBeenCalledWith("test.conflict.md", expect.anything());
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "test 2.conflict.md",
+        "remote modified content",
+      );
+    });
   });
 
   describe("resolveByStrategy", () => {
