@@ -16,6 +16,7 @@ import {
   ViewDataProvider,
   EntryEditor,
   getLogger,
+  isMarkdownPath,
 } from "@im-nobsidian/core";
 import type {
   Config,
@@ -587,7 +588,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private registerVaultEvents(): void {
     const onVaultChange = (file: { path: string }) => {
-      if (!file.path.endsWith(".md")) return;
+      if (!isMarkdownPath(file.path)) return;
       this.scheduleVaultSync();
       this.scheduleSidebarRefresh();
     };
@@ -709,6 +710,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
     try {
       const status = await this.syncController.getStatus();
+      if (!status) return;
 
       const lines = [];
 

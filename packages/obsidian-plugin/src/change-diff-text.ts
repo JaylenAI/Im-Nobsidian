@@ -1,3 +1,4 @@
+import { noteNameFromPath } from "@im-nobsidian/core";
 import type { ChangeDiff, LocalChange, RemoteChange } from "@im-nobsidian/core";
 
 /** 변경 하나의 두 글을 불러오는 곳 — 플러그인에서는 `SyncController`. */
@@ -22,14 +23,10 @@ export interface ChangeDiffSource {
 const SYNCED_LABEL = "지난 동기화";
 const SAME_TEXT = "지난 동기화 때와 내용이 같습니다";
 
-function noteName(path: string): string {
-  return path.split("/").pop()?.replace(/\.md$/, "") ?? path;
-}
-
 /** 로컬 변경 — 지난 동기화 때의 글과 지금 볼트의 글. */
 export function localDiffSource(change: LocalChange, differ: ChangeDiffer): ChangeDiffSource {
   return {
-    title: noteName(change.path),
+    title: noteNameFromPath(change.path),
     caption: localCaption(change),
     oldLabel: SYNCED_LABEL,
     newLabel: "지금 볼트",
@@ -61,7 +58,7 @@ export function remoteDiffSource(
 ): ChangeDiffSource | null {
   if (!change.path) return null;
   return {
-    title: noteName(change.path),
+    title: noteNameFromPath(change.path),
     caption: `${REMOTE_CAPTION[change.type]} — ${change.path}`,
     oldLabel: SYNCED_LABEL,
     newLabel: "Notion 지금",

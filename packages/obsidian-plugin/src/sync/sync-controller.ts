@@ -1,6 +1,7 @@
 import {
   getLogger,
   inAnyPathScope,
+  isMarkdownPath,
   isRemoteDeletion,
   notionIdsEqual,
   SyncBusyError,
@@ -203,15 +204,15 @@ export class SyncController {
   }
 
   /** 취소한 작업이 멈췄다 — 그때까지 처리한 것은 남는다. */
-  private cancelled(): void {
-    this.hooks.onNotice?.("Im-Nobsidian: 동기화 취소됨");
+  private cancelled(label = "동기화", summary = "동기화가 취소되었습니다"): void {
+    this.hooks.onNotice?.(`Im-Nobsidian: ${label} 취소됨`);
     this.hooks.onStatusBar?.("ready");
     this.emitState({
       syncState: "ready",
       operationType: null,
       progress: null,
       errorMessage: null,
-      completionSummary: "동기화가 취소되었습니다",
+      completionSummary: summary,
     });
   }
 
@@ -411,7 +412,7 @@ export class SyncController {
       await this.refreshLocal(false);
       return;
     }
-    await this.exclusive("status", async () => {
+    await this.exclusive("status", async (signal) => {
       try {
         this.emitState({
           syncState: "syncing",
@@ -419,12 +420,14 @@ export class SyncController {
           progress: null,
           errorMessage: null,
         });
-        const status = await this.orchestrator.status();
+        const status = await this.orchestrator.status({ signal });
         this.remoteChanges = status.remoteChanges;
         this.settle(status, { remoteChanges: status.remoteChanges });
       } catch (error) {
+        // 취소한 것은 실패가 아니다 — 원격 목록은 지난번 것을 그대로 둔다.
+        if (signal.aborted) this.cancelled("상태 확인", "상태 확인이 취소되었습니다");
         // 사용자가 누른 새로고침이다. 예전에는 무시해 사이드바가 「동기화 중」 에 남았다.
-        this.fail("상태 확인", error);
+        else this.fail("상태 확인", error);
       }
     });
   }
@@ -504,11 +507,11 @@ export class SyncController {
       this.recordRename(oldPath, newPath, "folder");
       return true;
     }
-    if (newPath.endsWith(".md")) {
+    if (isMarkdownPath(newPath)) {
       this.recordRename(oldPath, newPath, "file");
       return true;
     }
-    if (oldPath.endsWith(".md")) {
+    if (isMarkdownPath(oldPath)) {
       this.recordDelete(oldPath);
       return true;
     }
@@ -539,15 +542,20 @@ export class SyncController {
 
   /**
    * 상태 조회(상태 표시 커맨드용 — 표시 포맷은 셸이 담당). 원격까지 보므로 도는 작업이 있으면
-   * {@link SyncBusyError} 로 거절한다 — 무엇이 돌고 있는지는 오류가 말한다.
+   * {@link SyncBusyError} 로 거절한다 — 무엇이 돌고 있는지는 오류가 말한다. 취소하면 알리고 null.
    */
-  async getStatus(): Promise<Awaited<ReturnType<SyncOrchestrator["status"]>>> {
+  async getStatus(): Promise<Awaited<ReturnType<SyncOrchestrator["status"]>> | null> {
     if (this.closed)
       throw new Error("Im-Nobsidian 을 다시 불러오는 중입니다 — 잠시 뒤 다시 시도하세요");
     if (this.active) throw new SyncBusyError(this.active.operation, "status");
-    let status!: Awaited<ReturnType<SyncOrchestrator["status"]>>;
-    await this.exclusive("status", async () => {
-      status = await this.orchestrator.status();
+    let status: Awaited<ReturnType<SyncOrchestrator["status"]>> | null = null;
+    await this.exclusive("status", async (signal) => {
+      try {
+        status = await this.orchestrator.status({ signal });
+      } catch (error) {
+        if (!signal.aborted) throw error;
+        this.hooks.onNotice?.("Im-Nobsidian: 상태 확인 취소됨");
+      }
     });
     return status;
   }
