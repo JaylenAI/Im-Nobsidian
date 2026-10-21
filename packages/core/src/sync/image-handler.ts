@@ -7,7 +7,7 @@ import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
-import { getMimeType, isNotionUploadable } from "../utils/mime.js";
+import { getBlockType, getMimeType, isNotionUploadable } from "../utils/mime.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import {
   fileUrlOfBlock,
@@ -167,6 +167,9 @@ const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊)\s*/u;
 const MEDIA_TAG_RE =
   /<(?:file|video|audio|pdf)\s+src="([^"]+)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
 
+/** 미디어 태그의 이름 — 그대로 둘 미디어를 같은 종류의 태그로 다시 싣는다. */
+const MEDIA_TAG_NAME_RE = /^<(file|video|audio|pdf)\s/;
+
 /** 캡션 없는 미디어에 pull 변환이 붙이는 자리 이름(`[📎 file](…)`) — 사람이 적은 캡션이 아니다. */
 const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio"]);
 
@@ -252,9 +255,20 @@ function captionOfLabel(label: string): string {
  *   가를 수 없다 — 이름으로 받는다.
  */
 function fileNameOf(caption: string, url: string): string {
+  return savedNameOf(caption, uploadedFileNameFromUrl(url));
+}
+
+/**
+ * 받은 파일의 이름을 고르는 규칙 하나 — 서명 URL 로 오든 내부 참조(`attachment:<id>:<이름>`)로 오든 같다.
+ * 예전에는 내부 참조 갈래만 올라간 이름을 캡션보다 앞세워, 같은 블록이 다른 모양으로 오면 다른 이름으로
+ * 받아 사본이 생기고 임베드 별칭이 바뀌었다(B11).
+ *
+ * @param uploadedName Notion 에 올라간 파일 이름 — 모르면 빈 문자열.
+ */
+function savedNameOf(caption: string, uploadedName: string): string {
   const alias = toWikilinkAlias(caption);
   if (alias && !MEDIA_PLACEHOLDER_CAPTIONS.has(alias)) return alias;
-  return uploadedFileNameFromUrl(url) || alias || "file";
+  return uploadedName || alias || "file";
 }
 
 /**
@@ -424,6 +438,10 @@ function messageOf(error: unknown): string {
 /**
  * 자리표시자 자리에 넣을 미디어 블록. 캡션은 사람이 적은 설명만({@link captionOfEmbed}) —
  * 설명이 없으면 비운다. 파일 블록은 이름으로 파일 이름을 보여 준다.
+ *
+ * 파일은 확장자로 블록 종류를 고른다({@link getBlockType}) — PDF · 동영상 · 소리를 일반 파일 블록으로 올리면
+ * Notion 에서 미리보기 · 재생이 안 됐다(B12). PDF · 동영상 · 소리 블록은 `name` 을 거절한다(실측 2026-10-21:
+ * `pdf.name should be not present`).
  */
 function mediaBlock(
   kind: PlaceholderHit["kind"],
@@ -434,9 +452,10 @@ function mediaBlock(
   const description = captionOfEmbed(target);
   const caption = description ? [{ type: "text", text: { content: description } }] : [];
   const file = { type: "file_upload", file_upload: { id: fileUploadId }, caption };
-  return kind === "image"
-    ? { type: "image", image: file }
-    : { type: "file", file: { ...file, name: baseName(vaultTarget) } };
+  const type = kind === "image" ? "image" : getBlockType(baseName(vaultTarget));
+  return type === "file"
+    ? { type, file: { ...file, name: baseName(vaultTarget) } }
+    : { type, [type]: file };
 }
 
 /**
@@ -917,7 +936,9 @@ export class ImageHandler {
   ): Promise<string | null> {
     const isImage = placeholder.kind === "image";
     if (isImage !== found.span.full.startsWith("![")) return null;
-    if (!isImage && !found.span.full.startsWith("<file ")) return null;
+    // 파일은 Notion 에 있는 블록 종류 그대로 둔다 — PDF · 동영상 · 소리 블록도(B12).
+    const tag = MEDIA_TAG_NAME_RE.exec(found.span.full)?.[1];
+    if (!isImage && !tag) return null;
     const caption = this.keptCaptionOf(placeholder.target, found.span);
     const url = found.span.url.split("?")[0]!;
     if (!PLAIN_CAPTION_RE.test(caption) || !PLAIN_URL_RE.test(url)) return null;
@@ -934,7 +955,7 @@ export class ImageHandler {
     }
     return isImage
       ? `${placeholder.lead}![${caption}](${url})`
-      : `${placeholder.lead}<file src="${url}">${caption}</file>`;
+      : `${placeholder.lead}<${tag} src="${url}">${caption}</${tag}>`;
   }
 
   /**
@@ -1288,8 +1309,7 @@ export class ImageHandler {
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
         if (!realUrl) continue;
 
-        const caption =
-          fileName || toWikilinkAlias(span.label.replace(FILE_LABEL_PREFIX_RE, "")) || "file";
+        const caption = savedNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
@@ -1337,7 +1357,7 @@ export class ImageHandler {
         const realUrl = await this.notionClient.getFileBlockUrl(blockId);
         if (!realUrl) continue;
 
-        const caption = fileName || toWikilinkAlias(match[2] ?? "") || "file";
+        const caption = savedNameOf(match[2] ?? "", fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
