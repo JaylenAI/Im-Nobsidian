@@ -73,8 +73,15 @@ export {
   assertNoPendingWal,
   pendingWalBytes,
   stateDbWalPath,
+  STATE_DB_MIGRATIONS,
 } from "./state/index.js";
-export type { IStateDB, StateDbTool, StateLockClaim, StateLockOwner } from "./state/index.js";
+export type {
+  IStateDB,
+  StateDbTool,
+  StateLockClaim,
+  StateLockOwner,
+  StateDbMigration,
+} from "./state/index.js";
 export type {
   UpsertSyncRecord,
   FileRegistryEntry,
@@ -251,7 +258,13 @@ export type {
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
-export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
+export {
+  generateId,
+  normalizeNotionId,
+  notionIdsEqual,
+  compactNotionId,
+  notionIdFromInput,
+} from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
 export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./utils/markdown-path.js";
 export { systemTimeZone } from "./utils/zoned-time.js";

@@ -8,10 +8,7 @@ import type {
   RemoteObservation,
 } from "../types/index.js";
 import { generateId } from "../utils/id.js";
-import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
-import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
-import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
-import { REMOTE_OBSERVATION_MIGRATION } from "./migrations/004-remote-observation.js";
+import { STATE_DB_MIGRATIONS } from "./migrations/index.js";
 import type { IStateDB } from "./state-db-interface.js";
 import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
 import { StateLock, stateDbLockPath } from "./state-lock.js";
@@ -65,17 +62,8 @@ export class StateDB implements IStateDB {
 
   private migrate(): void {
     const version = this.getSchemaVersion();
-    if (version < 1) {
-      this.db.exec(INITIAL_MIGRATION);
-    }
-    if (version < 2) {
-      this.db.exec(FILE_REGISTRY_MIGRATION);
-    }
-    if (version < 3) {
-      this.db.exec(STAT_CACHE_MIGRATION);
-    }
-    if (version < 4) {
-      this.db.exec(REMOTE_OBSERVATION_MIGRATION);
+    for (const migration of STATE_DB_MIGRATIONS) {
+      if (version < migration.version) this.db.exec(migration.sql);
     }
   }
 
