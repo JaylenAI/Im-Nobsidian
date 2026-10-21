@@ -4,6 +4,8 @@ import { mapOutsideCode } from "../../utils/md-regions.js";
 const BLOCK_MATH_REGEX = /\$\$([\s\S]+?)\$\$/g;
 /** 줄머리가 인용 표시(`>`)와 들여쓰기뿐인가 — 콜아웃 · 목록 안의 블록 수식은 줄마다 이것을 단다. */
 const CONTAINER_PREFIX_RE = /^(?:[ \t]*>)*[ \t]*$/;
+/** 줄머리(인용 표시 · 들여쓰기) — {@link CONTAINER_PREFIX_RE} 의 줄 앞 부분. */
+const CONTAINER_LEAD_RE = /^(?:[ \t]*>)*[ \t]*/;
 
 /**
  * 블록 수식(`$$…$$`)의 두 `$$` 를 저마다 제 줄에 세운다 — Notion 은 `$$` 가 줄에 혼자 있을 때만 블록
@@ -17,6 +19,11 @@ const CONTAINER_PREFIX_RE = /^(?:[ \t]*>)*[ \t]*$/;
  * 코드 펜스 · 인라인 코드 안의 `$` 는 코드다. 셸의 `$$`(PID) · `$HOME` 을 수식으로 보면 Notion 의
  * 코드가 바뀌고, 코드 속 `$$` 가 코드 밖 수식의 `$$` 와 짝지어져 그 사이 본문까지 옮겨졌다(S-21).
  *
+ * 블록 수식으로 서지 못하는 `$$` 는 Notion 이 빈 인라인 수식으로 읽는다(2026-10-21 실측) — 짝이 없는 `$$` 는
+ * Obsidian 이 글로 그리는데 Notion 에는 빈 수식 상자가 생겼다. 그래서 줄 안에서 짝이 없는 `$$` 는 `\$\$`(두 쪽 모두
+ * 글 `$$`)로, 글과 한 줄인 `$$ x $$` 는 안쪽 공백을 떼어 `$$x$$`(Notion 의 인라인 수식)로 보낸다
+ * ({@link settleLineDollars}). 제 줄의 `$$` 는 블록 수식의 경계라 둔다.
+ *
  * 인라인 수식(`$…$`)은 건드리지 않는다. 예전에는 안쪽 공백을 잘라 `$ x $` 가 수식이 되고
  * `$5 and $10` 이 `$5 and$10` 으로 바뀌었다. Obsidian 과 Notion 은 여는 `$` 뒤 · 닫는 `$` 앞이
  * 공백이거나 닫는 `$` 뒤가 숫자면 수식으로 읽지 않는다(Obsidian 1.13.7 의 토크나이저 · Notion 실측) —
@@ -27,14 +34,16 @@ export class MathNormalizer implements Processor {
   readonly order = 50;
 
   process(input: ProcessorInput): ProcessorOutput {
-    const source = input.content;
-    const content = mapOutsideCode(source, (segment, base) =>
+    // 줄 가운데의 짝 없는 `$$` 를 먼저 글로 — 남겨 두면 뒤 블록 수식의 여는 `$$` 와 짝지어져 그 수식을 세우지 못한다.
+    const source = settleDollars(input.content, false);
+    const stood = mapOutsideCode(source, (segment, base) =>
       segment.replace(
         BLOCK_MATH_REGEX,
         (match: string, equation: string, at: number) =>
           standBlockMath(source, base + at, match, equation) ?? match,
       ),
     );
+    const content = settleDollars(stood, true);
 
     return {
       content,
@@ -83,4 +92,55 @@ function withoutPrefix(line: string, prefix: string): string | null {
   if (line.startsWith(prefix)) return line.slice(prefix.length);
   if (line.trimEnd() === prefix.trimEnd()) return "";
   return null;
+}
+
+/**
+ * 글의 `$$` — 앞이 `\` · `$` 가 아니고 뒤가 `$` 가 아니다. `$$$` 처럼 세 개 넘게 붙은 `$` 는 보지 않는다. 앞이
+ * 공백(줄 머리)이 아닌 `$$` 는 인라인 수식 둘 사이(`$a$$b$`)일 수 있어 글로 바꾸지 않는다({@link settleLineDollars}).
+ */
+const DOUBLE_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g;
+/** 제 줄의 `$$` — 줄머리 · 목록 표지 · 콜아웃 머리(`[!note]`) 뒤에 `$$` 만 있다. 블록 수식의 경계다. */
+const OWN_LINE_DOLLARS_RE =
+  /^(?:[ \t]*>)*[ \t]*(?:\[![^\]]*\][+-]?[ \t]*|(?:[-*+]|\d+[.)])[ \t]+)?\$\$[ \t]*$/;
+
+/** 코드 밖 줄마다 {@link settleLineDollars}. */
+function settleDollars(content: string, final: boolean): string {
+  return mapOutsideCode(content, (segment) =>
+    segment
+      .split("\n")
+      .map((line) => (line.includes("$$") ? settleLineDollars(line, final) : line))
+      .join("\n"),
+  );
+}
+
+/**
+ * 한 줄의 `$$` 를 앞에서부터 둘씩 짝짓고 Notion 이 Obsidian 과 같게 읽을 모양으로 고친다.
+ *
+ * - 짝이 없는 `$$` 는 `\$\$` — 앞이 공백 · 줄 머리일 때만. `final` 이 아니면(블록 수식을 세우기 전) 뒤에도 글이 있어
+ *   블록 수식의 경계일 수 없는 것만.
+ * - 안쪽 끝에 공백이 있는 짝(`$$ x $$`)의 공백을 뗀다 — 제 줄의 짝은 뒤에서 블록 수식으로 선다. 식이 빈 짝(`$$ $$`)은 둔다.
+ */
+function settleLineDollars(line: string, final: boolean): string {
+  if (OWN_LINE_DOLLARS_RE.test(line)) return line;
+  const at = [...line.matchAll(DOUBLE_DOLLAR_RE)].map((m) => m.index);
+  const edits: Array<readonly [start: number, end: number, text: string]> = [];
+  for (let k = 0; k + 1 < at.length; k += 2) {
+    const inner = line.slice(at[k]! + 2, at[k + 1]);
+    const trimmed = inner.trim();
+    if (trimmed !== "" && trimmed !== inner) {
+      edits.push([at[k]!, at[k + 1]! + 2, `$$${trimmed}$$`]);
+    }
+  }
+  if (at.length % 2 === 1) {
+    const stray = at[at.length - 1]!;
+    const before = line[stray - 1];
+    const openText = before === undefined || /\s/.test(before);
+    const lead = line.match(CONTAINER_LEAD_RE)![0].length;
+    const midLine = line.slice(lead, stray).trim() !== "" && line.slice(stray + 2).trim() !== "";
+    if (openText && (final || midLine)) edits.push([stray, stray + 2, "\\$\\$"]);
+  }
+  let out = line;
+  for (const [start, end, text] of edits.reverse())
+    out = out.slice(0, start) + text + out.slice(end);
+  return out;
 }

@@ -312,3 +312,123 @@ describe("받은 노트 — 목록 안 코드블록이 목록 안에 남는다(S
     expect(obsidianToNotionEnhanced(pulled)).toBe(pulled);
   });
 });
+
+/**
+ * M3 — 콜아웃 · 토글 안 목록 항목의 코드가 항목 밖으로 납작해졌다. 컨테이너 본문을 내어 쓸 때 코드 펜스의 줄머리를
+ * 모두 지워, 펜스가 항목과 같은 깊이가 되었다(2026-10-21 실측: Obsidian 은 코드를 항목 밖에 그린다). 입력은 실제
+ * export 모양이다. push 모양은 실 Notion 에서 콜아웃 › 목록 › 코드(글 앞 탭 없음)로 읽혔다.
+ */
+describe("콜아웃 · 토글 안 목록의 코드 — 항목 안에 남는다(M3)", () => {
+  const CALLOUT_LIST_CODE = lines(
+    '<callout icon="💡">',
+    "\t메모",
+    "\t- 항목",
+    "\t\t```javascript",
+    "let a = 1;",
+    "let b = 2;",
+    "\t\t```",
+    "\t- 둘째",
+    "</callout>",
+    "뒤 문단",
+  );
+
+  it("콜아웃 — 펜스와 코드가 항목 안 깊이(탭 하나)를 입는다", () => {
+    expect(pull(CALLOUT_LIST_CODE)).toBe(
+      lines(
+        "> [!tip] 메모",
+        "> - 항목",
+        "> \t```javascript",
+        "> \tlet a = 1;",
+        "> \tlet b = 2;",
+        "> \t```",
+        "> - 둘째",
+        "",
+        "뒤 문단",
+      ),
+    );
+  });
+
+  it.each([
+    [
+      "토글",
+      lines(
+        "<details>",
+        "<summary>접기</summary>",
+        "\t- 항목",
+        "\t\t```js",
+        "x",
+        "\t\t```",
+        "</details>",
+      ),
+      lines("> [!toggle]- 접기", "> - 항목", "> \t```js", "> \tx", "> \t```"),
+    ],
+    [
+      "콜아웃 속 콜아웃",
+      lines(
+        '<callout icon="💡">',
+        "\t메모",
+        '\t<callout icon="📝">',
+        "\t\t안",
+        "\t\t- 항목",
+        "\t\t\t```js",
+        "x",
+        "\t\t\t```",
+        "\t</callout>",
+        "</callout>",
+      ),
+      lines("> [!tip] 메모", "> > [!note] 안", "> > - 항목", "> > \t```js", "> > \tx", "> > \t```"),
+    ],
+    [
+      "두 단계 목록",
+      lines(
+        '<callout icon="💡">',
+        "\t메모",
+        "\t- 항목",
+        "\t\t- 안쪽",
+        "\t\t\t```js",
+        "x",
+        "\t\t\t```",
+        "</callout>",
+      ),
+      lines("> [!tip] 메모", "> - 항목", "> \t- 안쪽", "> \t\t```js", "> \t\tx", "> \t\t```"),
+    ],
+  ])("%s — 코드가 제 항목 안에 남는다", (_name, nfm, expected) => {
+    expect(pull(nfm)).toBe(expected);
+  });
+
+  it("다시 올리면 펜스가 항목의 자식 깊이 · 코드 글은 앞 탭 없이(실 Notion 에서 구조가 같다)", () => {
+    expect(obsidianToNotionEnhanced(pull(CALLOUT_LIST_CODE))).toBe(
+      lines(
+        '<callout icon="💡">',
+        "\t메모",
+        "\t- 항목",
+        "\t\t```javascript",
+        "\tlet a = 1;",
+        "\tlet b = 2;",
+        "\t\t```",
+        "\t- 둘째",
+        "</callout>",
+        "",
+        "뒤 문단",
+      ),
+    );
+  });
+
+  it("목록 항목이 아닌 콜아웃 본문의 코드는 그대로 줄머리 없이 둔다", () => {
+    const nfm = lines('<callout icon="💡">', "\t메모", "\t```js", "x", "\t```", "</callout>");
+    expect(pull(nfm)).toBe(lines("> [!tip] 메모", "> ```js", "> x", "> ```"));
+  });
+
+  it("문단의 자식 코드는 줄머리 없이 둔다 — 들여 쓰면 Obsidian 이 문단의 이어진 글로 읽는다", () => {
+    const nfm = lines(
+      '<callout icon="💡">',
+      "\t메모",
+      "\t문단",
+      "\t\t```js",
+      "x",
+      "\t\t```",
+      "</callout>",
+    );
+    expect(pull(nfm)).toBe(lines("> [!tip] 메모", "> 문단", "> ```js", "> x", "> ```"));
+  });
+});

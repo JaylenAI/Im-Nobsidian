@@ -9,7 +9,11 @@
  * `\$a\$` 는 글 `$a$`.
  */
 import { describe, it, expect } from "vitest";
-import { notionEnhancedToObsidian } from "../../src/converter/enhanced-md-converter.js";
+import {
+  notionEnhancedToObsidian,
+  obsidianToNotionEnhanced,
+} from "../../src/converter/enhanced-md-converter.js";
+import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { unescapeSafeLiteralDollars } from "../../src/converter/literal-dollar.js";
 
 describe("unescapeSafeLiteralDollars — 수식 짝이 생길 수 없는 줄만 푼다", () => {
@@ -61,5 +65,37 @@ describe("pull 변환 — Notion 의 글 달러는 글로 남는다(C13)", () =>
     expect(notionEnhancedToObsidian("```bash\necho \\$HOME\\$\n```")).toBe(
       "```bash\necho \\$HOME\\$\n```",
     );
+  });
+});
+
+/**
+ * Notion 의 빈 인라인 수식(`` $``$ ``) — 옛 push 가 글의 `$$` 를 이렇게 올렸다(2026-10-21 실측). 받으면 글 `\$\$` 다.
+ * push 는 짝 없는 `$$` 를 `\$\$` 로 보내므로, 로컬의 `$$` 와 받은 글이 Notion 에서 같은 꼴이다.
+ */
+describe("빈 인라인 수식은 글 $$ 로 받는다", () => {
+  it.each([
+    ["문단", "a $``$ b", "a \\$\\$ b"],
+    ["글을 사이에 둔 둘", "a $``$ x\\^2 $``$ b", "a \\$\\$ x^2 \\$\\$ b"],
+    ["목록", "- $``$ 글", "- \\$\\$ 글"],
+  ])("%s", (_name, nfm, expected) => {
+    expect(notionEnhancedToObsidian(nfm)).toBe(expected);
+  });
+
+  it("코드 펜스 안은 코드의 글이다", () => {
+    const nfm = "```\n$``$\n```";
+    expect(notionEnhancedToObsidian(nfm)).toBe(nfm);
+  });
+
+  it("받은 글과 로컬의 짝 없는 $$ 는 push 하면 같다", () => {
+    const pipeline = createDefaultPipeline();
+    const sent = (note: string) =>
+      obsidianToNotionEnhanced(
+        pipeline.convertToNotion(note, {
+          direction: "push",
+          path: "markdown-api",
+          filePath: "t.md",
+        }).content,
+      );
+    expect(sent(notionEnhancedToObsidian("가 $``$ 나"))).toBe(sent("가 $$ 나"));
   });
 });

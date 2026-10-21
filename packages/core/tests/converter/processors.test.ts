@@ -42,13 +42,13 @@ describe("MathNormalizer", () => {
     expect(result.content).toContain("$$\n\\int_0^1 x dx\n$$");
   });
 
-  it("수식 아닌 달러 기호 무시", () => {
+  it("수식 아닌 달러 기호 — 짝 없는 $$ 만 글로 이스케이프한다", () => {
     const result = processor.process({
       content: "Price is $100 and $$200",
       metadata: {},
       context: pushContext,
     });
-    expect(result.content).toBe("Price is $100 and $$200");
+    expect(result.content).toBe("Price is $100 and \\$\\$200");
   });
 
   const push = (content: string): string =>
@@ -138,6 +138,40 @@ describe("MathNormalizer", () => {
     ["목록 줄", "- $$x^2$$"],
   ])("글과 한 줄에 있는 $$…$$ 는 그대로다 — %s", (_name, text) => {
     expect(push(text)).toBe(text);
+  });
+
+  // 짝 없는 $$ 는 Obsidian 이 글로 그리는데 Notion 은 빈 인라인 수식으로 읽었다(2026-10-21 실측) — `\$\$` 는 두 쪽 모두 글 $$.
+  it.each([
+    ["문단 가운데", "a $$ b", "a \\$\\$ b"],
+    ["목록 항목마다 하나", "- 가 $$ 나\n- 다 $$ 라", "- 가 \\$\\$ 나\n- 다 \\$\\$ 라"],
+    ["줄 끝", "글 $$", "글 \\$\\$"],
+    ["인라인 코드 뒤", "`$$` 가 $$", "`$$` 가 \\$\\$"],
+    ["콜아웃 본문", "> [!note] 제목\n> 가 $$ 나", "> [!note] 제목\n> 가 \\$\\$ 나"],
+  ])("짝 없는 $$ 는 글로 보낸다 — %s", (_name, md, expected) => {
+    expect(push(md)).toBe(expected);
+  });
+
+  it("줄 가운데의 짝 없는 $$ 가 뒤 블록 수식의 여는 $$ 를 가져가지 않는다", () => {
+    expect(push("가 $$ 나\n\n$$ y $$")).toBe("가 \\$\\$ 나\n\n$$\ny\n$$");
+  });
+
+  // 글과 한 줄의 `$$ x $$` 는 Notion 이 빈 수식 · 글 · 빈 수식으로 읽었다 — 공백을 떼면 인라인 수식이다(실측).
+  it.each([
+    ["목록 줄", "- $$ x^2 $$", "- $$x^2$$"],
+    ["글 사이", "a $$ x^2 $$ b", "a $$x^2$$ b"],
+  ])("글과 한 줄인 $$ x $$ 는 안쪽 공백을 뗀다 — %s", (_name, md, expected) => {
+    expect(push(md)).toBe(expected);
+  });
+
+  it.each([
+    ["이미 이스케이프", "a \\$\\$ b"],
+    ["인라인 수식 둘 사이", "$a$$b$"],
+    ["$ 셋", "a $$$ b"],
+    ["$ 셋 둘 — 셋 넘게 붙은 $ 는 짝짓지 않는다", "x $$$ y $$$ z"],
+    ["목록 줄에 선 $$", "- $$\n  x\n  $$"],
+    ["콜아웃 제목 줄의 $$", "> [!note] $$\n> x\n> $$"],
+  ])("짝 없는 $$ 처럼 보여도 그대로다 — %s", (_name, md) => {
+    expect(push(md)).toBe(md);
   });
 
   // 인라인 수식은 노트 그대로 보낸다 — Obsidian 과 Notion 이 같은 규칙으로 수식을 가린다.
