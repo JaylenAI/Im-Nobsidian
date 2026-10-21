@@ -319,7 +319,10 @@ function withMediaBlocks(notion: ReturnType<typeof memoryNotion>): string[] {
   notion.client.appendChildBlocks.mockImplementation(
     async (
       parentId: string,
-      blocks: { type: "image" | "file"; image?: MediaBody; file?: MediaBody }[],
+      blocks: ({ type: "image" | "file" | "pdf" | "video" | "audio" } & Record<
+        string,
+        MediaBody
+      >)[],
       options?: { after?: string },
     ) => {
       const page = notion.touch(parentId);
@@ -330,8 +333,11 @@ function withMediaBlocks(notion: ReturnType<typeof memoryNotion>): string[] {
         const name = uploads.get(media.file_upload.id)!;
         const url = signedUrl(fileId(++stored), name);
         const caption = media.caption.map((c) => c.text.content).join("");
+        // markdown API 는 PDF · 동영상 · 소리 블록을 그 이름의 태그로 준다(실측 2026-10-21).
         lines[at] =
-          block.type === "image" ? `![${caption}](${url})` : `<file src="${url}">${caption}</file>`;
+          block.type === "image"
+            ? `![${caption}](${url})`
+            : `<${block.type} src="${url}">${caption}</${block.type}>`;
         return {
           id: `media-${stored}`,
           type: block.type,
@@ -446,6 +452,20 @@ describe("본문 push 와 미디어 — 바뀌지 않은 미디어는 다시 올
       "assets/a.png|새 설명",
       "docs/계약서.pdf",
     ]);
+  });
+
+  it("PDF 는 PDF 블록으로 올리고, 글만 고친 push 는 그 블록을 둔다(B12)", async () => {
+    vault.write("assets/a.png", "PNG");
+    vault.write("docs/계약서.pdf", "PDF");
+    vault.write("Note.md", NOTE);
+    await orchestrator.push();
+    expect(body("Note.md")).toMatch(/<pdf src="[^"]+"><\/pdf>/);
+    const before = mediaFileIds("Note.md");
+
+    expect(await pushEdit("Note.md", (t) => t.replace("뒤 문단", "뒤 문단 — 고침"))).toEqual([]);
+
+    expect(body("Note.md")).toMatch(/<pdf src="[^"]+"><\/pdf>/);
+    expect(mediaFileIds("Note.md")).toEqual(before);
   });
 
   it("볼트에서 바뀐 파일만 다시 올린다", async () => {
