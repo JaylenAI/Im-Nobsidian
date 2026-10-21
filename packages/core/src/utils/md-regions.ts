@@ -264,6 +264,48 @@ export function codeLineMask(content: string): boolean[] {
   return inCode;
 }
 
+/** 목록 항목 줄 — 줄머리 세 칸까지(네 칸이면 들여쓴 코드다). */
+const TOP_LIST_ITEM_RE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[\t ]|$)/;
+/** 들여쓴 코드의 폭 — CommonMark 는 네 칸(탭 하나)부터 코드로 읽는다. */
+const INDENTED_CODE_WIDTH = 4;
+
+/**
+ * 줄마다 들여쓴 코드 블록(CommonMark)인가 — 코드 펜스 밖, 목록 밖에서 빈 줄(또는 글 맨 앞) 뒤에 네 칸(탭)
+ * 이상 들여쓴 줄과 그 뒤로 이어지는 들여쓴 줄. Obsidian 은 이 줄을 코드로 그리지만 Notion 은 들여쓰기를 앞
+ * 블록의 자식으로 읽는다(`nfm-to-blocks.ts`). 목록 안의 깊은 줄은 항목의 자식이라 넣지 않는다. 앞머리
+ * frontmatter 는 보지 않는다.
+ */
+export function indentedCodeLineMask(content: string): boolean[] {
+  const lines = content.split("\n");
+  const mask = new Array<boolean>(lines.length).fill(false);
+  const inFence = codeLineMask(content);
+  const frontmatterEnd = lines[0] === "---" ? lines.findIndex((l, i) => i > 0 && l === "---") : -1;
+  let afterBlank = true;
+  let inCode = false;
+  let inList = false;
+  for (let i = frontmatterEnd + 1; i < lines.length; i++) {
+    const line = lines[i]!;
+    if (line.trim() === "") {
+      afterBlank = true;
+      continue;
+    }
+    const width = indentWidth(/^[\t ]*/.exec(line)![0]);
+    if (inFence[i]) {
+      inCode = false;
+      if (width === 0) inList = false;
+    } else if (width >= INDENTED_CODE_WIDTH && (inCode || (afterBlank && !inList))) {
+      mask[i] = true;
+      inCode = true;
+    } else {
+      inCode = false;
+      if (TOP_LIST_ITEM_RE.test(line)) inList = true;
+      else if (width === 0) inList = false;
+    }
+    afterBlank = false;
+  }
+  return mask;
+}
+
 /** 줄바꿈 셋 이상 — 빈 줄이 둘 이상 이어진 자리. */
 const BLANK_RUN_RE = /\n{3,}/g;
 
