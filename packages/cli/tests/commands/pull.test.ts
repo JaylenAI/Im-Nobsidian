@@ -20,7 +20,7 @@ vi.mock("@im-nobsidian/core", () => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
       notion: { token: "ntn_test" },
-      paths: {},
+      paths: { attachments: "media/첨부" },
       advanced: { concurrency: 3, timeoutMs: 30000 },
     }),
   })),
@@ -248,8 +248,9 @@ describe("pull command", () => {
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files"));
+    // 첨부 폴더는 설정의 것을 보인다 — 예전에는 늘 attachments/ 라고 적었다
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images → media/첨부/"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files → media/첨부/"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
     spy.mockRestore();
   });

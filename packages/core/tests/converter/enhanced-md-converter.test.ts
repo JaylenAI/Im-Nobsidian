@@ -198,6 +198,18 @@ describe("obsidianToNotionEnhanced", () => {
     expect(result).toContain("</details>");
   });
 
+  it("legacy toggle markers — 100개를 넘어도 모두 <details> 가 된다", () => {
+    const toggle = (n: number) =>
+      `%%im-nobsidian:toggle:start%%\n- 토글 ${n}\n  글 ${n}\n%%im-nobsidian:toggle:end%%`;
+    const input = Array.from({ length: 101 }, (_, i) => toggle(i + 1)).join("\n\n");
+
+    const result = obsidianToNotionEnhanced(input);
+
+    expect(result.match(/<details>/g)).toHaveLength(101);
+    expect(result).toContain("<summary>토글 101</summary>");
+    expect(result).not.toContain("toggle:start");
+  });
+
   it("> [!type] → <callout icon> 정준형 태그 (이모지는 본문이 아닌 icon 속성)", () => {
     const input = "> [!warning] Be careful";
     const result = obsidianToNotionEnhanced(input);
