@@ -324,9 +324,12 @@ due: 2026-06-30 # → Date property
 
 Enable it:
 
-```bash
-# Set parentMode to "database" and point to your database ID
-nobsi init  # select a database as your root
+```jsonc
+// .im-nobsidian/config.json — `nobsi init` does not ask for these
+"notion": {
+  "parentMode": "database",
+  "databaseId": "<database ID>" // without it the vault stays in page mode
+}
 ```
 
 ## Packages
@@ -368,24 +371,28 @@ await orchestrator.sync({ dryRun: false });
 
 ## Known Limitations
 
-Sync is **lossless, idempotent and convergent**: no content is dropped, re-syncing an unchanged
-vault produces zero churn, and where a rendition has to change it settles on the **first**
-round-trip and never moves again. The tables below list every place where Notion's storage model
-constrains the _rendition_ — grouped by whether the constraint is permanent or a one-time
-normalization.
+Sync is **idempotent and convergent**: re-syncing an unchanged vault produces zero churn, and where
+a rendition has to change it settles on the **first** round-trip and never moves again. Content
+survives the round-trip except where the tables below say otherwise — they list the places we know
+of where Notion's storage model constrains the _rendition_, grouped by whether the constraint is
+permanent or a one-time normalization. The block-API mode (`conversion.preferMarkdownApi: false`)
+loses more; see [Configuration](docs/05-guides/CONFIGURATION.md#prefermarkdownapi).
 
 ### Permanent limitations
 
-| Limitation                       | Reason                                                                        | Workaround                                                                                                                                                                                                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Notion-only blocks               | API returns `unsupported` for buttons, forms, synced blocks                   | Preserved as callout placeholders                                                                                                                                                                                                                                  |
-| Rate limit                       | Notion enforces 3 requests/second                                             | Built-in rate limiter with exponential backoff                                                                                                                                                                                                                     |
-| Soft breaks split blocks         | A single newline becomes a separate paragraph block in Notion                 | Use hard paragraph breaks (blank line) for intended splits                                                                                                                                                                                                         |
-| Consecutive blank lines          | Notion has no "N empty paragraphs" concept — collapses to one                 | No semantic difference — spacing is restored on pull                                                                                                                                                                                                               |
-| Note embeds (`![[note]]`)        | Notion has no note-transclusion concept, and drops custom-scheme links        | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                     |
-| First-push wikilinks             | Cross-references between new pages may not resolve on first sync              | Resolved automatically on subsequent syncs                                                                                                                                                                                                                         |
-| Links to pages outside the vault | The target isn't shared with your integration, or isn't part of what you pull | Kept as a **clickable `https://www.notion.so/…` link** instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
-| Deletions/DB renames arrive late | Search skips trash, and a DB rename keeps its edit time — full scan only      | `nobsi pull --force`, or **Pull from Notion (전체 확인)** in the plugin, runs a full scan now. Set the interval to `0` to scan fully on every pull                                                                                                                 |
+| Limitation                                         | Reason                                                                           | Workaround                                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Notion-only blocks                                 | API returns `unsupported` for buttons, forms, synced blocks                      | Preserved as callout placeholders                                                                                                                                                                                                                                  |
+| Rate limit                                         | Notion enforces 3 requests/second                                                | Built-in rate limiter with exponential backoff                                                                                                                                                                                                                     |
+| Soft breaks split blocks                           | A single newline becomes a separate paragraph block in Notion                    | Use hard paragraph breaks (blank line) for intended splits                                                                                                                                                                                                         |
+| Consecutive blank lines                            | Notion has no "N empty paragraphs" concept — collapses to one                    | No semantic difference — spacing is restored on pull                                                                                                                                                                                                               |
+| Note embeds (`![[note]]`)                          | Notion has no note-transclusion concept, and drops custom-scheme links           | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                     |
+| First-push wikilinks                               | Notion needs the target page to exist before a link can point at it              | The same push sends the linking note again once its targets exist (since v0.4.0) — except notes outside a narrowed push or with unpushed edits, which resolve on a later push                                                                                      |
+| Links to pages outside the vault                   | The target isn't shared with your integration, or isn't part of what you pull    | Kept as a **clickable `https://www.notion.so/…` link** instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
+| Deletions/DB renames arrive late                   | Search skips trash, and a DB rename keeps its edit time — full scan only         | `nobsi pull --force`, or **Pull from Notion (전체 확인)** in the plugin, runs a full scan now. Set the interval to `0` to scan fully on every pull                                                                                                                 |
+| Bot mentions                                       | Notion's Markdown API does not export mentions of bots or integrations           | They are missing from pulled notes, and pushing that note removes them in Notion too — re-add them in Notion                                                                                                                                                       |
+| Callout aliases and folding (`[!faq]-`, `[!tldr]`) | Notion callouts have no type name or fold state                                  | The vault that pushed keeps its spelling; another vault pulling fresh gets the base type with the same icon (`[!question]`)                                                                                                                                        |
+| Edits from the same token elsewhere                | Another device using the same integration token looks like this tool's own write | None yet. Separately, a Notion edit made within about a second of a push can still be overwritten — Notion has no conditional write ([ADR-017](docs/02-architecture/adr/017-same-minute-remote-edit.md))                                                           |
 
 ### One-time normalizations
 

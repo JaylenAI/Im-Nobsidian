@@ -10,13 +10,13 @@ Sync your vault with Notion without leaving Obsidian. Runs entirely on a sql.js 
 - **6 database view types** — Gallery, Board, Table, Calendar, List, Timeline (Svelte 5).
 - **Notion DB → Obsidian Bases** — `.base` files generated automatically, with gallery cover images.
 - **Inline table editing**, conflict-resolution modal, and ribbon icons for one-click sync.
-- **Lossless round-trip** — 25+ block types, colors, underlines and Notion-only blocks preserved.
+- **Round-trip that settles** — 25+ block types, colors, underlines and Notion-only blocks survive a push and pull; where Notion stores something differently the note changes once and then stays put (see [Known Limitations](https://github.com/JaylenAI/Im-Nobsidian#known-limitations)).
 
 ## Install
 
 ### Community plugins
 
-Submission to the Obsidian community plugin store is in progress.
+Not listed in the community plugin store yet — install with BRAT or by hand below.
 
 ### BRAT (beta)
 
@@ -40,7 +40,13 @@ delete that file from the plugin folder after updating.
 2. Enter your Notion integration token and the root page — paste the page's address, or its 32-character ID.
 3. Use the sidebar dashboard or the ribbon icon to Push / Pull / Sync.
 
-Requires Obsidian v1.7.0+. Desktop only.
+- **The token lives in Obsidian's keychain, not in the vault.** Obsidian keeps a keychain per vault and per
+  device, so enter the token once in each vault (and on each computer) you sync. Settings from v0.3.2 and
+  earlier are moved into the keychain on first load.
+- **Date-time time zone.** Date-time properties are written and sent in this computer's time zone unless you
+  pick one under _Date-time time zone_. Changing it does not rewrite times already in your notes.
+
+Requires Obsidian v1.12.4+. Desktop only.
 
 ## Documentation
 

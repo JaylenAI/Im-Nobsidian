@@ -2,6 +2,11 @@
 
 > 작성일: 2026-05-08
 > 상태: complete
+>
+> **v0.4.0 기준 실제 경로** — 이 문서는 2026-05 설계다. 문서 복잡도로 경로를 고르지 않는다. 기본은 Notion Markdown API(NFM) ↔ 볼트
+> (`converter/enhanced-md-converter.ts` + 전처리기 · 후처리기)이고, Markdown API 로 받지 못했거나 `conversion.preferMarkdownApi: false`
+> 면 블록 ↔ NFM(`blocks-to-nfm` · `nfm-to-blocks`, [ADR-034](adr/034-block-fallback-via-nfm.md) ·
+> [ADR-035](adr/035-block-push-via-nfm.md)) 뒤 같은 변환을 거친다. notion-to-md 는 v0.4.0 에서 뺐고, martian 은 글 조각의 rich text 에만 쓴다.
 
 ---
 
@@ -21,8 +26,8 @@ flowchart LR
         MD1[Obsidian MD] --> FM[Frontmatter 추출]
         FM --> PRE[전처리기 체인]
         PRE --> ROUTE{경로 선택}
-        ROUTE -->|단순 문서| MDAPI[Markdown API]
-        ROUTE -->|복합 문서| MARTIAN[@tryfabric/martian]
+        ROUTE -->|기본| MDAPI[Markdown API]
+        ROUTE -->|블록 방식| MARTIAN[nfm-to-blocks]
         MDAPI --> BLOCKS1[Notion Blocks]
         MARTIAN --> BLOCKS1
     end
@@ -30,8 +35,8 @@ flowchart LR
     subgraph Pull["Pull (Notion → MD)"]
         direction LR
         BLOCKS2[Notion Blocks] --> ROUTE2{경로 선택}
-        ROUTE2 -->|단순 문서| MDAPI2[Markdown API]
-        ROUTE2 -->|복합 문서| N2MD[notion-to-md]
+        ROUTE2 -->|기본| MDAPI2[Markdown API]
+        ROUTE2 -->|실패 · 블록 방식| N2MD[blocks-to-nfm]
         MDAPI2 --> POST[후처리기 체인]
         N2MD --> POST
         POST --> FMGEN[Frontmatter 생성]
@@ -92,7 +97,7 @@ sequenceDiagram
 sequenceDiagram
     participant MD as Markdown
     participant PRE as PreProcessor
-    participant LIB as martian / notion-to-md
+    participant LIB as nfm-to-blocks / blocks-to-nfm
     participant POST as PostProcessor
     participant API as Notion API
 
@@ -287,7 +292,7 @@ const MARKER_REGEX = /%% im-nobsidian:(\w+):(.+?) %%/g;
 
 ## 후처리기 체인 (Pull: Notion → MD)
 
-후처리기는 notion-to-md 또는 Markdown API의 출력을 Obsidian 형식으로 변환한다.
+후처리기는 Markdown API 의 NFM(블록 방식은 `blocks-to-nfm` 이 만든 NFM)을 Obsidian 형식으로 변환한다.
 
 ```mermaid
 flowchart TD
@@ -465,10 +470,11 @@ Notion 페이지 커버/아이콘 → frontmatter 변환.
 <!-- Range: 시작~끝 사이 콘텐츠에 적용 -->
 
 %% im-nobsidian:inline-db:id=abc123&title=Projects %%
-| Name | Status |
-|------|--------|
-| A | Done |
-%% im-nobsidian:end %%
+
+| Name                   | Status |
+| ---------------------- | ------ |
+| A                      | Done   |
+| %% im-nobsidian:end %% |
 ```
 
 ---

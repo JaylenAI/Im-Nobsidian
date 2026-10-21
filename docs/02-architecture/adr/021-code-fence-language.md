@@ -67,14 +67,14 @@ Obsidian 코드 펜스의 정보 문자열은 자유다 — `ts` · `py` 같은 
   짝지으므로 잘못 지어도 같은 언어의 표기끼리 바뀐다(`dataview` ↔ 맨 펜스).
 - 받을 때마다 로컬 노트를 한 번 더 읽는다.
 - Notion 에서 JavaScript 로 칠해지던 Dataview 쿼리가 Plain Text 가 된다 — 의도한 것이다.
-- 코드에 ``` 줄이 있는 펜스는 어떤 펜스로 보내도 Notion 이 그 줄에서 블록을 가른다 — 펜스는 둔다(S-22,
-  따로 다룬다).
+- 코드에 ``` 줄이 있는 펜스는 어떤 펜스로 보내도 Notion 이 그 줄에서 블록을 가른다(S-22) — ADR-029 가 자리표시를
+  보낸 뒤 블록으로 채워 풀었다.
 
 ## 영향
 
 - 새 파일: `converter/code-language.ts`(언어 옮기기) · `converter/code-fence.ts`(펜스 찾기) ·
   `pre-processors/code-language-guard.ts` · `post-processors/code-language-restorer.ts`
-- 수정: `converter/pipeline-factory.ts`(등록) · `converter/block-converter.ts`(`applyFenceLanguages`) ·
+- 수정: `converter/pipeline-factory.ts`(등록) · `converter/block-converter.ts`(`applyFenceLanguages`, v0.4.0 에서 변환기째 지움) ·
   `types/convert.ts`(`localContent`) · `sync/vault-fs.ts`(`readLocalNote`) · `sync/orchestrator.ts`
   (`renderRemotePage`) · `sync/database-syncer.ts`(`renderRow` 의 `localPath` — 행을 옮기며 받을 때 옛 자리)
 - 공개 API · 상태 DB 스키마 · 설정: 변경 없음

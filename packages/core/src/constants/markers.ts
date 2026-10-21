@@ -126,7 +126,7 @@ export const TOC_MARKER = compactMarker("toc");
  * NFM 은 목차를 `<table_of_contents color="gray"/>` 로 내보낸다. 마크다운 표현이 없어
  * 변환하지 않으면 볼트에 원시 태그가 그대로 노출되고, 색을 버리면 push 마다 사용자가
  * 지정한 색이 기본색으로 되돌아간다. 기본색은 {@link TOC_MARKER} 를 그대로 써
- * 구버전 볼트·레거시(notion-to-md) 경로와 형식을 공유한다.
+ * 구버전 볼트(지운 옛 블록 경로가 받은 노트)와 형식을 공유한다.
  */
 export function tocMarker(color?: string): string {
   return !color || color === "default" ? TOC_MARKER : compactMarker(`toc:color=${color}`);

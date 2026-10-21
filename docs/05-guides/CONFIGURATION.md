@@ -59,7 +59,8 @@ https://www.notion.so/My-Page-abc123def456...
 ### parentMode
 
 - `"page"` — 마크다운 파일이 페이지 트리로 동기화됩니다 (기본값)
-- `"database"` — 마크다운 파일이 데이터베이스 행으로 동기화됩니다
+- `"database"` — 마크다운 파일이 데이터베이스 행으로 동기화됩니다. `notion.databaseId` 도 적어야 합니다 — 없으면
+  페이지 모드로 동작합니다. `nobsi init` 은 이 둘을 묻지 않으므로 `config.json` 에 직접 적습니다.
 
 ## Sync Settings / 동기화 설정
 
@@ -135,7 +136,11 @@ Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입
 ### preferMarkdownApi
 
 `true` (기본값): Notion 공식 Markdown API를 사용합니다. 변환 품질이 높습니다.
-`false`: 레거시 Block API + notion-to-md를 사용합니다.
+`false`: 블록 API 로 블록을 읽고 씁니다. 받은 블록은 Markdown API 와 같은 NFM 으로 옮긴 뒤 같은 변환을 거칩니다
+(ADR-034 · 035). 블록 API 가 주지 않는 것(콜아웃 첫 줄 아래 자식, 표 열 너비 · 행 색, 지역 시간대 이름)은 잃습니다.
+바뀌지 않은 미디어도 매번 다시 올리고, 자식 페이지 · DB 가 있는 페이지의 본문은 보내지 않습니다(자식까지 지워지므로).
+
+`true` 여도 Markdown API 로 받지 못한 페이지는 블록 API 로 받습니다.
 
 ### preserveMarkers
 
