@@ -32,6 +32,7 @@ import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper
 import { getLogger } from "../utils/logger.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool } from "../utils/pool.js";
+import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
@@ -57,6 +58,7 @@ import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
 import { PagePuller } from "./page-puller.js";
 import { resolveNotionLinks } from "./notion-link-pass.js";
+import { notesWithResolvableWikilinks } from "./push-link-pass.js";
 import { PullPlanner } from "./pull-planner.js";
 import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
@@ -388,16 +390,20 @@ export class SyncOrchestrator {
       options?.onProgress?.(++completed, total, { path: to, operation: "move" }),
     );
 
+    // 이번 push 가 본문을 보낸 노트 — 링크 패스가 이 노트의 실패를 실패로 알린다.
+    const pushedBodies = new Set<string>();
     // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
     const applyPushChange = async (change: LocalChange): Promise<void> => {
       switch (change.type) {
         case "created":
           await this.pusher.pushCreate(change.path);
           counts.created++;
+          pushedBodies.add(change.path);
           break;
         case "modified":
           await this.pusher.pushUpdate(change.path);
           counts.updated++;
+          pushedBodies.add(change.path);
           break;
         case "moved":
           await this.pusher.pushMove(change);
@@ -473,6 +479,43 @@ export class SyncOrchestrator {
       );
     }
 
+    // 뒤에 만든 페이지로 가는 위키링크를 멘션으로 — 모두 올린 뒤 한 번 더 본다(N8).
+    if (!options?.signal?.aborted) {
+      const relink = async (path: string): Promise<void> => {
+        try {
+          // 올리지 않은 로컬 수정이 있는 노트는 이번 push 가 고른 변경이 아니다 — 같이 보내지 않는다.
+          if (!pushedBodies.has(path) && !(await this.unchangedSincePush(path))) return;
+          await withDeadline(
+            () => this.pusher.pushUpdate(path),
+            this.config.advanced.itemTimeoutMs,
+            `push ${path}`,
+          );
+          if (!pushedBodies.has(path)) counts.updated++;
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          // 이번에 보낸 노트는 실패로 알린다. 예전에 올린 노트는 다음 push 가 다시 고른다 — 사용자가
+          // 고치지 않은 노트를 실패로 세지 않는다.
+          if (pushedBodies.has(path)) {
+            failed.push({
+              path,
+              operation: "update",
+              error: `위키링크를 멘션으로 다시 보내지 못함 — ${message}`,
+            });
+          }
+          getLogger().warn(
+            `[Im-Nobsidian] 위키링크를 멘션으로 다시 보내지 못함: ${path} — ${message}`,
+          );
+        }
+      };
+      const relinkable = notesWithResolvableWikilinks(this.stateDb).filter(
+        (path) => inAnyPathScope(path, options?.paths) && !excludeSet?.has(path),
+      );
+      await runPool(relinkable, relink, {
+        concurrency: this.config.advanced.concurrency,
+        signal: options?.signal,
+      });
+    }
+
     if (this.config.sync.syncFiles !== false) {
       try {
         const fileResults = await this.fileHandler.pushAllFiles();
@@ -498,6 +541,17 @@ export class SyncOrchestrator {
       failed,
       duration: Date.now() - startTime,
     };
+  }
+
+  /** 볼트의 노트가 마지막으로 올린 내용 그대로인가 — 읽지 못하면(지움 · 옮김) 아니다. */
+  private async unchangedSincePush(path: string): Promise<boolean> {
+    const record = this.stateDb.getByPath(path);
+    if (!record) return false;
+    try {
+      return computeHash(await this.vaultFs.readFile(path)) === record.contentHash;
+    } catch {
+      return false;
+    }
   }
 
   async pull(options?: PullOptions): Promise<PullResult> {
