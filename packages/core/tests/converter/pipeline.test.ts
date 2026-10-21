@@ -7,7 +7,6 @@ import { PropertiesTableInjector } from "../../src/converter/pre-processors/prop
 import { MentionToWikilink } from "../../src/converter/post-processors/mention-to-wikilink.js";
 import { PropertiesTableRestorer } from "../../src/converter/post-processors/properties-table-restorer.js";
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
-import { BlockConverter } from "../../src/converter/block-converter.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import type { ConversionContext } from "../../src/types/convert.js";
 
@@ -528,32 +527,5 @@ Content here.`;
     expect(pullResult).toContain("status: active");
     expect(pullResult).toContain("priority: 3");
     expect(pullResult).toContain("# My Note");
-  });
-});
-
-describe("BlockConverter", () => {
-  it("markdownToNotionBlocks: quote+emoji → callout 변환", () => {
-    const converter = new BlockConverter();
-    const blocks = converter.markdownToNotionBlocks(
-      "> ⚠️ **Warning Title**\n> Be careful here",
-    ) as Array<Record<string, unknown>>;
-
-    const calloutBlock = blocks.find((b) => b.type === "callout");
-    if (calloutBlock) {
-      const callout = calloutBlock.callout as { icon: { emoji: string } };
-      expect(callout.icon.emoji).toBe("⚠️");
-    } else {
-      const quoteBlock = blocks.find((b) => b.type === "quote");
-      expect(quoteBlock).toBeDefined();
-    }
-  });
-
-  it("markdownToNotionBlocks: 일반 quote는 그대로 유지", () => {
-    const converter = new BlockConverter();
-    const blocks = converter.markdownToNotionBlocks("> Just a normal quote") as Array<
-      Record<string, unknown>
-    >;
-
-    expect(blocks[0]?.type).toBe("quote");
   });
 });

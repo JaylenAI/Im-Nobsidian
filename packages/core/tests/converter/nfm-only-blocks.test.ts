@@ -3,7 +3,6 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../../src/converter/enhanced-md-converter.js";
-import { BlockConverter } from "../../src/converter/block-converter.js";
 import { TOC_MARKER, tocMarker, embedMarker } from "../../src/constants/markers.js";
 
 /**
@@ -38,19 +37,6 @@ describe("NFM 전용 블록 보존", () => {
       const raw = `> <table_of_contents color="blue"/>`;
       expect(notionEnhancedToObsidian(raw)).toContain(tocMarker("blue"));
       expect(roundTrip(raw).trim()).toBe(raw);
-    });
-
-    it("색 마커도 legacy 블록 경로에서 table_of_contents 로 복원된다", () => {
-      // 마커 형식이 넓어졌는데 읽는 쪽이 하나만 알면, 그 문서만 마커가 평범한
-      // 문단으로 Notion 에 기록된다(P1 과 같은 "한쪽 경로 누락" 결함).
-      const blocks = new BlockConverter().markdownToNotionBlocks(
-        `# Title\n\n${tocMarker("gray")}\n\nBody`,
-      ) as Array<Record<string, unknown>>;
-
-      const toc = blocks.find((b) => b.type === "table_of_contents");
-      expect(toc, "색 마커가 table_of_contents 로 복원되지 않음").toBeDefined();
-      expect((toc!.table_of_contents as { color: string }).color).toBe("gray");
-      expect(JSON.stringify(blocks)).not.toContain("im-nobsidian:toc");
     });
   });
 

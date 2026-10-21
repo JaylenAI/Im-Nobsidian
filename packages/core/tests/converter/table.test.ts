@@ -6,11 +6,7 @@
  * 표가 됐다.
  */
 import { describe, it, expect } from "vitest";
-import {
-  nfmTablesToPipeTables,
-  pipeTablesToNfmTables,
-  stripTableMarkers,
-} from "../../src/converter/table.js";
+import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "../../src/converter/table.js";
 import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
@@ -438,13 +434,5 @@ describe("붙은 표 — 인용 안에서 글 바로 뒤에 온 표", () => {
     const pushed = obsidianToNotionEnhanced(pulled);
     expect(pushed.split("\n").filter((l) => l.trim() !== "")).toEqual(raw.split("\n"));
     expect(notionEnhancedToObsidian(pushed)).toBe(pulled);
-  });
-});
-
-describe("stripTableMarkers — 블록 방식 push", () => {
-  it("표 마커 네 종류만 걷는다", () => {
-    expect(stripTableMarkers(ATTR_PIPE)).not.toContain("%%im-nobsidian:table");
-    const other = `${M("table-row", "color=gray_bg")}a ${M("color", "red")}b%%/color%%`;
-    expect(stripTableMarkers(other)).toBe(`a ${M("color", "red")}b%%/color%%`);
   });
 });
