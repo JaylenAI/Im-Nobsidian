@@ -83,11 +83,13 @@ export const pullCommand = new Command("pull")
 
       if (result.imageCount > 0) {
         console.log(
-          `\n  ${icons.success} ${result.imageCount} images → ${dimText("attachments/")}`,
+          `\n  ${icons.success} ${result.imageCount} images → ${dimText(`${config.paths.attachments}/`)}`,
         );
       }
       if (result.fileCount > 0) {
-        console.log(`  ${icons.success} ${result.fileCount} files → ${dimText("attachments/")}`);
+        console.log(
+          `  ${icons.success} ${result.fileCount} files → ${dimText(`${config.paths.attachments}/`)}`,
+        );
       }
       if (result.linkCount > 0) {
         console.log(`  ${icons.success} ${result.linkCount} links resolved`);

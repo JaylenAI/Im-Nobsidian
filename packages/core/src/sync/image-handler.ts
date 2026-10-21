@@ -15,7 +15,8 @@ import {
   isNotionAttachmentUri,
   notionFileIdOf,
 } from "../utils/notion-file-url.js";
-import { fetchForDownload, DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
+import { fetchForDownload } from "../utils/download-fetch.js";
+import { DEFAULT_CONFIG } from "../types/config.js";
 import {
   recallUploadedMedia,
   rememberReceivedMedia,
@@ -483,18 +484,21 @@ export class ImageHandler {
 
   constructor(
     private readonly vaultFs: VaultFS,
-    private readonly attachmentFolder: string = "attachments",
+    private readonly attachmentFolder: string = DEFAULT_CONFIG.paths.attachments,
     private readonly notionClient?: NotionClient,
     customFetch?: typeof globalThis.fetch,
     options?: MediaOptions,
     private readonly stateDb?: IStateDB,
   ) {
     this.customFetch = customFetch;
-    this.concurrency = options?.concurrency ?? 3;
-    this.maxRetries = options?.maxRetries ?? 3;
-    this.retryBaseMs = options?.retryBaseMs ?? 1000;
-    this.maxFileSizeBytes = options?.maxFileSizeBytes ?? 100 * 1024 * 1024;
-    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? DEFAULT_DOWNLOAD_TIMEOUT_MS;
+    const defaults = DEFAULT_CONFIG.advanced;
+    this.concurrency = options?.concurrency ?? defaults.mediaConcurrency;
+    // 미디어의 maxRetries 는 «시도 횟수» 다(NotionClient 의 maxRetries 는 첫 시도 뒤 재시도 수). 설정은 0 을
+    // 받는데, 예전에는 0 이면 시도를 한 번도 하지 않고 null 을 던졌다 — 적어도 한 번은 받는다.
+    this.maxRetries = Math.max(1, options?.maxRetries ?? defaults.mediaMaxRetries);
+    this.retryBaseMs = options?.retryBaseMs ?? defaults.mediaRetryBaseMs;
+    this.maxFileSizeBytes = options?.maxFileSizeBytes ?? defaults.maxFileSizeBytes;
+    this.downloadTimeoutMs = options?.downloadTimeoutMs ?? defaults.mediaDownloadTimeoutMs;
   }
 
   private get fetchFn(): typeof globalThis.fetch {

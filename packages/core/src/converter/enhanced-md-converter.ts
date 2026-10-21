@@ -793,8 +793,9 @@ function convertTogglesToHtml(content: string): string {
   const startRe = new RegExp(escapeRegex(TOGGLE_START), "g");
   const endRe = new RegExp(escapeRegex(TOGGLE_END), "g");
 
-  safety = 0;
-  while (result.includes(TOGGLE_START) && safety++ < 100) {
+  // 한 바퀴에 시작 마커를 하나씩 없애므로 끝난다(짝 없는 마커는 멈춘다). 예전에는 100 바퀴로 끊어
+  // 101번째 토글부터 마커만 지워져 글이 토글 없이 올라갔다.
+  while (result.includes(TOGGLE_START)) {
     const startIdx = result.indexOf(TOGGLE_START);
     const endIdx = findMatchingEnd(result, startIdx + TOGGLE_START.length);
     if (endIdx === -1) break;
