@@ -227,3 +227,19 @@ describe("콜아웃 · 목록 안 블록 수식 왕복(S-21)", () => {
     await h.repushIsNoop();
   });
 });
+
+describe("Notion 의 글 달러 왕복(C13)", () => {
+  const h = harness("첫 줄\n");
+
+  it("Notion 의 글 `$a$` 는 볼트에서 `\\$a\\$` — 다시 올려도 Notion 에서 글이다", async () => {
+    expect(await h.pullRemote("글 \\$a\\$ 끝\n가격 \\$5 와 \\$10")).toMatchObject({
+      updated: 1,
+      failed: [],
+    });
+
+    const note = h.state.vault.read("Note.md")!;
+    expect(note).toContain("글 \\$a\\$ 끝");
+    expect(note).toContain("가격 $5 와 $10");
+    await h.repushIsNoop();
+  });
+});
