@@ -82,7 +82,8 @@ export function pagePathCandidates(dir: string, safeName: string, pageId: string
  * @param localFolder DB 폴더 경로 (확장자·슬래시 없는 디렉터리)
  * @param safeName    sanitize 된 파일명(확장자 제외)
  * @param pageId      대상 Notion 페이지 ID (하이픈 유무 무관)
- * @param lookupByPath 후보 경로의 현재 소유 레코드를 돌려주는 조회 함수(없으면 null)
+ * @param lookupByPath 후보 경로의 현재 소유 레코드를 돌려주는 조회 함수(없으면 null). 레코드가 없어도 볼트에
+ *   파일이 있으면 주인 모름(`notionPageId: null`)으로 돌려줘야 그 파일을 덮어쓰지 않는다.
  */
 export function resolveDbRowPath(
   localFolder: string,

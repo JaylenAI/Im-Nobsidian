@@ -20,7 +20,12 @@ import { diffRowProperties } from "./row-properties.js";
 import { extractAliases, noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
-import { inClaimOrder, resolveDbRowPath } from "../utils/db-row-path.js";
+import {
+  inClaimOrder,
+  pagePathCandidates,
+  resolveDbRowPath,
+  type PathOwner,
+} from "../utils/db-row-path.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
@@ -377,9 +382,10 @@ export class DatabaseSyncer {
       if (action === "skip") continue;
       if (!record) {
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
+        const ownerOf = await this.rowPathOwners(dbConfig.localFolder, name, page.id);
         const path = resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) => {
           const owner = claimed.get(p);
-          return owner !== undefined ? { notionPageId: owner } : this.stateDb.getByPath(p);
+          return owner !== undefined ? { notionPageId: owner } : ownerOf(p);
         });
         claimed.set(path, page.id);
         planned.push({ pageId: page.id, path, operation: "create" });
@@ -1024,6 +1030,25 @@ export class DatabaseSyncer {
     return compareRemote(record, page, this.observation().botUserId);
   }
 
+  /**
+   * 행 경로 후보의 주인 — 상태 DB 의 레코드, 없으면 볼트에 이미 있는 파일(주인 모름). 추적하지 않는 로컬 파일
+   * (아직 push 하지 않은 노트)을 새 행이 덮어쓰면 그 글이 사라졌다. 일반 페이지 받기(`claimFilePath`)처럼 피한다.
+   */
+  private async rowPathOwners(
+    localFolder: string,
+    safeName: string,
+    pageId: string,
+  ): Promise<(path: string) => PathOwner | null> {
+    const untracked = new Set<string>();
+    for (const candidate of pagePathCandidates(localFolder, safeName, pageId)) {
+      if (this.stateDb.getByPath(candidate) === null && (await this.vaultFs.exists(candidate))) {
+        untracked.add(candidate);
+      }
+    }
+    return (path) =>
+      this.stateDb.getByPath(path) ?? (untracked.has(path) ? { notionPageId: null } : null);
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -1040,8 +1065,11 @@ export class DatabaseSyncer {
     if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
       filePath = recordPath;
     } else {
-      filePath = resolveDbRowPath(dbConfig.localFolder, safeName, page.id, (p) =>
-        this.stateDb.getByPath(p),
+      filePath = resolveDbRowPath(
+        dbConfig.localFolder,
+        safeName,
+        page.id,
+        await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
       );
     }
 
