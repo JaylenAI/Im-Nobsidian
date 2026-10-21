@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
@@ -191,6 +191,14 @@ describe("NodeVaultFS", () => {
 
       expect(files).toHaveLength(1);
       expect(files[0]!.path).toBe("note.md");
+    });
+
+    it("읽지 못한 .im-nobsidian-ignore 는 빈 목록이 아니라 오류 — 제외한 파일이 올라가지 않게", async () => {
+      const ignore = join(tempDir, ".im-nobsidian-ignore");
+      await writeFile(ignore, "drafts/**\n");
+      await chmod(ignore, 0o200);
+
+      expect(() => new NodeVaultFS(tempDir)).toThrow("EACCES");
     });
   });
 });
