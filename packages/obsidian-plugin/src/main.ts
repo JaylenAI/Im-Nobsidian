@@ -859,7 +859,12 @@ export default class ImNobsidianPlugin extends Plugin {
       return;
     }
 
-    const allConfigs = await this.viewProvider.loadAllViewConfigs();
+    // 읽지 못한 보기 설정을 「설정이 없습니다(Pull 하세요)」 로 안내하지 않는다 — 까닭을 그대로 보인다.
+    const allConfigs = await this.viewProvider.loadAllViewConfigs().catch((error: unknown) => {
+      new Notice(`Im-Nobsidian: ${error instanceof Error ? error.message : String(error)}`);
+      return null;
+    });
+    if (!allConfigs) return;
     const dbIds = Object.keys(allConfigs);
 
     if (dbIds.length === 0) {

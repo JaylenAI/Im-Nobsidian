@@ -617,8 +617,17 @@ export class NotionClient {
         return { originalDbId, viewName: view.name ?? "" };
       }
       return null;
-    } catch {
-      return null;
+    } catch (error) {
+      // 없거나 · 권한이 없거나 · 거절된 요청만 「해소 불가」 다. 429 · 5xx · 시간 초과까지 null 로 바꾸면
+      // 호출처가 이 DB 를 접근 불가로 영구 거부 목록에 올린다(`--force` 전까지 다시 보지 않는다).
+      if (
+        isNotionObjectNotFound(error) ||
+        isNotionAccessDenied(error) ||
+        isNotionValidationError(error)
+      ) {
+        return null;
+      }
+      throw error;
     }
   }
 

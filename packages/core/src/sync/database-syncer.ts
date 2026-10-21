@@ -671,12 +671,22 @@ export class DatabaseSyncer {
       const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
       await this.vaultFs.ensureFolder(INTERNAL_DIR);
 
+      // 파일이 없을 때만 빈 객체에서 시작한다. 있는데 읽지 못하면(깨진 JSON 등) 이 DB 의 설정만 담아 쓰면
+      // 다른 DB 들의 보기 설정이 모두 지워진다 — 이번에는 쓰지 않고 받은 설정만 돌려준다.
       let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
-      try {
-        const existing = await this.vaultFs.readFile(configPath);
-        allViewsConfigs = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
-      } catch {
-        // 파일 없으면 빈 객체
+      if (await this.vaultFs.exists(configPath)) {
+        try {
+          allViewsConfigs = JSON.parse(await this.vaultFs.readFile(configPath)) as Record<
+            string,
+            DatabaseViewsConfig
+          >;
+        } catch (error) {
+          getLogger().warn(
+            `[DB Sync] ${configPath} 를 읽지 못해 이 DB 의 보기 설정을 저장하지 않음(파일은 그대로 둠):`,
+            error,
+          );
+          return viewsConfig;
+        }
       }
 
       allViewsConfigs[dbConfig.databaseId] = viewsConfig;

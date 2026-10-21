@@ -5,6 +5,7 @@ import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import type { NotionClient } from "../notion/client.js";
+import { isNotionAccessDenied, isNotionObjectNotFound } from "../notion/client.js";
 import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
@@ -694,8 +695,11 @@ export class PagePuller {
       const grandparentPath = await this.resolveParentPath(parentPage);
       const safeName = sanitizeFileName(parentTitle);
       return grandparentPath ? `${grandparentPath}/${safeName}` : safeName;
-    } catch {
-      return "";
+    } catch (error) {
+      // 이 통합이 볼 수 없는 부모(없음 · 권한 없음)만 볼트 맨 위로 받는다. 일시 오류까지 ""로 바꾸면 노트가
+      // 맨 위에 받아지고 그 경로가 상태 DB 에 굳는다 — 던지면 이 페이지만 실패하고 다음 pull 이 다시 받는다.
+      if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) return "";
+      throw error;
     }
   }
 

@@ -33,8 +33,10 @@ export class NodeVaultFS implements VaultFS {
         .split("\n")
         .map((line: string) => line.trim())
         .filter((line: string) => line && !line.startsWith("#"));
-    } catch {
-      return [];
+    } catch (error) {
+      // 읽지 못한 제외 파일을 빈 목록으로 보면 제외했던 파일이 말없이 올라간다 — 없을 때만 빈 목록이다.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
   }
 
