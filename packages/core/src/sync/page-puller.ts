@@ -8,6 +8,7 @@ import type { NotionClient } from "../notion/client.js";
 import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
+import type { PreserveMarker } from "../types/convert.js";
 import type { RemoteChange, SyncRecord } from "../types/sync.js";
 import { inClaimOrder, pagePathCandidates } from "../utils/db-row-path.js";
 import { computeHash } from "../utils/hash.js";
@@ -154,12 +155,8 @@ export class PagePuller {
 
     const hasChildPages = await this.pageHasChildContainers(pageId);
 
-    const {
-      content: markdown,
-      compact: exportCompact,
-      fingerprint,
-    } = await this.fetchPageMarkdown(pageId);
-    const hasContent = markdown.trim().length > 0;
+    const fetched = await this.fetchPageMarkdown(pageId);
+    const hasContent = fetched.content.trim().length > 0;
 
     let filePath: string;
     let fileType: "file" | "folder-note" | "folder-only";
@@ -179,51 +176,15 @@ export class PagePuller {
       fileType = "file";
     }
 
-    let properties: Record<string, unknown>;
-    if (isDatabaseMode(this.config)) {
-      await this.ensureDbSchema();
-      properties = this.propertyMapper.fromNotionProperties(
-        (page as unknown as { properties: Record<string, unknown> }).properties,
-      );
-    } else {
-      properties = this.notionClient.extractProperties(page);
-    }
-    // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 —
-    // 원본에 없던 `title:` 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize·`(1)` 접미사로
-    // 파일명이 제목과 달라진 경우만 보존한다(DB 모드 title 은 Name 컬럼 데이터라 항상 유지).
-    if (isDatabaseMode(this.config) || extractTitle(filePath) !== title) {
-      properties.title = title;
-    }
-
-    let processedMarkdown = await this.imageHandler.restoreUploadedMedia(
-      markdown,
+    const { content: finalContent, properties } = await this.renderPageNote({
       pageId,
+      page,
+      fetched,
       filePath,
-    );
-    if (this.config.conversion.imageDownload === "immediate") {
-      const imageResult = await this.imageHandler.downloadAllImages(
-        processedMarkdown,
-        title,
-        pageId,
-      );
-      processedMarkdown = imageResult.content;
-      this._pullImageCount += imageResult.downloads.length;
-    }
-
-    const fileResult = await this.imageHandler.downloadAllFiles(processedMarkdown, title, pageId);
-    processedMarkdown = fileResult.content;
-    this._pullFileCount += fileResult.downloads.length;
-
-    const finalContent = this.pipeline.convertToMarkdown(
-      processedMarkdown,
-      {
-        direction: "pull",
-        path: "markdown-api",
-        filePath,
-        parentMode: this.config.notion.parentMode,
-      },
-      { properties, notionExportCompact: exportCompact },
-    );
+      title,
+      titleFollowsName: extractTitle(filePath) === title,
+      downloadMedia: true,
+    });
 
     // 부모 해소는 파일 기록 전에 끝낸다. parent 가 block 일 때 resolveBlockToPageId 가
     // API 를 호출(429 가능)하는데, 이를 writeFile 뒤에 두면 기록만 되고 sync_state 등록 전에
@@ -241,7 +202,7 @@ export class PagePuller {
         notionPageId: pageId,
         notionParentId: resolvedParentId,
         contentHash: hash,
-        ...this.observation.fieldsOf(page, fingerprint),
+        ...this.observation.fieldsOf(page, fetched.fingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType,
@@ -454,10 +415,47 @@ export class PagePuller {
       return this.databaseSyncer.renderRow(page, record.obsidianPath, { downloadMedia });
     }
     const fetched = await this.fetchPageMarkdown(pageId);
-    let markdown = fetched.content;
-
     const title = this.notionClient.extractTitle(page);
+    const { content, properties } = await this.renderPageNote({
+      pageId,
+      page,
+      fetched,
+      filePath: record.obsidianPath,
+      title,
+      titleFollowsName: this.titleFollowsName(record, title),
+      downloadMedia,
+      local: {
+        content: await readLocalNote(this.vaultFs, record.obsidianPath),
+        markers: this.stateDb.getPreserveMarkers(record.obsidianPath),
+      },
+    });
+    return { content, title, properties, bodyFingerprint: fetched.fingerprint };
+  }
 
+  /**
+   * 받은 페이지 본문을 볼트에 쓸 노트로 — 새로 받기(`createPulledPage`)와 다시 받기({@link renderRemotePage})가
+   * 같은 길을 쓴다(B9). 예전에는 두 벌이라 한쪽에만 고친 것이 다른 쪽에 없었다 — DB 모드에서 Notion 이
+   * 정하는 키(F-08)는 다시 받기에만 있었다.
+   *
+   * 이 노트가 올린 미디어는 내려받지 않고 원래 임베드로 되돌리고, 나머지 미디어는 내려받는다(`downloadMedia`).
+   * 다시 받을 때는 받기 직전 로컬 노트와 보존 마커로 로컬 표기를 지킨다(`local`).
+   */
+  private async renderPageNote(input: {
+    readonly pageId: string;
+    readonly page: PageObjectResponse;
+    readonly fetched: { readonly content: string; readonly compact: boolean };
+    readonly filePath: string;
+    readonly title: string;
+    /** 파일 이름으로 제목을 되살릴 수 있다 — frontmatter 에 `title:` 을 넣지 않는다(D2). */
+    readonly titleFollowsName: boolean;
+    /** 표시 전용 렌더(diff)는 첨부를 내려받지 않는다 — 비교를 보려다 볼트에 파일이 생기면 안 된다. */
+    readonly downloadMedia: boolean;
+    readonly local?: {
+      readonly content: string | undefined;
+      readonly markers: PreserveMarker[];
+    };
+  }): Promise<{ content: string; properties: Record<string, unknown> }> {
+    const { pageId, page, filePath, title } = input;
     let properties: Record<string, unknown>;
     // DB 모드의 행에서 Notion 이 정하는 키 — 속성과 제목. 나머지는 로컬 키다(F-08).
     let notionKeys: string[] | undefined;
@@ -469,44 +467,47 @@ export class PagePuller {
     } else {
       properties = this.notionClient.extractProperties(page);
     }
-    // D2: pullCreate 와 동일 — 파일명으로 복원 가능한 제목은 주입하지 않는다.
-    if (isDatabaseMode(this.config) || !this.titleFollowsName(record, title)) {
+    // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 — 원본에 없던 `title:`
+    // 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize · `(1)` 접미사로 파일명이 제목과 달라진 경우만
+    // 보존한다(DB 모드 title 은 Name 컬럼 데이터라 항상 유지).
+    if (isDatabaseMode(this.config) || !input.titleFollowsName) {
       properties.title = title;
     }
 
-    // 이 노트가 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 표시 전용 렌더도 같다.
-    markdown = await this.imageHandler.restoreUploadedMedia(markdown, pageId, record.obsidianPath);
-
-    if (downloadMedia && this.config.conversion.imageDownload === "immediate") {
+    let markdown = await this.imageHandler.restoreUploadedMedia(
+      input.fetched.content,
+      pageId,
+      filePath,
+    );
+    if (input.downloadMedia && this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
       markdown = imageResult.content;
       this._pullImageCount += imageResult.downloads.length;
     }
-
-    if (downloadMedia) {
+    if (input.downloadMedia) {
       const fileResult = await this.imageHandler.downloadAllFiles(markdown, title, pageId);
       markdown = fileResult.content;
       this._pullFileCount += fileResult.downloads.length;
     }
 
-    const savedMarkers = this.stateDb.getPreserveMarkers(record.obsidianPath);
+    const markers = input.local?.markers ?? [];
     const content = this.pipeline.convertToMarkdown(
       markdown,
       {
         direction: "pull",
         path: "markdown-api",
-        filePath: record.obsidianPath,
+        filePath,
         parentMode: this.config.notion.parentMode,
       },
       {
         properties,
-        preserveMarkers: savedMarkers.length > 0 ? savedMarkers : undefined,
-        notionExportCompact: fetched.compact,
-        localContent: await readLocalNote(this.vaultFs, record.obsidianPath),
+        preserveMarkers: markers.length > 0 ? markers : undefined,
+        notionExportCompact: input.fetched.compact,
+        localContent: input.local?.content,
         notionKeys,
       },
     );
-    return { content, title, properties, bodyFingerprint: fetched.fingerprint };
+    return { content, properties };
   }
 
   /**
