@@ -6,19 +6,17 @@
  * 무시), body 는 정규화 후 문자열 완전 일치(delta=0)로 비교할 재료를 돌려준다.
  *
  * .toContain 단편 검사가 아니라 "파이프라인이 아무것도 손실시키지 않는가"를 전체 deep-equal
- * 로 증명한다. 이 하네스가 잠그는 손실 표면은 **martian/notion-to-md 가 건드리지 않는** 부분
+ * 로 증명한다. 이 하네스가 잠그는 손실 표면은 **NFM ↔ 블록 변환이 건드리지 않는** 부분
  * — frontmatter, preserve-marker(toggle·column·inline-db), 콜아웃, wikilink, 수식 정규화,
  * properties-table, underline/color 주석 — 이다.
  *
  * 범위 밖(이 하네스는 검증하지 않음, 거짓 안전망 방지를 위해 명시):
- *  - martian(MD→Notion 블록) push 변환 → `converter/block-converter.test.ts`(오프라인 유닛)
- *  - notion-to-md(블록→MD) pull 변환 및 실 블록 왕복 fixpoint →
- *    `invariants/block-roundtrip.invariant.test.ts`(라이브 Notion, NOTION_TOKEN 게이트)
- *  - 단일 문서에 전 블록 타입을 한 번에 통과시킨 push 블록 구조 완전성 →
- *    `converter/block-taxonomy-coverage.test.ts`(오프라인, 실 BlockConverter)
+ *  - 블록 방식 push 의 NFM → 블록 변환 → `converter/nfm-to-blocks.test.ts` ·
+ *    `notion/append-block-tree.test.ts`(요청 한도 · 깊이)
+ *  - 블록 방식 pull 의 블록 → NFM 변환 → `converter/blocks-to-nfm.test.ts`(Markdown API export 짝 픽스처)
+ *  - 실 블록 왕복 fixpoint → `invariants/block-roundtrip.invariant.test.ts`(라이브 Notion, NOTION_TOKEN 게이트)
  *
- * 즉 이 하네스는 "파이프라인 무손실"을 증명할 뿐 "블록 무손실"을 증명하지 않는다. 블록
- * 무손실은 위 세 테스트가 분담한다(이원 도달성: 오프라인 결정론 + 라이브 Notion).
+ * 즉 이 하네스는 "파이프라인 무손실"을 증명할 뿐 "블록 무손실"을 증명하지 않는다.
  */
 import matter from "gray-matter";
 import {

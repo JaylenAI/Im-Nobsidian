@@ -46,7 +46,7 @@ export function deferredCodeMarker(index: number): string {
   return compactMarker(`deferred-code:${index}`);
 }
 
-/** 토글 블록 보존 마커 (enhanced-md-converter / block-converter 공유). */
+/** 토글 블록 보존 마커 (enhanced-md-converter). */
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
 
@@ -77,7 +77,7 @@ export function calloutIndentMarker(depth: number): string {
   return compactMarker(`callout-indent:${depth}`);
 }
 
-/** 컬럼 레이아웃 보존 마커 (block-converter). */
+/** 컬럼 레이아웃 보존 마커 — 옛 블록 변환기가 남긴 볼트에도 있다. */
 export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");
 export const COLUMN_SEP = compactMarker("column");

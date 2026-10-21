@@ -12,7 +12,6 @@ import {
   mentionsToMarkers,
   mentionUserIds,
   parseDateMentionLabel,
-  stripMentionMarkers,
 } from "../../src/converter/mention.js";
 import {
   notionEnhancedToObsidian,
@@ -230,11 +229,5 @@ describe("날짜 글", () => {
     "2026-09-26 → 18:00",
   ])("%s → 읽지 못한다", (label) => {
     expect(parseDateMentionLabel(label)).toBeNull();
-  });
-});
-
-describe("stripMentionMarkers — 블록 방식 push", () => {
-  it("마커를 걷고 보이는 글만 남긴다", () => {
-    expect(stripMentionMarkers(`담당 ${USER_MARKER("@한지수")} 님`)).toBe("담당 @한지수 님");
   });
 });

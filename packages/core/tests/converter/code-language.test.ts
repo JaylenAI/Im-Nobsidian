@@ -18,7 +18,6 @@ import { deferredCodeMarker } from "../../src/constants/markers.js";
 import { RICH_TEXT_ARRAY_MAX, RICH_TEXT_CONTENT_MAX } from "../../src/constants/notion-limits.js";
 import { CodeLanguageGuard } from "../../src/converter/pre-processors/code-language-guard.js";
 import { CodeLanguageRestorer } from "../../src/converter/post-processors/code-language-restorer.js";
-import { BlockConverter } from "../../src/converter/block-converter.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
 import { roundtrip } from "./roundtrip-fidelity.js";
 
@@ -631,49 +630,5 @@ describe("파이프라인 왕복 — 펜스 표기가 그대로 돌아온다", (
   it("push → pull 이 원문과 같다", () => {
     const { inputBody, outputBody } = roundtrip(DOC);
     expect(outputBody).toBe(inputBody);
-  });
-});
-
-describe("블록 방식 push — martian 이 정한 언어를 펜스 언어로", () => {
-  it.each([
-    ["plain text", "plain text"],
-    ["llvm ir", "llvm ir"],
-    ["toml", "toml"],
-    ["visual basic", "visual basic"],
-    ["typescript", "typescript"],
-  ])("```%s → %s", (info, expected) => {
-    const blocks = new BlockConverter().markdownToNotionBlocks(fence(info, "a = 1")) as Array<{
-      type: string;
-      code?: { language: string };
-    }>;
-    expect(blocks.find((b) => b.type === "code")?.code?.language).toBe(expected);
-  });
-
-  /** 블록 트리의 코드 블록 언어 — 목록 · 콜아웃 아래까지. */
-  function languages(markdown: string): string[] {
-    const found: string[] = [];
-    const visit = (block: Record<string, unknown>): void => {
-      const body = block[block.type as string] as
-        { language?: string; children?: Array<Record<string, unknown>> } | undefined;
-      if (block.type === "code") found.push(body?.language ?? "");
-      for (const child of body?.children ?? []) visit(child);
-    };
-    new BlockConverter().markdownToNotionBlocks(markdown).forEach((b) => visit(b as never));
-    return found;
-  }
-
-  it("목록 아래 펜스도", () => {
-    expect(languages("- 항목\n\n  ```toml\n  a = 1\n  ```")).toEqual(["toml"]);
-  });
-
-  it("같은 코드의 펜스가 여럿이면 차례로 제 언어를", () => {
-    expect(languages(`${fence("ts", "x = 1")}\n\n${fence("py", "x = 1")}`)).toEqual([
-      "typescript",
-      "python",
-    ]);
-  });
-
-  it("닫히지 않은 펜스(문서 끝까지 코드)도 — martian 은 `text` 를 vb.net 으로 보낸다", () => {
-    expect(languages("```text\na = 1")).toEqual(["plain text"]);
   });
 });

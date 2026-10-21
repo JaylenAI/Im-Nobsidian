@@ -7,8 +7,6 @@
  * 뒷부분이 본문이 되고, 진짜 닫는 줄이 새 코드 블록을 열어 노트 끝까지 삼켰다.
  */
 import { describe, it, expect } from "vitest";
-import type { Client } from "@notionhq/client";
-import { BlockConverter } from "../../src/converter/block-converter.js";
 import {
   fenceBarAbove,
   needsCodeBlockTexts,
@@ -236,54 +234,5 @@ describe("fenceBarAbove — 코드를 감쌀 백틱 펜스", () => {
     [["`` 인라인"], null],
   ])("%j → %j", (code, bar) => {
     expect(fenceBarAbove(code)).toBe(bar);
-  });
-});
-
-describe("블록 폴백 pull(notion-to-md) — 코드 속 펜스 줄", () => {
-  // 평면 블록만 넣는다 — 클라이언트를 부르면 오프라인 위반이다.
-  const offline = new Proxy(
-    {},
-    {
-      get() {
-        throw new Error("오프라인 위반: Notion 클라이언트가 호출됨");
-      },
-    },
-  ) as unknown as Client;
-  const converter = new BlockConverter();
-  converter.initNotionToMd(offline);
-  const code = (text: string[], language: string) => ({
-    object: "block",
-    id: `code-${language}`,
-    type: "code",
-    has_children: false,
-    // 글이 rich text 여럿에 나뉘어 와도 이어 붙인다 — 긴 코드는 2,000자씩 나뉜다.
-    code: { language, caption: [], rich_text: text.map(richText) },
-  });
-  const richText = (content: string) => ({
-    type: "text",
-    text: { content, link: null },
-    plain_text: content,
-    href: null,
-    annotations: {
-      bold: false,
-      italic: false,
-      strikethrough: false,
-      underline: false,
-      code: false,
-      color: "default",
-    },
-  });
-
-  it("코드에 ``` 줄이 있으면 그보다 긴 펜스로 감싼다", async () => {
-    const md = await converter.notionBlockArrayToMarkdown([
-      code(["before\n```js\nnested();", "\n```\nafter"], "JavaScript"),
-    ]);
-    expect(md.trim()).toBe("````javascript\nbefore\n```js\nnested();\n```\nafter\n````");
-    expect(obsidianCodeBlocks(md)).toEqual(["before\n```js\nnested();\n```\nafter"]);
-  });
-
-  it("``` 줄이 없으면 기본 렌더 그대로", async () => {
-    const md = await converter.notionBlockArrayToMarkdown([code(["const x = 1;"], "typescript")]);
-    expect(md.trim()).toBe("```typescript\nconst x = 1;\n```");
   });
 });

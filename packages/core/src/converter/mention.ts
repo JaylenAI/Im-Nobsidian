@@ -220,18 +220,6 @@ export function mentionsToMarkers(
 
 // ─── 블록 API 폴백 pull ───
 
-/**
- * 블록 API 의 사용자 멘션을 짝 마커로 — Markdown API 로 받은 것({@link mentionsToMarkers})과 같은 모양이다.
- * 예전 블록 폴백은 `@이름` 평문을 내려, 그 노트를 push 하면 Notion 의 멘션이 글이 됐다(A3).
- *
- * @returns 사용자 id 가 아니면 null — 호출측이 보이는 글로 둔다.
- */
-export function userMentionText(userId: string, name: string | undefined): string | null {
-  if (!isNotionId(userId)) return null;
-  const attrs: NfmAttrs = [["url", `user://${userId}`]];
-  return `${mentionMarker("user", attrs)}${labelOf("user", attrs, name, undefined)}${MENTION_END}`;
-}
-
 /** 블록 API 날짜의 한쪽 — `2026-09-26` 또는 `2026-09-26T09:00:00.000+09:00`(실측 — 시각에는 늘 오프셋). */
 const BLOCK_DATE_RE =
   /^(\d{4}-\d{2}-\d{2})(?:T(\d{2}:\d{2})(?::\d{2}(?:\.\d+)?)?(Z|[+-]\d{2}:\d{2})?)?$/;
@@ -324,13 +312,6 @@ export function blockDateAttrs(date: {
   return attrs;
 }
 
-/** 블록 API 의 날짜 멘션을 짝 마커로. 읽지 못하는 날짜면 null. */
-export function dateMentionText(date: Parameters<typeof blockDateAttrs>[0]): string | null {
-  const attrs = blockDateAttrs(date);
-  if (attrs === null) return null;
-  return `${mentionMarker("date", attrs)}${dateMentionLabel(attrs)}${MENTION_END}`;
-}
-
 // ─── push ───
 
 function restoreDate(attrs: NfmAttrs, label: string): string {
@@ -359,16 +340,5 @@ export function markersToMentions(obsidian: string): string {
     segment.replace(VAULT_MENTION_RE, (_m, kind: MentionKind, payload: string, label: string) =>
       restoreMention(kind, parseAttrsPayload(payload), label),
     ),
-  );
-}
-
-/**
- * 짝 마커를 보이는 글만 남기고 걷어낸다 — 멘션을 표현할 수 없는 블록 방식 push 전용. 마커 글자가
- * Notion 본문에 새지 않게 한다(색 · 밑줄 마커와 같은 강등).
- */
-export function stripMentionMarkers(obsidian: string): string {
-  return obsidian.replace(
-    VAULT_MENTION_RE,
-    (_m, _kind: string, _payload: string, label: string) => label,
   );
 }

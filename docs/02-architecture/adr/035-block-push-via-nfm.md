@@ -76,5 +76,5 @@ push 는 Markdown API 로 본문을 보낸다. `conversion.preferMarkdownApi: fa
   그때 다시 잴 근거다.
 - 블록 방식은 갱신 때 본문을 통째로 다시 만든다(예전과 같다). 블록 id 는 남지 않는다 — 블록 id 를 지키려면
   Markdown API 경로를 쓴다.
-- martian 의 push 쪽(`BlockConverter.markdownToNotionBlocks`)은 제품 경로에서 쓰이지 않게 됐다. 지우는 것은 별도
-  작업이다.
+- martian 의 push 쪽(`BlockConverter.markdownToNotionBlocks`)은 제품 경로에서 쓰이지 않게 됐다. v0.4.0 에서
+  지웠다(`refactor/remove-legacy-converters`). martian 은 글 조각의 rich text(`nfm-inline`)에만 남는다.

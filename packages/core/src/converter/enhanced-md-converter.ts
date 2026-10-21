@@ -326,7 +326,7 @@ function toggleToCallout(title: string, rawBody: string, color?: string): string
 }
 
 // <columns>/<column> → 평탄화하되 경계를 컬럼 마커로 남긴다(ADR-008). 마커 어휘는
-// legacy block 경로(block-converter)와 동일 — push 가 <columns> 정준형으로 재조립한다.
+// 옛 블록 변환기가 남긴 볼트와 같다 — push 가 <columns> 정준형으로 재조립한다.
 // 각 칼럼 본문은 dedent 로 구조적 탭까지 벗긴다(결함②: 탭 하나만 벗기던 기존 동작 교체).
 //
 // **빈 칼럼도 자리를 지킨다**(D-EMPTY-COLUMN). Notion 레이아웃에서 빈 칼럼은 여백을 주는
