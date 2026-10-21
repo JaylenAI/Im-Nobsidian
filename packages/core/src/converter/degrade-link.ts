@@ -26,7 +26,15 @@ export function degradeLink(label: string, url: string, marker: string): string 
  */
 export const DEGRADE_LINK_SOURCE = "(?:\\[(?:\\\\.|[^\\\\\\]])*\\]\\([^)]*\\))?";
 
-/** 임베드의 볼트 모양 — 이름은 늘 같다(Markdown API 는 임베드의 캡션을 보내지 않는다). */
-export function embedVaultLink(src: string): string {
-  return degradeLink("🔗 Embed", src, embedMarker(src));
+/**
+ * 임베드의 볼트 모양. 캡션이 있으면 링크 이름으로 보이고 원문(NFM)은 마커가 싣는다. 이름에서는 태그와
+ * 대괄호 · 백슬래시를 뺀다 — 뒤 변환이 escape 를 풀어도 {@link DEGRADE_LINK_SOURCE} 의 이름 끝이
+ * 앞당겨지지 않게. 이름은 보여주기용이라 push 는 마커의 캡션을 쓴다.
+ */
+export function embedVaultLink(src: string, caption = ""): string {
+  const label = caption
+    .replace(/<[^>]*>/g, "")
+    .replace(/[[\]\\]/g, "")
+    .trim();
+  return degradeLink(label === "" ? "🔗 Embed" : `🔗 ${label}`, src, embedMarker(src, caption));
 }

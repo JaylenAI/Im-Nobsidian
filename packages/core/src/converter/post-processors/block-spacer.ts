@@ -48,6 +48,11 @@ import {
  * 한계: Notion 문단 내부 soft break(shift+enter)로 생긴 다중 행은 문단 경계와
  * 구분 불가능해 별개 문단으로 분리된다.
  *
+ * 탭 블록(`<tabs>` … `</tabs>`)은 변환기가 원시 NFM 그대로 내려보낸다. 안을 문단으로 보고 빈 줄을
+ * 끼우고 탭을 칸으로 펴면 Obsidian 이 탭 안 글을 들여쓴 코드블록으로 그리고, 그 노트를 고쳐 push
+ * 하면 Notion 이 탭 구조를 읽지 못한다(실볼트 사본 E2E 6노트). 여는 줄부터 닫는 줄까지 한 블록으로
+ * 손대지 않고 둔다 — 빈 줄이 없으니 Obsidian 은 HTML 블록 하나로 읽는다.
+ *
  * pull 전용, order 110 — PreserveMarkerInjector(100)가 앵커 기준으로 삽입을 끝낸
  * 뒤에 간격만 손대야 앵커 오프셋 계산과 충돌하지 않는다.
  */
@@ -73,6 +78,8 @@ const QUOTE_RE = /^[ \t]*>/;
 const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;
 const BRAND_MARKER_LINE_RE = new RegExp(`^[ \\t]*%%\\s*${MARKER_BRAND}:`);
+const TABS_OPEN_RE = /^[ \t]*<tabs>\s*$/;
+const TABS_CLOSE_RE = /^[ \t]*<\/tabs>\s*$/;
 
 /**
  * 리스트 항목 아래 들여쓴 연속 내용(자식 문단 등)인지 — 리스트 블록에 묶는다. 두 단계 이상 깊은 자식은
@@ -173,6 +180,15 @@ function spaceBlocks(lines: readonly string[]): string {
       continue;
     }
 
+    const tabsEnd = TABS_OPEN_RE.test(raw) ? tabsRegionEnd(lines, i) : -1;
+    if (tabsEnd !== -1) {
+      const region = lines.slice(i, tabsEnd + 1);
+      if (last()?.kind === "list" && INDENTED_RE.test(raw)) region.forEach(appendToLast);
+      else blocks.push({ kind: "other", lines: region });
+      i = tabsEnd;
+      continue;
+    }
+
     const opening = openCodeFence(raw);
     if (opening) {
       // 리스트 항목의 자식 코드블록은 항목에 붙인다(S-24) — 들여쓴 자식 문단과 같다. 따로 떼면
@@ -255,6 +271,19 @@ function spaceBlocks(lines: readonly string[]): string {
   }
 
   return blocks.map((b) => b.lines.join("\n")).join("\n\n");
+}
+
+/**
+ * `<tabs>` 여는 줄에 짝지은 `</tabs>` 줄 번호 — 탭 안의 탭까지 센다. 짝이 없으면 -1 이고, 그때는
+ * 여는 줄도 보통 글로 다룬다(사용자가 적은 `<tabs>` 글자).
+ */
+function tabsRegionEnd(lines: readonly string[], start: number): number {
+  let depth = 0;
+  for (let i = start; i < lines.length; i++) {
+    if (TABS_OPEN_RE.test(lines[i]!)) depth++;
+    else if (TABS_CLOSE_RE.test(lines[i]!) && --depth === 0) return i;
+  }
+  return -1;
 }
 
 /**

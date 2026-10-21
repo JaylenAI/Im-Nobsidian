@@ -544,8 +544,11 @@ function linkBookmarks(content: string, bookmarks?: ReadonlyMap<string, Bookmark
 // `<table>`/`<table_of_contents>` 처럼 접두가 겹치는 이름이 실재하기 때문이다
 // ({@link nfmOpenTagSource} 주석 참조).
 const NOTION_TOC_RE = /<table_of_contents(?:\s+color="([^"]*)")?\s*\/>/g;
-/** 임베드는 여는/닫는 태그 쌍으로 오지만 내부는 항상 비어 있다(코퍼스 27개 전건 실측). */
-const NOTION_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>\s*<\/embed>/g;
+/**
+ * 임베드는 여는/닫는 태그 쌍으로 온다. 안은 캡션이다 — 코퍼스 27개는 모두 비어 있었으나 실볼트 사본
+ * E2E 에서 캡션 있는 임베드 5노트가 원시 태그로 남았다.
+ */
+const NOTION_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>([^\n]*?)\s*<\/embed>/g;
 const NOTION_UNKNOWN_MENTION_RE = /<unknown_mention\s+url="([^"]*)"([^>]*?)\/>/g;
 
 /**
@@ -558,7 +561,9 @@ const NOTION_UNKNOWN_MENTION_RE = /<unknown_mention\s+url="([^"]*)"([^>]*?)\/>/g
  */
 function preserveNfmOnlyBlocks(content: string): string {
   let result = content.replace(NOTION_TOC_RE, (_match, color?: string) => tocMarker(color));
-  result = result.replace(NOTION_EMBED_RE, (_match, src: string) => embedVaultLink(src));
+  result = result.replace(NOTION_EMBED_RE, (_match, src: string, caption: string) =>
+    embedVaultLink(src, caption.trim()),
+  );
   return result.replace(NOTION_UNKNOWN_MENTION_RE, (_match, url: string, attrs: string) =>
     unknownMentionMarker(url, /alt="([^"]*)"/.exec(attrs)?.[1]),
   );
@@ -1104,10 +1109,11 @@ function restoreNfmOnlyBlocks(content: string): string {
   let result = content.replace(OBSIDIAN_TOC_RE, (_match, color?: string) =>
     color ? `<table_of_contents color="${color}"/>` : `<table_of_contents/>`,
   );
-  result = result.replace(
-    OBSIDIAN_EMBED_RE,
-    (_match, src: string) => `<embed src="${decodeURIComponent(src)}"></embed>`,
-  );
+  result = result.replace(OBSIDIAN_EMBED_RE, (_match, payload: string) => {
+    // src · 캡션은 각각 인코딩되어 있으므로 홑 `&` 는 우리가 넣은 구분자뿐이다.
+    const [src = "", caption = ""] = payload.split("&caption=");
+    return `<embed src="${decodeURIComponent(src)}">${decodeURIComponent(caption)}</embed>`;
+  });
   return result.replace(OBSIDIAN_UNKNOWN_MENTION_RE, (_match, payload: string) => {
     const [url, alt] = payload.split("&alt=");
     const altAttr = alt ? ` alt="${decodeURIComponent(alt)}"` : "";
