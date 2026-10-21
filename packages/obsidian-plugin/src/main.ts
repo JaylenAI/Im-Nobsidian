@@ -26,7 +26,11 @@ import type {
   RemoteChange,
   ResolutionChoice,
 } from "@im-nobsidian/core";
-import { STATE_DB_PATH, StateDbUnavailableError } from "@im-nobsidian/core";
+import {
+  DEFAULT_WATCH_DEBOUNCE_MS,
+  STATE_DB_PATH,
+  StateDbUnavailableError,
+} from "@im-nobsidian/core";
 import { TOKEN_SECRET_ID } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
 import { designLivePreview } from "./design/live-preview.js";
@@ -100,24 +104,26 @@ export interface ImNobsidianSettings {
   /** Obsidian 키체인(SecretStorage)에 둔 Notion 토큰의 이름 — 토큰은 이 기기에만 있다. */
   tokenSecret: string;
   rootPageId: string;
-  syncDirection: "push" | "pull" | "both";
+  syncDirection: Config["sync"]["direction"];
   autoSync: boolean;
   autoSyncInterval: number;
-  conflictStrategy: "local-first" | "remote-first" | "manual";
+  /** 설정 화면에서 고르지 않는다 — 충돌은 사이드바에서 하나씩 푼다. */
+  conflictStrategy: Config["sync"]["conflictStrategy"];
   attachments: string;
   /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */
   timeZone: string;
   databases?: DatabaseConfig[];
 }
 
+// 동기화 기본값은 core 설정 기본값(DEFAULT_CONFIG)을 읽는다 — CLI 와 같은 값.
 const DEFAULT_SETTINGS: ImNobsidianSettings = {
   tokenSecret: "",
   rootPageId: "",
-  syncDirection: "both",
-  autoSync: false,
-  autoSyncInterval: 300,
-  conflictStrategy: "manual",
-  attachments: "attachments",
+  syncDirection: DEFAULT_CONFIG.sync.direction,
+  autoSync: DEFAULT_CONFIG.sync.autoSync,
+  autoSyncInterval: DEFAULT_CONFIG.sync.autoSyncInterval,
+  conflictStrategy: DEFAULT_CONFIG.sync.conflictStrategy,
+  attachments: DEFAULT_CONFIG.paths.attachments,
   timeZone: "",
 };
 
@@ -427,6 +433,7 @@ export default class ImNobsidianPlugin extends Plugin {
           ...DEFAULT_CONFIG.sync,
           direction: this.settings.syncDirection,
           conflictStrategy: this.settings.conflictStrategy,
+          // 플러그인은 늘 삭제를 맞춘다(README 의 deleteSync 설명) — CLI 기본값(false)과 다르다.
           deleteSync: true,
         },
         paths: {
@@ -662,7 +669,7 @@ export default class ImNobsidianPlugin extends Plugin {
     this.debounceTimer = window.setTimeout(() => {
       this.debounceTimer = null;
       void this.syncController?.vaultSync();
-    }, 2000);
+    }, DEFAULT_WATCH_DEBOUNCE_MS);
   }
 
   private clearVaultDebounce(): void {
