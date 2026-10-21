@@ -338,7 +338,7 @@ Enable it:
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.3.2 (release assets / BRAT)                                                                              |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.4.0 (release assets / BRAT)                                                                              |
 
 ### Using as a Library
 
@@ -415,6 +415,12 @@ Escapes inside fenced or inline code are untouched, and `\\[` (an escaped backsl
 ## Roadmap
 
 ```
+v0.4.0 ✅ incremental sync like Obsidian Git (per-note push/pull/discard, line diff,
+        periodic full reconcile, pull --rerender, --json), data safety (23 deep-QA
+        defects and those found after: lost edits, duplicate pages, missed changes),
+        block mode through the NFM converter, 3-file plugin, keychain token,
+        real-vault copy E2E (3,235 files, 0 failures,
+        no churn on repeat), 3980 tests
 v0.3.2 ✅ render fidelity (toggles/tables/callouts/code fences — 15 defect classes +
         document-swallowing code-fence fix), sync resilience (pull stalls, network
         deadlines, Retry-After, 4 link classes, CLI exit codes), deleted DB-row

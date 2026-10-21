@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-21
+
 > 0단계 · Phase 1 — 2026-09-27 심층 QA 가 찾은 결함 23건(S- · N- · F-)과 그 뒤 찾은 것을 봉합한 트랙.
 > Phase A — Obsidian Git 처럼 **바뀐 것만 보고, 노트마다 올리고 · 받고 · 되돌리는** 증분 동기화와 상태 DB 견고화.
 > Phase 2~~4 — 변환 왕복 충실도(F-01~~F-09), 플러그인 화면 · 설정(U-01~U-03), 디렉터리 배포(U-04 · U-05).
