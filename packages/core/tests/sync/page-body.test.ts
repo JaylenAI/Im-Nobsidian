@@ -117,6 +117,55 @@ describe("replacePageBody — 자식을 지우지 않고 본문 교체 (S-03)", 
   });
 });
 
+describe("replacePageBody — 없는 블록을 가리키는 자리 태그 (N6)", () => {
+  const KEPT = "40013b18d38281eb8e0ce29a40a3f12c";
+  const GONE = "40013b18d3828129b5fed3bfecd776db";
+  const url = (block: string) =>
+    `https://app.notion.com/p/40013b18d3828172867ee65a5c4ace5e#${block}`;
+  const tag = (block: string) => `<unknown url="${url(block)}" alt="bookmark"/>`;
+  // 2026-10-21 실측 — 지금 본문에 없는 블록의 태그를 보내면 아무것도 바꾸지 않고 이렇게 거절한다.
+  const CANNOT_CREATE = validationError(
+    "The update page tool cannot safely create new `<unknown .../>` blocks.",
+  );
+  const fallbacks = new Map([
+    [GONE, `<bookmark url="https://example.org/gone">지운 것</bookmark>`],
+  ]);
+
+  it("거절되면 지금 본문에 없는 블록의 태그만 볼트의 북마크로 바꿔 다시 보낸다", async () => {
+    const client = clientWith(`앞\n${tag(KEPT)}\n`, CANNOT_CREATE, undefined);
+
+    await replacePageBody(client as never, "p", `앞\n${tag(KEPT)}\n${tag(GONE)}\n`, {
+      unknownTagFallbacks: fallbacks,
+    });
+
+    expect(client.replacePageMarkdown).toHaveBeenCalledTimes(2);
+    expect(client.replacePageMarkdown.mock.calls[1]![1]).toBe(
+      `앞\n${tag(KEPT)}\n<bookmark url="https://example.org/gone">지운 것</bookmark>\n`,
+    );
+  });
+
+  it("자식 태그 되돌리기와 함께 — 한 번에 다시 보낸다", async () => {
+    const client = clientWith(`${tag(KEPT)}\n${PAGE_TAG}\n`, WOULD_DELETE, undefined);
+
+    await replacePageBody(client as never, "p", `${tag(GONE)}\n\n[[S03 자식 페이지]]\n`, {
+      unknownTagFallbacks: fallbacks,
+    });
+
+    expect(client.replacePageMarkdown).toHaveBeenCalledTimes(2);
+    expect(client.replacePageMarkdown.mock.calls[1]![1]).toBe(
+      `<bookmark url="https://example.org/gone">지운 것</bookmark>\n\n${PAGE_TAG}\n`,
+    );
+  });
+
+  it("모든 태그가 지금 본문에 있으면 거절 사유가 태그가 아니다 — 처음 거절을 그대로 올린다", async () => {
+    const client = clientWith(`${tag(KEPT)}\n`, CANNOT_CREATE);
+    await expect(
+      replacePageBody(client as never, "p", `${tag(KEPT)}\n`, { unknownTagFallbacks: fallbacks }),
+    ).rejects.toBe(CANNOT_CREATE);
+    expect(client.replacePageMarkdown).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("pull 이 만든 폴더 노트를 고쳐 push 하면 자식이 제자리로 돌아간다 (실제 변환기)", () => {
   const BASE_PATH = "S-03 프로브/S03-자식-DB/S03 자식 DB.base";
   const context = (direction: "push" | "pull") =>
