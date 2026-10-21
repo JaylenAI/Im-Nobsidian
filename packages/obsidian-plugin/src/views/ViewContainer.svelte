@@ -97,7 +97,6 @@
     sortProperty={toolbarSortProp}
     sortDirection={toolbarSortDir}
     propertyNames={data.propertyNames}
-    schema={data.schema}
     onSearchChange={handleSearchChange}
     onSortChange={handleSortChange}
     {onAddEntry}
