@@ -41,7 +41,12 @@ export type {
   WikilinkEntry,
 } from "./types/index.js";
 
-export { ConfigSchema, DEFAULT_CONFIG } from "./types/config.js";
+export {
+  ConfigSchema,
+  DEFAULT_CONFIG,
+  DEFAULT_TITLE_PROPERTY,
+  NOTION_TOKEN_PREFIX,
+} from "./types/config.js";
 export type { DatabaseSyncConfig } from "./types/config.js";
 export type {
   ViewType,
@@ -182,7 +187,7 @@ export type {
 } from "./structure/index.js";
 
 // Watcher
-export { FileWatcher, WatchSyncService } from "./watcher/index.js";
+export { FileWatcher, WatchSyncService, DEFAULT_WATCH_DEBOUNCE_MS } from "./watcher/index.js";
 export type { WatchSyncOptions, WatchSyncScope } from "./watcher/index.js";
 
 // View

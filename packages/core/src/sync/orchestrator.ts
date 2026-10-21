@@ -40,6 +40,7 @@ import { nextPullWatermark } from "./pull-watermark.js";
 import {
   DatabasePullLedger,
   LAST_FULL_PULL_META_KEY,
+  LAST_PULL_META_KEY,
   parsePendingDatabases,
   PENDING_DATABASES_META_KEY,
   remoteScanInfo,
@@ -48,7 +49,11 @@ import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
-import { InterruptedSyncRecovery } from "./interrupted-sync.js";
+import {
+  InterruptedSyncRecovery,
+  PULL_IN_PROGRESS_META_KEY,
+  PUSH_IN_PROGRESS_META_KEY,
+} from "./interrupted-sync.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
@@ -72,6 +77,9 @@ import {
   recordRenameHint,
   type RenameKind,
 } from "./local-moves.js";
+
+/** 마지막으로 push 나 pull 을 끝낸 시각을 두는 상태 메타 키. */
+const LAST_SYNC_META_KEY = "last_sync_at";
 
 export class SyncOrchestrator {
   private readonly fileHandler: FileHandler;
@@ -374,7 +382,7 @@ export class SyncOrchestrator {
       };
     }
 
-    this.stateDb.setMeta("push_in_progress", "true");
+    this.stateDb.setMeta(PUSH_IN_PROGRESS_META_KEY, "true");
     await this.observation.resolveBotUserId();
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
@@ -526,8 +534,8 @@ export class SyncOrchestrator {
     }
 
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
-    this.stateDb.setMeta("last_sync_at", new Date().toISOString());
-    this.stateDb.setMeta("push_in_progress", "");
+    this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
+    this.stateDb.setMeta(PUSH_IN_PROGRESS_META_KEY, "");
     // 완료/실패한 WAL 항목 정리 — 테이블 무한 증가 방지(미완료 항목은 보존).
     this.stateDb.clearCompletedOperations();
 
@@ -659,7 +667,7 @@ export class SyncOrchestrator {
       if (!options?.paths) {
         const startedAt = new Date(startTime).toISOString();
         this.stateDb.setMeta(
-          "last_pull_at",
+          LAST_PULL_META_KEY,
           nextPullWatermark(
             startedAt,
             detected.filter((change) => !applied.has(change)),
@@ -672,8 +680,8 @@ export class SyncOrchestrator {
         }
         this.detector.savePendingDatabases(ledger);
       }
-      this.stateDb.setMeta("last_sync_at", new Date().toISOString());
-      this.stateDb.setMeta("pull_in_progress", "");
+      this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
+      this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "");
       return {
         created,
         updated,
@@ -832,7 +840,7 @@ export class SyncOrchestrator {
       return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
     }
 
-    this.stateDb.setMeta("pull_in_progress", "true");
+    this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "true");
 
     // 변경 메타를 FailedOperation 으로 변환(경로·작업종류·에러 메시지).
     const toFailure = (change: RemoteChange, error: unknown): FailedOperation => {
@@ -992,7 +1000,7 @@ export class SyncOrchestrator {
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
-    const lastSyncAt = this.stateDb.getMeta("last_sync_at");
+    const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);
     await this.observation.resolveBotUserId();
     // 상태 확인은 주기가 됐어도 전체 대조하지 않는다 — 볼트를 받지 않아 마쳤다고 적을 수 없고, 확인할
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
@@ -1029,7 +1037,7 @@ export class SyncOrchestrator {
   async statusLocal(): Promise<StatusResult> {
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
-    const lastSyncAt = this.stateDb.getMeta("last_sync_at");
+    const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);
 
     return {
       localChanges: plan.scan.changes,

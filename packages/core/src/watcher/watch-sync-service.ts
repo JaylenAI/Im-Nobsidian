@@ -17,7 +17,8 @@ export interface WatchSyncOptions {
   readonly onFileChange?: (event: WatchEvent, path: string) => void;
 }
 
-const DEFAULT_DEBOUNCE_MS = 2000;
+/** 마지막 변경 뒤 동기화까지 기다리는 시간 — CLI `watch` 와 플러그인 자동 동기화가 함께 쓴다. */
+export const DEFAULT_WATCH_DEBOUNCE_MS = 2000;
 
 export class WatchSyncService {
   private readonly debounceMs: number;
@@ -38,7 +39,7 @@ export class WatchSyncService {
     private readonly orchestrator: SyncOrchestrator,
     options: WatchSyncOptions = {},
   ) {
-    this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.debounceMs = options.debounceMs ?? DEFAULT_WATCH_DEBOUNCE_MS;
     this.options = options;
   }
 

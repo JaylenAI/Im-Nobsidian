@@ -211,9 +211,11 @@ export class NotionClient {
   private readonly userNames = new Map<string, string | null>();
 
   constructor(options: NotionClientOptions) {
+    // 빠진 값은 설정 기본값 한 벌(DEFAULT_CONFIG)에서 읽는다 — `init` 처럼 토큰만으로 만드는 경로도 같은 값.
+    const defaults = DEFAULT_CONFIG.advanced;
     this.client = new Client({
       auth: options.token,
-      timeoutMs: options.timeoutMs ?? 30000,
+      timeoutMs: options.timeoutMs ?? defaults.timeoutMs,
       logLevel: LogLevel.ERROR,
       // 재시도는 withRateLimit 한 곳에서만 한다. SDK 5.x 는 기본으로 429·529 를 2회
       // 재시도하는데, 켜 둔 채면 두 층이 곱해져 429 가 이어질 때 호출 1건이
@@ -222,15 +224,15 @@ export class NotionClient {
       retry: false,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-    this.sema = new Sema(options.concurrency ?? 3);
-    this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
-    this.maxRetries = options.maxRetries ?? 5;
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1000;
-    this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
-    this.defaultPageSize = options.pageSize ?? 100;
-    this.batchSize = options.batchSize ?? 100;
+    this.sema = new Sema(options.concurrency ?? defaults.concurrency);
+    this.minRequestInterval = options.rateLimitIntervalMs ?? defaults.rateLimitIntervalMs;
+    this.maxRetries = options.maxRetries ?? defaults.maxRetries;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? defaults.retryBaseDelayMs;
+    this.retryBackoffFactor = options.retryBackoffFactor ?? defaults.retryBackoffFactor;
+    this.defaultPageSize = options.pageSize ?? defaults.pageSize;
+    this.batchSize = options.batchSize ?? defaults.batchSize;
     this.markdownCompletionMaxBlocks =
-      options.markdownCompletionMaxBlocks ?? DEFAULT_CONFIG.advanced.markdownCompletionMaxBlocks;
+      options.markdownCompletionMaxBlocks ?? defaults.markdownCompletionMaxBlocks;
     this.propertyMapper = new PropertyMapper({ timeZone: options.timeZone });
   }
 
