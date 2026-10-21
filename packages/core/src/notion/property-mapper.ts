@@ -314,6 +314,23 @@ export class PropertyMapper {
   }
 
   /**
+   * 이 행에서 기간의 끝을 적는 짝 키 — 날짜 속성 이름 → 짝 키. 값이 기간인 속성만이다
+   * ({@link fromNotionProperties} 가 끝을 짝 키에 적는 것과 같다).
+   */
+  rangeEndKeysOf(notionProps: Readonly<Record<string, unknown>>): Map<string, string> {
+    const zone = this.zone();
+    const ends = new Map<string, string>();
+    for (const [key, rawProp] of Object.entries(notionProps)) {
+      const prop = rawProp as { type: string; [k: string]: unknown };
+      const endKey = rangeEndKeyOf(key, prop.type, notionProps);
+      if (endKey === null) continue;
+      const value = this.extractValue(prop, zone);
+      if (isDateRangeValue(value) && value.end != null) ends.set(key, endKey);
+    }
+    return ends;
+  }
+
+  /**
    * 이 행에서 Notion 이 정하는 frontmatter 키 — {@link fromNotionProperties} 가 적을 수 있는 키 전부다.
    * 값이 비어 적지 않은 속성과 지금은 기간이 아니어서 적지 않은 짝 키도 든다. pull 이 받은 속성을 로컬
    * frontmatter 와 합칠 때 이 밖의 키는 로컬 것으로 둔다.

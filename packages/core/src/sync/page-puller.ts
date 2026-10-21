@@ -9,7 +9,7 @@ import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { RemoteChange, SyncRecord } from "../types/sync.js";
-import { pagePathCandidates } from "../utils/db-row-path.js";
+import { inClaimOrder, pagePathCandidates } from "../utils/db-row-path.js";
 import { computeHash } from "../utils/hash.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
@@ -49,6 +49,13 @@ export class PagePuller {
   // 실행마다 비운다 — 지난 실행에서 삭제된 경로를 영구히 막지 않기 위해.
   private readonly claimedPaths = new Set<string>();
 
+  // 제목이 같은 새 페이지끼리 경로를 고르는 차례({@link orderCreates}) — 페이지 → 앞 차례가 경로를 고르면
+  // 풀리는 약속과 내 차례를 끝내는 함수.
+  private readonly claimTurns = new Map<
+    string,
+    { readonly previous: Promise<void>; readonly release: () => void }
+  >();
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -71,6 +78,8 @@ export class PagePuller {
    */
   beginPull(): void {
     this.claimedPaths.clear();
+    for (const turn of this.claimTurns.values()) turn.release();
+    this.claimTurns.clear();
     this._pullImageCount = 0;
     this._pullFileCount = 0;
   }
@@ -85,7 +94,58 @@ export class PagePuller {
     return this._pullFileCount;
   }
 
+  /**
+   * 이번 pull 의 변경을 일할 차례로 — 제목이 같은 새 페이지끼리 ID 순으로 경로를 고른다(B10).
+   *
+   * 워커 풀에서는 먼저 준비된 페이지가 자연 이름을 얻어, 같은 이름의 두 페이지가 실행마다 · 볼트마다 다른
+   * 경로를 얻었다. 그래서 그 페이지들을 놓인 자리 안에서 ID 순으로 바꿔 놓고, 뒤 차례는 앞 차례가 경로를 고를
+   * 때까지 기다린다. 돌려준 차례대로 일을 시작해야 한다 — 앞 차례가 늘 먼저 시작하므로 서로 기다리는 일은 없다.
+   */
+  orderCreates<T extends RemoteChange>(changes: readonly T[]): T[] {
+    const titleOf = (change: T): string | null =>
+      change.type === "created" && change.title !== undefined
+        ? sanitizeFileName(change.title)
+        : null;
+    const counts = new Map<string, number>();
+    for (const change of changes) {
+      const title = titleOf(change);
+      if (title !== null) counts.set(title, (counts.get(title) ?? 0) + 1);
+    }
+    const shared = (change: T): string | null => {
+      const title = titleOf(change);
+      return title !== null && counts.get(title)! > 1 ? title : null;
+    };
+
+    const ordered = inClaimOrder(
+      changes,
+      (change) => shared(change) !== null,
+      (c) => c.pageId,
+    );
+    const lastTurn = new Map<string, Promise<void>>();
+    for (const change of ordered) {
+      const title = shared(change);
+      if (title === null) continue;
+      let release!: () => void;
+      const claimed = new Promise<void>((resolve) => (release = resolve));
+      this.claimTurns.set(normalizeNotionId(change.pageId), {
+        previous: lastTurn.get(title) ?? Promise.resolve(),
+        release,
+      });
+      lastTurn.set(title, claimed);
+    }
+    return ordered;
+  }
+
   async pullCreate(pageId: string): Promise<string> {
+    try {
+      return await this.createPulledPage(pageId);
+    } finally {
+      // 경로를 고르기 전에 실패해도 뒤 차례를 풀어 준다.
+      this.claimTurns.get(normalizeNotionId(pageId))?.release();
+    }
+  }
+
+  private async createPulledPage(pageId: string): Promise<string> {
     const page = await this.notionClient.getPage(pageId);
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
@@ -662,6 +722,16 @@ export class PagePuller {
     safeName: string,
     pageId: string,
   ): Promise<string> {
+    const turn = this.claimTurns.get(normalizeNotionId(pageId));
+    await turn?.previous;
+    try {
+      return await this.claimFilePath(dir, safeName, pageId);
+    } finally {
+      turn?.release();
+    }
+  }
+
+  private async claimFilePath(dir: string, safeName: string, pageId: string): Promise<string> {
     const candidates = pagePathCandidates(dir, safeName, pageId);
 
     for (const candidate of candidates) {

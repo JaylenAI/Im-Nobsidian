@@ -167,6 +167,17 @@ export function plainFrontmatterValue(value: unknown): unknown {
 }
 
 /**
+ * 비어 있는 frontmatter 값. pull 은 빈 속성을 적지 않고, 예전 버전은 `null`(글 · 선택 · 날짜 · 숫자)로
+ * 적었다. 손으로 비우면 `메모:`(null) · `""` 가 되기도 한다 — 모두 같은 «비어 있음» 이다.
+ */
+export function isEmptyFrontmatterValue(value: unknown): boolean {
+  if (value === null || value === undefined) return true;
+  if (typeof value === "string") return value.trim() === "";
+  if (Array.isArray(value)) return value.length === 0;
+  return false;
+}
+
+/**
  * 두 frontmatter 값이 같은가 — 글 · 수 · 참거짓 · null 은 엄격히, 목록 · 객체는 안쪽까지(객체의 키 차례는
  * 보지 않는다). YAML 이 `Date` 로 읽은 값은 {@link plainFrontmatterValue} 의 글자로 견준다.
  */

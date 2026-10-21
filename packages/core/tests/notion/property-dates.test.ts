@@ -228,7 +228,7 @@ describe("outdatedDateKeys — 예전 버전이 적은 날짜 모양이 남은 �
   it("새 매퍼가 적은 frontmatter 는 예전 모양이 아니다 — 고친 행을 또 고르지 않는다", () => {
     const written = freshlyWritten();
     expect(written).not.toHaveProperty("빈묶음");
-    expect(written).toHaveProperty("빈날", null);
+    expect(written).not.toHaveProperty("빈날"); // 빈 속성은 적지 않는다(B4)
     expect(seoulMapper().outdatedDateKeys(written, remote)).toEqual([]);
   });
 

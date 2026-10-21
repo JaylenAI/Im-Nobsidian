@@ -20,7 +20,7 @@ import { diffRowProperties } from "./row-properties.js";
 import { extractAliases, noteTitle } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
-import { resolveDbRowPath } from "../utils/db-row-path.js";
+import { inClaimOrder, resolveDbRowPath } from "../utils/db-row-path.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
@@ -253,7 +253,7 @@ export class DatabaseSyncer {
     // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
     if (wholeDbInScope) {
       const viewsConfig = await this.pullDatabaseViews(dbConfig);
-      await this.generateBaseFile(dbConfig, viewsConfig, meta);
+      await this.generateBaseFile(dbConfig, viewsConfig, meta, undefined, this.rangeEndsOf(pages));
     }
 
     let created = 0;
@@ -284,7 +284,13 @@ export class DatabaseSyncer {
     }
     opts?.progress?.planned(pending.length);
 
-    for (const { page, action } of pending) {
+    // 새 행은 ID 차례로 경로를 고른다 — 같은 이름이면 조회 순서에 따라 경로가 달라졌다(B10).
+    const ordered = inClaimOrder(
+      pending,
+      ({ page }) => this.stateDb.getByNotionId(page.id) === null,
+      ({ page }) => page.id,
+    );
+    for (const { page, action } of ordered) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
 
@@ -338,8 +344,8 @@ export class DatabaseSyncer {
    * 행 판정 · 삭제 확인은 {@link pullDatabase} 와 같다.
    *
    * 행 본문은 읽지 않는다. 그래서 같은 분 안의 편집(«확인 안 됨»)은 고침으로 세고, 받아 보고 같으면
-   * 쓰지 않을 행 · local-first 로 지킬 행 · 충돌로 남길 행도 고침으로 센다. 새 행의 경로는 지금 상태
-   * 기준이다 — 같은 pull 에서 먼저 만든 행과 이름이 겹치면 실제 경로에는 id 가 붙는다.
+   * 쓰지 않을 행 · local-first 로 지킬 행 · 충돌로 남길 행도 고침으로 센다. 새 행의 경로는 pull 과 같은
+   * 차례(ID 순)로 고른다 — 이번에 만들 행끼리 이름이 겹치면 뒤 차례에 id 가 붙는다.
    */
   async planDatabase(
     dbConfig: DatabaseSyncConfig,
@@ -352,7 +358,14 @@ export class DatabaseSyncer {
     if (target.kind !== "rows") return [];
 
     const planned: PlannedRow[] = [];
-    for (const page of target.pages) {
+    // 이번에 만들 행이 고른 경로 — 경로 → 페이지. 뒤 차례 행은 이 경로를 피한다.
+    const claimed = new Map<string, string>();
+    const pages = inClaimOrder(
+      target.pages,
+      (page) => this.stateDb.getByNotionId(page.id) === null,
+      (page) => page.id,
+    );
+    for (const page of pages) {
       const record = this.stateDb.getByNotionId(page.id);
       const action = await this.rowAction(
         dbConfig,
@@ -364,13 +377,12 @@ export class DatabaseSyncer {
       if (action === "skip") continue;
       if (!record) {
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
-        planned.push({
-          pageId: page.id,
-          path: resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) =>
-            this.stateDb.getByPath(p),
-          ),
-          operation: "create",
+        const path = resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) => {
+          const owner = claimed.get(p);
+          return owner !== undefined ? { notionPageId: owner } : this.stateDb.getByPath(p);
         });
+        claimed.set(path, page.id);
+        planned.push({ pageId: page.id, path, operation: "create" });
       } else {
         planned.push({
           pageId: page.id,
@@ -673,6 +685,17 @@ export class DatabaseSyncer {
     }
   }
 
+  /** 행들 가운데 한 번이라도 기간인 날짜 속성 → 그 짝 키. */
+  private rangeEndsOf(pages: readonly PageObjectResponse[]): Map<string, string> {
+    const ends = new Map<string, string>();
+    for (const page of pages) {
+      for (const [name, endKey] of this.propertyMapper.rangeEndKeysOf(rowProperties(page))) {
+        ends.set(name, endKey);
+      }
+    }
+    return ends;
+  }
+
   private async generateBaseFile(
     dbConfig: DatabaseSyncConfig,
     viewsConfig: DatabaseViewsConfig | null,
@@ -684,6 +707,8 @@ export class DatabaseSyncer {
      * 않는다. 생략하면 자기 폴더(원본 DB 의 기본 동작).
      */
     rowsFolder?: string,
+    /** 받은 행 가운데 기간이 있는 날짜 속성의 짝 키 — `BaseFileOptions.rangeEnds`. */
+    rangeEnds?: ReadonlyMap<string, string>,
   ): Promise<void> {
     try {
       const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId, meta);
@@ -706,6 +731,7 @@ export class DatabaseSyncer {
         schema: schemaFull,
         viewsConfig: resolvedViews,
         folderPath: rowsFolder ?? dbConfig.localFolder,
+        rangeEnds,
       });
 
       const safeName = sanitizeFileName(dbName);
@@ -1125,6 +1151,8 @@ export class DatabaseSyncer {
 
     const rehomed = existingRecord && recordPath && recordPath !== filePath;
     const hash = computeHash(finalContent);
+    // 쓴 파일의 stat 도 적는다 — 없으면 다음 변경 확인이 받은 행을 모두 다시 읽어 해시를 잰다(B5).
+    const stat = await this.vaultFs.getFileStat(filePath);
     this.stateDb.transaction(() => {
       if (rehomed) {
         // 재배치: upsert 는 obsidianPath 키라 경로를 먼저 옮겨야 같은 notion_page_id 의
@@ -1143,6 +1171,8 @@ export class DatabaseSyncer {
         fileType: "db-row",
         status: "synced",
         baseSnapshot: Buffer.from(finalContent, "utf-8"),
+        localMtime: stat?.mtime ?? null,
+        localFileSize: stat?.size ?? null,
       });
 
       this.stateDb.upsertWikilink({

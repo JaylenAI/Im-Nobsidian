@@ -1,5 +1,5 @@
 import type { RowPropertyChanges } from "../types/sync.js";
-import { plainFrontmatterValue } from "../utils/frontmatter.js";
+import { isEmptyFrontmatterValue, plainFrontmatterValue } from "../utils/frontmatter.js";
 
 /**
  * S-01 — DB 행의 속성은 «지난 동기화 뒤 로컬에서 바뀐 것» 만 보낸다.
@@ -31,30 +31,19 @@ export function diffRowProperties(
   for (const key of keys) {
     const after = plainFrontmatterValue(current[key]);
     if (base === null) {
-      if (!isEmptyValue(after)) changed[key] = after;
+      if (!isEmptyFrontmatterValue(after)) changed[key] = after;
       continue;
     }
     const before = plainFrontmatterValue(base[key]);
     if (sameValue(before, after)) continue;
-    if (isEmptyValue(after)) cleared.push(key);
+    if (isEmptyFrontmatterValue(after)) cleared.push(key);
     else changed[key] = after;
   }
   return { changed, cleared };
 }
 
-/**
- * 비어 있는 값. pull 은 빈 속성을 `null`(글 · 선택 · 날짜 · 숫자)로 적거나 아예 적지 않는다
- * (빈 배열). 손으로 고치면 `""` 가 되기도 한다 — 모두 같은 «비어 있음» 이다.
- */
-function isEmptyValue(value: unknown): boolean {
-  if (value === null || value === undefined) return true;
-  if (typeof value === "string") return value.trim() === "";
-  if (Array.isArray(value)) return value.length === 0;
-  return false;
-}
-
 function sameValue(a: unknown, b: unknown): boolean {
-  if (isEmptyValue(a) && isEmptyValue(b)) return true;
+  if (isEmptyFrontmatterValue(a) && isEmptyFrontmatterValue(b)) return true;
   if (a === b) return true;
   if (Array.isArray(a) || Array.isArray(b)) {
     if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;

@@ -142,6 +142,21 @@ describe("mergeRowFrontmatter — 받은 행 속성을 로컬 frontmatter 에 �
     expect(mergeRowFrontmatter("---\n상태: [\n---\n", { 상태: "a" }, new Set(["상태"]))).toBeNull();
   });
 
+  it("로컬에 빈 값으로 적힌 Notion 키(`메모:`)는 Notion 에서도 비었으면 그 줄 그대로 (B4)", () => {
+    const local = NOTE.replace(
+      "상태: 진행 중\n",
+      '상태: 진행 중\n메모:\n점수: null\n분류: ""\n참조: []\n',
+    );
+    expect(merge(local, PULLED, [...OWNED, "메모", "분류", "참조"])).toBe(local);
+  });
+
+  it("로컬의 빈 Notion 키에 Notion 이 값을 넣으면 그 자리에서 받은 값으로 (B4)", () => {
+    const local = NOTE.replace("상태: 진행 중\n", "상태: 진행 중\n메모:\n");
+    expect(merge(local, { ...PULLED, 메모: "새 글" }, [...OWNED, "메모"])).toBe(
+      NOTE.replace("상태: 진행 중\n", "상태: 진행 중\n메모: 새 글\n"),
+    );
+  });
+
   it("받은 속성이 모두 비고 로컬에 Notion 키뿐이면 frontmatter 를 쓰지 않는다", () => {
     const lines = mergeRowFrontmatter("---\n상태: a\n---\n", {}, new Set(["상태"]));
     expect(joinFrontmatter(lines!, "본문\n")).toBe("본문\n");
@@ -172,6 +187,27 @@ describe("FrontmatterGenerator — 행을 받을 때만 합친다 (F-08)", () =>
       context: pull,
     });
     expect(result.content).toBe("---\n상태: 완료\n---\n본문\n");
+  });
+
+  it("빈 속성(null)은 적지 않는다 — 새 행에 `메모: null` 이 남지 않는다 (B4)", () => {
+    const result = generator.process({
+      content: "본문",
+      metadata: {
+        properties: { title: "행", 상태: null, 메모: null, 점수: 0, 완료: false, 태그: [] },
+        notionKeys: ["상태", "메모", "점수", "완료", "태그", "title"],
+      },
+      context: pull,
+    });
+    expect(result.content).toBe("---\ntitle: 행\n점수: 0\n완료: false\n---\n본문\n");
+  });
+
+  it("빈 속성은 로컬에 값이 있던 줄을 지운다 — Notion 에서 비운 것 (B4)", () => {
+    const result = generator.process({
+      content: "본문",
+      metadata: { properties: { ...PULLED, 상태: null }, localContent: NOTE, notionKeys: OWNED },
+      context: pull,
+    });
+    expect(result.content).toBe(NOTE.replace("상태: 진행 중\n", ""));
   });
 
   it("로컬 노트가 없으면(새 행) 받은 속성만 적는다", () => {

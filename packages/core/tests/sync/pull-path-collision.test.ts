@@ -64,8 +64,15 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     vi.restoreAllMocks();
   });
 
-  /** `order` 는 원격이 돌려주는 페이지 차례, `concurrency` 는 pull 워커 수 — 1 이면 배정 차례가 `order` 그대로다. */
-  async function pullOnce(order: readonly string[] = [A, B, C], concurrency?: number) {
+  /**
+   * `order` 는 원격이 돌려주는 페이지 차례, `concurrency` 는 pull 워커 수 — 1 이면 배정 차례가 `order` 그대로다.
+   * `slow` 페이지는 조회가 늦게 끝난다 — 워커 풀에서 다른 페이지가 먼저 경로를 고를 수 있다.
+   */
+  async function pullOnce(
+    order: readonly string[] = [A, B, C],
+    concurrency?: number,
+    slow?: string,
+  ) {
     tmpDir = await mkdtemp(join(tmpdir(), "im-pullcollision-"));
     const vaultFs = new NodeVaultFS(tmpDir);
     await vaultFs.ensureFolder(".im-nobsidian");
@@ -78,6 +85,7 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       const found = PAGES.get(id);
       if (!found) throw new Error(`unexpected getPage ${id}`);
+      if (id === slow) await new Promise((resolve) => setTimeout(resolve, 50));
       return found;
     });
     // 본문을 페이지마다 다르게 준다 — 덮어쓰기가 나면 내용 단언에서 바로 드러난다.
@@ -123,10 +131,7 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     expect(paths.filter((p) => p === "노트.md")).toHaveLength(1);
     for (const p of paths) expect(p, `순번 접미사 잔존: ${p}`).not.toMatch(/ \(\d+\)\.md$/);
 
-    // 어느 페이지가 어느 경로를 얻는지는 워커 풀의 배정 차례 — 실제 파일 조회가 끝나는 차례 — 에 달려
-    // 실행마다 다를 수 있다(CI 에서 A 가 마지막으로 배정돼 B·C 중 하나가 넓어진다는 옛 단언이 깨졌다).
-    // 차례와 무관한 것만 본다: 접미사는 자기 ID 의 앞 조각이고, 세 페이지가 앞 8 글자를 나누므로 뒤에
-    // 배정된 쪽이 16 글자로 넓어진다.
+    // 접미사는 자기 ID 의 앞 조각이고, 세 페이지가 앞 8 글자를 나누므로 셋째가 16 글자로 넓어진다.
     const fragments = [A, B, C].flatMap((id, i) => {
       const fragment = /^노트 \(([0-9a-f]+)\)\.md$/.exec(paths[i]!)?.[1];
       return fragment === undefined ? [] : [{ id, fragment }];
@@ -135,23 +140,34 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     expect(fragments.map(({ fragment }) => fragment.length).sort((x, y) => x - y)).toEqual([8, 16]);
   });
 
-  /** [마지막으로 배정되는 페이지, 원격 차례, 그 페이지가 얻는 경로] */
-  const LAST: Array<[string, string[], string]> = [
-    ["A", [B, C, A], "노트 (c6313b18d38283e7).md"],
-    ["B", [A, C, B], "노트 (c6313b18d38283d8).md"],
-    ["C", [A, B, C], "노트 (c6313b18d38283d8).md"],
+  // B10 — 경로는 처리 차례가 아니라 페이지 ID 차례로 정한다(B < C < A). 예전에는 원격 차례 · 워커 풀의
+  // 배정 차례에 따라 실행마다 · 볼트마다 다른 페이지가 자연 이름을 얻었다.
+  const ORDERS: Array<[string, string[], number | undefined]> = [
+    ["A B C · 워커 하나", [A, B, C], 1],
+    ["B C A · 워커 하나", [B, C, A], 1],
+    ["C A B · 워커 하나", [C, A, B], 1],
+    ["C B A · 기본 워커", [C, B, A], undefined],
+    ["A C B · 기본 워커", [A, C, B], undefined],
   ];
 
-  it.each(LAST)(
-    "%s 가 마지막으로 배정되면 그 페이지가 자기 ID 16 글자로 넓어진다",
-    async (_name, order, widened) => {
-      // 워커 하나로 배정 차례를 원격 차례에 고정한다.
-      const { db } = await pullOnce(order, 1);
-      const [first, second, last] = order.map((id) => db.getByNotionId(id)!.obsidianPath);
+  it("ID 가 가장 앞선 페이지의 조회가 가장 늦게 끝나도 그 페이지가 자연 이름을 얻는다 (B10)", async () => {
+    const { result, db } = await pullOnce([B, C, A], 3, B);
 
-      expect(first).toBe("노트.md");
-      expect(second).toBe("노트 (c6313b18).md");
-      expect(last).toBe(widened);
+    expect(result.failed).toEqual([]);
+    expect(db.getByNotionId(B)!.obsidianPath).toBe("노트.md");
+    expect(db.getByNotionId(C)!.obsidianPath).toBe("노트 (c6313b18).md");
+  });
+
+  it.each(ORDERS)(
+    "원격 차례 %s — 어느 차례로 받아도 같은 페이지가 같은 경로를 얻는다 (B10)",
+    async (_name, order, concurrency) => {
+      const { db } = await pullOnce(order, concurrency);
+
+      expect([A, B, C].map((id) => db.getByNotionId(id)!.obsidianPath)).toEqual([
+        "노트 (c6313b18d38283e7).md",
+        "노트.md",
+        "노트 (c6313b18).md",
+      ]);
     },
   );
 
