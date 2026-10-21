@@ -55,6 +55,7 @@ import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
 import { DEFAULT_CALLOUT_TYPE, calloutIconOf, calloutTypeOf } from "./callout-types.js";
 import { startsWithParagraph } from "./nfm-to-blocks.js";
 import { quotedCodeToChildren } from "./quote-code.js";
+import { unescapeSafeLiteralDollars } from "./literal-dollar.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -998,16 +999,21 @@ function separateAdjacentCallouts(content: string): string {
 const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;
 const NOTION_BLOCK_MATH_RE = /\$\$\n```\n([\s\S]*?)\n```\n\$\$/g;
 
+/**
+ * Notion 의 수식을 Obsidian 수식으로. markdown API 는 인라인 수식을 `` $`식`$ `` 로, 글의 `$` 는 `\$` 로 준다
+ * (실측 2026-10-21).
+ *
+ * 글의 `\$` 는 수식 짝이 생길 수 있는 줄에서만 그대로 둔다({@link unescapeSafeLiteralDollars}) — Obsidian 은 `\$` 를
+ * 글 `$` 로 그리고(1.13.7 실측), push 는 Notion 에 글로 보낸다. 예전에는 `\$…\$` 를 이스케이프된 수식으로 보고 `$…$` 로 풀어, Notion 의 글 `$a$` 가 볼트에서 수식이 되고 그
+ * 노트를 push 하면 Notion 에서도 수식이 됐다. 코드 블록 안의 `\$x\$` 도 바뀌었다(C13).
+ */
 function convertNotionMath(content: string): string {
-  let result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
+  const result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
     return `$$\n${eq.trim()}\n$$`;
   });
-  result = result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`);
-  result = result.replace(/\\\$([^$]+?)\\\$/g, (_match, inner: string) => {
-    const unescaped = inner.replace(/\\\^/g, "^").replace(/\\~/g, "~");
-    return `$${unescaped}$`;
-  });
-  return result;
+  return unescapeSafeLiteralDollars(
+    result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`),
+  );
 }
 
 function unescapeNotionChars(content: string): string {
