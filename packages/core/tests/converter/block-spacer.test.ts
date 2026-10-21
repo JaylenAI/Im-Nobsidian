@@ -4,7 +4,12 @@ import {
   respace,
   isCompactExport,
 } from "../../src/converter/post-processors/block-spacer.js";
-import { obsidianToNotionEnhanced } from "../../src/converter/enhanced-md-converter.js";
+import {
+  notionEnhancedToObsidian,
+  obsidianToNotionEnhanced,
+} from "../../src/converter/enhanced-md-converter.js";
+import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
+import { lintRenderedMarkdown } from "../../src/audit/render.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
 
 describe("respace — Notion 압축형 export 블록 간격 복원 (D1/D4)", () => {
@@ -364,5 +369,41 @@ describe("목록 안 얕은 글 — 앞 항목 문단에 이어 붙지 않게 (C
     expect(respace("- a\n\t- b\n\t\t- c\n\t\t\ttext\n- d\n")).toBe(
       "- a\n    - b\n        - c\n            text\n- d\n",
     );
+  });
+});
+
+describe("탭 블록 — pull 전체 경로와 push 왕복 (실볼트 사본 E2E)", () => {
+  const PUSH = { direction: "push", path: "markdown-api", filePath: "탭.md" } as const;
+  const PULL = { ...PUSH, direction: "pull" } as const;
+  // Notion 이 실제로 내보낸 모양 — `<tab>` 에 이름 속성이 없고 첫 줄이 탭 이름이다.
+  const NFM =
+    "머리 글\n<tabs>\n\t<tab>\n\t\t첫 탭\n\t\t- 항목\n\t</tab>\n\t<tab>\n\t\t둘째\n\t</tab>\n</tabs>\n끝 글";
+
+  // 실볼트 사본 E2E — 탭 안 줄마다 빈 줄이 끼고 탭이 칸으로 펴져 Obsidian 이 코드블록으로 그렸다(6노트).
+  it("탭 블록(<tabs>)은 여는 줄부터 닫는 줄까지 손대지 않는다", () => {
+    const tabs =
+      "<tabs>\n\t<tab>\n\t\t첫 탭\n\t\t- 항목\n\t</tab>\n\t<tab>\n\t\t둘째\n\t</tab>\n</tabs>";
+    expect(respace(`글\n${tabs}\n다음\n`)).toBe(`글\n\n${tabs}\n\n다음\n`);
+  });
+
+  it("탭 안의 탭도 바깥 닫는 줄까지 한 블록이다", () => {
+    const tabs =
+      "<tabs>\n\t<tab>\n\t\t<tabs>\n\t\t\t<tab>\n\t\t\t\t안\n\t\t\t</tab>\n\t\t</tabs>\n\t\t뒤\n\t</tab>\n</tabs>";
+    expect(respace(`${tabs}\n다음\n`)).toBe(`${tabs}\n\n다음\n`);
+  });
+
+  it("짝 없는 <tabs> 는 사용자가 적은 글이다", () => {
+    expect(respace("<tabs>\n글\n")).toBe("<tabs>\n\n글\n");
+  });
+
+  it("받은 노트에 들여쓴 코드블록이 없고, 그대로 push 하면 같은 탭 구조가 간다", () => {
+    const pipeline = createDefaultPipeline();
+    const pulled = pipeline.convertToMarkdown(notionEnhancedToObsidian(NFM), PULL, {
+      notionExportCompact: isCompactExport(NFM),
+    });
+
+    expect(lintRenderedMarkdown(pulled).map((f) => f.code)).toEqual([]);
+    const sent = obsidianToNotionEnhanced(pipeline.convertToNotion(pulled, PUSH).content);
+    expect(sent).toContain(NFM.split("\n").slice(1, -1).join("\n"));
   });
 });
