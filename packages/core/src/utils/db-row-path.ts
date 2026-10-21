@@ -1,4 +1,4 @@
-import { notionIdsEqual } from "./id.js";
+import { compactNotionId, notionIdsEqual } from "./id.js";
 
 /** {@link resolveDbRowPath} 가 경로 점유 여부를 조회하기 위한 최소 레코드 형태. */
 export interface PathOwner {
@@ -48,8 +48,7 @@ export function selectDbRowFiles<T extends VaultPathRef>(
  * 쓰는 이유는 **안정성**이다. 순번은 그때그때 볼트에 무엇이 있느냐로 결정되므로 두 페이지가
  * 실행마다 접미사를 맞바꿀 수 있고, 그러면 pull 마다 파일이 뒤바뀌어 churn 이 끝나지 않는다.
  * 페이지 ID 는 불변이라 순번처럼 접미사를 맞바꾸는 일이 없고, 한 번 배정된 경로는 레코드에 남아 다음
- * pull 도 그대로 쓴다. 단 같은 이름의 새 페이지끼리 누가 자연 이름 · 짧은 조각을 얻는지는 처리 차례(pull
- * 워커 풀)에 달렸다.
+ * pull 도 그대로 쓴다. 같은 이름의 새 페이지끼리는 {@link inClaimOrder} 의 차례로 고른다.
  *
  * 마지막 후보(전체 32 글자)는 전역 유일하므로 후보가 고갈되는 일은 없다 — 호출부는
  * "고갈 시 원본 덮어쓰기" 같은 폴백을 두지 않아도 된다.
@@ -103,4 +102,28 @@ export function resolveDbRowPath(
   // 전체 ID(32 글자) 후보는 전역 유일하므로 find 는 실질적으로 항상 성공한다.
   // 도달 불가 경로이나 방어적으로 마지막(가장 유일한) 후보를 돌려준다.
   return candidates.find(ownedBySelf) ?? candidates[candidates.length - 1]!;
+}
+
+/**
+ * 같은 이름의 새 페이지끼리 경로를 고르는 차례 — 페이지 ID 순(B10). 먼저 고른 쪽이 자연 이름 · 짧은 조각을
+ * 얻는다. 처리 차례(DB 조회 순서 · pull 워커 풀)로 정하면 같은 두 페이지가 실행마다 다른 경로를 얻었다 —
+ * 같은 Notion 을 받은 두 볼트의 파일 이름이 서로 달랐다.
+ *
+ * `items` 가운데 `chosen` 인 것만 그들이 놓인 자리 안에서 ID 순으로 바꿔 놓는다. 나머지 차례는 그대로다.
+ *
+ * @param idOf 항목의 페이지 ID (하이픈 유무 무관)
+ */
+export function inClaimOrder<T>(
+  items: readonly T[],
+  chosen: (item: T) => boolean,
+  idOf: (item: T) => string,
+): T[] {
+  const slots = items.flatMap((item, index) => (chosen(item) ? [index] : []));
+  const key = (item: T) => compactNotionId(idOf(item));
+  const members = slots
+    .map((index) => items[index]!)
+    .sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0));
+  const ordered = [...items];
+  slots.forEach((slot, k) => (ordered[slot] = members[k]!));
+  return ordered;
 }

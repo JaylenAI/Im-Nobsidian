@@ -1,5 +1,6 @@
 import {
   frontmatterLines,
+  isEmptyFrontmatterValue,
   plainFrontmatterValue,
   sameFrontmatterValue,
   splitFrontmatter,
@@ -15,7 +16,8 @@ import {
  *
  * - 키 차례는 로컬 노트를 따른다. 새로 생긴 키는 받은 차례에서 앞에 오는 키 바로 뒤에 넣는다.
  * - Notion 이 정하는 키(`owned`)는 값이 같으면 로컬 줄을 그대로 두고, 다르면 그 자리에서 받은 값으로
- *   바꾸고, 받은 속성에 없으면(값이 비었다) 지운다.
+ *   바꾸고, 받은 속성에 없으면(값이 비었다) 지운다. 로컬에도 빈 값(`메모:`)이면 그 줄을 둔다 — 빈 값과
+ *   없는 키는 같은 값이고, 사람이 적어 둔 빈 속성 칸이다(B4).
  * - 그 밖의 키는 로컬 줄을 그대로 둔다.
  *
  * 값은 엄격히 견준다 — 예전 버전이 적은 날짜 모양(`…+09:00`)은 같은 순간이어도 받은 모양으로 바뀐다.
@@ -42,7 +44,10 @@ export function mergeRowFrontmatter(
   }
   if (!local.hasFrontmatter) return null;
 
-  const isOwned = (key: string) => owned.has(key) || Object.hasOwn(pulled, key);
+  const emptyOnBothSides = (key: string) =>
+    !Object.hasOwn(pulled, key) && isEmptyFrontmatterValue(local.data[key]);
+  const isOwned = (key: string) =>
+    (owned.has(key) || Object.hasOwn(pulled, key)) && !emptyOnBothSides(key);
   const order = mergedKeyOrder(Object.keys(local.data), Object.keys(pulled), isOwned);
   const values: Record<string, unknown> = {};
   for (const key of order) {

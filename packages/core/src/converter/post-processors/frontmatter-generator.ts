@@ -53,6 +53,10 @@ function normalizeProperties(
 }
 
 function normalizeValue(value: unknown): unknown {
+  // 빈 속성은 적지 않는다 — 빈 목록과 같다. Notion 의 빈 글 · 선택 · 날짜 · 숫자는 null 로 오고, 적으면
+  // 행마다 `메모: null` 이 남는다(B4). push 는 빈 값과 없는 키를 같게 본다(`diffRowProperties`).
+  if (value === null) return undefined;
+
   if (value instanceof Date) {
     return normalizeDate(value.toISOString());
   }

@@ -870,7 +870,7 @@ export class SyncOrchestrator {
     // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패한 변경은 재시도 큐로 모은다.
     const retryQueue: RemoteChange[] = [];
     await runPool(
-      workItems,
+      this.puller.orderCreates(workItems),
       async (change) => {
         if (options?.signal?.aborted) return;
         try {
