@@ -63,6 +63,8 @@ vi.mock("@im-nobsidian/core", async () => ({
       assertNoPendingWal: core.assertNoPendingWal,
       pendingWalBytes: core.pendingWalBytes,
       stateDbWalPath: core.stateDbWalPath,
+      notionIdFromInput: core.notionIdFromInput,
+      isMarkdownPath: core.isMarkdownPath,
     }))),
   NotionClient: class {
     constructor() {}
@@ -128,6 +130,9 @@ import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 
+/** 루트 페이지 — 설정은 Notion 페이지 ID 여야 연결한다(D1). */
+const ROOT_PAGE_ID = "0123456789abcdef0123456789abcdef";
+
 /** Obsidian 키체인(SecretStorage) — 이름 → 비밀. 시험이 무엇을 넣었는지 본다. */
 function keychain(entries: Record<string, string> = {}) {
   const secrets = new Map(Object.entries(entries));
@@ -145,7 +150,7 @@ function keychain(entries: Record<string, string> = {}) {
  */
 function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
   const plugin = new ImNobsidianPlugin({} as never, {} as never);
-  plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: "root" };
+  plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: ROOT_PAGE_ID };
   const vaultPath = mkdtempSync(join(tmpdir(), "im-nobsidian-main-"));
   let reads = 0;
   const patches: unknown[] = [];
@@ -224,7 +229,7 @@ describe("ImNobsidianPlugin", () => {
 
   it("saveSettings 에러 없이 실행", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
-    plugin.settings.rootPageId = "root";
+    plugin.settings.rootPageId = ROOT_PAGE_ID;
     await expect(plugin.saveSettings()).resolves.not.toThrow();
     // 기본값은 플러그인마다 사본이다 — 고친 값이 다음 플러그인으로 새지 않는다
     expect(new ImNobsidianPlugin({} as never, {} as never).settings.rootPageId).toBe("");
@@ -598,11 +603,14 @@ describe("ImNobsidianPlugin", () => {
     await internals.executePush();
     plugin.settings = { ...plugin.settings, rootPageId: "root" };
     await internals.executePush();
+    plugin.settings = { ...plugin.settings, rootPageId: ROOT_PAGE_ID };
+    await internals.executePush();
 
     // 무엇이 비었는지 말한다 — 예전에는 「설정을 먼저 완료해주세요」 뿐이었다
     expect(Notice.shown).toEqual([
-      "Im-Nobsidian: 설정이 비어 있습니다 — Notion 토큰 · 루트 페이지 ID",
-      "Im-Nobsidian: 설정이 비어 있습니다 — 루트 페이지 ID",
+      "Im-Nobsidian: 설정을 채워 주세요 — Notion 토큰 · 루트 페이지 ID",
+      "Im-Nobsidian: 설정을 채워 주세요 — 루트 페이지 ID",
+      "Im-Nobsidian: 설정을 채워 주세요 — 루트 페이지 ID(주소나 ID 에서 페이지 ID 를 찾지 못함)",
       "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.",
     ]);
   });
@@ -646,7 +654,7 @@ describe("ImNobsidianPlugin", () => {
 
   it("초기화는 차례로 돈다 — 설정을 칠 때마다 불러도 앞 초기화가 끝난 뒤에 다음이 DB 를 닫고 연다", async () => {
     const plugin = new ImNobsidianPlugin({} as never, {} as never);
-    plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: "root" };
+    plugin.settings = { ...plugin.settings, tokenSecret: "notion", rootPageId: ROOT_PAGE_ID };
     // 볼트가 없어 초기화는 실패한다 — 차례만 본다. 실패 이유는 변경 패널에도 보내므로 작업 공간은 둔다.
     (plugin as unknown as { app: unknown }).app = {
       secretStorage: keychain({ notion: "ntn_test" }),
@@ -689,6 +697,49 @@ describe("ImNobsidianPlugin", () => {
       [undefined, { force: true, rerender: false }],
       [undefined, { force: false, rerender: false }],
     ]);
+  });
+
+  it("동기화가 쓴 노트의 볼트 이벤트는 동기화를 다시 부르지 않는다 — 사용자의 편집만 부른다 (D4)", () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const handlers = new Map<string, (file: { path: string }, oldPath?: string) => void>();
+    const scheduled: string[] = [];
+    const internals = plugin as unknown as {
+      app: unknown;
+      syncVault: { isOwnChange: (path: string) => boolean };
+      syncController: unknown;
+      registerVaultEvents: () => void;
+      scheduleVaultSync: () => void;
+      scheduleSidebarRefresh: () => void;
+    };
+    internals.app = {
+      vault: { on: (name: string, handler: never) => void handlers.set(name, handler) },
+    };
+    internals.syncVault = { isOwnChange: (path) => path.startsWith("받은/") };
+    internals.syncController = {
+      recordDelete: vi.fn(),
+      onVaultRename: vi.fn(() => true),
+    };
+    let current = "";
+    internals.scheduleVaultSync = () => void scheduled.push(current);
+    const refreshed = vi.fn();
+    internals.scheduleSidebarRefresh = refreshed;
+    internals.registerVaultEvents();
+
+    for (const [event, path, oldPath] of [
+      ["modify", "받은/감자.md"],
+      ["create", "받은/새.md"],
+      ["delete", "받은/지운.md"],
+      ["rename", "받은/옮긴.md", "옛/옮긴.md"],
+      ["modify", "내/고친.md"],
+      ["rename", "내/옮긴.md", "옛/내.md"],
+    ] as const) {
+      current = path;
+      handlers.get(event)!({ path }, oldPath);
+    }
+
+    expect(scheduled).toEqual(["내/고친.md", "내/옮긴.md"]);
+    // 목록은 늘 새로고친다 — 받은 노트도 변경 패널에서 빠져야 한다
+    expect(refreshed).toHaveBeenCalledTimes(6);
   });
 
   it("「전체 확인」 명령은 전체 대조 Pull 을, 「Pull」 명령은 보통 Pull 을 부른다", async () => {
@@ -816,7 +867,7 @@ describe("ImNobsidianPlugin", () => {
     }
 
     it("글자 그대로 적힌 토큰을 키체인으로 옮기고 설정 파일에서 지운다", async () => {
-      const { plugin, saved, secrets } = legacy({ token: "ntn_old", rootPageId: "root" });
+      const { plugin, saved, secrets } = legacy({ token: "ntn_old", rootPageId: ROOT_PAGE_ID });
 
       await plugin.loadSettings();
 
@@ -830,7 +881,7 @@ describe("ImNobsidianPlugin", () => {
 
     it("다른 볼트가 같은 이름에 다른 토큰을 두었으면 덮지 않고 번호를 붙인다", async () => {
       const { plugin, secrets } = legacy(
-        { token: "ntn_mine", rootPageId: "root" },
+        { token: "ntn_mine", rootPageId: ROOT_PAGE_ID },
         keychain({ "im-nobsidian-notion-token": "ntn_other", "im-nobsidian-notion-token-2": "x" }),
       );
 
@@ -843,7 +894,7 @@ describe("ImNobsidianPlugin", () => {
 
     it("이미 옮긴 토큰과 같으면 그 이름을 그대로 쓴다", async () => {
       const { plugin, secrets } = legacy(
-        { token: "ntn_mine", rootPageId: "root" },
+        { token: "ntn_mine", rootPageId: ROOT_PAGE_ID },
         keychain({ "im-nobsidian-notion-token": "ntn_mine" }),
       );
 
@@ -858,7 +909,7 @@ describe("ImNobsidianPlugin", () => {
       secrets.setSecret.mockImplementation(() => {
         throw new Error("Invalid secret ID");
       });
-      const { plugin, saved } = legacy({ token: "ntn_old", rootPageId: "root" }, secrets);
+      const { plugin, saved } = legacy({ token: "ntn_old", rootPageId: ROOT_PAGE_ID }, secrets);
 
       await plugin.loadSettings();
 

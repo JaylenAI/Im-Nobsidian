@@ -63,6 +63,26 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     expect(row("Notion 토큰").desc).toContain("이 기기에만");
   });
 
+  it("루트 페이지는 주소를 붙여 넣어도 그 안의 ID 로 적고, ID 를 못 찾으면 까닭을 보인다 (D1)", async () => {
+    const { row, control } = display();
+    const raw = "35a13b18d38280cf9057e37e6e473e41";
+    const id = "35a13b18-d382-80cf-9057-e37e6e473e41";
+
+    await control("루트 페이지 ID").change(` https://www.notion.so/myspace/회의-${raw}?pvs=4 `);
+    expect(plugin.settings.rootPageId).toBe(id);
+    expect(row("루트 페이지 ID").desc).toContain(`ID ${id} 로 씁니다`);
+    expect(row("루트 페이지 ID").descEl.classes.has("mod-warning")).toBe(false);
+
+    await control("루트 페이지 ID").change("https://www.notion.so/myspace/Notes");
+    expect(plugin.settings.rootPageId).toBe("https://www.notion.so/myspace/Notes");
+    expect(row("루트 페이지 ID").desc).toContain("찾지 못했습니다");
+    expect(row("루트 페이지 ID").descEl.classes.has("mod-warning")).toBe(true);
+
+    await control("루트 페이지 ID").change("");
+    expect(plugin.settings.rootPageId).toBe("");
+    expect(row("루트 페이지 ID").descEl.classes.has("mod-warning")).toBe(false);
+  });
+
   it("연결 설정은 칠 때마다 다시 연결하지 않고, 창을 닫을 때 한 번 다시 연결한다", async () => {
     const { control } = display();
     await control("루트 페이지 ID").change(" abc ");
@@ -124,7 +144,7 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     expect(row("자동 동기화").desc).toContain("2초 뒤");
     expect(row("자동 동기화").desc).toContain("동기화 방향을 따름");
     expect(row("자동 동기화").desc).not.toContain("push");
-    expect(row("동기화 방향").desc).toContain("Pull만이면 Push 가 아무것도 보내지 않습니다");
+    expect(row("동기화 방향").desc).toContain("Pull 단추가 꺼지고 명령은 까닭을 알립니다");
     expect(row("날짜시각 시간대").desc).toContain("이미 적힌 시각은 고치지 않고");
   });
 

@@ -750,6 +750,73 @@ describe("SyncController", () => {
   });
 
   describe("로컬 새로고침과 패널 단계", () => {
+    it("목록을 읽지 못하면 까닭을 패널에 보인다 — 다음에 읽으면 걷는다 (D3)", async () => {
+      mock.statusLocal.mockRejectedValueOnce(new Error("state db closed"));
+      const { hooks, onState, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.refreshStatus(false);
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "error",
+          errorMessage: "변경 목록을 읽지 못했습니다: state db closed",
+        }),
+      );
+
+      await controller.refreshStatus(false);
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "ready", errorMessage: null }),
+      );
+    });
+
+    it("작업의 실패 이유는 목록을 다시 읽어도 남는다 — 목록 읽기 실패만 걷는다 (D3)", async () => {
+      mock.push.mockRejectedValue(new Error("Notion 502"));
+      const { hooks, onState } = createHooks();
+      const controller = makeController(mock, hooks);
+
+      await controller.push();
+      await controller.refreshStatus(false);
+
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({ syncState: "error", errorMessage: "Notion 502" }),
+      );
+    });
+
+    it("방금 끝난 작업 뒤에 목록을 읽지 못하면 알리고, 작업이 정한 단계는 그대로다 (D3)", async () => {
+      mock.statusLocal.mockRejectedValue(new Error("vault read failed"));
+      const { hooks, onNotice, onStatusBar } = createHooks();
+
+      await makeController(mock, hooks).push();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 변경 목록을 읽지 못했습니다: vault read failed",
+        8000,
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("ready");
+    });
+
+    it.each([
+      ["both", { push: null, pull: null }],
+      ["push", { push: null, pull: expect.stringContaining("Pull 하지 않습니다") }],
+      ["pull", { push: expect.stringContaining("Push 하지 않습니다"), pull: null }],
+    ] as const)(
+      "동기화 방향(%s)이 막는 동작을 목록과 함께 싣는다 (D2)",
+      async (direction, blocked) => {
+        const { hooks, onState } = createHooks();
+        const controller = new SyncController(
+          mock as unknown as SyncOrchestrator,
+          hooks,
+          direction,
+        );
+
+        await controller.refreshStatus(false);
+
+        expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ blocked }));
+      },
+    );
+
     it("충돌로 표시된 노트를 싣는다 — 원격을 읽지 않아도 상태 DB 가 안다", async () => {
       mock.statusLocal.mockResolvedValue(localStatus(["배추.md"]));
       const { hooks, onState } = createHooks();
