@@ -14,10 +14,14 @@
  * 표 · 빈 블록(`<br>`) 앞은 각 변환(`table.ts` · `empty-block.ts`)이 띄운다. 제목 · 구분선 · 인용 ·
  * 코드처럼 문단을 끊는 줄은 앞 문단에 이어 붙지 않는다.
  *
- * 맨 바깥 목록의 중첩 항목 바로 뒤 글(같은 깊이)도 같은 이유로 앞 항목에 이어 보이지만 여기서
- * 띄우지 않는다 — 목록 안의 빈 줄은 목록 전체를 느슨한 목록(항목마다 문단 간격)으로 바꾼다.
+ * 맨 바깥 목록의 중첩 항목 바로 뒤 글(그 항목보다 얕은 자식)도 같은 이유로 앞 항목에 이어 보인다(C3).
+ * 목록은 BlockSpacer 가 빈 줄을 걷으므로 BlockSpacer 가 {@link continuesListParagraph} 로 가려 빈 줄을
+ * 남긴다. 빈 줄 말고는 Obsidian 이 이어 붙이기를 끊지 않는다 — 주석(`%%`) · HTML 주석 줄도 이어 붙는다
+ * (Obsidian 1.13.7 실측 2026-10-21). 대가로 그 목록은 느슨한 목록(항목마다 문단 간격)이 된다 — 글이 엉뚱한
+ * 항목 안에 보이는 것보다 낫다. push 는 그대로 보낸다 — Notion 은 빈 줄을 버린다.
  */
 import { classifyContainerLines, splitContainerPrefix } from "./container-indent.js";
+import { indentWidth } from "../utils/md-regions.js";
 
 /** 인용 접두 — 줄머리의 여백과 `>` 가 이어진 부분, 마지막 `>` 까지. */
 const QUOTE_PREFIX_RE = /^[\t >]*>/;
@@ -29,6 +33,33 @@ const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])(?:[\t ]|$)/;
 const NOT_LAZY_RE = /^(?:#{1,6}(?:[\t ]|$)|>|\[!|(?:[-*_][\t ]*){3,}$|\||<br\s*\/?>[\t ]*$|%%)/;
 /** 문단이 아닌 줄 — 뒤 줄이 이어 붙을 문단이 없다. */
 const NOT_PARAGRAPH_RE = /^(?:#{1,6}(?:[\t ]|$)|(?:[-*_][\t ]*){3,}$|\||<br\s*\/?>[\t ]*$|\$\$|%%)/;
+
+/** 글이 있는 목록 항목 — 표시 뒤에 문단이 열린다. */
+const LIST_PARAGRAPH_RE = /^(?:[-*+]|\d+[.)])[\t ]+\S/;
+/** 코드 펜스 줄 — 목록 자식 코드의 닫는 펜스 뒤에는 이어 붙을 문단이 없다. */
+const FENCE_LINE_RE = /^(?:`{3,}|~{3,})/;
+
+/**
+ * 목록 안에서 앞 줄의 문단에 이어 붙는 글 줄인가 — 더 깊은 항목(또는 그 항목의 자식 글) 바로 뒤에 그보다
+ * 얕게 들여쓴 글 줄(C3). Notion 에서는 얕은 쪽 항목의 자식 블록인데, Obsidian 은 앞 문단에 이어 깊은 항목
+ * 안에 그린다. 두 줄 모두 인용 밖이어야 한다.
+ */
+export function continuesListParagraph(previous: string, line: string): boolean {
+  const prev = splitQuoted(previous);
+  const current = splitQuoted(line);
+  if (prev.quote !== "" || current.quote !== "") return false;
+  if (current.body === "" || LIST_ITEM_RE.test(current.body) || NOT_LAZY_RE.test(current.body)) {
+    return false;
+  }
+  if (prev.body === "" || NOT_PARAGRAPH_RE.test(prev.body) || FENCE_LINE_RE.test(prev.body)) {
+    return false;
+  }
+  const width = indentWidth(current.indent);
+  if (LIST_ITEM_RE.test(prev.body)) {
+    return LIST_PARAGRAPH_RE.test(prev.body) && width <= indentWidth(prev.indent);
+  }
+  return width < indentWidth(prev.indent);
+}
 
 interface QuotedLine {
   /** 인용 접두 — 인용 밖이면 "". */

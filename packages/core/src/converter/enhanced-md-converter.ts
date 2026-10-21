@@ -53,16 +53,18 @@ import { DEGRADE_LINK_SOURCE, degradeLink, embedVaultLink } from "./degrade-link
 import type { BookmarkTarget } from "../types/convert.js";
 import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
 import { DEFAULT_CALLOUT_TYPE, calloutIconOf, calloutTypeOf } from "./callout-types.js";
+import { startsWithParagraph } from "./nfm-to-blocks.js";
+import { quotedCodeToChildren } from "./quote-code.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
 const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
 const NOTION_UNKNOWN_URL_RE = /<unknown url="([^"]*)"([^>]*)\/>/g;
 
-const NOTION_AUDIO_RE = /[\t ]*<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
-const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
-const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
-const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
+const NOTION_AUDIO_RE = /<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
+const NOTION_VIDEO_RE = /<video src="([^"]*)">([\s\S]*?)<\/video>/g;
+const NOTION_PDF_RE = /<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
+const NOTION_FILE_RE = /<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 /** 라벨 달린 Notion 페이지 링크. id 는 하이픈 유무 양쪽으로 온다(실측). */
 const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
@@ -162,6 +164,8 @@ function unescapeBrackets(content: string): string {
 export function obsidianToNotionEnhanced(obsidian: string): string {
   let result = obsidian;
 
+  // 일반 인용 안 코드를 인용의 자식으로 맨 먼저 꺼낸다 — 아래 변환이 모두 코드로 알아보게(S-23).
+  result = quotedCodeToChildren(result);
   // 빈 블록 · 표가 가장 먼저 — 콜아웃 안의 줄도 아직 `> ` 접두로 있어 볼트 모양 그대로 찾는다.
   // 바꾼 태그 줄은 아래 컨테이너 변환이 다른 본문 줄처럼 탭으로 들여쓴다.
   result = breaksToEmptyBlocks(result);
@@ -399,9 +403,15 @@ const QUOTED_LINE_RE = /^[\t ]*>/;
  * 컬럼 경계 마커면 열 구성이 무너지고, 중첩 컨테이너의 머리면 그 컨테이너가
  * `> [!note] > [!toggle]- 제목` 한 줄로 뭉개져 push 가 `<details>` 를 되살리지 못한다
  * (실측: `<details>` 5개·3노트 소실).
+ *
+ * 맨 문단이 아닌 첫 줄도 그렇다 — 글 없는 콜아웃의 첫 자식이다(C4). 이미지 · 목록 · 제목이 제목 줄로
+ * 올라가 Obsidian 에서 자식으로 보이지 않고, 코드 · 표는 몸통 줄만 한 단계 깊어져 push 때 내용이 바뀐다.
  */
-function isStructuralFirstLine(line: string): boolean {
-  return COLUMN_MARKER_LINE_RE.test(line) || QUOTED_LINE_RE.test(line);
+function isStructuralFirstLine(lines: readonly string[]): boolean {
+  const first = lines[0] ?? "";
+  return (
+    COLUMN_MARKER_LINE_RE.test(first) || QUOTED_LINE_RE.test(first) || !startsWithParagraph(lines)
+  );
 }
 
 function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
@@ -409,7 +419,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   const lines = dedentContainerBody(body)
     .split("\n")
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
-  const titleIndex = isStructuralFirstLine(lines[0] ?? "") ? -1 : 0;
+  const titleIndex = isStructuralFirstLine(lines) ? -1 : 0;
   const firstLine = titleIndex === 0 ? (lines[0] ?? "") : "";
 
   // NFM 정준형은 아이콘을 icon 속성으로 나른다 — 속성이 하나라도 있으면 정준형이므로
@@ -636,6 +646,11 @@ function restoreSyncedBlocks(content: string): string {
 }
 
 // 2A: 미디어 태그 → Obsidian 마크다운
+/**
+ * 미디어 태그를 볼트 링크로. 줄머리 들여쓰기는 그대로 둔다 — 목록 · 문단 · 콜아웃 안 자식의 깊이다(N7).
+ * 예전에는 들여쓰기를 먹어 목록 자식 미디어가 목록 밖으로 나왔고, 콜아웃 안에서는 `>` 뒤에 붙어 push 때
+ * 콜아웃 밖으로 빠졌다.
+ */
 function convertMediaTags(content: string): string {
   let result = content;
 

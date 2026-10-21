@@ -3,6 +3,7 @@ import {
   collapseBlankLines,
   computeAnchor,
   indentWidth,
+  indentedCodeLineMask,
   inlineCodeRanges,
   mapOutsideCode,
   mapOutsideCodeFences,
@@ -275,5 +276,27 @@ describe("mapOutsideCode — offset", () => {
     });
     for (const [seg, offset] of seen) expect(content.slice(offset, offset + seg.length)).toBe(seg);
     expect(seen.map(([seg]) => seg).join("|")).toBe("앞 | 링크|뒤 링크");
+  });
+});
+
+describe("indentedCodeLineMask — Obsidian 이 들여쓴 코드로 그리는 줄", () => {
+  const coded = (text: string) => text.split("\n").filter((_, i) => indentedCodeLineMask(text)[i]);
+
+  it("빈 줄 뒤 네 칸 · 탭 줄과 이어지는 들여쓴 줄 · 빈 줄 뒤에도 이어진다", () => {
+    expect(coded("문단\n\n    a\n    b\n\n    c\n다음")).toEqual(["    a", "    b", "    c"]);
+    expect(coded("> 인용\n\n\t- 항목")).toEqual(["\t- 항목"]);
+    expect(coded("    맨 앞")).toEqual(["    맨 앞"]);
+  });
+
+  it("목록 안 · 문단에 이어진 줄 · 세 칸 · 펜스 안 · frontmatter 는 아니다", () => {
+    expect(coded("- a\n\n    자식\n    - b\n\n        깊은 자식")).toEqual([]);
+    expect(coded("문단\n    이어진 줄")).toEqual([]);
+    expect(coded("문단\n\n   세 칸")).toEqual([]);
+    expect(coded("```\n\n    코드\n```")).toEqual([]);
+    expect(coded("---\na:\n\n    - b\n---\n문단")).toEqual([]);
+  });
+
+  it("목록이 맨 바깥 글에서 끝나면 다시 코드다", () => {
+    expect(coded("- a\n\n문단\n\n    코드")).toEqual(["    코드"]);
   });
 });

@@ -53,6 +53,15 @@ export function nfmToBlocks(nfm: string, options: NfmToBlocksOptions = {}): NfmB
   return prune(new NfmBlockParser(lines, options).parse(0, lines.length).map((p) => p.block));
 }
 
+/**
+ * NFM 의 첫 블록이 맨 문단인가 — `<callout>` 몸통이면 그 줄이 콜아웃의 글이 되는 조건이다(Notion 의
+ * 가져오기, 실측). Notion 은 글 없는 콜아웃의 첫 자식(이미지 · 목록 · 제목 · 코드 …)을 같은 자리에 내보내므로
+ * pull 도 이 규칙으로 콜아웃의 글과 자식을 가른다.
+ */
+export function startsWithParagraph(lines: readonly string[]): boolean {
+  return new NfmBlockParser(lines, {}).parse(0, lines.length)[0]?.plain === true;
+}
+
 // ─── 줄 ───
 
 const BLANK_RE = /^[ \t]*$/;

@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND } from "../../constants/markers.js";
 import { CLAMPED_INDENT } from "../callout-indent.js";
+import { continuesListParagraph } from "../lazy-continuation.js";
 import {
   closesCodeFence,
   type CodeFenceOpening,
@@ -73,8 +74,11 @@ const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;
 const BRAND_MARKER_LINE_RE = new RegExp(`^[ \\t]*%%\\s*${MARKER_BRAND}:`);
 
-/** 리스트 항목 아래 들여쓴 연속 내용(자식 문단 등)인지 — 리스트 블록에 묶는다. */
-const INDENTED_CONTINUATION_RE = /^(?:\t| {2,})\S/;
+/**
+ * 리스트 항목 아래 들여쓴 연속 내용(자식 문단 등)인지 — 리스트 블록에 묶는다. 두 단계 이상 깊은 자식은
+ * 탭이 여럿이다 — 탭 하나만 받으면 그 줄이 목록에서 떨어져 앞뒤에 빈 줄이 들어가고 탭이 남았다(N9).
+ */
+const INDENTED_CONTINUATION_RE = /^(?:\t+| {2,})\S/;
 
 /** 들여쓴 줄 — 리스트 자식 코드블록의 펜스는 깊이에 따라 탭이 여럿이다. */
 const INDENTED_RE = /^(?:\t| {2})/;
@@ -221,6 +225,9 @@ function spaceBlocks(lines: readonly string[]): string {
       // 왕복에서 `<details>` 8→7 소실). 블록에서 떼어 내지는 않고(뒤따르는 4칸 자식의
       // 코드블록 오파싱 방지) 빈 줄만 되살려 두 경계 요구를 동시에 만족시킨다.
       if (QUOTE_RE.test(line) && (atBoundary || CALLOUT_START_RE.test(line))) {
+        appendToLast("");
+      } else if (continuesListParagraph(last()!.lines[last()!.lines.length - 1]!, line)) {
+        // 더 깊은 항목 뒤의 얕은 글 — 빈 줄로 끊지 않으면 Obsidian 이 앞 항목 문단에 이어 그린다(C3).
         appendToLast("");
       }
       appendToLast(line);
