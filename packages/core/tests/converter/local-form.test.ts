@@ -535,3 +535,30 @@ describe("pull — Obsidian 이 Notion 과 다르게 읽는 로컬 표기는 남
     expect(pull("- a\n\t- b\n\ttext\n- c", local)).toBe(local);
   });
 });
+
+describe("pull — Obsidian 에서 깨져 보이는 로컬 표기는 남기지 않는다 (2026-10-21 실볼트 사본)", () => {
+  // 옛 pull 이 남긴 글은 push 가 받은 글과 같은 꼴로 보낸다 — 그래서 고친 변환기로 다시 그려도(`--rerender`)
+  // 로컬 글이 남았다. 실볼트 사본의 임베드 5노트 · 탭 6노트.
+  it("캡션 있는 임베드를 원시 태그로 받아 둔 노트 — 받은 링크로, 다른 로컬 표기는 그대로", () => {
+    const exported = '> [!tip] 팁\n<embed src="https://example.com/v">발표 영상</embed>';
+    const local = '> [!tip]- 팁\n\n<embed src="https://example.com/v">발표 영상</embed>\n';
+    expect(sent(local)).toBe(sent(pull(exported)));
+    const restored = pull(exported, local);
+    expect(restored).not.toContain("<embed");
+    expect(restored).toContain("🔗 발표 영상");
+    expect(restored).toContain("> [!tip]- 팁");
+  });
+
+  it("탭 안에 빈 줄을 둔 노트 — 그 뒤 줄이 코드 상자로 보이지 않게 받은 글로", () => {
+    const exported = "<tabs>\n\t<tab>\n\t\t첫 탭\n\t\t- 항목\n\t</tab>\n</tabs>";
+    const local = "<tabs>\n\t<tab>\n\t\t첫 탭\n\t\t- 항목\n\n\t</tab>\n</tabs>\n";
+    expect(sent(local)).toBe(sent(pull(exported)));
+    const restored = pull(exported, local);
+    expect(restored).not.toContain("- 항목\n\n");
+  });
+
+  it("<details> 는 사용자가 적는 HTML — 깨짐으로 보지 않고 로컬 표기로 둔다", () => {
+    const local = "<details>\n<summary>요약</summary>\n\n세부 내용\n\n</details>\n";
+    expect(pull("<details>\n<summary>요약</summary>\n\t세부 내용\n</details>", local)).toBe(local);
+  });
+});
