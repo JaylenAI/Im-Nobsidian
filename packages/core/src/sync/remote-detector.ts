@@ -318,13 +318,16 @@ export class RemoteDetector {
           databaseIds.add(compactNotionId(page.parentDatabaseId));
           continue;
         }
+        // 루트는 받을 페이지가 아니라 동기화의 바탕이다 — 그 아래 페이지를 만들 때마다 수정 시각이 바뀌어
+        // 조회 창에 자주 든다. 예전에는 그때마다 루트를 한 번 더 읽고 부모를 물었다.
+        if (notionIdsEqual(page.id, this.config.notion.rootPageId)) continue;
         throwIfAborted(options.signal);
         try {
-          const fullPage = await this.notionClient.getPage(page.id);
-          const parentId = await extractParentId(this.notionClient, fullPage);
+          // search 가 준 부모를 쓴다 — 부모가 블록(콜아웃 · 컬럼)일 때만 그 블록을 거슬러 읽는다.
+          const parentId = await extractParentId(this.notionClient, page);
           if (parentId) {
             this._childParentIds.add(normalizeNotionId(parentId));
-            untracked.push({ page, parentId, title: this.notionClient.extractTitle(fullPage) });
+            untracked.push({ page, parentId, title: page.title });
           }
         } catch {
           // inaccessible page

@@ -121,6 +121,13 @@ export interface RecentPage {
    * 부모를 `data_source_id` 로 주면서 DB id 를 함께 싣는다(실측 2026-09-28).
    */
   readonly parentDatabaseId: string | null;
+  /**
+   * 부모와 제목 — search 는 페이지 객체를 통째로 준다(실측 2026-10-21: 부모 · 제목 속성 포함). 새 페이지가 받을
+   * 것인지 가르는 데 쓴다. 예전에는 추적하지 않는 페이지마다 다시 읽어 이 둘을 얻었다 — 워크스페이스에서 최근
+   * 고친 페이지가 많을수록 pull 마다 요청이 그만큼 늘었다(B8).
+   */
+  readonly parent: PageObjectResponse["parent"];
+  readonly title: string;
 }
 
 /**
@@ -1157,6 +1164,8 @@ export class NotionClient {
           last_edited_time: p.last_edited_time,
           last_edited_by: p.last_edited_by ? { id: p.last_edited_by.id } : null,
           parentDatabaseId: parentDatabaseIdOf(p),
+          parent: p.parent,
+          title: this.extractTitle(p),
         });
       }
 

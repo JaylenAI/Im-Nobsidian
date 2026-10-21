@@ -3,7 +3,9 @@ import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { RemoteChange, SyncRecord } from "../types/sync.js";
+import { throwIfAborted } from "../utils/abort.js";
 import { snapshotFrontmatter } from "../utils/frontmatter.js";
+import type { AbortLike } from "../utils/pool.js";
 import type { DatabaseSyncer } from "./database-syncer.js";
 import { titleUnchangedSince } from "./note-title.js";
 import { rowDatabaseOf } from "./parent-mode.js";
@@ -140,11 +142,16 @@ export class RemoteDriftChecker {
    * dry-run 이 쓴다. pull 은 받아서 견주므로 쓰지 않는다. push 가 덮어쓰기 전에 보는 것과 같게
    * 견준다({@link remoteDrift}).
    *
-   * 원격을 읽지 못했으면 그대로 둔다 — 읽지 못한 것을 바뀌지 않았다고 하지 않는다.
+   * 원격을 읽지 못했으면 그대로 둔다 — 읽지 못한 것을 바뀌지 않았다고 하지 않는다. 취소하면
+   * {@link OperationAbortedError} 를 던진다 — 변경마다 요청 1회다.
    */
-  async withoutUnchangedRemotes(changes: RemoteChange[]): Promise<RemoteChange[]> {
+  async withoutUnchangedRemotes(
+    changes: RemoteChange[],
+    signal?: AbortLike,
+  ): Promise<RemoteChange[]> {
     const kept: RemoteChange[] = [];
     for (const change of changes) {
+      throwIfAborted(signal);
       const record = change.unverified ? this.stateDb.getByNotionId(change.pageId) : null;
       if (!record) {
         kept.push(change);
