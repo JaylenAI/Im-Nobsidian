@@ -3,6 +3,7 @@ import { alignLines } from "../utils/line-diff.js";
 import { alignNoteLines } from "./comments.js";
 import { continuesListParagraph } from "./lazy-continuation.js";
 import { bookmarkLinks } from "./bookmark.js";
+import { CONTAINER_TAG_RULE, lintRenderedMarkdown } from "../audit/render.js";
 
 /**
  * 받은 글에서 Notion 에 같은 모양으로 올라가는 자리를 로컬 노트의 표기로 되돌린다(F-06 · S-30).
@@ -22,6 +23,7 @@ import { bookmarkLinks } from "./bookmark.js";
  * 다르면 받은 글을 쓴다({@link misreadLines}).
  * 빈 줄은 Notion 이 버려 보낼 꼴이 같은데, Obsidian 에서는 그 빈 줄이 블록을 가른다. 옛 pull 이 그렇게 써 둔
  * 노트가 받을 때마다 로컬 글로 남아 계속 다르게 보였다.
+ * Obsidian 에서 깨져 보이는 줄({@link brokenLines})이 다를 때도 받은 글을 쓴다.
  *
  * @param sent 노트를 push 가 보낼 꼴로 — 같은 꼴이면 Notion 에서 같다.
  */
@@ -30,7 +32,8 @@ export function restoreLocalForm(
   local: string,
   sentForm: (note: string) => string,
 ): string {
-  const sent = (note: string) => `${sentForm(note)}\n${misreadLines(note)}\n${bookmarkLinks(note)}`;
+  const sent = (note: string) =>
+    `${sentForm(note)}\n${misreadLines(note)}\n${bookmarkLinks(note)}\n${brokenLines(note)}`;
   // 받은 글은 LF 다 — CRLF 노트도 받으면 LF 로 쓰인다.
   const note = pulled.includes("\r") ? local : local.replace(/\r\n/g, "\n");
   if (note === pulled) return pulled;
@@ -70,6 +73,20 @@ function misreadLines(note: string): string {
     !fence[i - 1] &&
     continuesListParagraph(lines[i - 1]!, lines[i]!);
   return lines.filter((_, i) => code[i] || joins(i)).join("\n");
+}
+
+/**
+ * Obsidian 에서 깨져 보이는 줄들 — 렌더 감사({@link lintRenderedMarkdown})가 짚은 줄. 옛 pull 이 남긴 원시
+ * `<embed>…</embed>` · 탭 블록 안 빈 줄 뒤의 코드 상자는 push 가 받은 글과 같은 꼴로 보낸다. 그래서 고친 변환기로
+ * 다시 그려도(`pull --rerender`) 로컬 글이 남았다(2026-10-21 실볼트 사본 · 임베드 5노트 · 탭 6노트).
+ * 컨테이너 태그(③)는 사용자가 적는 HTML(`<details>`)이라 되살릴 로컬 표기로 둔다.
+ */
+function brokenLines(note: string): string {
+  const lines = note.split("\n");
+  return lintRenderedMarkdown(note)
+    .filter((finding) => finding.code !== CONTAINER_TAG_RULE)
+    .map((finding) => `${finding.code}${lines[finding.line - 1]}`)
+    .join("\n");
 }
 
 /** 노트 하나에서 보낼 꼴을 만들어 보는 횟수 상한 — 한 번마다 노트 전체를 push 의 눈으로 본다. */
