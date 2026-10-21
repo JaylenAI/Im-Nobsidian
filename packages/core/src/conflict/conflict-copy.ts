@@ -1,3 +1,5 @@
+import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
+
 /**
  * 「복제」 해소가 남기는 원격 사본(`이름.conflict.md`)의 이름.
  *
@@ -9,11 +11,11 @@ const CONFLICT_COPY_SUFFIX = ".conflict";
 
 /** `노트.md` 의 사본 경로 — `노트.conflict.md`. */
 export function conflictCopyPath(path: string): string {
-  const ext = path.endsWith(".md") ? ".md" : "";
-  return `${path.slice(0, path.length - ext.length)}${CONFLICT_COPY_SUFFIX}${ext}`;
+  const name = stripMarkdownExtension(path);
+  return `${name}${CONFLICT_COPY_SUFFIX}${path.slice(name.length)}`;
 }
 
 /** 「복제」 해소가 남긴 사본의 이름인가. */
 export function isConflictCopyPath(path: string): boolean {
-  return path.endsWith(`${CONFLICT_COPY_SUFFIX}.md`);
+  return isMarkdownPath(path) && stripMarkdownExtension(path).endsWith(CONFLICT_COPY_SUFFIX);
 }
