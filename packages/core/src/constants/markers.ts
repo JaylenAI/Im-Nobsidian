@@ -138,10 +138,12 @@ export function tocMarker(color?: string): string {
  * `<embed src="…"></embed>` 는 NFM 전용 태그다. 그대로 두면 볼트에 원시 태그가
  * 노출되고(실측 27개·2노트), 마커 없이 링크만 남기면 push 에서 평범한 링크 문단으로
  * 박제되어 임베드 위젯이 사라진다. {@link MARKER_PAYLOAD_CHAR} 로 읽을 수 있도록
- * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다.
+ * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다. 캡션이 있으면 `&caption=` 로 함께 싣는다 — 빼면
+ * push 가 캡션 없는 임베드로 되돌려 Notion 의 캡션이 지워진다.
  */
-export function embedMarker(src: string): string {
-  return compactMarker(`embed:src=${encodeURIComponent(src)}`);
+export function embedMarker(src: string, caption = ""): string {
+  const tail = caption === "" ? "" : `&caption=${encodeURIComponent(caption)}`;
+  return compactMarker(`embed:src=${encodeURIComponent(src)}${tail}`);
 }
 
 /**

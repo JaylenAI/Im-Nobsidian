@@ -77,6 +77,30 @@ describe("NFM 전용 블록 보존", () => {
       const raw = `\t<embed src="https://ex.com/x"></embed>`;
       expect(roundTrip(raw)).toContain(`\t<embed src="https://ex.com/x"></embed>`);
     });
+
+    // 실볼트 사본 E2E — 캡션 있는 임베드 5노트가 원시 태그로 남았다. 캡션은 태그 안에 온다.
+    it("캡션 있는 임베드도 원시 태그를 남기지 않고 캡션을 이름으로 보인다", () => {
+      const raw = `<embed src="https://ex.com/v">**굵은** 설명</embed>`;
+      const pulled = notionEnhancedToObsidian(raw).trim();
+
+      expect(pulled).not.toContain("<embed");
+      expect(pulled).toBe(
+        `[🔗 **굵은** 설명](https://ex.com/v)${embedMarker("https://ex.com/v", "**굵은** 설명")}`,
+      );
+    });
+
+    it("캡션까지 왕복한다 — 빼면 push 가 Notion 의 캡션을 지운다", () => {
+      const raw = `<embed src="https://ex.com/v">**굵은** 설명</embed>`;
+      expect(roundTrip(raw).trim()).toBe(raw);
+    });
+
+    it("캡션의 대괄호 · 태그가 링크 이름 끝을 앞당기지 않는다", () => {
+      const raw = `<embed src="https://ex.com/v">a [b] <span color="red">c</span></embed>`;
+      const pulled = notionEnhancedToObsidian(raw).trim();
+
+      expect(pulled.startsWith("[🔗 a b c](https://ex.com/v)")).toBe(true);
+      expect(roundTrip(raw).trim()).toBe(raw);
+    });
   });
 
   describe("인라인 멘션(unknown_mention)", () => {
