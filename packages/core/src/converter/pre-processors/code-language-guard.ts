@@ -6,7 +6,12 @@ import type {
   ProcessorInput,
   ProcessorOutput,
 } from "../../types/convert.js";
-import { codeLineLead, fenceCodeText, hasBacktickFenceLine } from "../code-fence.js";
+import {
+  codeLineLead,
+  fenceCodeText,
+  hasBacktickFenceLine,
+  hasCommonCodeIndent,
+} from "../code-fence.js";
 import { notionCodeLanguage } from "../code-language.js";
 import { scanCodeFences } from "../../utils/md-regions.js";
 
@@ -20,7 +25,8 @@ import { scanCodeFences } from "../../utils/md-regions.js";
  * 코드에 ``` 로 시작하는 줄이 있으면 Notion 이 어떤 펜스로 보내도 그 줄에서 블록을 가른다 — 백슬래시로
  * 막아도 백슬래시째 저장한다(S-22, 2026-10-04 실측). 그런 코드는 자리표시 한 줄로 보내고 코드는
  * `deferredCode` 로 넘긴다 — 본문을 쓴 뒤 그 자리표시를 가진 코드 블록의 글을 블록 API 로 바꾼다
- * (`sync/deferred-code.ts`). 코드 블록 하나에 담을 수 없을 만큼 긴 코드는 예전처럼 보낸다 — Notion 이
+ * (`sync/deferred-code.ts`). 모든 줄이 들여쓰인 코드도 그렇게 보낸다 — Notion 이 공통 들여쓰기를 뗀다
+ * ({@link hasCommonCodeIndent}). 코드 블록 하나에 담을 수 없을 만큼 긴 코드는 예전처럼 보낸다 — Notion 이
  * 가르더라도 글은 남는다.
  *
  * 원래 표기는 기록하지 않는다 — pull 이 로컬 노트의 펜스에서 되살린다(`CodeLanguageRestorer`).
@@ -42,8 +48,8 @@ export class CodeLanguageGuard implements Processor {
 
     const earlier = input.metadata.deferredCode ?? [];
     const deferred = fences
-      .filter(hasBacktickFenceLine)
       .map((fence) => ({ fence, code: fenceCodeText(fence) }))
+      .filter(({ fence, code }) => hasBacktickFenceLine(fence) || hasCommonCodeIndent(code))
       .filter(({ code }) => richTextChunks(code) !== null);
     const deferredCode: DeferredCode[] = deferred.map(({ code }, i) => ({
       token: deferredCodeMarker(earlier.length + i),
