@@ -276,3 +276,21 @@ describe("자리표시자 마커에 Notion 이 건 자동 링크", () => {
     expect(pull(own)).toContain("[a.pdf](http://example.com)");
   });
 });
+
+/**
+ * 2026-10-22 실데이터 E2E — 마커는 `%% … %%` 글이라 Notion 이 마크다운으로 읽는다. 경로의
+ * `__폴더__` 가 굵은 `폴더` 로 바뀌어 돌아와 임베드가 깨졌다. 밑줄을 퍼센트 인코딩해 보낸다.
+ */
+describe("자리표시자 마커 경로의 밑줄", () => {
+  it("`_` 를 퍼센트 인코딩해 보내고 받을 때 되돌린다", () => {
+    const sent = push("![[__a__/__b__/doc.pdf]]");
+    expect(sent).not.toContain("_");
+    expect(pull(sent)).toBe("![[__a__/__b__/doc.pdf]]");
+  });
+
+  it("밑줄이 그대로 든 옛 마커도 받는다", () => {
+    expect(pull("> 📎 doc.pdf %% im-nobsidian:local-file:a_b%2Fdoc.pdf %%")).toBe(
+      "![[a_b/doc.pdf]]",
+    );
+  });
+});
