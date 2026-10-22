@@ -274,9 +274,16 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
   };
 
   // Notion 은 markdown 으로 만들 때 맨 앞 `# H1` 을 버린다(N-04, 실측). 본문 교체는 남긴다.
+  // 동기화 블록 참조가 든 markdown 으로는 만들지 못한다 — 본문 교체는 받는다(2026-10-22 실측).
   client.createPageWithMarkdown.mockImplementation(
-    async (params: { parentId: string; title: string; markdown: string }) =>
-      create({ ...params, markdown: params.markdown.replace(/^\n*# [^\n]*\n?/, "") }),
+    async (params: { parentId: string; title: string; markdown: string }) => {
+      if (params.markdown.includes("<synced_block_reference")) {
+        throw new Error(
+          "Failed to parse markdown content: Block not found in record map: {blockId}",
+        );
+      }
+      return create({ ...params, markdown: params.markdown.replace(/^\n*# [^\n]*\n?/, "") });
+    },
   );
   client.createPage.mockImplementation(create);
   // 되살릴지는 제품이 정한다 — 전송(replacePageMarkdown)만 이 메모리로 흉내 낸다.
