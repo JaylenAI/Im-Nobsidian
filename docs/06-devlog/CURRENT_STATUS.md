@@ -124,6 +124,7 @@
 | 4 뒤 | `fix/rerender-local-form`                    | 다시 그려도 옛 pull 이 남긴 원시 임베드 · 탭 안 빈 줄이 로컬 표기로 남던 것 수정                                                                                                                                                   | 완료 `becab81` |
 | 4 뒤 | `fix/db-query-nested-data-source`            | 실데이터 E2E — DB 행 조회에 섞인 하위 DB 를 행으로 받아 pull 마다 실패 2                                                                                                                                                           | 완료           |
 | 4 뒤 | `fix/push-create-synced-ref`                 | 실데이터 E2E — 동기화 블록 참조가 든 노트를 새로 올리지 못해 폴더째 실패                                                                                                                                                           | 완료           |
+| 4 뒤 | `fix/child-tag-title-underscore`             | 실데이터 E2E — 폴더 노트를 올리면 `__이름__` 하위 페이지 제목이 굵게 바뀜                                                                                                                                                          | 완료           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
