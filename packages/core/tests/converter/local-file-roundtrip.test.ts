@@ -288,6 +288,12 @@ describe("자리표시자 마커 경로의 밑줄", () => {
     expect(pull(sent)).toBe("![[__a__/__b__/doc.pdf]]");
   });
 
+  it("별칭의 `*` · `~` 도 퍼센트 인코딩해 강조로 읽히지 않게 한다", () => {
+    const sent = push("![[~~d~~/doc.pdf|*w* x]]");
+    expect(sent).not.toMatch(/local-file:[^%\n]*[*~]/);
+    expect(pull(sent)).toBe("![[~~d~~/doc.pdf|*w* x]]");
+  });
+
   it("밑줄이 그대로 든 옛 마커도 받는다", () => {
     expect(pull("> 📎 doc.pdf %% im-nobsidian:local-file:a_b%2Fdoc.pdf %%")).toBe(
       "![[a_b/doc.pdf]]",
