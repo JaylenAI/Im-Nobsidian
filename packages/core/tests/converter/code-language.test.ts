@@ -324,6 +324,25 @@ describe("CodeLanguageGuard (push) — Notion 이 그대로 받는 펜스로", (
     ]);
   });
 
+  // Notion 은 모든 줄이 같은 들여쓰기로 시작하는 코드에서 그 들여쓰기를 떼고 저장한다 — 빈 줄이 섞여도,
+  // 탭이어도(2026-10-22 실데이터 E2E 실측). 블록 API 로 채운 글은 그대로 남는다.
+  it("모든 줄이 들여쓰인 코드는 자리표시를 보내고 코드는 따로 넘긴다", () => {
+    const out = pushed("```py\n    a = 1\n\n    b = 2\n```\n\n```\n\tx\n```");
+    expect(out.content).toBe(
+      `\`\`\`python\n${deferredCodeMarker(0)}\n\`\`\`\n\n\`\`\`plain text\n${deferredCodeMarker(1)}\n\`\`\``,
+    );
+    expect(out.metadata.deferredCode).toEqual([
+      { token: deferredCodeMarker(0), code: "    a = 1\n\n    b = 2" },
+      { token: deferredCodeMarker(1), code: "\tx" },
+    ]);
+  });
+
+  it("첫 줄이 들여쓰이지 않은 코드와 목록 깊이만큼만 들여쓴 코드는 그대로 보낸다", () => {
+    const out = pushed("```py\ndef f():\n    x\n```\n\n- ```ts\n  y\n  ```");
+    expect(out.content).toBe("```python\ndef f():\n    x\n```\n\n- ```typescript\n  y\n  ```");
+    expect(out.metadata.deferredCode).toBeUndefined();
+  });
+
   it("코드에 ``` 줄이 없으면 따로 넘기지 않는다", () => {
     const out = pushed(fence("ts", "~~~"));
     expect(out.content).toBe(fence("typescript", "~~~"));
