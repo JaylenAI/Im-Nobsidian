@@ -122,6 +122,7 @@
 | 4 뒤 | `fix/final-audit`                            | 끝 점검 — 복제 사본 덮어쓰기 · 맨 위 노트 위키링크 · 읽지 못함을 없음으로 · 재시도 0 · 토글 상한 · CLI 인자 · 흩어진 기본값                                                                                                        | 완료 `185f7a5` |
 | 4 뒤 | `fix/e2e-embed-tabs`                         | 실볼트 사본 E2E 가 찾은 캡션 임베드 원시 태그 · 탭 블록 코드블록 수정                                                                                                                                                              | 완료 `85e9881` |
 | 4 뒤 | `fix/rerender-local-form`                    | 다시 그려도 옛 pull 이 남긴 원시 임베드 · 탭 안 빈 줄이 로컬 표기로 남던 것 수정                                                                                                                                                   | 완료 `becab81` |
+| 4 뒤 | `fix/db-query-nested-data-source`            | 실데이터 E2E — DB 행 조회에 섞인 하위 DB 를 행으로 받아 pull 마다 실패 2                                                                                                                                                           | 완료           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
