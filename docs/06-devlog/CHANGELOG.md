@@ -7,6 +7,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **동기화 블록 참조가 든 노트를 새로 올리지 못하던 것** — Notion 은 `<synced_block_reference>` 가 든 markdown 으로 페이지를 만들지 못한다(`Block not found in record map`). 폴더 노트가 실패하면 그 아래 노트도 모두 건너뛰어, 볼트 사본을 새 루트로 올린 실데이터 E2E 에서 13 노트가 1,146 실패로 번졌다. 빈 페이지로 만든 뒤 본문 교체로 채운다 — 교체는 참조를 받고 남긴다(실측).
 - **pull 마다 실패 2건이 남던 것** — DB 안에 둔 DB(인라인)는 행 조회 결과에 `data_source` 로 섞여 온다. 행으로 받으려다 `object_not_found` 로 실패했다. 행이 아니므로 뺀다(2026-10-22 실데이터 E2E — 두 하위 DB 모두 행 0, 빠진 내용 없음).
 
 ## [0.4.0] - 2026-10-21
