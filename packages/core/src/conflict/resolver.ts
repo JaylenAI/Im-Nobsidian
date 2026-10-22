@@ -1,18 +1,72 @@
 import type { Conflict, ConflictStrategy } from "../types/sync.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { VaultFS } from "../sync/vault-fs.js";
+import { removeTrackedNote } from "../sync/remote-deletion.js";
+import { freeConflictCopyPath } from "./conflict-copy.js";
 import { threeWayMerge } from "./merger.js";
 import { computeHash } from "../utils/hash.js";
+import { formatUnifiedDiff, lineDiff } from "../utils/line-diff.js";
 
 export type ResolutionChoice = "local" | "remote" | "merge" | "duplicate";
+
+/**
+ * Notion 에서 지운 노트의 충돌인가 — 올리지 않은 로컬 편집이 남은 채 원격이 휴지통 · 보관 · 없음이다.
+ * 풀 수 있는 것은 «로컬 유지»(Notion 에 새 페이지로 다시 만든다)와 «원격 유지»(볼트에서도 지운다)
+ * 뿐이다 — 병합하거나 사본으로 남길 원격 본문이 없다.
+ */
+export function isRemoteDeletion(conflict: Conflict): boolean {
+  return conflict.remoteChange.type === "deleted";
+}
+
+const ALL_CHOICES: readonly ResolutionChoice[] = ["local", "remote", "merge", "duplicate"];
+const REMOTE_DELETION_CHOICES: readonly ResolutionChoice[] = ["local", "remote"];
+
+/** 이 충돌을 풀 수 있는 선택지 — 앱은 이것만 보여 준다. */
+export function applicableChoices(conflict: Conflict): readonly ResolutionChoice[] {
+  return isRemoteDeletion(conflict) ? REMOTE_DELETION_CHOICES : ALL_CHOICES;
+}
+
+/**
+ * 전략이 이 충돌에 고르는 것. 원격에서 지운 노트는 복제할 원격이 없어 duplicate 도 «로컬 유지» —
+ * 둘 다 잃는 것이 없다. manual 은 자동 병합인데 지운 원격과는 병합할 수 없어 던진다.
+ */
+export function choiceForStrategy(
+  conflict: Conflict,
+  strategy: ConflictStrategy,
+): ResolutionChoice {
+  switch (strategy) {
+    case "local-first":
+      return "local";
+    case "remote-first":
+      return "remote";
+    case "duplicate":
+      return isRemoteDeletion(conflict) ? "local" : "duplicate";
+    case "manual":
+      if (isRemoteDeletion(conflict)) {
+        throw new Error(
+          `Notion 에서 지운 노트는 자동 병합할 수 없음 — 로컬 유지나 원격 유지를 고르세요: ${conflict.syncRecord.obsidianPath}`,
+        );
+      }
+      return "merge";
+  }
+}
 
 export interface ResolutionResult {
   readonly path: string;
   readonly choice: ResolutionChoice;
   readonly success: boolean;
   readonly mergeHadConflicts?: boolean;
+  /** 풀지 못한 이유 — 일괄 해결(`resolveAllConflicts`)이 실패를 던지지 않고 싣는다. */
+  readonly error?: string;
 }
 
+/**
+ * 충돌을 볼트 파일과 상태 DB 에서 푼다. **Notion 에는 올리지 않는다.**
+ *
+ * 앱은 `SyncOrchestrator.resolveConflict` 를 쓴다 — 이 클래스로 푼 뒤 고른 결과를 Notion 에 올리고,
+ * 올리지 못하면 충돌로 되돌린다. 이 클래스만 부르면 지난 동기화 사본만 해결 결과로 바뀌어, 다음
+ * pull 이 바뀐 원격으로 고른 로컬 · 병합 결과를 덮는다(N-06).
+ */
 export class ConflictResolver {
   constructor(
     private readonly stateDb: IStateDB,
@@ -20,6 +74,7 @@ export class ConflictResolver {
   ) {}
 
   async resolve(conflict: Conflict, choice: ResolutionChoice): Promise<ResolutionResult> {
+    if (isRemoteDeletion(conflict)) return this.resolveRemoteDeletion(conflict, choice);
     switch (choice) {
       case "local":
         return this.resolveLocal(conflict);
@@ -36,16 +91,7 @@ export class ConflictResolver {
     conflict: Conflict,
     strategy: ConflictStrategy,
   ): Promise<ResolutionResult> {
-    switch (strategy) {
-      case "local-first":
-        return this.resolve(conflict, "local");
-      case "remote-first":
-        return this.resolve(conflict, "remote");
-      case "duplicate":
-        return this.resolve(conflict, "duplicate");
-      case "manual":
-        return this.resolve(conflict, "merge");
-    }
+    return this.resolve(conflict, choiceForStrategy(conflict, strategy));
   }
 
   async resolveAll(conflicts: Conflict[], strategy: ConflictStrategy): Promise<ResolutionResult[]> {
@@ -55,6 +101,24 @@ export class ConflictResolver {
       results.push(result);
     }
     return results;
+  }
+
+  /**
+   * Notion 에서 지운 노트 — «로컬 유지» 는 추적만 놓아 파일을 새 노트로 만든다(다음 push 가 새 페이지로
+   * 올린다. 앱은 오케스트레이터가 곧바로 올린다). «원격 유지» 는 볼트에서도 지운다.
+   */
+  private async resolveRemoteDeletion(
+    conflict: Conflict,
+    choice: ResolutionChoice,
+  ): Promise<ResolutionResult> {
+    const record = conflict.syncRecord;
+    if (!applicableChoices(conflict).includes(choice)) {
+      throw new Error(
+        `Notion 에서 지운 노트는 병합 · 복제로 풀 수 없음 — 로컬 유지나 원격 유지를 고르세요: ${record.obsidianPath}`,
+      );
+    }
+    await removeTrackedNote(this.stateDb, this.vaultFs, record, choice === "remote");
+    return { path: record.obsidianPath, choice, success: true };
   }
 
   private async resolveLocal(conflict: Conflict): Promise<ResolutionResult> {
@@ -106,9 +170,9 @@ export class ConflictResolver {
 
   private async resolveDuplicate(conflict: Conflict): Promise<ResolutionResult> {
     const originalPath = conflict.syncRecord.obsidianPath;
-    const ext = originalPath.endsWith(".md") ? ".md" : "";
-    const baseName = originalPath.replace(/\.md$/, "");
-    const conflictPath = `${baseName}.conflict${ext}`;
+    const conflictPath = await freeConflictCopyPath(originalPath, (path) =>
+      this.vaultFs.exists(path),
+    );
 
     await this.vaultFs.writeFile(conflictPath, conflict.remoteContent);
 
@@ -123,28 +187,20 @@ export class ConflictResolver {
     return { path: originalPath, choice: "duplicate", success: true };
   }
 
+  /**
+   * 충돌 미리보기 — 로컬(`-`)과 원격(`+`)의 줄 비교. 바뀐 곳과 앞뒤 세 줄을 `@@` 묶음으로 보인다.
+   *
+   * 예전에는 같은 번호의 줄끼리 견줬다 — 한쪽 앞에 한 줄만 더해도 그 뒤의 모든 줄이 바뀐 것으로 보여,
+   * 무엇이 실제로 다른지 찾을 수 없었다.
+   */
   generateDiff(conflict: Conflict): string {
-    const localLines = conflict.localContent.split("\n");
-    const remoteLines = conflict.remoteContent.split("\n");
-    const lines: string[] = [];
-
-    lines.push(`--- local: ${conflict.syncRecord.obsidianPath}`);
-    lines.push(`+++ remote: Notion (${conflict.remoteChange.pageId})`);
-    lines.push("");
-
-    const maxLen = Math.max(localLines.length, remoteLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const localLine = localLines[i];
-      const remoteLine = remoteLines[i];
-
-      if (localLine === remoteLine) {
-        lines.push(`  ${localLine ?? ""}`);
-      } else {
-        if (localLine !== undefined) lines.push(`- ${localLine}`);
-        if (remoteLine !== undefined) lines.push(`+ ${remoteLine}`);
-      }
-    }
-
+    const hunks = lineDiff(conflict.localContent, conflict.remoteContent);
+    const lines = formatUnifiedDiff(
+      hunks,
+      `local: ${conflict.syncRecord.obsidianPath}`,
+      `remote: Notion (${conflict.remoteChange.pageId})`,
+    );
+    if (hunks.length === 0) lines.push("(로컬과 원격의 내용이 같습니다)");
     return lines.join("\n");
   }
 }

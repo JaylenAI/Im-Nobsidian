@@ -1,37 +1,70 @@
+import { existsSync, statSync } from "node:fs";
 import Database from "better-sqlite3";
-import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
+import type {
+  SyncRecord,
+  SyncStatus,
+  WikilinkEntry,
+  PreserveMarker,
+  RemoteObservation,
+} from "../types/index.js";
 import { generateId } from "../utils/id.js";
-import { INITIAL_MIGRATION } from "./migrations/001-initial.js";
-import { FILE_REGISTRY_MIGRATION } from "./migrations/002-file-registry.js";
-import { STAT_CACHE_MIGRATION } from "./migrations/003-stat-cache.js";
+import { STATE_DB_MIGRATIONS } from "./migrations/index.js";
 import type { IStateDB } from "./state-db-interface.js";
+import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
+import { WIKILINK_LOOKUPS } from "./wikilink-lookup.js";
+import { StateLock, stateDbLockPath } from "./state-lock.js";
 
 export class StateDB implements IStateDB {
   private readonly db: Database.Database;
 
-  private constructor(db: Database.Database) {
+  private constructor(
+    db: Database.Database,
+    private readonly lock: StateLock,
+  ) {
     this.db = db;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
   }
 
+  /**
+   * 상태 DB 파일을 연다 — 없으면 새로 만든다. 한 볼트의 상태 DB 는 한 곳만 연다 — 플러그인이나 다른 CLI 가 쓰는
+   * 중이면 {@link StateDbLockedError} 를 던진다(ADR-026). 저장된 파일이 비었거나 잘렸으면 빈 DB 로 열지 않고
+   * {@link SavedStateDbError} 를 던진다. 예전에는 0 · 1바이트 파일을 빈 DB 로 열고 닫을 때 빈 DB 로 덮었다.
+   */
   static open(dbPath: string): StateDB {
+    const lock = StateLock.acquire(stateDbLockPath(dbPath), { tool: "cli" });
+    try {
+      return StateDB.openLocked(dbPath, lock);
+    } catch (error) {
+      lock.release();
+      throw error;
+    }
+  }
+
+  private static openLocked(dbPath: string, lock: StateLock): StateDB {
+    const savedBytes = existsSync(dbPath) ? statSync(dbPath).size : null;
+    // 비었으면 열지도 않는다 — SQLite 는 0바이트 파일을 읽을 때 옆 WAL 파일을 지운다.
+    if (savedBytes === 0) throw SavedStateDbError.noTables(0);
     const db = new Database(dbPath);
-    const stateDb = new StateDB(db);
-    stateDb.migrate();
-    return stateDb;
+    try {
+      // WAL 로 바꾸기 · 마이그레이션이 파일을 쓰기 전에 본다 — 깨진 파일을 빈 DB 로 덮지 않는다.
+      if (savedBytes !== null && db.prepare(SAVED_STATE_TABLES_QUERY).get() === undefined) {
+        throw SavedStateDbError.noTables(savedBytes);
+      }
+      const stateDb = new StateDB(db, lock);
+      stateDb.migrate();
+      return stateDb;
+    } catch (error) {
+      db.close();
+      if (savedBytes === null || error instanceof SavedStateDbError) throw error;
+      throw SavedStateDbError.unreadable(error);
+    }
   }
 
   private migrate(): void {
     const version = this.getSchemaVersion();
-    if (version < 1) {
-      this.db.exec(INITIAL_MIGRATION);
-    }
-    if (version < 2) {
-      this.db.exec(FILE_REGISTRY_MIGRATION);
-    }
-    if (version < 3) {
-      this.db.exec(STAT_CACHE_MIGRATION);
+    for (const migration of STATE_DB_MIGRATIONS) {
+      if (version < migration.version) this.db.exec(migration.sql);
     }
   }
 
@@ -46,8 +79,13 @@ export class StateDB implements IStateDB {
     }
   }
 
+  /** 닫고 잠금을 푼다 — 닫는 사이 다른 곳이 열지 않게 닫은 뒤에 푼다. */
   close(): void {
-    this.db.close();
+    try {
+      this.db.close();
+    } finally {
+      this.lock.release();
+    }
   }
 
   // --- sync_state ---
@@ -84,7 +122,8 @@ export class StateDB implements IStateDB {
         .prepare(
           `UPDATE sync_state SET
             notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
-            notion_last_edited = ?, local_last_modified = ?,
+            notion_last_edited = ?, notion_last_edited_by = ?, notion_seen_at = ?,
+            notion_body_fingerprint = ?, local_last_modified = ?,
             sync_direction = ?, file_type = ?, status = ?,
             base_snapshot = ?, local_mtime = ?, local_file_size = ?,
             version = version + 1, updated_at = datetime('now')
@@ -95,6 +134,9 @@ export class StateDB implements IStateDB {
           record.notionParentId ?? null,
           record.contentHash,
           record.notionLastEdited ?? null,
+          record.notionLastEditedBy ?? null,
+          record.notionSeenAt ?? null,
+          record.notionBodyFingerprint ?? null,
           record.localLastModified,
           record.syncDirection,
           record.fileType,
@@ -112,9 +154,10 @@ export class StateDB implements IStateDB {
       .prepare(
         `INSERT INTO sync_state
           (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
-           notion_last_edited, local_last_modified, sync_direction, file_type,
+           notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
+           local_last_modified, sync_direction, file_type,
            status, base_snapshot, local_mtime, local_file_size, version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       )
       .run(
         id,
@@ -123,6 +166,9 @@ export class StateDB implements IStateDB {
         record.notionParentId ?? null,
         record.contentHash,
         record.notionLastEdited ?? null,
+        record.notionLastEditedBy ?? null,
+        record.notionSeenAt ?? null,
+        record.notionBodyFingerprint ?? null,
         record.localLastModified,
         record.syncDirection,
         record.fileType,
@@ -156,12 +202,32 @@ export class StateDB implements IStateDB {
     }
   }
 
-  setNotionLastEdited(id: string, lastEdited: string): void {
+  setRemoteObservation(id: string, observation: RemoteObservation): void {
+    const { lastEdited, lastEditedBy, seenAt, bodyFingerprint } = observation;
+    if (bodyFingerprint === undefined) {
+      this.db
+        .prepare(
+          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+            notion_seen_at = ?, updated_at = datetime('now') WHERE id = ?`,
+        )
+        .run(lastEdited, lastEditedBy, seenAt, id);
+    } else {
+      this.db
+        .prepare(
+          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+            notion_seen_at = ?, notion_body_fingerprint = ?, updated_at = datetime('now')
+          WHERE id = ?`,
+        )
+        .run(lastEdited, lastEditedBy, seenAt, bodyFingerprint, id);
+    }
+  }
+
+  setNotionBodyFingerprint(id: string, fingerprint: string | null): void {
     this.db
       .prepare(
-        "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
+        "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
       )
-      .run(lastEdited, id);
+      .run(fingerprint, id);
   }
 
   updateStatCache(id: string, mtime: string, fileSize: number): void {
@@ -193,22 +259,12 @@ export class StateDB implements IStateDB {
   // --- wikilink_map ---
 
   resolveWikilink(text: string): WikilinkEntry | null {
-    const byTitle = this.db.prepare("SELECT * FROM wikilink_map WHERE title = ?").get(text) as
-      RawWikilinkRow | undefined;
-
-    if (byTitle) return this.mapWikilinkRow(byTitle);
-
-    const byAlias = this.db
-      .prepare("SELECT * FROM wikilink_map WHERE aliases LIKE ?")
-      .get(`%"${text}"%`) as RawWikilinkRow | undefined;
-
-    if (byAlias) return this.mapWikilinkRow(byAlias);
-
-    const byFilename = this.db
-      .prepare("SELECT * FROM wikilink_map WHERE obsidian_path LIKE ?")
-      .get(`%/${text}.md`) as RawWikilinkRow | undefined;
-
-    return byFilename ? this.mapWikilinkRow(byFilename) : null;
+    for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
+        RawWikilinkRow | undefined;
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
   }
 
   resolvePageId(pageId: string): WikilinkEntry | null {
@@ -409,6 +465,9 @@ export class StateDB implements IStateDB {
       notionParentId: row.notion_parent_id,
       contentHash: row.content_hash,
       notionLastEdited: row.notion_last_edited,
+      notionLastEditedBy: row.notion_last_edited_by,
+      notionSeenAt: row.notion_seen_at,
+      notionBodyFingerprint: row.notion_body_fingerprint,
       localLastModified: row.local_last_modified,
       syncDirection: row.sync_direction as SyncRecord["syncDirection"],
       fileType: row.file_type as SyncRecord["fileType"],
@@ -438,6 +497,9 @@ export interface UpsertSyncRecord {
   readonly notionParentId?: string | null;
   readonly contentHash: string;
   readonly notionLastEdited?: string | null;
+  readonly notionLastEditedBy?: string | null;
+  readonly notionSeenAt?: string | null;
+  readonly notionBodyFingerprint?: string | null;
   readonly localLastModified: string;
   readonly syncDirection: SyncRecord["syncDirection"];
   readonly fileType: SyncRecord["fileType"];
@@ -454,6 +516,9 @@ interface RawSyncRow {
   notion_parent_id: string | null;
   content_hash: string;
   notion_last_edited: string | null;
+  notion_last_edited_by: string | null;
+  notion_seen_at: string | null;
+  notion_body_fingerprint: string | null;
   local_last_modified: string;
   sync_direction: string;
   file_type: string;

@@ -1,5 +1,15 @@
 /* Im-Nobsidian Plugin Styles */
 
+/*
+ * 오류 · 성공 색을 바탕에 깔 때의 짙기 — 플러그인의 모든 화면(변경 패널 · 줄 비교)이 이 값 하나를 쓴다.
+ * 테마의 오류 · 성공 · 경고 «바탕» 변수는 글색과 같은 진한 색일 수 있다(Obsidian 1.13 기본 테마:
+ * `--background-modifier-error` 와 `--text-error` 가 둘 다 #fb464c). 그래서 바탕에는 그 변수 대신
+ * `rgba(var(--color-red-rgb), var(--im-nobsidian-tint))` 처럼 옅게 깐다.
+ */
+body {
+  --im-nobsidian-tint: 0.15;
+}
+
 .im-nobsidian-conflict-banner {
   padding: 8px 12px;
   margin: 4px 0;
@@ -48,6 +58,8 @@
 }
 
 .im-nobsidian-diff-header {
+  display: flex;
+  gap: 16px;
   padding: 8px 12px;
   background-color: var(--background-secondary);
   border-bottom: 1px solid var(--background-modifier-border);
@@ -55,11 +67,11 @@
   font-weight: 600;
 }
 
-.im-nobsidian-diff-label-local {
+.im-nobsidian-diff-label-old {
   color: var(--text-error);
 }
 
-.im-nobsidian-diff-label-remote {
+.im-nobsidian-diff-label-new {
   color: var(--text-success);
 }
 
@@ -71,19 +83,72 @@
   line-height: 1.5;
 }
 
+/* 옛 줄 번호 · 새 줄 번호 · 부호 · 글 · 줄바꿈 없음 표시 */
 .im-nobsidian-diff-line {
-  padding: 1px 12px;
-  white-space: pre-wrap;
-  word-break: break-all;
+  display: grid;
+  grid-template-columns: 3em 3em 1.2em minmax(0, 1fr) auto;
+  gap: 0 4px;
+  padding: 0 8px;
 }
 
-.im-nobsidian-diff-removed {
-  background-color: var(--background-modifier-error);
+.im-nobsidian-diff-num {
+  color: var(--text-faint);
+  text-align: right;
+  user-select: none;
+}
+
+.im-nobsidian-diff-sign {
+  text-align: center;
+  user-select: none;
+}
+
+.im-nobsidian-diff-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.im-nobsidian-diff-eol {
+  color: var(--text-faint);
+  font-size: 0.85em;
+  user-select: none;
+}
+
+/* 바뀌지 않아 접은 줄 */
+.im-nobsidian-diff-gap {
+  padding: 0 8px;
+  text-align: center;
+  color: var(--text-faint);
+  background-color: var(--background-secondary);
+  user-select: none;
+}
+
+.im-nobsidian-diff-status {
+  padding: 16px 12px;
+  text-align: center;
+  color: var(--text-muted);
+}
+
+.im-nobsidian-diff-error {
   color: var(--text-error);
 }
 
+/*
+ * 바뀐 줄은 옅은 바탕(`--im-nobsidian-tint`)에 보통 글색으로, 부호만 오류 · 성공 색으로 칠한다 — 예전처럼
+ * 오류 바탕 변수와 오류 글색을 함께 쓰면 바뀐 줄의 글이 바탕에 묻혀 보이지 않았다.
+ */
+.im-nobsidian-diff-removed {
+  background-color: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
+}
+
 .im-nobsidian-diff-added {
-  background-color: var(--background-modifier-success);
+  background-color: rgba(var(--color-green-rgb), var(--im-nobsidian-tint));
+}
+
+.im-nobsidian-diff-removed .im-nobsidian-diff-sign {
+  color: var(--text-error);
+}
+
+.im-nobsidian-diff-added .im-nobsidian-diff-sign {
   color: var(--text-success);
 }
 
@@ -94,6 +159,16 @@
 .im-nobsidian-conflict-buttons .setting-item {
   border-top: none;
   padding: 6px 0;
+}
+
+/* Change Diff Modal — 변경 패널에서 연 줄 비교. 긴 노트를 보므로 충돌 창보다 넓고 길다. */
+
+.modal.im-nobsidian-change-diff-modal {
+  width: min(960px, 92vw);
+}
+
+.im-nobsidian-change-diff-modal .im-nobsidian-diff-body {
+  max-height: 65vh;
 }
 
 /* Sync Sidebar */
@@ -169,4 +244,158 @@
 
 .im-nobsidian-statusbar:hover {
   color: var(--text-accent);
+}
+
+/*
+ * 디자인 마커 렌더러(U-01) — pull 이 마커로 실은 Notion 색 · 밑줄 · 멘션 · 블록 색 · 표 속성.
+ * 색 이름은 Notion 의 것(core `NOTION_COLOR_NAMES`)이고, 값은 테마 변수를 따른다 — 어두운 테마에서도
+ * 읽히게. 테마에 없는 회색 · 갈색만 여기서 정한다(Notion 의 밝은 / 어두운 테마 값).
+ */
+body {
+  --im-nobsidian-gray-rgb: 120, 119, 116;
+  --im-nobsidian-brown-rgb: 159, 107, 83;
+  --im-nobsidian-orange-rgb: var(--color-orange-rgb);
+  --im-nobsidian-yellow-rgb: var(--color-yellow-rgb);
+  --im-nobsidian-green-rgb: var(--color-green-rgb);
+  --im-nobsidian-blue-rgb: var(--color-blue-rgb);
+  --im-nobsidian-purple-rgb: var(--color-purple-rgb);
+  --im-nobsidian-pink-rgb: var(--color-pink-rgb);
+  --im-nobsidian-red-rgb: var(--color-red-rgb);
+}
+
+.theme-dark {
+  --im-nobsidian-gray-rgb: 155, 155, 155;
+  --im-nobsidian-brown-rgb: 186, 133, 111;
+}
+
+.im-nobsidian-color-gray {
+  --im-nobsidian-fg: var(--im-nobsidian-gray-rgb);
+}
+.im-nobsidian-color-brown {
+  --im-nobsidian-fg: var(--im-nobsidian-brown-rgb);
+}
+.im-nobsidian-color-orange {
+  --im-nobsidian-fg: var(--im-nobsidian-orange-rgb);
+}
+.im-nobsidian-color-yellow {
+  --im-nobsidian-fg: var(--im-nobsidian-yellow-rgb);
+}
+.im-nobsidian-color-green {
+  --im-nobsidian-fg: var(--im-nobsidian-green-rgb);
+}
+.im-nobsidian-color-blue {
+  --im-nobsidian-fg: var(--im-nobsidian-blue-rgb);
+}
+.im-nobsidian-color-purple {
+  --im-nobsidian-fg: var(--im-nobsidian-purple-rgb);
+}
+.im-nobsidian-color-pink {
+  --im-nobsidian-fg: var(--im-nobsidian-pink-rgb);
+}
+.im-nobsidian-color-red {
+  --im-nobsidian-fg: var(--im-nobsidian-red-rgb);
+}
+
+.im-nobsidian-bg-gray {
+  --im-nobsidian-bg: var(--im-nobsidian-gray-rgb);
+}
+.im-nobsidian-bg-brown {
+  --im-nobsidian-bg: var(--im-nobsidian-brown-rgb);
+}
+.im-nobsidian-bg-orange {
+  --im-nobsidian-bg: var(--im-nobsidian-orange-rgb);
+}
+.im-nobsidian-bg-yellow {
+  --im-nobsidian-bg: var(--im-nobsidian-yellow-rgb);
+}
+.im-nobsidian-bg-green {
+  --im-nobsidian-bg: var(--im-nobsidian-green-rgb);
+}
+.im-nobsidian-bg-blue {
+  --im-nobsidian-bg: var(--im-nobsidian-blue-rgb);
+}
+.im-nobsidian-bg-purple {
+  --im-nobsidian-bg: var(--im-nobsidian-purple-rgb);
+}
+.im-nobsidian-bg-pink {
+  --im-nobsidian-bg: var(--im-nobsidian-pink-rgb);
+}
+.im-nobsidian-bg-red {
+  --im-nobsidian-bg: var(--im-nobsidian-red-rgb);
+}
+
+/*
+ * 색은 변수 하나로 칠한다. 테마가 제목 · 인용에 자기 색 변수를 쓰므로(`--h2-color` 등) 블록에는 그
+ * 변수를 덮어쓴다 — 클래스로 color 만 주면 더 구체적인 테마 규칙에 진다(1.13.7 실측: 제목이 기본색).
+ */
+[class*="im-nobsidian-color-"] {
+  color: rgb(var(--im-nobsidian-fg));
+}
+
+[class*="im-nobsidian-bg-"] {
+  background-color: rgba(var(--im-nobsidian-bg), var(--im-nobsidian-tint));
+}
+
+.im-nobsidian-block[class*="im-nobsidian-color-"] {
+  --h1-color: rgb(var(--im-nobsidian-fg));
+  --h2-color: rgb(var(--im-nobsidian-fg));
+  --h3-color: rgb(var(--im-nobsidian-fg));
+  --h4-color: rgb(var(--im-nobsidian-fg));
+  --h5-color: rgb(var(--im-nobsidian-fg));
+  --h6-color: rgb(var(--im-nobsidian-fg));
+  --blockquote-color: rgb(var(--im-nobsidian-fg));
+}
+
+.im-nobsidian-block[class*="im-nobsidian-bg-"] {
+  --blockquote-background-color: rgba(var(--im-nobsidian-bg), var(--im-nobsidian-tint));
+}
+
+.im-nobsidian-underline {
+  text-decoration: underline;
+}
+
+.im-nobsidian-mention {
+  color: var(--text-muted);
+}
+
+/* 블록 배경은 글에 붙지 않게 조금 띄운다 — Notion 처럼 */
+.im-nobsidian-block[class*="im-nobsidian-bg-"] {
+  padding: 2px 6px;
+  border-radius: var(--radius-s);
+}
+
+/* Notion 토글 색 — 토글 모양 규칙(바탕 없음 · 제목 기본색)보다 앞서야 보인다 */
+.callout.im-nobsidian-block[class*="im-nobsidian-bg-"] {
+  background-color: rgba(var(--im-nobsidian-bg), var(--im-nobsidian-tint));
+  padding: 2px 6px;
+}
+
+.callout.im-nobsidian-block[class*="im-nobsidian-color-"] > .callout-title {
+  color: inherit;
+}
+
+/* Notion 에서 지운 콜아웃 아이콘 */
+.callout-icon.im-nobsidian-callout-no-icon {
+  display: none;
+}
+
+/* Notion 이모지 아이콘 — Obsidian 이 아이콘을 다시 그려도 남도록 요소의 속성으로 싣는다 */
+.callout-icon.im-nobsidian-callout-emoji > svg {
+  display: none;
+}
+
+.callout-icon.im-nobsidian-callout-emoji::before {
+  content: attr(data-im-nobsidian-emoji);
+  line-height: 1;
+}
+
+th.im-nobsidian-table-header-column,
+td.im-nobsidian-table-header-column {
+  font-weight: var(--table-header-weight, var(--font-semibold));
+  background-color: var(--table-header-background, var(--background-secondary));
+}
+
+.im-nobsidian-table-no-header-row thead th {
+  font-weight: inherit;
+  background-color: transparent;
 }

@@ -1,8 +1,13 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { ConflictModal } from "../src/conflict-modal.js";
-import type { Conflict } from "@im-nobsidian/core";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
-vi.mock("@im-nobsidian/core", () => ({}));
+vi.mock("svelte", () => ({ mount: vi.fn(), unmount: vi.fn() }));
+vi.mock("../src/views/DiffLines.svelte", () => ({ default: { name: "DiffLines" } }));
+
+import { Setting } from "obsidian";
+import { mount, unmount } from "svelte";
+import { ConflictModal } from "../src/conflict-modal.js";
+import DiffLines from "../src/views/DiffLines.svelte";
+import type { Conflict, DiffHunk } from "@im-nobsidian/core";
 
 describe("ConflictModal", () => {
   let modal: ConflictModal;
@@ -11,6 +16,7 @@ describe("ConflictModal", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(mount).mockImplementation(() => ({}));
 
     onResolve = vi.fn();
     mockConflict = {
@@ -52,6 +58,118 @@ describe("ConflictModal", () => {
     modal = new ConflictModal({} as never, mockConflict, onResolve);
   });
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 연 모달이 놓은 단추의 이름 · 설명과, 본문에 만든 문단 · 줄 비교. */
+  function opened(conflict: Conflict, uploads = true) {
+    const names = vi.spyOn(Setting.prototype, "setName");
+    const descs = vi.spyOn(Setting.prototype, "setDesc");
+    const target = new ConflictModal({} as never, conflict, vi.fn(), uploads);
+    const createEl = vi.spyOn(target.contentEl as { createEl: () => unknown }, "createEl");
+    target.onOpen();
+    return {
+      labels: names.mock.calls.map(([label]) => label),
+      descriptions: descs.mock.calls.map(([description]) => description),
+      paragraphs: createEl.mock.calls
+        .filter(([tag]) => tag === "p")
+        .map(([, options]) => (options as { text: string }).text),
+      diffs: vi.mocked(mount).mock.calls.map(([component, options]) => ({
+        component,
+        props: options.props as {
+          hunks: DiffHunk[];
+          oldLabel: string;
+          newLabel: string;
+          emptyText: string;
+        },
+      })),
+    };
+  }
+
+  /** 줄 비교의 줄을 「종류:글」 로 — 어느 줄을 더하고 지웠는지만 본다. */
+  function diffLines(hunks: DiffHunk[]): string[] {
+    return hunks.flatMap((hunk) => hunk.lines.map((line) => `${line.kind}:${line.text}`));
+  }
+
+  it("양쪽을 고친 충돌은 로컬과 원격의 줄 비교와 네 가지 단추를 놓는다", () => {
+    const view = opened(mockConflict);
+
+    expect(view.labels).toEqual(["로컬 유지", "원격 유지", "자동 병합", "복제"]);
+    expect(view.diffs).toHaveLength(1);
+    expect(view.diffs[0]!.component).toBe(DiffLines);
+    expect(view.diffs[0]!.props).toMatchObject({
+      oldLabel: "로컬 (Obsidian)",
+      newLabel: "원격 (Notion)",
+    });
+    expect(diffLines(view.diffs[0]!.props.hunks)).toEqual([
+      "removed:local line 1",
+      "removed:local line 2",
+      "added:remote line 1",
+      "added:remote line 2",
+    ]);
+  });
+
+  it("원격이 맨 위에 한 줄을 끼웠으면 그 줄만 더한 것으로 보인다 — 아래 줄을 모두 바뀐 것으로 보이지 않는다", () => {
+    const view = opened({
+      ...mockConflict,
+      localContent: "첫 줄\n둘째 줄\n",
+      remoteContent: "끼운 줄\n첫 줄\n둘째 줄\n",
+    });
+
+    expect(diffLines(view.diffs[0]!.props.hunks)).toEqual([
+      "added:끼운 줄",
+      "same:첫 줄",
+      "same:둘째 줄",
+    ]);
+  });
+
+  it("Notion 에서 지운 노트는 줄 비교 대신 알리고, 로컬 유지 · 삭제 따르기 둘만 놓는다 (D)", () => {
+    const view = opened({
+      ...mockConflict,
+      remoteChange: { ...mockConflict.remoteChange, type: "deleted" },
+      remoteContent: "",
+    });
+
+    expect(view.labels).toEqual(["로컬 유지", "삭제 따르기"]);
+    expect(view.descriptions).toEqual([
+      "Obsidian 파일을 그대로 두고 Notion 에 새 페이지로 다시 만듭니다",
+      "Notion 에서 지운 대로 Obsidian 파일도 지웁니다",
+    ]);
+    expect(view.paragraphs).toContain(
+      "Notion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.",
+    );
+    expect(view.diffs).toEqual([]);
+  });
+
+  it("Pull만 하는 설정이면 Notion 에 올리지 않는다고 말한다 — 원격 유지는 그대로", () => {
+    const view = opened(mockConflict, false);
+
+    expect(view.labels).toEqual(["로컬 유지", "원격 유지", "자동 병합", "복제"]);
+    expect(view.descriptions).toEqual([
+      "Obsidian 파일을 그대로 둡니다 — Pull만 하는 설정이라 Notion 에는 올리지 않습니다",
+      "Notion 버전으로 Obsidian 파일을 덮어씁니다",
+      "두 변경을 3-way 병합해 Obsidian 파일에 씁니다 — Pull만 하는 설정이라 Notion 에는 올리지 않습니다",
+      "Obsidian 파일을 그대로 두고 Notion 버전은 .conflict 파일로 남깁니다 — Notion 에는 올리지 않습니다",
+    ]);
+  });
+
+  it("Pull만 하는 설정에서 지운 노트의 로컬 유지는 다시 만들지 않는다고 말한다", () => {
+    const view = opened(
+      {
+        ...mockConflict,
+        remoteChange: { ...mockConflict.remoteChange, type: "deleted" },
+        remoteContent: "",
+      },
+      false,
+    );
+
+    expect(view.descriptions).toEqual([
+      "Obsidian 파일을 그대로 둡니다 — Pull만 하는 설정이라 Notion 에 다시 만들지 않습니다",
+      "Notion 에서 지운 대로 Obsidian 파일도 지웁니다",
+    ]);
+  });
+
   it("onOpen 에러 없이 실행", () => {
     expect(() => modal.onOpen()).not.toThrow();
   });
@@ -67,6 +185,31 @@ describe("ConflictModal", () => {
   it("onOpen 호출 후 onClose 호출 가능", () => {
     modal.onOpen();
     expect(() => modal.onClose()).not.toThrow();
+  });
+
+  it("닫으면 줄 비교를 한 번만 내린다", () => {
+    modal.onOpen();
+    modal.close();
+    modal.close();
+
+    expect(unmount).toHaveBeenCalledTimes(1);
+  });
+
+  it("고르지 않고 닫으면(Esc · 바깥 클릭) 고르지 않았다고 한 번 알린다 (N-06)", () => {
+    modal.onOpen();
+    modal.close();
+    modal.close();
+
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith(null);
+  });
+
+  it("단추로 고르면 고른 것만 알린다 — 닫히며 다시 알리지 않는다", () => {
+    modal.onOpen();
+    (modal as unknown as { selectChoice(choice: string): void }).selectChoice("local");
+
+    expect(onResolve).toHaveBeenCalledTimes(1);
+    expect(onResolve).toHaveBeenCalledWith("local");
   });
 
   it("다른 충돌 데이터로도 생성 가능", () => {

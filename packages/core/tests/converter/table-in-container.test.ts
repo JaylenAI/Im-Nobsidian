@@ -53,13 +53,14 @@ describe("컨테이너 안 표", () => {
     const lines = pushed.split("\n");
 
     // 표는 <details> 본문 **안**에 있어야 한다 — 밖으로 새면 토글이 조각난다.
-    // 본문 내부가 열 0 인 것은 NFM 의 비대칭 들여쓰기 관례 그대로다(container-indent).
+    // 머리 행이 없는 표(속성 없는 `<table>`)라 NFM 표로 되돌아간다(table.ts).
     const open = lines.indexOf("<details>");
     const close = lines.indexOf("</details>");
-    const rows = lines.reduce<number[]>((acc, l, i) => (l.startsWith("|") ? [...acc, i] : acc), []);
-    expect(rows).toHaveLength(3);
-    for (const i of rows) expect(i > open && i < close).toBe(true);
-    expect(pushed).toContain("12.06%");
+    const table = [lines.indexOf("<table>"), lines.indexOf("</table>")];
+    const rows = lines.reduce<number[]>((acc, l, i) => (l === "<tr>" ? [...acc, i] : acc), []);
+    expect(rows).toHaveLength(2);
+    for (const i of [...table, ...rows]) expect(i > open && i < close).toBe(true);
+    expect(pushed).toContain("<td>12.06%</td>");
 
     // 두 번째 왕복이 첫 번째와 같아야 한다(래칫 없음)
     expect(obsidianToNotionEnhanced(notionEnhancedToObsidian(pushed))).toBe(pushed);

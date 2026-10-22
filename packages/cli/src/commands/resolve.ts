@@ -6,12 +6,44 @@ import {
   NotionClient,
   SyncOrchestrator,
   NodeVaultFS,
+  applicableChoices,
+  isRemoteDeletion,
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { printUnifiedDiff } from "../utils/diff-output.js";
+import { describeFailure } from "../utils/state-db-failure.js";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
 type Strategy = (typeof STRATEGIES)[number];
+
+const CHOICE_NAMES: Record<ResolutionChoice, string> = {
+  local: "로컬 유지 (Obsidian 버전 유지)",
+  remote: "원격 유지 (Notion 버전으로 덮어쓰기)",
+  merge: "자동 병합 (3-way merge)",
+  duplicate: "복제 (원본 유지 + 올리지 않는 .conflict 사본 생성)",
+};
+
+/** Notion 에서 지운 노트는 같은 선택이 다른 일을 한다 — 로컬 유지는 다시 만들고, 원격 유지는 지운다. */
+const REMOTE_DELETION_CHOICE_NAMES: Partial<Record<ResolutionChoice, string>> = {
+  local: "로컬 유지 (Notion 에 새 페이지로 다시 만들기)",
+  remote: "삭제 따르기 (Obsidian 파일도 지우기)",
+};
+
+/** 받기 전용(direction: pull)은 해결 결과를 Notion 에 올리지 않는다 — 다시 만들지도 않는다. */
+const PULL_ONLY_REMOTE_DELETION_CHOICE_NAMES: Partial<Record<ResolutionChoice, string>> = {
+  local: "로컬 유지 (Obsidian 파일만 두기 — 받기 전용이라 Notion 에 만들지 않음)",
+};
+
+function choiceName(conflict: Conflict, choice: ResolutionChoice, uploads: boolean): string {
+  const deleted = isRemoteDeletion(conflict);
+  return (
+    (deleted && !uploads ? PULL_ONLY_REMOTE_DELETION_CHOICE_NAMES[choice] : undefined) ??
+    (deleted ? REMOTE_DELETION_CHOICE_NAMES[choice] : undefined) ??
+    CHOICE_NAMES[choice] ??
+    choice
+  );
+}
 
 /**
  * 대화형 프롬프트를 띄울 수 있는 환경인지.
@@ -68,9 +100,28 @@ export const resolveCommand = new Command("resolve")
       }
 
       console.log(`\n충돌 ${pending.length}건 발견\n`);
+      const uploads = config.sync.direction !== "pull";
+      if (!uploads) {
+        console.log(
+          "  받기 전용(direction: pull) — 해결 결과는 Obsidian 에만 두고 Notion 에는 올리지 않습니다\n",
+        );
+      }
 
       if (options.strategy) {
         const strategy = options.strategy as Strategy;
+        // 원격에서 지운 노트는 전략이 파일을 지우거나 페이지를 새로 만든다 — 묻기 전에 알린다.
+        const deletions = pending.filter(isRemoteDeletion).length;
+        if (deletions > 0) {
+          console.log(
+            `  Notion 에서 삭제된 노트 ${deletions}건 — ${
+              strategy === "remote-first"
+                ? "Obsidian 파일도 지웁니다"
+                : uploads
+                  ? "Notion 에 새 페이지로 다시 만듭니다"
+                  : "Obsidian 파일을 그대로 둡니다"
+            }`,
+          );
+        }
 
         if (!options.yes) {
           if (!isInteractive()) {
@@ -88,10 +139,13 @@ export const resolveCommand = new Command("resolve")
 
         const results = await orchestrator.resolveAllConflicts(pending, strategy);
         let failed = 0;
-        for (const result of results) {
+        for (const [index, result] of results.entries()) {
           if (!result.success) failed++;
           const icon = result.success ? "\x1b[32m✓\x1b[0m" : "\x1b[31m✗\x1b[0m";
-          console.log(`  ${icon} ${result.path} → ${result.choice}`);
+          const reason = result.error ? ` — ${result.error}` : "";
+          console.log(
+            `  ${icon} ${result.path} → ${choiceName(pending[index]!, result.choice, uploads)}${reason}`,
+          );
         }
         report(results.length - failed, failed);
         return;
@@ -99,7 +153,7 @@ export const resolveCommand = new Command("resolve")
 
       if (!isInteractive()) {
         console.error(
-          "비대화형 환경에서는 대화형 해결을 쓸 수 없습니다 — --strategy <local-first|remote-first|duplicate> --yes 를 지정하세요.",
+          `비대화형 환경에서는 대화형 해결을 쓸 수 없습니다 — --strategy <${STRATEGIES.join("|")}> --yes 를 지정하세요.`,
         );
         process.exitCode = 1;
         return;
@@ -108,12 +162,12 @@ export const resolveCommand = new Command("resolve")
       let resolved = 0;
       let failed = 0;
       for (const conflict of pending) {
-        if (await resolveInteractive(conflict, orchestrator)) resolved++;
+        if (await resolveInteractive(conflict, orchestrator, uploads)) resolved++;
         else failed++;
       }
       report(resolved, failed);
     } catch (error) {
-      console.error("오류:", error instanceof Error ? error.message : String(error));
+      console.error("오류:", describeFailure(error));
       process.exitCode = 1;
     } finally {
       // 예전엔 분기마다 close 를 흩뿌려 두고 catch 경로에선 아예 닫지 않았다 — 잠금이 남는다.
@@ -135,6 +189,7 @@ function report(resolved: number, failed: number): void {
 async function resolveInteractive(
   conflict: Conflict,
   orchestrator: SyncOrchestrator,
+  uploads: boolean,
 ): Promise<boolean> {
   const path = conflict.syncRecord.obsidianPath;
 
@@ -142,34 +197,27 @@ async function resolveInteractive(
   console.log(`파일: \x1b[1m${path}\x1b[0m`);
   console.log(`${"─".repeat(60)}`);
 
-  const diff = orchestrator.generateConflictDiff(conflict);
-  const diffLines = diff.split("\n");
-  for (const line of diffLines) {
-    if (line.startsWith("- ")) {
-      console.log(`\x1b[31m${line}\x1b[0m`);
-    } else if (line.startsWith("+ ")) {
-      console.log(`\x1b[32m${line}\x1b[0m`);
-    } else if (line.startsWith("---") || line.startsWith("+++")) {
-      console.log(`\x1b[1m${line}\x1b[0m`);
-    } else {
-      console.log(line);
-    }
+  if (isRemoteDeletion(conflict)) {
+    // 견줄 원격 본문이 없다 — 줄 비교는 로컬 전부를 지운 것으로 보여 준다.
+    console.log(
+      "\x1b[33mNotion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.\x1b[0m",
+    );
+  } else {
+    printUnifiedDiff(orchestrator.generateConflictDiff(conflict).split("\n"), true);
   }
 
   const choice = await select<ResolutionChoice>({
     message: "어떻게 해결할까요?",
-    choices: [
-      { name: "로컬 유지 (Obsidian 버전 유지)", value: "local" },
-      { name: "원격 유지 (Notion 버전으로 덮어쓰기)", value: "remote" },
-      { name: "자동 병합 (3-way merge)", value: "merge" },
-      { name: "복제 (원본 유지 + .conflict 파일 생성)", value: "duplicate" },
-    ],
+    choices: applicableChoices(conflict).map((value) => ({
+      name: choiceName(conflict, value, uploads),
+      value,
+    })),
   });
 
   const result = await orchestrator.resolveConflict(conflict, choice);
 
   if (result.success) {
-    console.log(`\x1b[32m✓ ${path} → ${choice}로 해결\x1b[0m`);
+    console.log(`\x1b[32m✓ ${path} → ${choiceName(conflict, choice, uploads)}\x1b[0m`);
     return true;
   }
   if (result.mergeHadConflicts) {

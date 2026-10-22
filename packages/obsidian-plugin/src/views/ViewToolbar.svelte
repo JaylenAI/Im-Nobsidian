@@ -1,12 +1,9 @@
 <script lang="ts">
-  import type { PropertySchema } from "@im-nobsidian/core";
-
   interface Props {
     searchQuery: string;
     sortProperty: string;
     sortDirection: "ascending" | "descending";
     propertyNames: string[];
-    schema?: Record<string, PropertySchema>;
     onSearchChange: (query: string) => void;
     onSortChange: (property: string, direction: "ascending" | "descending") => void;
     onAddEntry?: () => void;
@@ -17,7 +14,6 @@
     sortProperty,
     sortDirection,
     propertyNames,
-    schema,
     onSearchChange,
     onSortChange,
     onAddEntry,

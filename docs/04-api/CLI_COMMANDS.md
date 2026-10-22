@@ -39,14 +39,14 @@ Notion 연결을 설정하고 `.im-nobsidian/config.json` + 상태 DB를 생성�
 
 ```bash
 nobsi init                                          # 대화형 설정
-nobsi init --token ntn_xxx --root-page-id abc123 --non-interactive  # CI/스크립트
+nobsi init --token ntn_xxx --root-page-id "https://www.notion.so/myspace/Notes-0123456789abcdef0123456789abcdef" --non-interactive  # CI/스크립트
 ```
 
-| 옵션                  | 설명                                        |
-| --------------------- | ------------------------------------------- |
-| `--token <token>`     | Notion Integration Secret (`ntn_`으로 시작) |
-| `--root-page-id <id>` | 루트 페이지/DB ID                           |
-| `--non-interactive`   | 대화형 프롬프트 비활성화 (위 두 옵션 필수)  |
+| 옵션                  | 설명                                                        |
+| --------------------- | ----------------------------------------------------------- |
+| `--token <token>`     | Notion Integration Secret (`ntn_`으로 시작)                 |
+| `--root-page-id <id>` | 루트 페이지/DB ID 또는 그 주소(주소 끝의 32자리 ID 를 읽음) |
+| `--non-interactive`   | 대화형 프롬프트 비활성화 (위 두 옵션 필수)                  |
 
 ---
 
@@ -188,7 +188,7 @@ nobsi fetch
 nobsi resolve                            # 대화형 (파일별 선택)
 nobsi resolve --strategy local-first     # 로컬 우선 (일괄)
 nobsi resolve --strategy remote-first    # Notion 우선 (일괄)
-nobsi resolve --strategy duplicate       # 양쪽 보존 (.conflict 파일 생성)
+nobsi resolve --strategy duplicate       # 양쪽 보존 (.conflict 사본 생성 — 올리지 않음)
 ```
 
 | 옵션                        | 설명                                                   |

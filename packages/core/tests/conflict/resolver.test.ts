@@ -156,6 +156,18 @@ describe("ConflictResolver", () => {
       );
       expect(mockStateDb.updateStatus).toHaveBeenCalledWith("1", "synced");
     });
+
+    it("앞서 남긴 사본이 있으면 덮지 않고 번호 붙은 새 사본을 쓴다", async () => {
+      mockVaultFs.exists.mockImplementation(async (path: string) => path === "test.conflict.md");
+
+      await resolver.resolve(createConflict(), "duplicate");
+
+      expect(mockVaultFs.writeFile).not.toHaveBeenCalledWith("test.conflict.md", expect.anything());
+      expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
+        "test 2.conflict.md",
+        "remote modified content",
+      );
+    });
   });
 
   describe("resolveByStrategy", () => {
@@ -201,8 +213,39 @@ describe("ConflictResolver", () => {
 
       expect(diff).toContain("--- local:");
       expect(diff).toContain("+++ remote:");
-      expect(diff).toContain("- local modified content");
-      expect(diff).toContain("+ remote modified content");
+      expect(diff).toContain("-local modified content");
+      expect(diff).toContain("+remote modified content");
+    });
+
+    it("한쪽 앞에 한 줄을 더했으면 그 줄만 다르다고 보인다 — 뒤의 줄을 번호대로 견주지 않는다", () => {
+      const diff = resolver.generateDiff(
+        createConflict({
+          localContent: "둘\n셋\n넷\n",
+          remoteContent: "하나\n둘\n셋\n넷\n",
+        }),
+      );
+
+      expect(diff.split("\n")).toEqual([
+        "--- local: test.md",
+        "+++ remote: Notion (notion-123)",
+        "@@ -1,3 +1,4 @@",
+        "+하나",
+        " 둘",
+        " 셋",
+        " 넷",
+      ]);
+    });
+
+    it("양쪽 글이 같으면 같다고 알린다 — 빈 비교를 보이지 않는다", () => {
+      const diff = resolver.generateDiff(
+        createConflict({ localContent: "같은 글\n", remoteContent: "같은 글\n" }),
+      );
+
+      expect(diff.split("\n")).toEqual([
+        "--- local: test.md",
+        "+++ remote: Notion (notion-123)",
+        "(로컬과 원격의 내용이 같습니다)",
+      ]);
     });
   });
 });

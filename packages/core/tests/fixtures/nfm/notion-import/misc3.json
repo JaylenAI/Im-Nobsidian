@@ -1,0 +1,28 @@
+{
+  "markdown": "<details>\nno summary body\n</details>\n![**b** cap](https://example.com/c.png)\n- li\n\t<empty-block/>\n\t---\n<embed src=\"https://example.com/e\">**b** cap</embed>\n<file src=\"https://example.com/f/data.csv\"></file>\n<columns>\n\t<column>\n\t\tonly one column\n\t</column>\n</columns>",
+  "notion": [
+    "toggle {} ",
+    "  paragraph {} T\"no summary body\"",
+    "image {\"external\":\"https://example.com/c.png\",\"type\":\"external\"}  cap:T\"b\"/b + T\" cap\"",
+    "bulleted_list_item {} T\"li\"",
+    "  paragraph {} ",
+    "  divider {} ",
+    "embed {\"url\":\"https://example.com/e\"}  cap:T\"b\"/b + T\" cap\"",
+    "file {\"external\":\"https://example.com/f/data.csv\",\"type\":\"external\"} ",
+    "column_list {} ",
+    "  column {} ",
+    "    paragraph {} T\"only one column\""
+  ],
+  "ours": [
+    "toggle {} ",
+    "  paragraph {} T\"no summary body\"",
+    "image {\"external\":\"https://example.com/c.png\",\"type\":\"external\"}  cap:T\"b\"/b + T\" cap\"",
+    "bulleted_list_item {} T\"li\"",
+    "  paragraph {} ",
+    "  divider {} ",
+    "embed {\"url\":\"https://example.com/e\"}  cap:T\"b\"/b + T\" cap\"",
+    "file {\"external\":\"https://example.com/f/data.csv\",\"type\":\"external\"} ",
+    "paragraph {} T\"only one column\""
+  ],
+  "why": "블록 API 는 칼럼 하나짜리 묶음을 거부한다(실측) — 칼럼의 블록을 그 자리에 둔다."
+}

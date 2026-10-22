@@ -22,6 +22,18 @@ export interface ProcessorMetadata {
    * true: 무조건 재간격 / false: 무동작 / 미지정: 내용 기반 휴리스틱 폴백.
    */
   readonly notionExportCompact?: boolean;
+  /**
+   * pull 직전 로컬 노트 원문 — 있을 때만. Notion 에 남길 자리가 없는 표기(코드 펜스의 원래 언어 ·
+   * 펜스 기호 S-20, 주석 S-29)를 되살리는 근거다. 호출측이 로컬 파일을 읽어 넘긴다.
+   */
+  readonly localContent?: string;
+  /**
+   * 행 노트에서 Notion 이 정하는 frontmatter 키 — 행을 받을 때만. 받은 속성을 로컬 frontmatter 에 합칠 때
+   * 이 밖의 키(`aliases` 등)는 로컬 것으로 두고, 키 차례 · 적은 모양도 로컬을 따른다(F-08).
+   */
+  readonly notionKeys?: readonly string[];
+  /** Markdown API 로 보낼 수 없어 본문을 쓴 뒤 블록으로 채울 코드({@link DeferredCode}). */
+  readonly deferredCode?: DeferredCode[];
   readonly [key: string]: unknown;
 }
 
@@ -43,6 +55,29 @@ export interface ConversionResult {
   readonly properties: Record<string, unknown>;
   readonly images: ImageReference[];
   readonly preserveMarkers: PreserveMarker[];
+  readonly deferredCode: DeferredCode[];
+}
+
+/**
+ * 본문을 쓴 뒤 블록으로 채울 코드(S-22). Notion Markdown API 는 코드에 ``` 로 시작하는 줄이 있으면
+ * 어떤 펜스로 보내도 그 줄에서 블록을 가른다 — 코드 자리에 자리표시(`token`)만 보내고, 페이지를
+ * 쓴 뒤 그 자리표시를 가진 코드 블록의 글을 `code` 로 바꾼다.
+ */
+export interface DeferredCode {
+  /** 코드 블록에 대신 보낸 자리표시 — 페이지 안에서 하나뿐이다. */
+  readonly token: string;
+  /** Obsidian 이 보여 주는 그대로의 코드 — 컨테이너 접두 · 펜스 들여쓰기를 뗀 것. */
+  readonly code: string;
+}
+
+/**
+ * 북마크 블록의 주소와 캡션(F-09). Markdown API 는 북마크를 주소 · 캡션 없는 자리 태그로만 보내,
+ * 블록으로 따로 읽는다(`NotionClient.getBookmarks`).
+ */
+export interface BookmarkTarget {
+  readonly url: string;
+  /** 캡션의 글 — 없으면 빈 문자열. */
+  readonly caption: string;
 }
 
 export interface PreserveMarker {

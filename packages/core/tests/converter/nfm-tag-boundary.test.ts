@@ -20,7 +20,7 @@ describe("NFM 여는 태그 이름 경계", () => {
       ``,
       `본문 A`,
       ``,
-      `<table>`,
+      `<table header-row="true">`,
       `<tr><td>헤더</td></tr>`,
       `<tr><td>값</td></tr>`,
       `</table>`,

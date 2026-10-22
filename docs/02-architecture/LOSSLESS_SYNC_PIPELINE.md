@@ -370,8 +370,9 @@ MyDB/
 
 - Cover/Icon → frontmatter `banner`/`banner_icon` + `im_nobsidian_cover`/`im_nobsidian_icon` 원본
   보존, 커버는 `attachments/covers/` 다운로드. (근거: C B-11)
-- Embeds → `<iframe>` 또는 `[제목](URL)`/`![[file.pdf]]`, 원본 embed 타입 마커 보존:
-  `%% im-nobsidian:embed:type=video:source=youtube:url=… %%`. (근거: C B-12)
+- Embeds → `<iframe>` 또는 `[제목](URL)`/`![[file.pdf]]`. 동영상은 `[🎬 캡션](URL)` 로 받고 push 는
+  `<video src>` 로 보낸다 — 볼트의 동영상 이미지 링크(`![캡션](youtube…)`)도 같다. 설계 때의 embed 타입 마커는
+  읽는 곳이 없어 2026-10-20 에 걷었다. (근거: C B-12)
 
 ### 단계 9 — 미지 블록 graceful degrade
 
@@ -477,7 +478,7 @@ MyDB/
 | Column Layout                             | `%% im-nobsidian:column_list:start:columns=2:widths=1,1 %%` … `:end %%`      | C B-9             |
 | Toggle Heading                            | `%% im-nobsidian:toggle_heading:level=2 %%` → 복원 시 `is_toggleable:true`   | C B-10            |
 | Synced Block                              | `%% im-nobsidian:synced-block:abc123:source %%` + `_synced_blocks/abc123.md` | C C-4, N §5.1 #29 |
-| Embed(영상 등)                            | `%% im-nobsidian:embed:type=video:source=youtube:url=… %%`                   | C B-12            |
+| Embed(영상 등)                            | `[🎬 캡션](URL)` ↔ `<video src>` (embed 타입 마커는 걷음, 2026-10-20)        | C B-12            |
 | 목차(TOC)                                 | `%% im-nobsidian:table_of_contents %%`                                       | C A등급           |
 | Callout foldable                          | caption `im-nobsidian:callout-type:warning:foldable:collapsed`               | C B-2             |
 | Dataview 쿼리                             | caption `im-nobsidian:preserve:dataview`(정적 테이블 무시·원본 복원)         | C C-1             |

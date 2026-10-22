@@ -3,6 +3,7 @@ import { EmbedResolver } from "../../src/converter/pre-processors/embed.js";
 import { LocalImageRestorer } from "../../src/converter/post-processors/local-image-restorer.js";
 import { PreserveMarkerInjector } from "../../src/converter/post-processors/preserve-marker-injector.js";
 import type { ProcessorInput } from "../../src/types/convert.js";
+import { roundtrip } from "./roundtrip-fidelity.js";
 
 const pushContext = {
   direction: "push" as const,
@@ -56,6 +57,121 @@ describe("비이미지 로컬 임베드 push (D5)", () => {
   it("노트 임베드 별칭도 원문 보존 (D-EMBEDALIAS)", () => {
     expect(push("![[다른노트|별칭]]")).toBe("![[다른노트|별칭]]");
   });
+});
+
+// S-19: v0.3.2 의 pull 은 Notion 에서 고치거나 지운 미디어의 마커를 노트에 되살렸다. 그 마커를
+// 그대로 올리면 자리표시자로 읽혀 옛 파일을 한 번 더 올린다 — 임베드만 자리표시자가 된다.
+describe("노트에 홀로 남은 미디어 마커 (S-19)", () => {
+  it("마커만 있는 줄은 보내지 않는다 — 임베드는 그대로 자리표시자가 된다", () => {
+    expect(push("![[a.png|새 설명]]\n%% im-nobsidian:local-image:a.png %%\n\n뒤 문단")).toBe(
+      "> 📎 a.png %% im-nobsidian:local-image:a.png%7C%EC%83%88%20%EC%84%A4%EB%AA%85 %%\n\n\n뒤 문단",
+    );
+  });
+
+  it("글 끝에 붙은 마커도 뗀다 — 마커 없는 옛 보존 기록이 줄 가운데에 넣었다", () => {
+    expect(push("앞 문단%% im-nobsidian:local-file:docs%2Fspec.pdf %%")).toBe("앞 문단");
+  });
+
+  it("코드 안의 마커는 그대로 둔다 — 마커 형식을 설명하는 글이다", () => {
+    const doc =
+      "```\n%% im-nobsidian:local-image:a.png %%\n```\n\n`%% im-nobsidian:local-file:b.pdf %%` 형식";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("볼트에 남은 자리표시자는 그대로 둔다 — 올리면 제자리 블록으로 바뀐다", () => {
+    const placeholder = "> 📎 a.png %% im-nobsidian:local-image:a.png %%";
+    expect(push(placeholder)).toBe(placeholder);
+  });
+
+  it("pull 은 건드리지 않는다", () => {
+    const input: ProcessorInput = {
+      content: "%% im-nobsidian:local-image:a.png %%",
+      metadata: {},
+      context: pullContext,
+    };
+    expect(new EmbedResolver().process(input).content).toBe(input.content);
+  });
+});
+
+// S-18: 코드 안의 임베드는 임베드 문법을 보여 주는 글이다 — Obsidian 도 임베드로 그리지 않는다.
+// 예전 push 는 여기도 자리표시자로 바꿔, 펜스 안이면 Notion 코드에 `> 📎 …` 가 보였고 인라인
+// 코드는 둘로 쪼개져 그 사이에 자리표시자 줄이 들어갔다.
+describe("코드 안의 임베드 (S-18)", () => {
+  const PLACEHOLDER = "> 📎 a.png %% im-nobsidian:local-image:a.png %%";
+
+  it("코드 펜스 안의 임베드는 그대로 올린다", () => {
+    const doc = "```md\n![[a.png]]\n![[docs/spec.pdf|사본]]\n```";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("인라인 코드 안의 임베드는 그대로 올린다 — 문단을 쪼개지 않는다", () => {
+    const doc = "형식은 `![[b.pdf]]` 처럼 쓴다";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("인라인 코드 뒤의 임베드는 자기 줄로 떼어 올린다 — 코드는 앞 문단에 남는다", () => {
+    expect(push("`코드` 뒤 ![[a.png]] 끝")).toBe(`\`코드\` 뒤\n\n${PLACEHOLDER}\n\n끝`);
+  });
+
+  // 코드에 붙은 임베드는 조각의 맨 앞·맨 끝에 온다. 조각만 보고 정하면 줄머리·줄끝으로
+  // 잘못 알아, 자리표시자가 코드와 한 줄에 붙어 quote 가 되지 못한다.
+  it.each([
+    ["바로 뒤", "`코드`![[a.png]] 끝", `\`코드\`\n\n${PLACEHOLDER}\n\n끝`],
+    ["바로 앞", "앞 ![[a.png]]`코드`", `앞\n\n${PLACEHOLDER}\n\n\`코드\``],
+  ])("인라인 코드 %s에 붙은 임베드도 자기 줄로 떼어 올린다", (_label, doc, expected) => {
+    expect(push(doc)).toBe(expected);
+  });
+
+  it("두 문단의 홑 백틱 사이 임베드는 코드가 아니다 — 자리표시자로 올린다", () => {
+    expect(push("홑 ` 하나\n\n![[a.png]]\n\n또 ` 하나")).toBe(
+      `홑 \` 하나\n\n${PLACEHOLDER}\n\n또 \` 하나`,
+    );
+  });
+
+  it("코드 안의 동영상 이미지 링크는 임베드 마커로 바꾸지 않는다", () => {
+    const doc = "```\n![영상](https://youtu.be/abc)\n```";
+    expect(push(doc)).toBe(doc);
+  });
+
+  it("코드 안의 임베드는 올릴 목록에 넣지 않는다", () => {
+    const input: ProcessorInput = {
+      content: "`![[a.png]]`\n\n![[b.png]]",
+      metadata: {},
+      context: pushContext,
+    };
+    expect(new EmbedResolver().process(input).metadata.images).toEqual([
+      { url: "b.png", localPath: "b.png", isExternal: false },
+    ]);
+  });
+
+  it.each([
+    ["코드 펜스", "앞 문단\n\n```md\n![[a.png]]\n![[docs/spec.pdf|사본]]\n```\n\n뒤 문단"],
+    ["인라인 코드", "형식은 `![[b.pdf]]` 처럼 쓴다\n\n![[a.png|설명]]"],
+  ])("%s — 임베드가 기본 파이프라인을 오가도 그대로다", (_label, doc) => {
+    const result = roundtrip(doc);
+    expect(result.outputBody).toBe(result.inputBody);
+  });
+
+  // 자리표시자 형식을 설명하는 노트 — 코드 안의 같은 모양 글은 push 가 심은 것이 아니다.
+  const DESCRIBED = [
+    ["코드 펜스", `앞 문단\n\n\`\`\`md\n${PLACEHOLDER}\n\`\`\`\n\n뒤 문단`],
+    ["인라인 코드", `자리표시자는 \`${PLACEHOLDER}\` 처럼 생겼다`],
+  ];
+
+  it.each(DESCRIBED)(
+    "%s 안의 자리표시자 모양 글은 pull 이 임베드로 바꾸지 않는다",
+    (_label, doc) => {
+      expect(pull(doc!)).toBe(doc);
+    },
+  );
+
+  it.each(DESCRIBED)(
+    "%s 안의 자리표시자 모양 글이 기본 파이프라인을 오가도 그대로다",
+    (_label, doc) => {
+      const result = roundtrip(doc!);
+      expect(result.outputBody).toBe(result.inputBody);
+    },
+  );
 });
 
 describe("비이미지 로컬 임베드 pull 복원 (D5)", () => {

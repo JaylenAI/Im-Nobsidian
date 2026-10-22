@@ -11,6 +11,12 @@ export interface SyncRecord {
   readonly notionParentId: string | null;
   readonly contentHash: string;
   readonly notionLastEdited: string | null;
+  /** {@link RemoteObservation.lastEditedBy} — 모르면 null. */
+  readonly notionLastEditedBy: string | null;
+  /** {@link RemoteObservation.seenAt} — 모르면 null. */
+  readonly notionSeenAt: string | null;
+  /** 지난 동기화 사본에 해당하는 원격 본문의 지문(`remoteBodyFingerprint`). 모르면 null. */
+  readonly notionBodyFingerprint: string | null;
   readonly localLastModified: string;
   readonly syncDirection: SyncDirection;
   readonly fileType: FileType;
@@ -23,6 +29,24 @@ export interface SyncRecord {
   readonly updatedAt: string;
 }
 
+/**
+ * 원격 페이지를 본 기록(N-05). Notion 의 수정 시각은 분 단위로 잘려, 시각만으로는 우리가 본 뒤
+ * 같은 분 안에서 고친 것을 알 수 없다 — 누가 고쳤는지와 언제 봤는지를 함께 적는다.
+ */
+export interface RemoteObservation {
+  /** Notion `last_edited_time` — 분 단위로 잘린 값. */
+  readonly lastEdited: string;
+  /** Notion `last_edited_by.id`. 응답에 없으면 null. */
+  readonly lastEditedBy: string | null;
+  /**
+   * 이 기기 시계로 본 때 — 그 실행을 시작한 때(실제로 읽은 때보다 이르다). 이때까지의 원격
+   * 편집은 레코드에 들어 있다. 모르면 null — 다음에 내용으로 확인한다.
+   */
+  readonly seenAt: string | null;
+  /** 원격 본문 지문. 적지 않으면(undefined) 있던 값을 둔다 — 본문을 건드리지 않은 관측. */
+  readonly bodyFingerprint?: string | null;
+}
+
 export interface LocalChange {
   readonly path: string;
   readonly type: "created" | "modified" | "deleted" | "moved";
@@ -31,12 +55,35 @@ export interface LocalChange {
   readonly movedFrom?: string;
 }
 
+/**
+ * DB 행 frontmatter 의 속성 차이 — 지난 동기화 시점과 비교해 바뀐 것만(S-01).
+ * `title` 은 속성이 아니라 행 제목이라 여기 들어가지 않는다.
+ */
+export interface RowPropertyChanges {
+  /** 새로 생겼거나 값이 바뀐 속성과 그 새 값. 날짜는 적힌 모양의 문자열로 되돌려 둔다. */
+  readonly changed: Readonly<Record<string, unknown>>;
+  /** 로컬에서 비웠거나 지운 속성 이름. */
+  readonly cleared: readonly string[];
+}
+
 export interface RemoteChange {
   readonly pageId: string;
   readonly type: "created" | "modified" | "deleted" | "moved";
   readonly lastEdited: string;
   readonly previousEdited: string | null;
   readonly movedFromParent?: string;
+  /**
+   * 추적 중인 노트의 볼트 경로. 화면이 내부 id 대신 노트 이름을 보이고, 그 노트만 받을 때 쓴다.
+   * 아직 볼트에 없는 새 페이지는 없다.
+   */
+  readonly path?: string;
+  /** Notion 제목 — 볼트 경로가 아직 없는 새 페이지를 화면이 이름으로 보일 때 쓴다. */
+  readonly title?: string;
+  /**
+   * 수정 시각 · 편집자로는 바뀌었는지 가를 수 없다 — 같은 분 안의 편집일 수 있다(N-05).
+   * 받는 쪽이 내용으로 확인한다. `modified` 에만 붙는다.
+   */
+  readonly unverified?: boolean;
 }
 
 export interface Conflict {
@@ -50,7 +97,16 @@ export interface Conflict {
 
 export interface ProgressItem {
   readonly path: string;
-  readonly operation: "create" | "update" | "delete";
+  /** `move` — 볼트에서 옮기거나 이름을 바꾼 노트 · 폴더를 Notion 에 반영한다(push). */
+  readonly operation: "create" | "update" | "delete" | "move";
+  /** 받기(pull) · 올리기(push) 중 어느 쪽 항목인가 — `sync` 만 채운다. 둘을 한 번에 돌려 가를 수 없다. */
+  readonly direction?: "pull" | "push";
+  /**
+   * 받아 봤지만 볼트에 쓰지 않았다(pull) — 바뀐 것이 없거나 로컬을 지켰다. 진행 수에는 들지만 화면이 바뀐
+   * 노트로 적지 않는다. 다시 그리기(B14)는
+   * 받아 둔 노트를 모두 받아 보므로, 적으면 바뀌지 않은 노트마다 「updated」 줄이 찍혔다.
+   */
+  readonly unchanged?: boolean;
 }
 
 export type ProgressCallback = (current: number, total: number, item: ProgressItem) => void;
@@ -64,11 +120,23 @@ export interface BaseSyncOptions {
   readonly signal?: AbortSignal;
 }
 
+/** 원격까지 보는 상태 확인(`status`)의 옵션. */
+export interface StatusOptions {
+  /** 취소하면 원격을 훑다 멈추고 {@link OperationAbortedError} 를 던진다 — 반쯤 본 상태를 돌려주지 않는다. */
+  readonly signal?: AbortSignal;
+}
+
 export interface PushOptions extends BaseSyncOptions {
   readonly excludePaths?: string[];
 }
 
-export type PullOptions = BaseSyncOptions;
+export interface PullOptions extends BaseSyncOptions {
+  /**
+   * Notion 에서 바뀌지 않은 받아 둔 노트도 지금 변환기로 다시 그린다(B14, `sync/rerender-targets.ts`).
+   * 볼트에서 고친 노트는 건드리지 않는다. dry-run 에서는 쓰지 않는다 — 다시 그려 봐야 바뀌는지 안다.
+   */
+  readonly rerender?: boolean;
+}
 
 export type SyncOptions = BaseSyncOptions;
 
@@ -76,8 +144,47 @@ export interface PushResult {
   readonly created: number;
   readonly updated: number;
   readonly deleted: number;
+  /**
+   * Notion 에 옮김을 반영한 노트 · 폴더 수. 옮기며 본문도 고친 노트도 여기서만 센다 — updated 와
+   * 겹치지 않는다. 예전에는 updated 에 섞여, 이름만 바꾼 노트도 「수정」 으로 보였다.
+   */
+  readonly moved: number;
   readonly failed: FailedOperation[];
   readonly duration: number;
+}
+
+/**
+ * 전체 대조를 한 이유 (ADR-027).
+ *
+ * - `first` — 받은 것이 없다(처음 pull · 빈 상태 DB).
+ * - `forced` — `--force`.
+ * - `database-mode` — 루트가 DB 하나라 그 DB 조회가 곧 전체 대조다.
+ * - `every-pull` — 주기(`sync.fullReconcileInterval`)가 0 이다.
+ * - `due` — 주기가 됐다.
+ */
+export type FullScanReason = "first" | "forced" | "database-mode" | "every-pull" | "due";
+
+/**
+ * 이번 실행이 원격을 얼마나 훑었나 (ADR-027). `incremental` 은 지난 pull 뒤에 바뀐 페이지 · 행 · DB 만
+ * 찾았다는 뜻이다 — 원격에서 지운 것 · 범위 밖으로 옮긴 것은 다음 전체 대조가 반영한다. 화면은 이것으로
+ * 그 사실과 다음 전체 대조 시각을 알린다.
+ */
+export interface RemoteScanInfo {
+  readonly kind: "full" | "incremental";
+  /** 전체 대조한 이유 — `full` 에만. */
+  readonly reason?: FullScanReason;
+  /** 마지막으로 전체 대조를 마친 때. 한 번도 없으면 null. */
+  readonly lastFullAt: string | null;
+  /** 다음 전체 대조 예정 시각 — `incremental` 에만. null 이면 이미 때가 됐다(다음 pull 이 한다). */
+  readonly nextFullAt: string | null;
+  /**
+   * Notion 에서 지운 노트가 아직 볼트에 반영되지 않았을 수 있나 — 바뀐 것만 찾았고 원격 삭제를 볼트에
+   * 반영하는 설정(`sync.deleteSync`)일 때. 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
+   * 볼트에 반영하지 않으므로 늘 false 다.
+   */
+  readonly deletionsDeferred: boolean;
+  /** 바뀐 것이 보이지 않아 조회하지 않은 DB 수 — pull 에만. */
+  readonly skippedDatabases?: number;
 }
 
 export interface PullResult {
@@ -97,6 +204,8 @@ export interface PullResult {
   readonly imageCount: number;
   readonly fileCount: number;
   readonly linkCount: number;
+  /** 원격을 얼마나 훑었나. 원격을 보지 않은 실행(받기 방향이 아님 · 취소)에는 없다. */
+  readonly remoteScan?: RemoteScanInfo;
 }
 
 export interface SyncResult {
@@ -106,13 +215,44 @@ export interface SyncResult {
   readonly duration: number;
 }
 
+/** 볼트에서 옮기거나 이름을 바꾼 폴더 — 다음 push 가 Notion 에 반영한다(DB 폴더는 볼트 쪽만). */
+export interface FolderMoveChange {
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * 변경 하나를 줄 비교로 보이는 두 글 — `SyncOrchestrator.localChangeDiff` · `remoteChangeDiff` 가 내고,
+ * `lineDiff` 로 견준다.
+ */
+export interface ChangeDiff {
+  /** 볼트 경로 — 옮긴 노트는 새 자리. */
+  readonly path: string;
+  readonly type: LocalChange["type"];
+  /** 옮긴 노트의 옛 자리. */
+  readonly movedFrom?: string;
+  /** 지난 동기화 때의 글. 새 노트는 null — 견줄 옛 글이 없다. */
+  readonly before: string | null;
+  /** 지금 글 — 로컬 변경은 볼트의 글, 원격 변경은 Notion 의 글. 지운 노트 · 페이지는 null. */
+  readonly after: string | null;
+}
+
 export interface StatusResult {
   readonly localChanges: LocalChange[];
+  /** 옮긴 폴더. 그 안의 노트는 `localChanges` 에 `moved` 로 따로 있다. */
+  readonly folderMoves: readonly FolderMoveChange[];
   readonly remoteChanges: RemoteChange[];
   readonly conflicts: Conflict[];
   readonly conflictRecords: SyncRecord[];
   readonly pendingOperations: number;
   readonly lastSyncAt: string | null;
+  /**
+   * 마지막으로 원격을 전체 대조한 pull 이 시작한 때. 한 번도 없으면 null. Notion 에서 지운 노트는 전체
+   * 대조 때 볼트에 반영된다 — 화면은 이것으로 그때를 알린다 (ADR-027).
+   */
+  readonly lastFullScanAt: string | null;
+  /** 원격을 얼마나 훑었나. 로컬만 본 확인(`statusLocal`)에는 없다. */
+  readonly remoteScan?: RemoteScanInfo;
 }
 
 export interface FailedOperation {

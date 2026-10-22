@@ -3,6 +3,11 @@ import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import type { Config } from "../../src/types/config.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
+import {
+  MOCK_BOT_USER_ID,
+  mockDatabaseMeta,
+  settledObservation,
+} from "../helpers/mock-orchestrator.js";
 
 function createMockVaultFs(): VaultFS {
   return {
@@ -32,7 +37,8 @@ function createMockStateDb() {
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
-    setNotionLastEdited: vi.fn(),
+    setRemoteObservation: vi.fn(),
+    setNotionBodyFingerprint: vi.fn(),
     updateStatCache: vi.fn(),
     setNotionParentId: vi.fn(),
     delete: vi.fn(),
@@ -98,9 +104,11 @@ function createMockNotionClient() {
     extractProperties: vi.fn().mockReturnValue({}),
     setWikilinkResolver: vi.fn(),
     getDatabaseSchema: vi.fn().mockResolvedValue({}),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     movePage: vi.fn().mockResolvedValue({}),
+    getBotUserId: vi.fn().mockResolvedValue(MOCK_BOT_USER_ID),
   };
 }
 
@@ -141,7 +149,7 @@ describe("pushUpdatePage (full replace)", () => {
       obsidianPath: "test.md",
       notionPageId: "page-1",
       contentHash: "old-hash",
-      notionLastEdited: "2026-01-01T00:00:00Z",
+      ...settledObservation("2026-01-01T00:00:00Z"),
       localMtime: "2026-01-01T00:00:00Z",
       localFileSize: 80,
       baseSnapshot: Buffer.from(oldContent, "utf-8"),
@@ -176,7 +184,7 @@ describe("pushUpdatePage (full replace)", () => {
       obsidianPath: "test.md",
       notionPageId: "page-1",
       contentHash: "old-hash",
-      notionLastEdited: "2026-01-01T00:00:00Z",
+      ...settledObservation("2026-01-01T00:00:00Z"),
       localMtime: "2026-01-01T00:00:00Z",
       localFileSize: 80,
       baseSnapshot: null,

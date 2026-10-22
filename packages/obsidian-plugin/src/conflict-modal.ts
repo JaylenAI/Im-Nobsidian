@@ -1,17 +1,27 @@
 import { Modal, Setting } from "obsidian";
 import type { App } from "obsidian";
+import { mount, unmount } from "svelte";
+import { applicableChoices, isRemoteDeletion, lineDiff } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import { choiceText } from "./conflict-choices.js";
+import DiffLines from "./views/DiffLines.svelte";
 
 export class ConflictModal extends Modal {
-  private readonly onResolve: (choice: ResolutionChoice) => void;
+  private answered = false;
+  private diffView: ReturnType<typeof mount> | null = null;
 
+  /**
+   * @param onResolve 고른 것을 한 번 알린다. 고르지 않고 닫으면(Esc · 바깥 클릭) null — 예전에는
+   *   아무것도 알리지 않아, 기다리던 해결 흐름이 멈추고 남은 충돌을 묻지 않았다(N-06).
+   */
+  /** @param uploads 해소 결과를 Notion 에 올리는 설정인가 — Pull만 하는 설정이면 false. */
   constructor(
     app: App,
     private readonly conflict: Conflict,
-    onResolve: (choice: ResolutionChoice) => void,
+    private readonly onResolve: (choice: ResolutionChoice | null) => void,
+    private readonly uploads = true,
   ) {
     super(app);
-    this.onResolve = onResolve;
   }
 
   onOpen(): void {
@@ -25,81 +35,56 @@ export class ConflictModal extends Modal {
       cls: "im-nobsidian-conflict-path",
     });
 
-    const diffContainer = contentEl.createDiv({ cls: "im-nobsidian-diff-container" });
-    this.renderDiff(diffContainer);
+    if (isRemoteDeletion(this.conflict)) {
+      // 견줄 원격 본문이 없다 — 줄 비교는 로컬 전부를 지운 것으로 보여 준다.
+      contentEl.createEl("p", {
+        text: "Notion 에서 삭제된 노트입니다 — Notion 에 올리지 않은 로컬 편집이 남아 있습니다.",
+        cls: "im-nobsidian-conflict-remote-deleted",
+      });
+    } else {
+      // 줄마다 같은 자리끼리 견주면 한 줄을 끼운 것만으로 그 아래가 모두 바뀐 것으로 보였다 — 실제 줄 비교로 보인다.
+      this.diffView = mount(DiffLines, {
+        target: contentEl.createDiv(),
+        props: {
+          hunks: lineDiff(this.conflict.localContent, this.conflict.remoteContent),
+          oldLabel: "로컬 (Obsidian)",
+          newLabel: "원격 (Notion)",
+          emptyText: "로컬과 원격의 내용이 같습니다",
+        },
+      });
+    }
 
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
 
-    new Setting(buttonContainer)
-      .setName("로컬 유지")
-      .setDesc("현재 Obsidian 파일을 유지합니다")
-      .addButton((btn) =>
-        btn
-          .setButtonText("로컬 유지")
-          .setCta()
-          .onClick(() => this.selectChoice("local")),
-      );
-
-    new Setting(buttonContainer)
-      .setName("원격 유지")
-      .setDesc("Notion 버전으로 덮어씁니다")
-      .addButton((btn) =>
-        btn.setButtonText("원격 유지").onClick(() => this.selectChoice("remote")),
-      );
-
-    new Setting(buttonContainer)
-      .setName("자동 병합")
-      .setDesc("3-way merge로 두 변경사항을 합칩니다")
-      .addButton((btn) => btn.setButtonText("자동 병합").onClick(() => this.selectChoice("merge")));
-
-    new Setting(buttonContainer)
-      .setName("복제")
-      .setDesc("현재 파일을 유지하고 Notion 버전을 .conflict 파일로 저장합니다")
-      .addButton((btn) => btn.setButtonText("복제").onClick(() => this.selectChoice("duplicate")));
+    for (const choice of applicableChoices(this.conflict)) {
+      const { label, description } = choiceText(this.conflict, choice, this.uploads);
+      new Setting(buttonContainer)
+        .setName(label)
+        .setDesc(description)
+        .addButton((btn) => {
+          btn.setButtonText(label).onClick(() => this.selectChoice(choice));
+          if (choice === "local") btn.setCta();
+        });
+    }
   }
 
   onClose(): void {
+    if (this.diffView) {
+      void unmount(this.diffView);
+      this.diffView = null;
+    }
     this.contentEl.empty();
+    this.answer(null);
   }
 
   private selectChoice(choice: ResolutionChoice): void {
+    this.answer(choice);
     this.close();
-    this.onResolve(choice);
   }
 
-  private renderDiff(container: HTMLElement): void {
-    const localLines = this.conflict.localContent.split("\n");
-    const remoteLines = this.conflict.remoteContent.split("\n");
-
-    const header = container.createDiv({ cls: "im-nobsidian-diff-header" });
-    header.createSpan({ text: "로컬 (Obsidian)", cls: "im-nobsidian-diff-label-local" });
-    header.createSpan({ text: " vs " });
-    header.createSpan({ text: "원격 (Notion)", cls: "im-nobsidian-diff-label-remote" });
-
-    const diffBody = container.createDiv({ cls: "im-nobsidian-diff-body" });
-
-    const maxLen = Math.max(localLines.length, remoteLines.length);
-    for (let i = 0; i < maxLen; i++) {
-      const localLine = localLines[i];
-      const remoteLine = remoteLines[i];
-
-      if (localLine === remoteLine) {
-        const line = diffBody.createDiv({ cls: "im-nobsidian-diff-line im-nobsidian-diff-same" });
-        line.createSpan({ text: `  ${localLine ?? ""}` });
-      } else {
-        if (localLine !== undefined) {
-          const line = diffBody.createDiv({
-            cls: "im-nobsidian-diff-line im-nobsidian-diff-removed",
-          });
-          line.createSpan({ text: `- ${localLine}` });
-        }
-        if (remoteLine !== undefined) {
-          const line = diffBody.createDiv({
-            cls: "im-nobsidian-diff-line im-nobsidian-diff-added",
-          });
-          line.createSpan({ text: `+ ${remoteLine}` });
-        }
-      }
-    }
+  private answer(choice: ResolutionChoice | null): void {
+    if (this.answered) return;
+    this.answered = true;
+    this.onResolve(choice);
   }
 }

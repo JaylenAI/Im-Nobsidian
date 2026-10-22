@@ -4,6 +4,12 @@
 
 <span color="yellow_background">배경색</span>과 <span color="gray">회색 본문</span>도 섞어 쓴다.
 
+<span color="red" underline="true">**굵게+빨강+밑줄**</span>은 한 태그로 오고, <span underline="true">밑줄만</span>인 글도 있다.
+
+```html
+<span color="red">코드 안의 span 은 예제 글자다</span>
+```
+
 수식은 문단 안에서 $E = mc^2$ 처럼 쓰고, 블록 수식은 아래처럼 둔다.
 
 $$

@@ -4,6 +4,7 @@ import { join, relative, dirname } from "node:path";
 import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 import { IGNORE_FILE } from "../constants/paths.js";
+import { isMarkdownPath } from "../utils/markdown-path.js";
 
 export interface PathFilterConfig {
   readonly include?: string[];
@@ -32,8 +33,10 @@ export class NodeVaultFS implements VaultFS {
         .split("\n")
         .map((line: string) => line.trim())
         .filter((line: string) => line && !line.startsWith("#"));
-    } catch {
-      return [];
+    } catch (error) {
+      // 읽지 못한 제외 파일을 빈 목록으로 보면 제외했던 파일이 말없이 올라간다 — 없을 때만 빈 목록이다.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
     }
   }
 
@@ -159,7 +162,7 @@ export class NodeVaultFS implements VaultFS {
         // .base 도 포함해 반환한다 — 여기서 빼면 DB rename 고아 .base 정리
         // (cleanupStaleDbArtifacts)가 영원히 못 본다. 첨부 업로드 제외는
         // 소비자(FileHandler.listUploadableFiles)가 책임진다.
-      } else if (entry.isFile() && !entry.name.endsWith(".md")) {
+      } else if (entry.isFile() && !isMarkdownPath(entry.name)) {
         const fileStat = await stat(fullPath);
         result.push({
           path: relativePath,
@@ -184,7 +187,7 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.isDirectory()) {
         await this.walkDirStats(fullPath, result);
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      } else if (entry.isFile() && isMarkdownPath(entry.name)) {
         const fileStat = await stat(fullPath);
         result.push({
           path: relativePath,
@@ -209,7 +212,7 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.isDirectory()) {
         await this.walkDir(fullPath, result);
-      } else if (entry.isFile() && entry.name.endsWith(".md")) {
+      } else if (entry.isFile() && isMarkdownPath(entry.name)) {
         const content = await readFile(fullPath, "utf-8");
         const fileStat = await stat(fullPath);
 

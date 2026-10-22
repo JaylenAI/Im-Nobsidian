@@ -1,8 +1,5 @@
-import matter from "gray-matter";
-import { stringifyFrontmatter } from "../utils/frontmatter.js";
-
-/** 대시 포함(8-4-4-4-12) 또는 대시 없는 32 hex Notion ID 전체 일치 패턴. */
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$|^[0-9a-f]{32}$/i;
+import { splitFrontmatter, stringifyFrontmatter } from "../utils/frontmatter.js";
+import { isNotionId } from "../utils/id.js";
 
 /**
  * frontmatter 의 relation/people 속성에 박힌 원시 Notion UUID 를 `[[제목]]` 위키링크로 치환한다.
@@ -24,27 +21,27 @@ export function resolveFrontmatterRelations(
   content: string,
   idToTitle: Map<string, string>,
 ): { content: string; count: number } {
-  if (!content.startsWith("---") || idToTitle.size === 0) {
+  if (idToTitle.size === 0) {
     return { content, count: 0 };
   }
 
-  let parsed: ReturnType<typeof matter>;
+  let parsed: ReturnType<typeof splitFrontmatter>;
   try {
-    parsed = matter(content);
+    parsed = splitFrontmatter(content);
   } catch {
-    // frontmatter 파싱 실패(예: 본문 선행 `---` 오인) 시 무손실 패스
+    // 깨진 frontmatter 는 건드리지 않는다(무손실 패스)
     return { content, count: 0 };
   }
 
-  const data = parsed.data as Record<string, unknown>;
-  if (!data || Object.keys(data).length === 0) {
+  const data = parsed.data;
+  if (Object.keys(data).length === 0) {
     return { content, count: 0 };
   }
 
   let count = 0;
   const resolveValue = (value: unknown): unknown => {
     if (typeof value === "string") {
-      if (!UUID_RE.test(value)) return value;
+      if (!isNotionId(value)) return value;
       const title = idToTitle.get(value.replace(/-/g, ""));
       if (!title) return value;
       count++;
@@ -54,9 +51,7 @@ export function resolveFrontmatterRelations(
     return value;
   };
 
-  // gray-matter 는 입력 문자열을 키로 파싱 결과를 캐시한다. `data` 를 in-place 로
-  // 수정하면 동일 frontmatter 를 가진 다른 파일이 오염된 캐시 객체를 공유해
-  // cross-file 오염이 발생한다. 반드시 새 객체에 결과를 담아 캐시를 건드리지 않는다.
+  // 읽은 값을 고치지 않고 새 객체에 담는다 — 해소가 0 건이면 원본을 그대로 돌려준다.
   const resolved: Record<string, unknown> = {};
   for (const key of Object.keys(data)) {
     resolved[key] = resolveValue(data[key]);

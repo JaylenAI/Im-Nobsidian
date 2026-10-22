@@ -1,0 +1,22 @@
+{
+  "markdown": "<synced_block>\n\tinside sync\n</synced_block>\n<tabs>\n\t<tab>\n\t\tA content\n\t</tab>\n\t<tab>\n\t\tB content\n\t\t- b li\n\t</tab>\n</tabs>\n<columns>\n\t<column ratio=\"30\">\n\t\tL\n\t</column>\n\t<column ratio=\"70\">\n\t\tR\n\t</column>\n</columns>\n<details>\n<summary>**bold** <span color=\"red\">red</span> sum</summary>\n\tx\n</details>\n<callout icon=\"https://www.gstatic.com/webp/gallery/1.png\">\n\ttext\n\t<empty-block/>\n</callout>\n<table>\n<tr><td>a<br>b</td><td>**c**</td></tr>\n</table>",
+  "notion": [
+    "synced_block {} ",
+    "  paragraph {} T\"inside sync\"",
+    "tab {} ",
+    "  paragraph {} T\"A content\"",
+    "  paragraph {} T\"B content\"",
+    "    bulleted_list_item {} T\"b li\"",
+    "column_list {} ",
+    "  column {\"width_ratio\":0.3} ",
+    "    paragraph {} T\"L\"",
+    "  column {\"width_ratio\":0.7} ",
+    "    paragraph {} T\"R\"",
+    "toggle {} T\"bold\"/b + T\" \" + T\"red\"/red + T\" sum\"",
+    "  paragraph {} T\"x\"",
+    "callout {\"icon\":{\"type\":\"external\",\"external\":{\"url\":\"https://www.gstatic.com/webp/gallery/1.png\"}}} T\"text\"",
+    "  paragraph {} ",
+    "table {\"table_width\":2} ",
+    "  row T\"a\\nb\" | T\"c\"/b"
+  ]
+}

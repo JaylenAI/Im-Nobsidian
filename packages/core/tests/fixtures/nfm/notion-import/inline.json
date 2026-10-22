@@ -1,0 +1,12 @@
+{
+  "markdown": "__b__ _i_ ***bi*** ~~s~~ `c*d` [l](https://example.com) <u>u</u> <span color=\"red\">r</span> <span underline=\"true\">u2</span> <span color=\"blue_bg\" underline=\"true\">bu</span>\n$`x^2`$ and $x$ and \\* \\$ \\[x\\] &amp; &lt;b&gt;\nhard  \nbreak and a<br>b and **bold<br>more**\n<https://example.com/auto> and https://example.com/bare\n[[wiki link]] and %% comment %% and ==mark==\n**bold `code` in** and *it [link](https://example.com) x*",
+  "notion": [
+    "paragraph {} T\"b\"/b + T\" \" + T\"i\"/i + T\" \" + T\"bi\"/bi + T\" \" + T\"s\"/s + T\" \" + T\"c*d\"/c + T\" \" + T\"l\"→https://example.com/ + T\" <u>u</u> \" + T\"r\"/red + T\" \" + T\"u2\"/u + T\" \" + T\"bu\"/u/blue_background",
+    "paragraph {} EQ[x^2] + T\" and \" + EQ[x] + T\" and * $ [x] &amp; &lt;b&gt;\"",
+    "paragraph {} T\"hard  \"",
+    "paragraph {} T\"break and a\\nb and \" + T\"bold\\nmore\"/b",
+    "paragraph {} T\"<\" + T\"https://example.com/auto\"→https://example.com/auto + T\"> and \" + T\"https://example.com/bare\"→https://example.com/bare",
+    "paragraph {} T\"[[wiki link]] and %% comment %% and ==mark==\"",
+    "paragraph {} T\"bold \"/b + T\"code\"/bc + T\" in\"/b + T\" and \" + T\"it \"/i + T\"link\"→https://example.com//i + T\" x\"/i"
+  ]
+}

@@ -175,13 +175,15 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Due).toBe("2026-01-01");
   });
 
-  it("date 속성 추출 (end 있음)", () => {
+  it("date 속성 추출 (end 있음) — 시작은 그 키, 끝은 _end 키 (F-08)", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Due: { type: "date", date: { start: "2026-01-01", end: "2026-12-31" } },
     });
 
-    expect(client.extractProperties(page).Due).toEqual({ start: "2026-01-01", end: "2026-12-31" });
+    const props = client.extractProperties(page);
+    expect(props.Due).toBe("2026-01-01");
+    expect(props.Due_end).toBe("2026-12-31");
   });
 
   it("phone_number 속성 추출", () => {
@@ -209,20 +211,28 @@ describe("NotionClient - extractProperties", () => {
     expect(client.extractProperties(page).Status).toBeNull();
   });
 
-  it("created_time 속성 추출", () => {
+  // 시각은 설정 시간대의 벽시계 시각 — Obsidian 날짜시각 속성의 모양이다(F-08).
+  const seoulClient = new NotionClient({
+    token: "ntn_test_fake_token",
+    concurrency: 1,
+    timeoutMs: 1000,
+    timeZone: "Asia/Seoul",
+  });
+
+  it("created_time 속성 추출 — 설정 시간대의 벽시계 시각", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Created: { type: "created_time", created_time: "2026-01-15T09:00:00.000Z" },
     });
-    expect(client.extractProperties(page).Created).toBe("2026-01-15T09:00:00.000Z");
+    expect(seoulClient.extractProperties(page).Created).toBe("2026-01-15T18:00");
   });
 
-  it("last_edited_time 속성 추출", () => {
+  it("last_edited_time 속성 추출 — 설정 시간대의 벽시계 시각", () => {
     const page = createMockPage({
       title: { type: "title", title: [{ plain_text: "T" }] },
       Edited: { type: "last_edited_time", last_edited_time: "2026-05-10T12:30:00.000Z" },
     });
-    expect(client.extractProperties(page).Edited).toBe("2026-05-10T12:30:00.000Z");
+    expect(seoulClient.extractProperties(page).Edited).toBe("2026-05-10T21:30");
   });
 
   it("people 속성 추출", () => {
@@ -696,8 +706,19 @@ describe("isNotionObjectNotFound — 404 권위 판별 (결함9)", () => {
 
 describe("NotionClient.getDatabaseSyncability — 접근성 선판별 (결함9)", () => {
   function stubRetrieve(client: NotionClient, value: unknown): void {
-    // 내부 SDK 클라이언트의 databases.retrieve 를 교체해 네트워크 없이 응답을 주입한다.
-    (client as any).client.databases.retrieve = vi.fn().mockResolvedValue(value);
+    // 내부 SDK 클라이언트의 retrieve 를 교체해 네트워크 없이 응답을 주입한다. data source 는 조회한
+    // DB 의 것(원본 DB)으로 답한다 — 막지 않으면 소유 판정이 실제 HTTPS 로 나가, 가짜 토큰으로
+    // 재시도하다 전량 실행에서 가끔 시간 초과가 났다(T-01).
+    const sdk = (client as any).client;
+    let databaseId = "";
+    sdk.databases.retrieve = vi.fn().mockImplementation(async ({ database_id }) => {
+      databaseId = database_id;
+      return value;
+    });
+    sdk.dataSources.retrieve = vi.fn().mockImplementation(async () => ({
+      object: "data_source",
+      parent: { type: "database_id", database_id: databaseId },
+    }));
   }
 
   it("data_sources 가 1개 이상이면 queryable=true + 제목 추출", async () => {

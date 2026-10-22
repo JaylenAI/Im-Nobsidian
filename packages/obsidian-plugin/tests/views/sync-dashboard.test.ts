@@ -13,14 +13,16 @@ import { renderComponent, normText, type Mounted } from "../helpers/mount-svelte
 
 interface SyncStateUpdate {
   lastSyncAt: string | null;
+  lastFullScanAt?: string | null;
   localChanges: unknown[];
   remoteChanges?: unknown[];
-  conflicts: unknown[];
+  conflictRecords: unknown[];
   syncState: "ready" | "syncing" | "error" | "conflict";
   operationType: "pull" | "push" | "sync" | null;
   progress: { current: number; total: number; currentPath: string } | null;
   errorMessage: string | null;
   completionSummary: string | null;
+  blocked: { push: string | null; pull: string | null };
 }
 
 let m: Mounted | null = null;
@@ -32,17 +34,22 @@ afterEach(() => {
   updater = null;
 });
 
+/** 동기화 방향이 막는 동작 없음 — 양방향. */
+const NOT_BLOCKED = { push: null, pull: null };
+
 function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
   return {
     lastSyncAt: null,
+    lastFullScanAt: null,
     localChanges: [],
     remoteChanges: [],
-    conflicts: [],
+    conflictRecords: [],
     syncState: "ready",
     operationType: null,
     progress: null,
     errorMessage: null,
     completionSummary: null,
+    blocked: NOT_BLOCKED,
     onReady: (fn: (s: SyncStateUpdate) => void) => {
       updater = fn;
     },
@@ -52,6 +59,11 @@ function baseProps(overrides: Partial<Record<string, unknown>> = {}) {
     onRefresh: vi.fn(),
     onCancel: vi.fn(),
     onOpenFile: vi.fn(),
+    onPushPath: vi.fn(),
+    onDiscard: vi.fn(),
+    onPullPath: vi.fn(),
+    onShowLocalDiff: vi.fn(),
+    onShowRemoteDiff: vi.fn(),
     onResolveConflict: vi.fn(),
     ...overrides,
   };
@@ -90,17 +102,49 @@ describe("SyncDashboard (I9 마운트)", () => {
     expect(progressText).toContain("감자"); // fileName() 이 .md 확장자를 제거
   });
 
-  it("conflict 상태: 충돌 건수 라벨 + 충돌 파일 목록 렌더", () => {
-    const conflicts = [
-      { syncRecord: { id: "r1" }, localChange: { path: "채소/감자.md" } },
-      { syncRecord: { id: "r2" }, localChange: { path: "채소/당근.md" } },
+  it("conflict 상태: 충돌 건수 라벨 + 충돌 기록의 노트 목록 + 해결 단추", () => {
+    const conflictRecords = [
+      { id: "r1", obsidianPath: "채소/감자.md" },
+      { id: "r2", obsidianPath: "채소/당근.md" },
     ];
-    m = renderComponent(SyncDashboard, baseProps({ syncState: "conflict", conflicts }));
+    const props = baseProps({ syncState: "conflict", conflictRecords });
+    m = renderComponent(SyncDashboard, props);
     expect(normText(m.target.querySelector(".im-sync-status-label"))).toBe("충돌 2건");
-    const items = m.target.querySelectorAll(".im-sync-conflict-item");
-    expect(items).toHaveLength(2);
-    expect(normText(m.target)).toContain("감자");
-    expect(normText(m.target)).toContain("당근");
+    expect(normText(m.target.querySelector(".im-sync-badge-warn"))).toBe("2");
+    const items = [...m.target.querySelectorAll(".im-sync-conflict-item")];
+    expect(items.map((item) => normText(item))).toEqual(["C 감자", "C 당근"]);
+    expect(
+      items.map((item) => item.querySelector(".im-sync-file-name")?.getAttribute("title")),
+    ).toEqual(["채소/감자.md", "채소/당근.md"]);
+    m.target.querySelector<HTMLElement>(".im-sync-resolve-btn")!.click();
+    expect(props.onResolveConflict).toHaveBeenCalledTimes(1);
+  });
+
+  it("충돌 기록이 비면 목록과 해결 단추가 사라진다", () => {
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "conflict",
+        conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      }),
+    );
+    expect(m.target.querySelector(".im-sync-resolve-btn")).not.toBeNull();
+
+    updater!({
+      lastSyncAt: null,
+      localChanges: [],
+      conflictRecords: [],
+      syncState: "ready",
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+      blocked: NOT_BLOCKED,
+    });
+    m.flush();
+
+    expect(m.target.querySelector(".im-sync-section-conflict")).toBeNull();
+    expect(normText(m.target.querySelector(".im-sync-status-label"))).toBe("준비됨");
   });
 
   it("onReady 업데이터로 완료 요약을 동적 갱신하면 완료 배너가 보인다", () => {
@@ -112,12 +156,13 @@ describe("SyncDashboard (I9 마운트)", () => {
       lastSyncAt: "2026-05-30T00:00:00.000Z",
       localChanges: [],
       remoteChanges: [],
-      conflicts: [],
+      conflictRecords: [],
       syncState: "ready",
       operationType: "pull",
       progress: null,
       errorMessage: null,
       completionSummary: "Pull 완료 · 5개 생성",
+      blocked: NOT_BLOCKED,
     });
     m.flush();
 
@@ -131,5 +176,345 @@ describe("SyncDashboard (I9 마운트)", () => {
     m = renderComponent(SyncDashboard, props);
     m.target.querySelector<HTMLElement>(".im-sync-refresh-btn")!.click();
     expect(props.onRefresh).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("변경 패널 — 항목별 동작", () => {
+  const PULL = 'button[aria-label="이 노트만 Notion 에서 받기"]';
+  const PULL_DELETION = 'button[aria-label="Notion 에서 지운 대로 이 노트도 지우기"]';
+  const PUSH = 'button[aria-label="이 노트만 Notion 에 올리기"]';
+  const DISCARD = 'button[aria-label="지난 동기화 때의 글로 되돌리기"]';
+  const OPEN = 'button[aria-label="노트 열기"]';
+
+  const remoteChanges = [
+    { pageId: "3e813b18-d382-8127-a761-c5dc986d858a", type: "modified", path: "채소/감자.md" },
+    { pageId: "3e913b18-0000-4000-8000-0000000071e0", type: "created", title: "Notion 새 페이지" },
+    { pageId: "3e913b18-0000-4000-8000-00000000365e", type: "deleted", path: "과일/사과.md" },
+  ];
+
+  it("원격 변경은 내부 id 대신 노트 이름 · 폴더, 새 페이지는 Notion 제목으로 보인다", () => {
+    m = renderComponent(SyncDashboard, baseProps({ remoteChanges }));
+    const names = [...m.target.querySelectorAll(".im-sync-file-name")].map(normText);
+    const folders = [...m.target.querySelectorAll(".im-sync-file-path")].map(normText);
+
+    expect(names).toEqual(["감자", "Notion 새 페이지", "사과"]);
+    expect(folders).toEqual(["채소", "새 페이지", "과일"]);
+    expect(m.target.innerHTML).not.toContain("3e813b18");
+  });
+
+  it("받기는 볼트에 있는 노트에만 있고 그 노트만 받는다 — 지운 노트는 지운다고 말한다", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    expect(m.target.querySelectorAll(PULL)).toHaveLength(1);
+    expect(m.target.querySelectorAll(PULL_DELETION)).toHaveLength(1);
+    m.target.querySelector<HTMLElement>(PULL)!.click();
+    m.target.querySelector<HTMLElement>(PULL_DELETION)!.click();
+    expect(props.onPullPath.mock.calls).toEqual([["채소/감자.md"], ["과일/사과.md"]]);
+  });
+
+  it("원격 항목을 누르면 그 노트의 줄 비교를 연다 — 아직 받지 않은 새 페이지는 견줄 글이 없어 열지 않는다", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+    const rows = m.target.querySelectorAll<HTMLElement>(".im-sync-file-item");
+
+    rows[0]!.click();
+    rows[1]!.click();
+    rows[2]!.click();
+    expect(props.onShowRemoteDiff.mock.calls).toEqual([[remoteChanges[0]], [remoteChanges[2]]]);
+    // 반응 프록시가 아닌 평범한 사본이다 — 프록시는 복제하면 깨진다.
+    expect(() => structuredClone(props.onShowRemoteDiff.mock.calls[0]![0])).not.toThrow();
+    expect(props.onOpenFile).not.toHaveBeenCalled();
+    expect(rows[1]!.classList.contains("im-sync-file-item-static")).toBe(true);
+  });
+
+  it("열기는 볼트의 그 노트를 연다 — 원격 항목도 볼트에 있는 노트만", () => {
+    const props = baseProps({ remoteChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    const opens = m.target.querySelectorAll<HTMLElement>(OPEN);
+    expect(opens).toHaveLength(2);
+    opens[0]!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["채소/감자.md"]]);
+    expect(props.onShowRemoteDiff).not.toHaveBeenCalled();
+  });
+
+  it("로컬 항목을 누르면 줄 비교를 연다 — 지운 노트도 무엇을 지웠는지 보이고, 열기는 볼트에 있는 노트에만 있다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" },
+      { path: "지운.md", type: "deleted", currentHash: "", previousHash: "h3" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+    const rows = m.target.querySelectorAll<HTMLElement>(".im-sync-file-item");
+
+    rows[0]!.click();
+    rows[1]!.click();
+    expect(props.onShowLocalDiff.mock.calls).toEqual([[localChanges[0]], [localChanges[1]]]);
+    expect(() => structuredClone(props.onShowLocalDiff.mock.calls[0]![0])).not.toThrow();
+    expect(props.onOpenFile).not.toHaveBeenCalled();
+
+    const opens = m.target.querySelectorAll<HTMLElement>(OPEN);
+    expect(opens).toHaveLength(1);
+    opens[0]!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["a/고친.md"]]);
+  });
+
+  it("동기화 중에는 올리기 · 받기 · 되돌리기를 누를 수 없다 — 노트 열기와 줄 비교는 보기만 해 된다", () => {
+    const localChanges = [{ path: "노트.md", type: "modified" }];
+    const props = baseProps({
+      remoteChanges,
+      localChanges,
+      syncState: "syncing",
+      operationType: "pull",
+    });
+    m = renderComponent(SyncDashboard, props);
+    const actions = [...m.target.querySelectorAll<HTMLButtonElement>(".im-sync-file-action")];
+    const opens = actions.filter((button) => button.matches(OPEN));
+    const writes = actions.filter((button) => !button.matches(OPEN));
+
+    expect(writes).toHaveLength(4);
+    expect(writes.every((button) => button.disabled)).toBe(true);
+    expect(opens).toHaveLength(3);
+    expect(opens.every((button) => !button.disabled)).toBe(true);
+    m.target.querySelector<HTMLElement>(".im-sync-file-item")!.click();
+    expect(props.onShowLocalDiff).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["push", "↑ Push", "↓ Pull"],
+    ["pull", "↓ Pull", "↑ Push"],
+  ] as const)(
+    "동기화 방향이 %s 를 막으면 그 단추와 항목 동작을 끄고 까닭을 보인다 (D2)",
+    (action, blockedLabel, openLabel) => {
+      const reason = `방향이 ${action} 를 막음`;
+      const localChanges = [{ path: "노트.md", type: "modified" }];
+      m = renderComponent(
+        SyncDashboard,
+        baseProps({
+          remoteChanges,
+          localChanges,
+          blocked: { ...NOT_BLOCKED, [action]: reason },
+        }),
+      );
+      const button = (label: string) =>
+        [...m!.target.querySelectorAll<HTMLButtonElement>(".im-sync-btn")].find(
+          (b) => normText(b) === label,
+        )!;
+
+      expect(button(blockedLabel).disabled).toBe(true);
+      expect(button(blockedLabel).title).toBe(reason);
+      expect(button(openLabel).disabled).toBe(false);
+      expect(button("⇅ Sync").disabled).toBe(false);
+      // 항목 동작은 설명(툴팁)이 까닭으로 바뀌고 꺼진다 — 다른 방향 동작은 그대로다
+      const items = [
+        ...m.target.querySelectorAll<HTMLButtonElement>(`button[aria-label="${reason}"]`),
+      ];
+      expect(items.length).toBeGreaterThan(0);
+      expect(items.every((b) => b.disabled)).toBe(true);
+      const other = action === "push" ? PULL : PUSH;
+      expect(m.target.querySelector<HTMLButtonElement>(other)!.disabled).toBe(false);
+    },
+  );
+
+  it("올리기는 그 노트만 올린다 — 새 노트에는 되돌릴 원본이 없어 되돌리기가 없다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified" },
+      { path: "새.md", type: "created" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+
+    expect(m.target.querySelectorAll(PUSH)).toHaveLength(2);
+    expect(m.target.querySelectorAll(DISCARD)).toHaveLength(1);
+    m.target.querySelectorAll<HTMLElement>(PUSH)[1]!.click();
+    expect(props.onPushPath).toHaveBeenCalledWith("새.md");
+  });
+
+  it("옮긴 폴더는 폴더 행으로, 옮긴 노트는 어디서 왔는지와 함께 보인다 — 올리기는 그 폴더를 올린다", () => {
+    const localChanges = [{ path: "B/x.md", type: "moved", movedFrom: "A/x.md" }];
+    const folderMoves = [{ from: "A", to: "B" }];
+    const props = baseProps({ localChanges, folderMoves });
+    m = renderComponent(SyncDashboard, props);
+
+    const names = [...m.target.querySelectorAll(".im-sync-file-name")].map(normText);
+    const where = [...m.target.querySelectorAll(".im-sync-file-path")].map(normText);
+    expect(names).toEqual(["B/", "x"]);
+    expect(where).toEqual(["← A", "← A/x"]);
+    expect(normText(m.target.querySelector(".im-sync-badge"))).toBe("2");
+    // 옮긴 노트는 되돌릴 수 없다(고침 · 지움만) — 올리기만 있다.
+    expect(m.target.querySelectorAll(DISCARD)).toHaveLength(0);
+    m.target
+      .querySelector<HTMLElement>('button[aria-label="이 폴더의 이동을 Notion 에 올리기"]')!
+      .click();
+    expect(props.onPushPath).toHaveBeenCalledWith("B");
+  });
+
+  it("되돌리기는 한 번 누르면 그 변경을 넘긴다 — 되돌릴지는 받는 쪽의 확인 창이 묻는다", () => {
+    const localChanges = [
+      { path: "a/고친.md", type: "modified", currentHash: "h2", previousHash: "h1" },
+      { path: "지운.md", type: "deleted", currentHash: "", previousHash: "h3" },
+    ];
+    const props = baseProps({ localChanges });
+    m = renderComponent(SyncDashboard, props);
+    const discards = m.target.querySelectorAll<HTMLElement>(DISCARD);
+
+    discards[0]!.click();
+    discards[1]!.click();
+    m.flush();
+
+    // 확인 창이 고친 노트인지 지운 노트인지를 말하도록 변경을 통째로 넘긴다.
+    expect(props.onDiscard.mock.calls).toEqual([[localChanges[0]], [localChanges[1]]]);
+    expect(() => structuredClone(props.onDiscard.mock.calls[0]![0])).not.toThrow();
+    // 예전에는 처음 누르면 단추 글이 「되돌리기?」 로 바뀌고 한 번 더 눌러야 했다.
+    expect([...m.target.querySelectorAll(DISCARD)].map(normText)).toEqual(["", ""]);
+  });
+
+  it("항목 동작은 글 없이 아이콘만 둔다 — 설명은 마우스를 올리면 뜨는 aria-label 이고 title 은 없다", () => {
+    const props = baseProps({
+      localChanges: [
+        { path: "a/고친.md", type: "modified" },
+        { path: "지운.md", type: "deleted" },
+      ],
+      folderMoves: [{ from: "A", to: "B" }],
+      remoteChanges,
+      conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      syncState: "conflict",
+    });
+    m = renderComponent(SyncDashboard, props);
+    const buttons = [...m.target.querySelectorAll<HTMLElement>(".im-sync-file-action")];
+    const iconOf = (button: Element) => button.querySelector("svg")?.getAttribute("class");
+
+    expect(buttons.map((button) => [button.getAttribute("aria-label"), iconOf(button)])).toEqual([
+      ["이 폴더의 이동을 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["이 노트만 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["지난 동기화 때의 글로 되돌리기", "svg-icon lucide-undo"],
+      ["이 노트만 Notion 에 올리기", "svg-icon lucide-upload"],
+      ["지난 동기화 때의 글로 되돌리기", "svg-icon lucide-undo"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["이 노트만 Notion 에서 받기", "svg-icon lucide-download"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+      ["Notion 에서 지운 대로 이 노트도 지우기", "svg-icon lucide-download"],
+      ["노트 열기", "svg-icon lucide-go-to-file"],
+    ]);
+    for (const button of buttons) {
+      expect(normText(button)).toBe("");
+      expect(button.hasAttribute("title")).toBe(false);
+      expect(button.classList.contains("clickable-icon")).toBe(true);
+    }
+    const refresh = m.target.querySelector(".im-sync-refresh-btn")!;
+    expect([normText(refresh), iconOf(refresh), refresh.hasAttribute("title")]).toEqual([
+      "",
+      "svg-icon lucide-refresh-cw",
+      false,
+    ]);
+  });
+
+  it("충돌 중인 노트는 변경 · 원격 목록에 없고 충돌 칸에만 있다 — 거기서 노트를 열 수 있다", () => {
+    const props = baseProps({
+      syncState: "conflict",
+      localChanges: [
+        { path: "배추.md", type: "modified" },
+        { path: "a/고친.md", type: "modified" },
+      ],
+      remoteChanges: [
+        { pageId: "p1", type: "modified", path: "배추.md" },
+        { pageId: "p2", type: "modified", path: "채소/감자.md" },
+      ],
+      conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+    });
+    m = renderComponent(SyncDashboard, props);
+    const [changes, remote, conflicts] = [...m.target.querySelectorAll(".im-sync-section")];
+    const names = (section: Element | undefined) =>
+      [...section!.querySelectorAll(".im-sync-file-name")].map(normText);
+
+    // 올리기는 충돌 노트를 건너뛰고 되돌리기는 거절한다 — 변경 목록에 두면 눌러도 소용이 없다.
+    expect(names(changes)).toEqual(["고친"]);
+    expect(names(remote)).toEqual(["감자"]);
+    expect(names(conflicts)).toEqual(["배추"]);
+    expect([...m.target.querySelectorAll(".im-sync-badge")].map(normText)).toEqual(["1", "1", "1"]);
+
+    conflicts!.querySelector<HTMLElement>(OPEN)!.click();
+    expect(props.onOpenFile.mock.calls).toEqual([["배추.md"]]);
+  });
+
+  it("오류를 보이는 동안에는 모르는 것을 없다고 하지 않는다 — 「변경 사항 없음」 · 「아직 동기화 안됨」", () => {
+    const meta = () => normText(m!.target.querySelector(".im-sync-meta-value"));
+    m = renderComponent(SyncDashboard, baseProps());
+    expect(normText(m.target.querySelector(".im-sync-empty"))).toBe("변경 사항 없음");
+    expect(meta()).toBe("아직 동기화 안됨");
+    m.destroy();
+
+    // 초기화가 실패하면 상태 DB 를 못 읽어 목록도 마지막 동기화도 모른다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({ syncState: "error", errorMessage: "초기화 실패: 상태 DB 를 읽지 못함" }),
+    );
+    expect(m.target.querySelector(".im-sync-empty")).toBeNull();
+    expect(m.target.querySelector(".im-sync-meta")).toBeNull();
+    expect(normText(m.target.querySelector(".im-sync-error"))).toBe(
+      "초기화 실패: 상태 DB 를 읽지 못함",
+    );
+    m.destroy();
+
+    // 읽은 적이 있으면 오류 중에도 마지막 동기화를 보인다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "error",
+        errorMessage: "Pull 실패: 토큰 만료",
+        lastSyncAt: new Date().toISOString(),
+      }),
+    );
+    expect(meta()).toBe("방금 전");
+  });
+
+  it("전체 확인 줄 — 마지막 전체 대조를 보이고, 툴팁이 Notion 에서 지운 노트가 언제 반영되는지 말한다", () => {
+    const row = () => m!.target.querySelector(".im-sync-meta-full");
+    const value = () => normText(row()?.querySelector(".im-sync-meta-value") ?? null);
+    m = renderComponent(SyncDashboard, baseProps());
+    expect(normText(row()?.querySelector(".im-sync-meta-label") ?? null)).toBe("전체 확인");
+    expect(value()).toBe("아직 안 함");
+    expect(row()?.getAttribute("aria-label")).toContain("Notion 에서 지운 노트는 전체 확인 때");
+    expect(row()?.getAttribute("aria-label")).toContain("Pull from Notion (전체 확인)");
+
+    updater!({
+      lastSyncAt: null,
+      lastFullScanAt: new Date(Date.now() - 5 * 60_000 - 1_000).toISOString(),
+      localChanges: [],
+      conflictRecords: [],
+      syncState: "ready",
+      operationType: null,
+      progress: null,
+      errorMessage: null,
+      completionSummary: null,
+      blocked: NOT_BLOCKED,
+    });
+    m.flush();
+    expect(value()).toBe("5분 전");
+    m.destroy();
+
+    // 초기화가 실패하면 상태 DB 를 못 읽었다 — 「아직 안 함」 이 거짓일 수 있어 줄을 뺀다
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({ syncState: "error", errorMessage: "초기화 실패: 상태 DB 를 읽지 못함" }),
+    );
+    expect(row()).toBeNull();
+  });
+
+  it("충돌만 남았으면 「변경 사항 없음」 을 띄우지 않는다 — 충돌 칸이 할 일을 말한다", () => {
+    m = renderComponent(
+      SyncDashboard,
+      baseProps({
+        syncState: "conflict",
+        localChanges: [{ path: "배추.md", type: "modified" }],
+        conflictRecords: [{ id: "r1", obsidianPath: "배추.md" }],
+      }),
+    );
+
+    expect(m.target.querySelector(".im-sync-empty")).toBeNull();
+    expect(m.target.querySelectorAll(".im-sync-section")).toHaveLength(1);
+    expect(m.target.querySelector(".im-sync-section-conflict")).not.toBeNull();
   });
 });

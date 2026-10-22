@@ -6,11 +6,13 @@ import { pullCommand } from "./commands/pull.js";
 import { syncCommand } from "./commands/sync.js";
 import { statusCommand } from "./commands/status.js";
 import { diffCommand } from "./commands/diff.js";
+import { discardCommand } from "./commands/discard.js";
 import { fetchCommand } from "./commands/fetch.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { watchCommand } from "./commands/watch.js";
 import { verifyCommand } from "./commands/verify.js";
 import { scheduleForcedExit } from "./utils/exit.js";
+import { reportStateDbFailure } from "./utils/state-db-failure.js";
 
 const requireJson = createRequire(import.meta.url);
 const { version } = requireJson("../package.json") as { version: string };
@@ -30,12 +32,20 @@ program.addCommand(pullCommand);
 program.addCommand(syncCommand);
 program.addCommand(statusCommand);
 program.addCommand(diffCommand);
+program.addCommand(discardCommand);
 program.addCommand(fetchCommand);
 program.addCommand(resolveCommand);
 program.addCommand(watchCommand);
 program.addCommand(verifyCommand);
 
 // 강제 종료하되 명령이 정한 종료 코드를 보존한다 — 근거는 utils/exit.ts 참조(R11-C).
-program.parseAsync().then(() => {
-  scheduleForcedExit(process);
-});
+// 상태 DB 를 쓸 수 없어 명령이 던졌으면 이유와 할 일을 보이고 1 로 끝낸다 — utils/state-db-failure.ts.
+program.parseAsync().then(
+  () => {
+    scheduleForcedExit(process);
+  },
+  (error: unknown) => {
+    reportStateDbFailure(error, process);
+    scheduleForcedExit(process);
+  },
+);

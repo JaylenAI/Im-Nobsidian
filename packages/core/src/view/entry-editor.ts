@@ -1,7 +1,6 @@
 import type { VaultFS } from "../sync/vault-fs.js";
 import type { DBEntry, PropertyValue } from "./types.js";
-import matter from "gray-matter";
-import { stringifyFrontmatter } from "../utils/frontmatter.js";
+import { splitFrontmatter, stringifyFrontmatter } from "../utils/frontmatter.js";
 
 export class EntryEditor {
   constructor(private readonly vaultFs: VaultFS) {}
@@ -12,11 +11,12 @@ export class EntryEditor {
     newValue: PropertyValue,
   ): Promise<void> {
     const content = await this.vaultFs.readFile(entryPath);
-    const parsed = matter(content);
-
-    parsed.data[propertyName] = newValue;
-
-    const updated = stringifyFrontmatter(parsed.content, parsed.data);
+    // 깨진 frontmatter 는 던진다 — 속성 하나만 적은 frontmatter 로 덮어쓰지 않는다.
+    const parsed = splitFrontmatter(content);
+    const updated = stringifyFrontmatter(parsed.content, {
+      ...parsed.data,
+      [propertyName]: newValue,
+    });
     await this.vaultFs.writeFile(entryPath, updated);
   }
 

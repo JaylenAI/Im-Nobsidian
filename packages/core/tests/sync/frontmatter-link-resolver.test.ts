@@ -84,6 +84,23 @@ body
     expect(content).toBe(plain);
   });
 
+  it("구분선으로 시작하는 본문은 frontmatter 로 읽지 않고 그대로 둔다", () => {
+    // gray-matter 는 첫 두 구분선 사이의 목록을 속성으로 읽어 `'0': [[제목]]` frontmatter 로 다시 썼다.
+    const note = "---\n- 1c013b18-d382-8377-9e12-81ab4578b0b9\n---\n\n본문\n";
+    const map = idMap([["1c013b18-d382-8377-9e12-81ab4578b0b9", "이선 몰릭"]]);
+    expect(resolveFrontmatterRelations(note, map)).toEqual({ content: note, count: 0 });
+  });
+
+  it("첫 줄이 `---js` 인 노트를 실행하지 않고 그대로 둔다", () => {
+    const probe = "__linkResolverEvalProbe";
+    const note = `---js\nglobalThis.${probe} = 1\n---\n\n본문\n`;
+    expect(resolveFrontmatterRelations(note, idMap([["a", "b"]]))).toEqual({
+      content: note,
+      count: 0,
+    });
+    expect((globalThis as Record<string, unknown>)[probe]).toBeUndefined();
+  });
+
   it("멱등성: 이미 해소된 결과를 재실행하면 변화 없음", () => {
     const map = idMap([
       ["1c013b18-d382-8377-9e12-81ab4578b0b9", "이선 몰릭"],

@@ -1,4 +1,4 @@
-import { WIKILINK_PROTOCOL, EMBED_PROTOCOL } from "../constants/markers.js";
+import { WIKILINK_PROTOCOL, EMBED_PROTOCOL, MARKER_BRAND_RE } from "../constants/markers.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 
@@ -9,9 +9,14 @@ import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./
  * 동일한 규칙을 써야 하므로 한곳에서 정의한다. 마커가 없는 문자열에는 무영향(no-op).
  */
 
-/** Notion 페이지 링크 → `[[display]]`. */
+/**
+ * Notion 페이지 링크 → `[[display]]`.
+ *
+ * 보존 마커가 바로 뒤따르는 링크는 뺀다 — 북마크 · 임베드의 가시 링크다(`enhanced-md-converter` 의
+ * `degradeLink`). Notion 주소를 북마크하면 그 링크가 위키링크로 바뀌어, 누르면 없는 노트가 열렸다(F-09).
+ */
 const NOTION_LINK_REGEX = new RegExp(
-  `\\[${MARKER_LABEL_CAPTURE}\\]\\((?:https:\\/\\/(?:www\\.)?notion\\.so\\/|notion:\\/\\/)([a-f0-9-]+)\\)`,
+  `\\[${MARKER_LABEL_CAPTURE}\\]\\((?:https:\\/\\/(?:www\\.)?notion\\.so\\/|notion:\\/\\/)([a-f0-9-]+)\\)(?!%%${MARKER_BRAND_RE}:(?:unknown|embed):)`,
   "g",
 );
 

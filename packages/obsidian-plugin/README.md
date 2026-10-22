@@ -6,17 +6,17 @@ Sync your vault with Notion without leaving Obsidian. Runs entirely on a sql.js 
 
 ## Features
 
-- **Sync sidebar dashboard** — Push / Pull / Sync buttons, % progress bar, bidirectional change detection, cancel button.
+- **Sync sidebar dashboard** — Push / Pull / Sync buttons, % progress bar, cancel button, and a Git-style change list: click a file to see its line diff against the last sync, then push, revert or pull just that file with its icon buttons (hover an icon for what it does; revert asks first). Conflicted notes are listed only under Conflicts.
 - **6 database view types** — Gallery, Board, Table, Calendar, List, Timeline (Svelte 5).
 - **Notion DB → Obsidian Bases** — `.base` files generated automatically, with gallery cover images.
 - **Inline table editing**, conflict-resolution modal, and ribbon icons for one-click sync.
-- **Lossless round-trip** — 25+ block types, colors, underlines and Notion-only blocks preserved.
+- **Round-trip that settles** — 25+ block types, colors, underlines and Notion-only blocks survive a push and pull; where Notion stores something differently the note changes once and then stays put (see [Known Limitations](https://github.com/JaylenAI/Im-Nobsidian#known-limitations)).
 
 ## Install
 
 ### Community plugins
 
-Submission to the Obsidian community plugin store is in progress.
+Not listed in the community plugin store yet — install with BRAT or by hand below.
 
 ### BRAT (beta)
 
@@ -26,25 +26,27 @@ Submission to the Obsidian community plugin store is in progress.
 
 ### Manual
 
-Copy **four** files from a [release](https://github.com/JaylenAI/Im-Nobsidian/releases) —
-`main.js`, `manifest.json`, `styles.css` and `sql-wasm.wasm` — into
-`<vault>/.obsidian/plugins/im-notion-sync/`.
+Copy **three** files from a [release](https://github.com/JaylenAI/Im-Nobsidian/releases) —
+`main.js`, `manifest.json` and `styles.css` — into `<vault>/<config folder>/plugins/im-notion-sync/`
+(the config folder is `.obsidian` unless you changed it under Settings → Files and links).
 
-Two details are load-bearing:
-
-- **The folder must be named `im-notion-sync`** (the plugin `id` in `manifest.json`). The plugin
-  locates its SQLite WASM binary at `.obsidian/plugins/<manifest.id>/sql-wasm.wasm`, so any other
-  folder name leaves the state database unable to open.
-- **`sql-wasm.wasm` is required.** It is the SQLite engine the plugin runs on — without it the
-  plugin loads but sync never initializes.
+The SQLite engine the plugin keeps its sync state in is built into `main.js`, so there is no
+fourth file to copy. Releases up to v0.3.2 shipped it separately as `sql-wasm.wasm`; it is safe to
+delete that file from the plugin folder after updating.
 
 ## Setup
 
 1. Open Settings → **Im-Notion Sync**.
-2. Enter your Notion integration token and root page ID.
+2. Enter your Notion integration token and the root page — paste the page's address, or its 32-character ID.
 3. Use the sidebar dashboard or the ribbon icon to Push / Pull / Sync.
 
-Requires Obsidian v1.7.0+. Desktop only.
+- **The token lives in Obsidian's keychain, not in the vault.** Obsidian keeps a keychain per vault and per
+  device, so enter the token once in each vault (and on each computer) you sync. Settings from v0.3.2 and
+  earlier are moved into the keychain on first load.
+- **Date-time time zone.** Date-time properties are written and sent in this computer's time zone unless you
+  pick one under _Date-time time zone_. Changing it does not rewrite times already in your notes.
+
+Requires Obsidian v1.12.4+. Desktop only.
 
 ## Documentation
 

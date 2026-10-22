@@ -1,4 +1,4 @@
-import { Command } from "commander";
+import { Command, Option } from "commander";
 import {
   ConfigManager,
   StateDB,
@@ -19,7 +19,9 @@ import {
   dimText,
   completionHeader,
   failedCountText,
+  remoteScanLines,
 } from "../utils/format.js";
+import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 
 export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
@@ -29,7 +31,17 @@ export const pullCommand = new Command("pull")
     "--force",
     "증분 감지를 건너뛰고 전체 스캔 (search 인덱싱 지연으로 누락된 신규 페이지·DB 복구)",
   )
+  // 다시 그려 봐야 바뀌는지 안다 — 미리 보기로는 보일 것이 없다(B14).
+  .addOption(
+    new Option(
+      "--rerender",
+      "Notion 에서 바뀌지 않은 받아 둔 노트도 지금 변환기로 다시 그림 (볼트에서 고친 노트는 그대로)",
+    ).conflicts("dryRun"),
+  )
+  .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
+    const json = options.json === true;
+    if (json) enableJsonMode();
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -40,29 +52,44 @@ export const pullCommand = new Command("pull")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      console.log(`\n${header("  Pulling from Notion...")}`);
-      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
-      console.log("");
+      if (!json) {
+        console.log(`\n${header("  Pulling from Notion...")}`);
+        if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+        console.log("");
+      }
 
       const result = await orchestrator.pull({
         dryRun: options.dryRun,
         paths: options.path,
         force: options.force,
-        onProgress: (current, total, item) => {
-          const icon = operationIcon(item.operation);
-          const label = operationLabel(item.operation);
-          const prog = progress(current, total);
-          console.log(`  ${icon} ${item.path} ${prog} ${label}`);
-        },
+        rerender: options.rerender,
+        onProgress: json
+          ? undefined
+          : (current, total, item) => {
+              // 받아 봤지만 바뀌지 않은 노트 — 다시 그리기는 받아 둔 노트를 모두 받아 본다(B14).
+              if (item.unchanged) return;
+              const icon = operationIcon(item.operation);
+              const label = operationLabel(item.operation);
+              const prog = progress(current, total);
+              console.log(`  ${icon} ${item.path} ${prog} ${label}`);
+            },
       });
+
+      if (json) {
+        printJson(pullJson(result));
+        if (result.failed.length > 0) process.exitCode = 1;
+        return;
+      }
 
       if (result.imageCount > 0) {
         console.log(
-          `\n  ${icons.success} ${result.imageCount} images → ${dimText("attachments/")}`,
+          `\n  ${icons.success} ${result.imageCount} images → ${dimText(`${config.paths.attachments}/`)}`,
         );
       }
       if (result.fileCount > 0) {
-        console.log(`  ${icons.success} ${result.fileCount} files → ${dimText("attachments/")}`);
+        console.log(
+          `  ${icons.success} ${result.fileCount} files → ${dimText(`${config.paths.attachments}/`)}`,
+        );
       }
       if (result.linkCount > 0) {
         console.log(`  ${icons.success} ${result.linkCount} links resolved`);
@@ -78,6 +105,9 @@ export const pullCommand = new Command("pull")
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
       }
       console.log(`  ${duration(result.duration)}`);
+      if (result.remoteScan) {
+        for (const line of remoteScanLines(result.remoteScan)) console.log(`  ${line}`);
+      }
 
       if (result.conflicts.length > 0) {
         console.log(

@@ -92,6 +92,38 @@ describe("EntryEditor", () => {
     });
   });
 
+  describe("updateProperty — frontmatter 를 읽는 규칙", () => {
+    it("같은 글을 가진 두 행 중 하나를 고쳐도 다른 행에 새지 않는다", async () => {
+      // gray-matter 캐시는 같은 글에 같은 data 객체를 돌려줬다 — A 를 고치면 B 가 A 의 값을 읽었다.
+      const template = "---\n단계: 할 일\n---\n\n본문\n";
+      vaultFs.files["jobs/A.md"] = template;
+      vaultFs.files["jobs/B.md"] = template;
+
+      await editor.updateProperty("jobs/A.md", "단계", "완료");
+      await editor.updateProperty("jobs/B.md", "우선순위", "높음");
+
+      expect(vaultFs.files["jobs/A.md"]).toBe("---\n단계: 완료\n---\n\n본문\n");
+      expect(vaultFs.files["jobs/B.md"]).toBe("---\n단계: 할 일\n우선순위: 높음\n---\n\n본문\n");
+    });
+
+    it("깨진 frontmatter 는 몇 번이고 거절하고 파일을 고치지 않는다", async () => {
+      const broken = "---\n단계: [할 일\n---\n\n본문\n";
+      vaultFs.files["jobs/Broken.md"] = broken;
+
+      await expect(editor.updateProperty("jobs/Broken.md", "단계", "완료")).rejects.toThrow();
+      await expect(editor.updateProperty("jobs/Broken.md", "단계", "완료")).rejects.toThrow();
+      expect(vaultFs.files["jobs/Broken.md"]).toBe(broken);
+    });
+
+    it("frontmatter 없이 구분선으로 시작하는 행은 본문을 그대로 두고 frontmatter 를 더한다", async () => {
+      vaultFs.files["jobs/Divider.md"] = "---\n\n첫 문단\n";
+
+      await editor.updateProperty("jobs/Divider.md", "단계", "완료");
+
+      expect(vaultFs.files["jobs/Divider.md"]).toBe("---\n단계: 완료\n---\n---\n\n첫 문단\n");
+    });
+  });
+
   describe("createEntry", () => {
     it("새 파일 생성", async () => {
       const path = await editor.createEntry("jobs", "새 회사", { 단계: "지원" });

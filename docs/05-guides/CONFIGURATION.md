@@ -59,7 +59,8 @@ https://www.notion.so/My-Page-abc123def456...
 ### parentMode
 
 - `"page"` — 마크다운 파일이 페이지 트리로 동기화됩니다 (기본값)
-- `"database"` — 마크다운 파일이 데이터베이스 행으로 동기화됩니다
+- `"database"` — 마크다운 파일이 데이터베이스 행으로 동기화됩니다. `notion.databaseId` 도 적어야 합니다 — 없으면
+  페이지 모드로 동작합니다. `nobsi init` 은 이 둘을 묻지 않으므로 `config.json` 에 직접 적습니다.
 
 ## Sync Settings / 동기화 설정
 
@@ -67,7 +68,8 @@ https://www.notion.so/My-Page-abc123def456...
 
 - `"both"` — 양방향 동기화 (Pull → Push, 기본값)
 - `"push"` — Obsidian → Notion만
-- `"pull"` — Notion → Obsidian만
+- `"pull"` — Notion → Obsidian만. 충돌을 풀어도 결과를 Notion 에 올리지 않습니다 — 고른 것은 Obsidian 에만
+  남고, 그 뒤의 Notion 편집은 다시 받습니다
 
 ### conflictStrategy
 
@@ -76,12 +78,16 @@ https://www.notion.so/My-Page-abc123def456...
 - `"local-first"` — 항상 Obsidian 버전 유지
 - `"remote-first"` — 항상 Notion 버전 유지
 - `"manual"` — 충돌 마커 삽입 후 수동 해결 (기본값)
-- `"duplicate"` — 양쪽 버전을 모두 보존 (`.conflict` 파일 생성)
+- `"duplicate"` — 양쪽 버전을 모두 보존 (`노트.conflict.md` 사본 생성 — 이 사본은 Notion 에 올리지 않습니다.
+  올리려면 이름을 바꾸세요)
 
 ### deleteSync
 
 - `false` (기본값) — 삭제는 동기화하지 않음 (안전)
 - `true` — 한쪽에서 삭제 시 반대쪽에서도 삭제
+
+어느 쪽이든 Notion 에서 지운 페이지(휴지통 · 보관)의 노트를 고쳐 push 하면 올리지 않고 충돌로 남깁니다. 충돌
+해결에서 로컬 유지(Notion 에 새 페이지로 다시 만들기)나 삭제 따르기(Obsidian 파일도 지우기)를 고르세요.
 
 ## Path Settings / 경로 설정
 
@@ -130,7 +136,11 @@ Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입
 ### preferMarkdownApi
 
 `true` (기본값): Notion 공식 Markdown API를 사용합니다. 변환 품질이 높습니다.
-`false`: 레거시 Block API + notion-to-md를 사용합니다.
+`false`: 블록 API 로 블록을 읽고 씁니다. 받은 블록은 Markdown API 와 같은 NFM 으로 옮긴 뒤 같은 변환을 거칩니다
+(ADR-034 · 035). 블록 API 가 주지 않는 것(콜아웃 첫 줄 아래 자식, 표 열 너비 · 행 색, 지역 시간대 이름)은 잃습니다.
+바뀌지 않은 미디어도 매번 다시 올리고, 자식 페이지 · DB 가 있는 페이지의 본문은 보내지 않습니다(자식까지 지워지므로).
+
+`true` 여도 Markdown API 로 받지 못한 페이지는 블록 API 로 받습니다.
 
 ### preserveMarkers
 
@@ -210,6 +220,29 @@ Pull 시 다운로드할 파일(비디오·첨부 등)의 크기 상한. 기본 
 
 `0`으로 두면 상한이 사라집니다(기존 동작). 한 페이지가 동기화 전체를 영구히 멈춰 세울 수
 있으므로 권장하지 않습니다.
+
+### markdownCompletionMaxBlocks
+
+Notion Markdown API 가 **잘라 보낸 블록**을 다시 받아 채우는 수의 상한. 기본 **3,000개**.
+
+블록이 아주 많은 페이지(실측: 약 2만 블록 이후)는 Markdown API 가 뒤쪽 블록을 자리표시로
+바꿔 보냅니다. 동기화는 그 블록들을 하나씩 다시 받아 제자리에 채웁니다 — 채우지 않으면
+본문 일부가 빠진 사본이 동기화 완료로 기록됩니다. 블록 하나에 요청 하나가 들기 때문에,
+기본 요청 간격(350ms)으로 3,000개는 약 17분이고 `itemTimeoutMs`(30분) 안에서 끝납니다.
+
+상한을 넘는 페이지는 블록 API 로 받습니다(일반 페이지는 Markdown API). 이때 로그에
+「Markdown API 로 받지 못해 블록 API 로 받음」이 남습니다. DB 행은 블록 API 경로가 없어
+그 행만 실패로 보고되고 다음 pull 에서 다시 시도합니다.
+
+```json
+{
+  "advanced": { "markdownCompletionMaxBlocks": 6000 }
+}
+```
+
+권한이 닿지 않는 블록(Notion 이 404 로 답하는 블록)은 다시 받지 못해 자리표시로 남고, push 때
+Notion 에 그대로 돌아갑니다. 같은 모양의 북마크 자리표시를 되돌려 보냈을 때 원래 블록이
+남는 것은 확인했지만, 권한 없는 블록 자체로는 확인하지 못했습니다.
 
 ## Database Mode / 데이터베이스 모드
 

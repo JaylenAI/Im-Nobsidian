@@ -1,0 +1,161 @@
+/**
+ * 렌더 감사 중 문맥이 필요한 규칙 — 목록 안 코드블록(⑤ · ⑱, S-24) · 들여쓴 코드블록(⑲).
+ *
+ * 한 줄만 보고 판정하는 규칙(①~④)과 표(⑦)는 렌더 게이트 코퍼스가 지킨다. 닫히지 않은 펜스(⑧)는 여기서도 본다.
+ * 여기는 4칸 들여쓴 펜스가 목록 자식인지, 목록 안 코드가 목록 밖으로 새는지, 구조 들여쓰기가
+ * 남아 글이 코드 상자로 보이는지를 본다.
+ */
+import { describe, it, expect } from "vitest";
+import { lintRenderedMarkdown } from "../../src/audit/render.js";
+
+const lines = (...rows: string[]): string => rows.join("\n");
+const codes = (markdown: string): string[] =>
+  lintRenderedMarkdown(markdown).map((f) => `${f.code}@${f.line}`);
+
+describe("한 줄 규칙(①~④) — 코드 안은 보지 않는다", () => {
+  it("NFM 태그가 본문에 남으면 잡고, 코드 안의 같은 태그는 예제 글자로 둔다", () => {
+    const md = lines(
+      '<span color="red" underline="true">새어 나온 span</span>',
+      "```html",
+      '<span color="red">예제</span> <details>',
+      "```",
+    );
+    expect(codes(md)).toEqual(["④@1"]);
+  });
+});
+
+describe("⑧ 닫히지 않은 코드펜스", () => {
+  it("코드 속 펜스 모양 줄은 세지 않는다 — 개수가 홀수여도 짝이 맞으면 정상", () => {
+    expect(codes(lines("````md", "```js", "x", "````", "끝"))).toEqual([]);
+    expect(codes(lines("```", "```bash", "ls", "```"))).toEqual([]);
+  });
+
+  it("개수가 짝수여도 마지막 펜스가 닫히지 않으면 잡는다 — 코드 속 빈 펜스 줄에서 닫힌 블록", () => {
+    // 코드 속 ```js 줄은 닫는 펜스가 아니다 — 넷째 줄이 연 블록이 문서 끝까지 간다.
+    expect(codes(lines("```", "x", "```", "```", "문서 끝까지 코드", "```js"))).toEqual(["⑧@0"]);
+    expect(codes(lines("```md", "x", "```", "본문", "```"))).toEqual(["⑧@0"]);
+  });
+
+  it("인용 안의 펜스는 인용과 함께 끝난다 — 문서를 삼키지 않는다", () => {
+    expect(codes(lines("> ```", "> x", "", "본문"))).toEqual([]);
+  });
+});
+
+describe("⑤ 코드펜스 4칸 들여쓰기 — 목록 · 콜아웃 밖", () => {
+  it("문단 뒤의 4칸 펜스는 들여쓰기 코드블록이다 — 여는 줄 · 닫는 줄", () => {
+    expect(codes(lines("문단", "", "    ```js", "    x", "    ```"))).toEqual(["⑤@3", "⑤@5"]);
+  });
+
+  it("목록 항목의 자식이면 정상이다 — 글머리표 · 번호 · 할 일 · 중첩", () => {
+    expect(codes(lines("- 항목", "    ```js", "    x", "    ```"))).toEqual([]);
+    expect(codes(lines("1. 번호", "    ```js", "    x", "    ```"))).toEqual([]);
+    expect(codes(lines("- [ ] 할 일", "    ```sh", "    echo", "    ```"))).toEqual([]);
+    expect(
+      codes(lines("- 둘째", "    - 안쪽", "        ```python", "        x", "        ```")),
+    ).toEqual([]);
+  });
+
+  it("자식 문단 · 빈 줄 · 앞선 코드블록을 건너 항목을 찾는다", () => {
+    const md = lines(
+      "- 항목",
+      "    자식 문단",
+      "",
+      "    ```js",
+      "    x",
+      "    ```",
+      "    ```py",
+      "    y",
+      "    ```",
+    );
+    expect(codes(md)).toEqual([]);
+  });
+
+  it("항목 내용보다 4칸 넘게 깊으면 항목 안의 들여쓰기 코드블록이다", () => {
+    expect(codes(lines("- 항목", "      ```js", "      x", "      ```"))).toEqual(["⑤@2", "⑤@4"]);
+  });
+
+  it("항목 내용보다 얕으면 목록이 끝난다 — 번호 100. 뒤의 4칸 펜스", () => {
+    expect(codes(lines("100. 항목", "    ```js", "    x", "    ```"))).toEqual(["⑤@2", "⑤@4"]);
+  });
+
+  it("코드 줄이 펜스보다 얕아도 항목 안이면 코드다 — 다음 펜스의 항목 찾기를 막지 않는다", () => {
+    const md = lines("- 항목", "    ```js", "  x", "    ```", "    ```py", "    y", "    ```");
+    expect(codes(md)).toEqual([]);
+  });
+
+  it("코드 속의 4칸 펜스 모양 줄은 코드다 — 마크다운 예제", () => {
+    expect(codes(lines("````markdown", "    ```js", "    x", "    ```", "````"))).toEqual([]);
+  });
+});
+
+describe("⑱ 목록 안 코드가 목록 밖으로 샌다", () => {
+  it("Notion 이 내보낸 모양 그대로 — 코드 줄이 열 0 이면 목록과 코드블록이 끝난다", () => {
+    const md = lines("- 목록", "\t```shell", "ls -al", "ls", "\t```", "- 둘째");
+    expect(codes(md)).toEqual(["⑱@2"]);
+  });
+
+  it("펜스만 4칸으로 편 모양도 샌다 — 줄 하나만 얕아도", () => {
+    const md = lines("- 목록", "    ```shell", "    ls -al", "echo leaked", "    ```");
+    expect(codes(md)).toEqual(["⑱@2"]);
+  });
+
+  it("두 단계 중첩 — 부모 항목 내용보다 얕으면 샌다", () => {
+    const md = lines("- 둘째", "    - 안쪽", "        ```python", "    x", "        ```");
+    expect(codes(md)).toEqual(["⑱@3"]);
+  });
+
+  it("코드 줄이 항목 내용 깊이에 있으면 새지 않는다 — 빈 줄은 보지 않는다", () => {
+    expect(codes(lines("- 목록", "    ```shell", "    ls", "", "    ls -al", "    ```"))).toEqual(
+      [],
+    );
+    expect(codes(lines("- 목록", "  ```shell", "  ls", "  ```"))).toEqual([]);
+  });
+
+  it("닫히지 않은 목록 코드 — 문서 끝 줄까지 코드다", () => {
+    expect(codes(lines("- 목록", "    ```sh", "    ls", "leak"))).toEqual(["⑧@0", "⑱@2"]);
+  });
+
+  it("항목 내용보다 얕은 펜스는 목록 밖 코드블록이다 — 목록 자식이 아니라 새는 것이 아니다", () => {
+    expect(codes(lines("1. 항목", "  ```js", "x", "  ```"))).toEqual([]);
+  });
+
+  it("목록 밖 코드 · 문단 아래 들여쓴 펜스는 이 규칙 밖이다", () => {
+    expect(codes(lines("- 목록", "", "```js", "x", "```"))).toEqual([]);
+    expect(codes(lines("문단", "\t```js", "x", "\t```"))).toEqual([]);
+  });
+});
+
+describe("⑲ 들여쓴 코드블록 — 구조 들여쓰기가 남은 줄", () => {
+  it("인용 · 문단 뒤 빈 줄 다음의 4칸 줄 — 자식 블록이 코드 상자로 보인다", () => {
+    expect(codes(lines("> 인용", "", "    자식 문단", "", "    - 자식 항목"))).toEqual([
+      "⑲@3",
+      "⑲@5",
+    ]);
+  });
+
+  it("제목 바로 뒤의 4칸 줄도 코드블록이다 — 문단만 들여쓴 코드블록에 끊기지 않는다", () => {
+    expect(codes(lines("### 제목", "    %%im-nobsidian:column-list:start%%"))).toEqual(["⑲@2"]);
+    expect(codes(lines("문단", "    이어지는 줄"))).toEqual([]);
+  });
+
+  it("2칸 들여쓴 자식은 코드가 아니다 — 손자 목록은 자식 목록 내용 폭에서 센다", () => {
+    expect(codes(lines("> 인용", "", "  자식 문단", "", "  - 자식", "      - 손자"))).toEqual([]);
+  });
+
+  it("목록 항목 · 각주 정의 안은 그 내용 폭에서 센다", () => {
+    expect(codes(lines("- 항목", "", "    자식 문단"))).toEqual([]);
+    expect(codes(lines("- 항목", "    - 자식", "", "        손자 문단"))).toEqual([]);
+    expect(codes(lines("- 항목", "", "      여섯 칸"))).toEqual(["⑲@3"]);
+    expect(codes(lines("[^1]: 정의", "", "    이어지는 문단"))).toEqual([]);
+  });
+
+  it("코드 · 수식 · 프론트매터 안은 보지 않는다", () => {
+    expect(codes(lines("```", "", "    코드", "```"))).toEqual([]);
+    expect(codes(lines("$$", "a", "", "    b", "$$"))).toEqual([]);
+    expect(codes(lines("---", "a: |", "", "    b", "---"))).toEqual([]);
+  });
+
+  it("들여쓴 콜아웃은 ① 이 맡는다 — 같은 줄을 두 번 세지 않는다", () => {
+    expect(codes(lines("문단", "", "    > [!tip] 팁"))).toEqual(["①@3"]);
+  });
+});

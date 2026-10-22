@@ -6,19 +6,17 @@
  * 무시), body 는 정규화 후 문자열 완전 일치(delta=0)로 비교할 재료를 돌려준다.
  *
  * .toContain 단편 검사가 아니라 "파이프라인이 아무것도 손실시키지 않는가"를 전체 deep-equal
- * 로 증명한다. 이 하네스가 잠그는 손실 표면은 **martian/notion-to-md 가 건드리지 않는** 부분
+ * 로 증명한다. 이 하네스가 잠그는 손실 표면은 **NFM ↔ 블록 변환이 건드리지 않는** 부분
  * — frontmatter, preserve-marker(toggle·column·inline-db), 콜아웃, wikilink, 수식 정규화,
  * properties-table, underline/color 주석 — 이다.
  *
  * 범위 밖(이 하네스는 검증하지 않음, 거짓 안전망 방지를 위해 명시):
- *  - martian(MD→Notion 블록) push 변환 → `converter/block-converter.test.ts`(오프라인 유닛)
- *  - notion-to-md(블록→MD) pull 변환 및 실 블록 왕복 fixpoint →
- *    `invariants/block-roundtrip.invariant.test.ts`(라이브 Notion, NOTION_TOKEN 게이트)
- *  - 단일 문서에 전 블록 타입을 한 번에 통과시킨 push 블록 구조 완전성 →
- *    `converter/block-taxonomy-coverage.test.ts`(오프라인, 실 BlockConverter)
+ *  - 블록 방식 push 의 NFM → 블록 변환 → `converter/nfm-to-blocks.test.ts` ·
+ *    `notion/append-block-tree.test.ts`(요청 한도 · 깊이)
+ *  - 블록 방식 pull 의 블록 → NFM 변환 → `converter/blocks-to-nfm.test.ts`(Markdown API export 짝 픽스처)
+ *  - 실 블록 왕복 fixpoint → `invariants/block-roundtrip.invariant.test.ts`(라이브 Notion, NOTION_TOKEN 게이트)
  *
- * 즉 이 하네스는 "파이프라인 무손실"을 증명할 뿐 "블록 무손실"을 증명하지 않는다. 블록
- * 무손실은 위 세 테스트가 분담한다(이원 도달성: 오프라인 결정론 + 라이브 Notion).
+ * 즉 이 하네스는 "파이프라인 무손실"을 증명할 뿐 "블록 무손실"을 증명하지 않는다.
  */
 import matter from "gray-matter";
 import {
@@ -26,6 +24,7 @@ import {
   type PipelineOptions,
 } from "../../src/converter/pipeline-factory.js";
 import type { ConversionContext } from "../../src/types/convert.js";
+import { collapseBlankLines } from "../../src/utils/md-regions.js";
 
 const PUSH_CTX: ConversionContext = {
   direction: "push",
@@ -39,15 +38,12 @@ const PULL_CTX: ConversionContext = {
 };
 
 /**
- * 비교용 body 정규화: 줄바꿈 통일, 행말 공백 제거, 3줄 이상 연속 빈줄 축약, 양끝 trim.
- * 의미 없는 공백 차이만 제거하며 실제 콘텐츠는 보존한다.
+ * 비교용 body 정규화: 줄바꿈 통일, 행말 공백 제거, 코드 밖 연속 빈줄 축약, 양끝 trim.
+ * 의미 없는 공백 차이만 제거하며 실제 콘텐츠는 보존한다. 코드 속 빈 줄은 코드라 줄이지 않는다 —
+ * 문서 전체에서 줄이던 때는 push 가 코드 속 빈 줄을 줄이는 것을 못 잡았다(S-27).
  */
 export function canonicalBody(md: string): string {
-  return md
-    .replace(/\r\n/g, "\n")
-    .replace(/[ \t]+$/gm, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+  return collapseBlankLines(md.replace(/\r\n/g, "\n").replace(/[ \t]+$/gm, "")).trim();
 }
 
 /**
@@ -88,9 +84,11 @@ export function roundtrip(input: string, options?: PipelineOptions): RoundtripRe
   const push = pipeline.convertToNotion(input, PUSH_CTX);
   // 프로덕션 배선 재현: push 가 수집한 preserve marker 는 sync.db 에 저장됐다가
   // pull 변환의 초기 metadata 로 주입된다(orchestrator storePreserveMarkers→convertToMarkdown).
+  // 받기 직전의 로컬 노트(= 올린 노트)도 함께 넘어간다(readLocalNote → localContent, S-20).
   const output = pipeline.convertToMarkdown(push.content, PULL_CTX, {
     properties: push.properties,
     preserveMarkers: push.preserveMarkers.length > 0 ? push.preserveMarkers : undefined,
+    localContent: input,
   });
 
   const inParsed = matter(input);

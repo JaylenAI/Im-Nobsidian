@@ -25,6 +25,7 @@ import { NotionClient } from "../../src/notion/client.js";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 // 셋 다 제목이 "노트". A/B/C 는 앞 8 글자가 같고, B 와 C 는 앞 16 글자까지 같다.
@@ -63,17 +64,28 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     vi.restoreAllMocks();
   });
 
-  async function pullOnce() {
+  /**
+   * `order` 는 원격이 돌려주는 페이지 차례, `concurrency` 는 pull 워커 수 — 1 이면 배정 차례가 `order` 그대로다.
+   * `slow` 페이지는 조회가 늦게 끝난다 — 워커 풀에서 다른 페이지가 먼저 경로를 고를 수 있다.
+   */
+  async function pullOnce(
+    order: readonly string[] = [A, B, C],
+    concurrency?: number,
+    slow?: string,
+  ) {
     tmpDir = await mkdtemp(join(tmpdir(), "im-pullcollision-"));
     const vaultFs = new NodeVaultFS(tmpDir);
     await vaultFs.ensureFolder(".im-nobsidian");
     stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
 
     const client = new NotionClient({ token: "offline-test" });
-    vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([...PAGES.values()]);
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
+    vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue(order.map((id) => PAGES.get(id)!));
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       const found = PAGES.get(id);
       if (!found) throw new Error(`unexpected getPage ${id}`);
+      if (id === slow) await new Promise((resolve) => setTimeout(resolve, 50));
       return found;
     });
     // 본문을 페이지마다 다르게 준다 — 덮어쓰기가 나면 내용 단언에서 바로 드러난다.
@@ -86,6 +98,9 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     const config: Config = {
       ...DEFAULT_CONFIG,
       notion: { ...DEFAULT_CONFIG.notion, rootPageId: ROOT, token: "offline-test" },
+      ...(concurrency === undefined
+        ? {}
+        : { advanced: { ...DEFAULT_CONFIG.advanced, concurrency } }),
     };
     const result = await new SyncOrchestrator(config, stateDb, client, vaultFs).pull();
     return { result, dir: tmpDir, db: stateDb };
@@ -113,13 +128,48 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     const paths = [A, B, C].map((id) => db.getByNotionId(id)!.obsidianPath);
 
     // 하나는 자연 이름, 나머지는 각자의 ID 조각. 순번 접미사는 하나도 없어야 한다.
-    expect(paths).toContain("노트.md");
+    expect(paths.filter((p) => p === "노트.md")).toHaveLength(1);
     for (const p of paths) expect(p, `순번 접미사 잔존: ${p}`).not.toMatch(/ \(\d+\)\.md$/);
 
-    // B·C 는 앞 8 글자가 같으므로 뒤에 배정된 쪽이 16 글자로 넓어져야 충돌이 풀린다.
-    const suffixed = paths.filter((p) => p !== "노트.md").sort();
-    expect(suffixed).toEqual(["노트 (c6313b18).md", "노트 (c6313b18d38283d8).md"]);
+    // 접미사는 자기 ID 의 앞 조각이고, 세 페이지가 앞 8 글자를 나누므로 셋째가 16 글자로 넓어진다.
+    const fragments = [A, B, C].flatMap((id, i) => {
+      const fragment = /^노트 \(([0-9a-f]+)\)\.md$/.exec(paths[i]!)?.[1];
+      return fragment === undefined ? [] : [{ id, fragment }];
+    });
+    for (const { id, fragment } of fragments) expect(id.startsWith(fragment), id).toBe(true);
+    expect(fragments.map(({ fragment }) => fragment.length).sort((x, y) => x - y)).toEqual([8, 16]);
   });
+
+  // B10 — 경로는 처리 차례가 아니라 페이지 ID 차례로 정한다(B < C < A). 예전에는 원격 차례 · 워커 풀의
+  // 배정 차례에 따라 실행마다 · 볼트마다 다른 페이지가 자연 이름을 얻었다.
+  const ORDERS: Array<[string, string[], number | undefined]> = [
+    ["A B C · 워커 하나", [A, B, C], 1],
+    ["B C A · 워커 하나", [B, C, A], 1],
+    ["C A B · 워커 하나", [C, A, B], 1],
+    ["C B A · 기본 워커", [C, B, A], undefined],
+    ["A C B · 기본 워커", [A, C, B], undefined],
+  ];
+
+  it("ID 가 가장 앞선 페이지의 조회가 가장 늦게 끝나도 그 페이지가 자연 이름을 얻는다 (B10)", async () => {
+    const { result, db } = await pullOnce([B, C, A], 3, B);
+
+    expect(result.failed).toEqual([]);
+    expect(db.getByNotionId(B)!.obsidianPath).toBe("노트.md");
+    expect(db.getByNotionId(C)!.obsidianPath).toBe("노트 (c6313b18).md");
+  });
+
+  it.each(ORDERS)(
+    "원격 차례 %s — 어느 차례로 받아도 같은 페이지가 같은 경로를 얻는다 (B10)",
+    async (_name, order, concurrency) => {
+      const { db } = await pullOnce(order, concurrency);
+
+      expect([A, B, C].map((id) => db.getByNotionId(id)!.obsidianPath)).toEqual([
+        "노트 (c6313b18d38283e7).md",
+        "노트.md",
+        "노트 (c6313b18).md",
+      ]);
+    },
+  );
 
   it("같은 볼트를 다시 pull 해도 경로가 그대로다 (churn 0)", async () => {
     const { db } = await pullOnce();
@@ -130,6 +180,8 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
       notion: { ...DEFAULT_CONFIG.notion, rootPageId: ROOT, token: "offline-test" },
     };
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([...PAGES.values()]);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => PAGES.get(id)!);
     vi.spyOn(client, "getPageMarkdown").mockImplementation(
@@ -142,6 +194,8 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
       [...PAGES.keys()].map((id) => ({ id, last_edited_time: "2026-05-01T00:00:00.000Z" })),
     );
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
 
     await new SyncOrchestrator(config, db, client, new NodeVaultFS(tmpDir!)).pull();
 

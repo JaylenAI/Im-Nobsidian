@@ -1,0 +1,507 @@
+{
+  "pageId": "3f713b18-d382-81e9-bc3e-f7b00e2ea1bf",
+  "blocks": [
+    {
+      "id": "050e1402-f6de-4e34-8567-fb2c1eea710d",
+      "has_children": true,
+      "type": "column_list",
+      "column_list": {},
+      "children": [
+        {
+          "id": "99c875cc-7f20-4462-a7a8-a2206f3aa929",
+          "has_children": true,
+          "type": "column",
+          "column": {
+            "width_ratio": 0.5
+          },
+          "children": [
+            {
+              "id": "f7407afb-4a1d-4a73-9d18-68b3e90a9c36",
+              "has_children": false,
+              "type": "heading_2",
+              "heading_2": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "좌측 요약",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "좌측 요약",
+                    "href": null
+                  }
+                ],
+                "is_toggleable": false,
+                "color": "default"
+              }
+            },
+            {
+              "id": "9b4a572b-4e3e-4124-b598-17cd6021186b",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "매출은 전분기 대비 열두 퍼센트 증가했고 이탈률은 소폭 감소했다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "매출은 전분기 대비 열두 퍼센트 증가했고 이탈률은 소폭 감소했다.",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            },
+            {
+              "id": "86864f44-9ca9-465f-abd3-3203d9bf9d2c",
+              "has_children": true,
+              "type": "table",
+              "table": {
+                "table_width": 3,
+                "has_column_header": false,
+                "has_row_header": false
+              },
+              "children": [
+                {
+                  "id": "67a53832-4102-4ad1-92d0-febd116f1108",
+                  "has_children": false,
+                  "type": "table_row",
+                  "table_row": {
+                    "cells": [
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "항목",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "항목",
+                          "href": null
+                        }
+                      ],
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "1분기",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "1분기",
+                          "href": null
+                        }
+                      ],
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "2분기",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "2분기",
+                          "href": null
+                        }
+                      ]
+                    ]
+                  }
+                },
+                {
+                  "id": "fe373bee-41e9-4598-8123-c988e05a4a7a",
+                  "has_children": false,
+                  "type": "table_row",
+                  "table_row": {
+                    "cells": [
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "매출",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "매출",
+                          "href": null
+                        }
+                      ],
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "120",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "120",
+                          "href": null
+                        }
+                      ],
+                      [
+                        {
+                          "type": "text",
+                          "text": {
+                            "content": "134",
+                            "link": null
+                          },
+                          "annotations": {
+                            "bold": false,
+                            "italic": false,
+                            "strikethrough": false,
+                            "underline": false,
+                            "code": false,
+                            "color": "default"
+                          },
+                          "plain_text": "134",
+                          "href": null
+                        }
+                      ]
+                    ]
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "141bc179-82dd-425c-bf57-d710bb410c18",
+          "has_children": true,
+          "type": "column",
+          "column": {
+            "width_ratio": 0.5
+          },
+          "children": [
+            {
+              "id": "a9478a3c-84b6-442e-a9ca-e70847a28087",
+              "has_children": false,
+              "type": "heading_2",
+              "heading_2": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "우측 요약",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "우측 요약",
+                    "href": null
+                  }
+                ],
+                "is_toggleable": false,
+                "color": "default"
+              }
+            },
+            {
+              "id": "6eef02eb-4448-46c6-82cd-9a45c3c27d17",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "신규 가입은 완만하게 늘었으나 유료 전환은 정체 상태로 남아 있다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "신규 가입은 완만하게 늘었으나 유료 전환은 정체 상태로 남아 있다.",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            },
+            {
+              "id": "1b51e647-022e-4729-b785-1c59d7de0aa8",
+              "has_children": false,
+              "type": "callout",
+              "callout": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "전환 실험을 다음 분기 최우선 과제로 잡는다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "전환 실험을 다음 분기 최우선 과제로 잡는다.",
+                    "href": null
+                  }
+                ],
+                "icon": {
+                  "type": "emoji",
+                  "emoji": "📌"
+                },
+                "color": "default"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "6aef9290-d2fc-43ff-89fc-b002d19e3330",
+      "has_children": true,
+      "type": "table",
+      "table": {
+        "table_width": 2,
+        "has_column_header": true,
+        "has_row_header": false
+      },
+      "children": [
+        {
+          "id": "2617cec0-eb85-4016-8904-18684f36536f",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "지역",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "지역",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "담당",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "담당",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        },
+        {
+          "id": "eb8c5227-30df-403e-beb4-5ac5f27a3ff2",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "수도권",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "수도권",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "1팀",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "1팀",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        },
+        {
+          "id": "ecea660d-e330-499f-8b91-3f5ac95fb3b4",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "5e58fa6a-f3a8-4fd7-a02b-fbfb02b8576a",
+      "has_children": false,
+      "type": "divider",
+      "divider": {}
+    },
+    {
+      "id": "7428411c-72c8-40af-8b03-e71f2e5a5a11",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "빈 행 뒤에 수평선이 오면 구분행 계산이 흔들릴 수 있어 함께 고정한다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "빈 행 뒤에 수평선이 오면 구분행 계산이 흔들릴 수 있어 함께 고정한다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}

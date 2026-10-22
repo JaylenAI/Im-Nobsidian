@@ -63,15 +63,21 @@ describe("notionEnhancedToObsidian", () => {
     expect(result).not.toContain("<mention-page");
   });
 
-  it("<mention-user> → @name", () => {
+  // F-01: 보이는 글(이름 · 날짜)을 짝 마커로 감싸 원래 속성을 싣는다 — push 가 멘션으로 되돌린다.
+  // 자세한 경우는 mention.test.ts.
+  it("<mention-user> → @이름 을 짝 마커로 감싼다", () => {
     const input = '<mention-user id="user-1">John</mention-user>';
-    expect(notionEnhancedToObsidian(input)).toBe("@John");
+    expect(notionEnhancedToObsidian(input)).toBe(
+      "%%im-nobsidian:mention-user:id=user-1%%@John%%/mention%%",
+    );
   });
 
-  it("<mention-date> → date text", () => {
-    expect(notionEnhancedToObsidian('<mention-date start="2026-05-13"/>')).toBe("2026-05-13");
+  it("<mention-date> → 날짜 글을 짝 마커로 감싼다", () => {
+    expect(notionEnhancedToObsidian('<mention-date start="2026-05-13"/>')).toBe(
+      "%%im-nobsidian:mention-date:start=2026-05-13%%2026-05-13%%/mention%%",
+    );
     expect(notionEnhancedToObsidian('<mention-date start="2026-05-13" end="2026-06-01"/>')).toBe(
-      "2026-05-13 → 2026-06-01",
+      "%%im-nobsidian:mention-date:start=2026-05-13&end=2026-06-01%%2026-05-13 → 2026-06-01%%/mention%%",
     );
   });
 
@@ -136,11 +142,16 @@ describe("notionEnhancedToObsidian", () => {
     expect(notionEnhancedToObsidian(input)).toBe("%%im-nobsidian:color:red%%중요%%/color%%");
   });
 
-  // 2C: 밑줄 보존
-  it("<span underline> → 보존 마커", () => {
+  // 2C: 밑줄 — 안이 평문이면 Obsidian 이 그리는 <u>, 마크다운이 있으면 보존 마커
+  it("<span underline> → <u> (안이 평문)", () => {
     const input = '<span underline="true">밑줄 텍스트</span>';
+    expect(notionEnhancedToObsidian(input)).toBe("<u>밑줄 텍스트</u>");
+  });
+
+  it("<span underline> → 보존 마커 (안에 마크다운)", () => {
+    const input = '<span underline="true">**굵게**</span>';
     expect(notionEnhancedToObsidian(input)).toBe(
-      "%%im-nobsidian:underline%%밑줄 텍스트%%/underline%%",
+      "%%im-nobsidian:underline%%**굵게**%%/underline%%",
     );
   });
 
@@ -185,6 +196,18 @@ describe("obsidianToNotionEnhanced", () => {
     expect(result).toContain("<summary>Toggle Title</summary>");
     expect(result).toContain("Inner content");
     expect(result).toContain("</details>");
+  });
+
+  it("legacy toggle markers — 100개를 넘어도 모두 <details> 가 된다", () => {
+    const toggle = (n: number) =>
+      `%%im-nobsidian:toggle:start%%\n- 토글 ${n}\n  글 ${n}\n%%im-nobsidian:toggle:end%%`;
+    const input = Array.from({ length: 101 }, (_, i) => toggle(i + 1)).join("\n\n");
+
+    const result = obsidianToNotionEnhanced(input);
+
+    expect(result.match(/<details>/g)).toHaveLength(101);
+    expect(result).toContain("<summary>토글 101</summary>");
+    expect(result).not.toContain("toggle:start");
   });
 
   it("> [!type] → <callout icon> 정준형 태그 (이모지는 본문이 아닌 icon 속성)", () => {
@@ -334,7 +357,7 @@ describe("round-trip", () => {
   it("밑줄 왕복", () => {
     const notion = '<span underline="true">밑줄</span>';
     const obsidian = notionEnhancedToObsidian(notion);
-    expect(obsidian).toBe("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    expect(obsidian).toBe("<u>밑줄</u>");
     const back = obsidianToNotionEnhanced(obsidian);
     expect(back).toBe(notion);
   });
@@ -371,7 +394,7 @@ describe("round-trip", () => {
 
     const obsidian = notionEnhancedToObsidian(notion);
     expect(obsidian).toContain("%%im-nobsidian:color:red%%중요%%/color%%");
-    expect(obsidian).toContain("%%im-nobsidian:underline%%밑줄%%/underline%%");
+    expect(obsidian).toContain("<u>밑줄</u>");
     expect(obsidian).toContain("[🔊 음악](https://x.com/a.mp3)");
     expect(obsidian).toContain("%%im-nobsidian:unknown:id=xyz&type=synced_block%%");
 
@@ -410,7 +433,7 @@ describe("round-trip", () => {
 
   it("Notion 테이블 HTML → MD 테이블 변환", () => {
     const notion =
-      "<table><tr><th>이름</th><th>나이</th></tr><tr><td>Alice</td><td>30</td></tr></table>";
+      '<table header-row="true"><tr><th>이름</th><th>나이</th></tr><tr><td>Alice</td><td>30</td></tr></table>';
     const obsidian = notionEnhancedToObsidian(notion);
     expect(obsidian).toContain("| 이름 | 나이 |");
     expect(obsidian).toContain("| --- | --- |");
@@ -541,29 +564,39 @@ describe("토글/콜아웃 코드펜스 cascade 차단 (P1)", () => {
     // NFM 에서 진짜 토글은 **항상** `<details>` 로 오므로 이 변환은 순수 오탐이었고,
     // 열 0 `<details>` 를 주입해 바깥 컨테이너의 dedent 기준까지 0 으로 무너뜨렸다
     // (`협업 Project & Guide.md`: 토글 본문 78줄이 통째로 코드로 오파싱).
-    const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n");
+    //
+    // 입력은 Notion 이 실제로 내보내는 비대칭 모양이다 — 코드 줄은 열 0(실측, S-24). 리스트로 남기고
+    // 코드 줄만 펜스 깊이로 맞추는 것이 정답이다.
+    const notion = ["\t- 중첩 코드 토글", "\t\t```bash", "echo nested", "\t\t```"].join("\n");
     const out = notionEnhancedToObsidian(notion);
 
     expect(out).not.toContain("[!toggle]");
-    expect(out).toBe(notion); // 손대지 않는 것이 정답
+    expect(out).toBe(
+      ["\t- 중첩 코드 토글", "\t\t```bash", "\t\techo nested", "\t\t```"].join("\n"),
+    );
     expect(fencesBalanced(out)).toBe(true);
-    expect(obsidianToNotionEnhanced(out)).toBe(notion); // 무손실 왕복
+    expect(obsidianToNotionEnhanced(out)).toBe(out); // 무손실 왕복
   });
 
-  it("중첩 백틱 예제도 원문 그대로 왕복한다", () => {
+  it("중첩 백틱 예제도 코드 그대로 왕복한다", () => {
+    // Notion 이 내보내는 비대칭 모양 — 코드 줄은 열 0 이다(실측, S-24).
     const notion = [
       "- 마크다운 예제",
       "\t````markdown",
-      "\t```js",
-      "\tconst x = 1;",
-      "\t```",
+      "```js",
+      "const x = 1;",
+      "```",
       "\t````",
     ].join("\n");
     const out = notionEnhancedToObsidian(notion);
 
     expect(fencesBalanced(out)).toBe(true);
-    expect(out).toBe(notion);
-    expect(obsidianToNotionEnhanced(out)).toBe(notion);
+    expect(out).toBe(
+      ["- 마크다운 예제", "\t````markdown", "\t```js", "\tconst x = 1;", "\t```", "\t````"].join(
+        "\n",
+      ),
+    );
+    expect(obsidianToNotionEnhanced(out)).toBe(out);
   });
 
   // 실데이터(Empowerment/Blog) 회귀 가드 — Notion 실제 출력의 **비대칭 들여쓰기**:
@@ -975,5 +1008,74 @@ describe("인접 블록 융합 방지 (P2 — 실 push 왕복 실측 회귀가�
     // 같은 볼트 파일로 재수렴
     const back2 = notionEnhancedToObsidian(enhanced2);
     expect(back2).toBe(back1);
+  });
+});
+
+describe("글 없는 콜아웃의 첫 자식은 제목 줄로 올리지 않는다 (C4)", () => {
+  const callout = (...body: string[]) => ['<callout icon="💡">', ...body, "</callout>"].join("\n");
+
+  it.each([
+    ["이미지", "\t![](https://x.test/a.png)", "> ![](https://x.test/a.png)"],
+    ["캡션 이미지", "\t![캡션](https://x.test/a.png)", "> ![캡션](https://x.test/a.png)"],
+    ["목록", "\t- a", "> - a"],
+    ["할 일", "\t- [ ] t", "> - [ ] t"],
+    ["제목", "\t## h", "> ## h"],
+    ["구분선", "\t---", "> ---"],
+    [
+      "동영상",
+      '\t<video src="https://x.test/v.mp4"></video>',
+      "> [🎬 video](https://x.test/v.mp4)",
+    ],
+  ])("%s — 머리 줄은 비고 자식 줄로 남는다", (_kind, child, line) => {
+    const pulled = notionEnhancedToObsidian(callout(child, "\t본문"));
+    expect(pulled.split("\n")[0]).toBe("> [!tip]");
+    expect(pulled).toContain(`\n${line}\n`);
+  });
+
+  it("코드 · 표가 첫 자식이어도 push 가 같은 글을 보낸다 — 예전에는 몸통 줄만 한 단계 깊어졌다", () => {
+    const code = callout("\t```javascript", "\tx", "\t```");
+    expect(obsidianToNotionEnhanced(notionEnhancedToObsidian(code))).toBe(code);
+    const table = notionEnhancedToObsidian(
+      callout("\t<table>", "\t<tr><td>a</td></tr>", "\t</table>"),
+    );
+    expect(table.split("\n")[0]).toBe("> [!tip]");
+    expect(table).toContain("> | %%im-nobsidian:table:header-row=false%%a |");
+  });
+
+  it("빈 블록이 첫 자식이면 `<br>` 로 받는다 — 제목에 태그가 남지 않는다", () => {
+    const pulled = notionEnhancedToObsidian(callout("\t<empty-block/>", "\t글"));
+    expect(pulled).not.toContain("empty-block");
+    expect(pulled).toContain("> <br>");
+  });
+
+  it("맨 문단으로 시작하면 그 줄이 제목이다", () => {
+    expect(notionEnhancedToObsidian(callout("\t글", "\t자식"))).toBe("> [!tip] 글\n> 자식");
+  });
+});
+
+describe("미디어 태그는 줄머리 들여쓰기를 지킨다 (N7)", () => {
+  it.each([
+    ["video", '<video src="https://x.test/v.mp4">cap</video>', "[🎬 cap](https://x.test/v.mp4)"],
+    ["audio", '<audio src="https://x.test/a.mp3">cap</audio>', "[🔊 cap](https://x.test/a.mp3)"],
+    ["pdf", '<pdf src="https://x.test/d.pdf">cap</pdf>', "[📄 cap](https://x.test/d.pdf)"],
+    ["file", '<file src="https://x.test/f.zip">f.zip</file>', "[📎 f.zip](https://x.test/f.zip)"],
+  ])("%s — 목록 자식으로 남고 왕복한다", (_kind, tag, link) => {
+    const nfm = `- item\n\t${tag}\n- next`;
+    const pulled = notionEnhancedToObsidian(nfm);
+    expect(pulled).toBe(`- item\n\t${link}\n- next`);
+    expect(obsidianToNotionEnhanced(pulled)).toBe(nfm);
+  });
+
+  it("콜아웃 안 목록 자식 미디어가 push 때 콜아웃 밖으로 빠지지 않는다", () => {
+    const nfm = [
+      '<callout icon="💡">',
+      "\t제목",
+      "\t- item",
+      '\t\t<video src="https://x.test/v.mp4">cap</video>',
+      "</callout>",
+    ].join("\n");
+    const pulled = notionEnhancedToObsidian(nfm);
+    expect(pulled).toBe("> [!tip] 제목\n> - item\n>   [🎬 cap](https://x.test/v.mp4)");
+    expect(obsidianToNotionEnhanced(pulled)).toBe(nfm);
   });
 });

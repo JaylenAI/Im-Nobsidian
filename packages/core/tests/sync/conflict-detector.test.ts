@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { resolvePullConflict } from "../../src/sync/conflict-detector.js";
+import { resolvePullConflict, sameNoteContent } from "../../src/sync/conflict-detector.js";
 import type { RemoteChange, SyncRecord } from "../../src/types/sync.js";
 import { computeHash } from "../../src/utils/hash.js";
 
@@ -11,6 +11,9 @@ function createRecord(overrides?: Partial<SyncRecord>): SyncRecord {
     notionParentId: "db-1",
     contentHash: "synced-hash",
     notionLastEdited: "2026-05-16T00:00:00.000Z",
+    notionLastEditedBy: null,
+    notionSeenAt: null,
+    notionBodyFingerprint: null,
     localLastModified: "2026-05-16T00:00:00.000Z",
     syncDirection: "both",
     fileType: "db-row",
@@ -136,6 +139,96 @@ describe("resolvePullConflict", () => {
     expect(result.conflict).toBeUndefined();
   });
 
+  it.each(["remote-first", "local-first", "manual", "duplicate"] as const)(
+    "로컬 수정 + 리모트가 지난 사본 그대로 → %s 여도 로컬을 덮지 않는다(N-05)",
+    (strategy) => {
+      // 같은 분 편집을 확인하려고 다시 읽은 페이지 · 수정 시각만 바뀐 페이지. 예전에는
+      // remote-first 가 이 확인보다 먼저 와서 로컬 편집을 지난 사본으로 덮었다.
+      const result = resolvePullConflict({
+        record: createRecord({ contentHash: computeHash("BASE") }),
+        localContent: "BASE + 로컬 편집",
+        remoteContent: "BASE",
+        remoteChange,
+        strategy,
+      });
+
+      expect(result).toMatchObject({ action: "skip", remoteUnchanged: true });
+      expect(result.conflict).toBeUndefined();
+    },
+  );
+
+  it("로컬 수정 + 리모트도 바뀌면 remoteUnchanged 를 붙이지 않는다", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: computeHash("BASE") }),
+      localContent: "BASE + 로컬 편집",
+      remoteContent: "BASE + 원격 편집",
+      remoteChange,
+      strategy: "local-first",
+    });
+
+    expect(result.action).toBe("skip");
+    expect(result.remoteUnchanged).toBeUndefined();
+  });
+
+  it.each(["remote-first", "manual", "duplicate"] as const)(
+    "로컬 수정 + 원격이 그대로임을 호출측이 확인 → 렌더한 글이 달라도 %s 여도 덮지도 충돌로 올리지도 않는다(N-05)",
+    (strategy) => {
+      // 이 도구가 만든 자식 페이지가 부모 렌더에 링크를 더했다 — 본문 지문과 제목은 그대로다.
+      const result = resolvePullConflict({
+        record: createRecord({ contentHash: computeHash("BASE") }),
+        localContent: "BASE + 로컬 편집",
+        remoteContent: "BASE\n\n[[자식]]",
+        remoteUnchanged: true,
+        remoteChange,
+        strategy,
+      });
+
+      expect(result).toMatchObject({ action: "skip", remoteUnchanged: true });
+      expect(result.conflict).toBeUndefined();
+    },
+  );
+
+  it("원격이 그대로여도 로컬 파일이 없으면 되살린다", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: computeHash("BASE") }),
+      localContent: "",
+      localExists: false,
+      remoteContent: "BASE",
+      remoteUnchanged: true,
+      remoteChange,
+      strategy: "manual",
+    });
+
+    expect(result.action).toBe("write");
+  });
+
+  it("파일 끝 개행만 다른 리모트는 지난 사본 그대로다 — 충돌로 올리지 않는다", () => {
+    const result = resolvePullConflict({
+      record: createRecord({
+        contentHash: computeHash("BASE\n"),
+        baseSnapshot: Buffer.from("BASE\n"),
+      }),
+      localContent: "BASE\n로컬 편집\n",
+      remoteContent: "BASE",
+      remoteChange,
+      strategy: "manual",
+    });
+
+    expect(result).toMatchObject({ action: "skip", remoteUnchanged: true });
+  });
+
+  it("파일 끝 개행만 다른 로컬 · 리모트는 같은 글이다 → 충돌 아님(write 로 정리)", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: null }),
+      localContent: "CONVERGED\n",
+      remoteContent: "CONVERGED",
+      remoteChange,
+      strategy: "manual",
+    });
+
+    expect(result.action).toBe("write");
+  });
+
   it("로컬·리모트 내용이 이미 동일 → 충돌 아님(write 로 정리)", () => {
     const result = resolvePullConflict({
       record: createRecord({ contentHash: "synced-hash", baseSnapshot: Buffer.from("BASE") }),
@@ -213,5 +306,18 @@ describe("resolvePullConflict", () => {
       strategy: "local-first",
     });
     expect(result.action).toBe("skip");
+  });
+});
+
+describe("sameNoteContent", () => {
+  it("파일 끝 개행만 다르면 같다", () => {
+    expect(sameNoteContent("글\n", "글")).toBe(true);
+    expect(sameNoteContent("글\n\n", "글\n")).toBe(true);
+  });
+
+  it("줄 끝 공백 · 앞의 개행 · 본문 속 개행이 다르면 다르다", () => {
+    expect(sameNoteContent("글 ", "글")).toBe(false);
+    expect(sameNoteContent("\n글", "글")).toBe(false);
+    expect(sameNoteContent("글\n다음", "글다음")).toBe(false);
   });
 });

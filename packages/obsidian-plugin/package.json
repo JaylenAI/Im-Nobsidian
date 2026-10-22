@@ -1,6 +1,6 @@
 {
   "name": "obsidian-im-nobsidian",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "private": true,
   "description": "Obsidian plugin for bidirectional Notion sync",
   "main": "main.js",
@@ -16,6 +16,9 @@
     "sql.js": "^1.14.1"
   },
   "devDependencies": {
+    "@codemirror/language": "^6",
+    "@codemirror/state": "6.5.0",
+    "@codemirror/view": "6.38.6",
     "@sveltejs/vite-plugin-svelte": "^4",
     "@types/node": "^22.0.0",
     "builtin-modules": "^5.3.0",

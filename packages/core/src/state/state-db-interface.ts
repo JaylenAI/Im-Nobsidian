@@ -1,4 +1,10 @@
-import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "../types/index.js";
+import type {
+  SyncRecord,
+  SyncStatus,
+  WikilinkEntry,
+  PreserveMarker,
+  RemoteObservation,
+} from "../types/index.js";
 import type {
   UpsertSyncRecord,
   FileRegistryEntry,
@@ -8,7 +14,8 @@ import type {
 } from "./state-db.js";
 
 export interface IStateDB {
-  close(): void;
+  /** 닫는다 — 파일에 남은 쓰기를 마쳐야 하는 구현(플러그인의 sql.js)은 그 일을 Promise 로 돌려준다. */
+  close(): void | Promise<void>;
 
   // sync_state
   getByPath(path: string): SyncRecord | null;
@@ -18,7 +25,10 @@ export interface IStateDB {
   upsert(record: UpsertSyncRecord): SyncRecord;
   updateStatus(id: string, status: SyncStatus): void;
   updateHash(id: string, hash: string, snapshot?: Buffer | Uint8Array | null): void;
-  setNotionLastEdited(id: string, lastEdited: string): void;
+  /** 원격을 본 기록을 적는다(N-05). 지문을 적지 않으면 있던 지문을 둔다. */
+  setRemoteObservation(id: string, observation: RemoteObservation): void;
+  /** 원격 본문 지문만 바꾼다 — 본문을 보냈지만 수정 시각은 올리지 않을 때. */
+  setNotionBodyFingerprint(id: string, fingerprint: string | null): void;
   updateStatCache(id: string, mtime: string, fileSize: number): void;
   setNotionParentId(id: string, parentId: string): void;
   /** 레코드의 로컬 경로를 갱신한다 (파일 rename/move 추적용). */

@@ -1,0 +1,340 @@
+{
+  "pageId": "3f713b18-d382-81ad-9a7d-e7c3dcab33aa",
+  "blocks": [
+    {
+      "id": "880cfcf4-51e2-40c5-bfe3-03b0a87d18a7",
+      "has_children": true,
+      "type": "heading_3",
+      "heading_3": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "배포 체크리스트",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "배포 체크리스트",
+            "href": null
+          }
+        ],
+        "is_toggleable": true,
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "42c266e9-dd95-4333-8478-7942e14937b0",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "빌드 산출물을 확인하고 태그를 붙인 뒤 릴리스 노트를 작성한다.",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "빌드 산출물을 확인하고 태그를 붙인 뒤 릴리스 노트를 작성한다.",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "125f3b33-d526-46fd-9744-935abf7b86a5",
+          "has_children": true,
+          "type": "toggle",
+          "toggle": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "롤백 절차",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "롤백 절차",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "1a2579ce-b8e4-4dc4-a240-bddba3dda801",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "직전 태그로 되돌리고 마이그레이션을 역순으로 적용한다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "직전 태그로 되돌리고 마이그레이션을 역순으로 적용한다.",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            },
+            {
+              "id": "0f1b9643-368d-4e18-b85f-e4a9146770e5",
+              "has_children": false,
+              "type": "code",
+              "code": {
+                "caption": [],
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "git checkout v1.2.3\npnpm build",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "git checkout v1.2.3\npnpm build",
+                    "href": null
+                  }
+                ],
+                "language": "bash"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f39fe4ba-e29d-4c0c-9949-0bba53b9419e",
+      "has_children": true,
+      "type": "heading_3",
+      "heading_3": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "관측 지표",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "관측 지표",
+            "href": null
+          }
+        ],
+        "is_toggleable": true,
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "028ae669-e8bb-4dc9-9e2f-fea73bfaa758",
+          "has_children": true,
+          "type": "table",
+          "table": {
+            "table_width": 2,
+            "has_column_header": false,
+            "has_row_header": false
+          },
+          "children": [
+            {
+              "id": "813166f2-0bdc-4d85-9e24-050fb630641c",
+              "has_children": false,
+              "type": "table_row",
+              "table_row": {
+                "cells": [
+                  [
+                    {
+                      "type": "text",
+                      "text": {
+                        "content": "지표",
+                        "link": null
+                      },
+                      "annotations": {
+                        "bold": false,
+                        "italic": false,
+                        "strikethrough": false,
+                        "underline": false,
+                        "code": false,
+                        "color": "default"
+                      },
+                      "plain_text": "지표",
+                      "href": null
+                    }
+                  ],
+                  [
+                    {
+                      "type": "text",
+                      "text": {
+                        "content": "임계값",
+                        "link": null
+                      },
+                      "annotations": {
+                        "bold": false,
+                        "italic": false,
+                        "strikethrough": false,
+                        "underline": false,
+                        "code": false,
+                        "color": "default"
+                      },
+                      "plain_text": "임계값",
+                      "href": null
+                    }
+                  ]
+                ]
+              }
+            },
+            {
+              "id": "054fca34-8b22-4e38-ba2b-15e6467d96bf",
+              "has_children": false,
+              "type": "table_row",
+              "table_row": {
+                "cells": [
+                  [
+                    {
+                      "type": "text",
+                      "text": {
+                        "content": "지연시간",
+                        "link": null
+                      },
+                      "annotations": {
+                        "bold": false,
+                        "italic": false,
+                        "strikethrough": false,
+                        "underline": false,
+                        "code": false,
+                        "color": "default"
+                      },
+                      "plain_text": "지연시간",
+                      "href": null
+                    }
+                  ],
+                  [
+                    {
+                      "type": "text",
+                      "text": {
+                        "content": "200ms",
+                        "link": null
+                      },
+                      "annotations": {
+                        "bold": false,
+                        "italic": false,
+                        "strikethrough": false,
+                        "underline": false,
+                        "code": false,
+                        "color": "default"
+                      },
+                      "plain_text": "200ms",
+                      "href": null
+                    }
+                  ]
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "f5a31b29-3005-4548-a066-5b4421ca3722",
+      "has_children": false,
+      "type": "heading_2",
+      "heading_2": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "다음 섹션",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "다음 섹션",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "default"
+      }
+    },
+    {
+      "id": "9799fad0-035a-4a6e-a975-9c83d031d5bc",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "토글 밖 형제 문단이다. 토글 자식으로 빨려 들어가면 안 된다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "토글 밖 형제 문단이다. 토글 자식으로 빨려 들어가면 안 된다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}

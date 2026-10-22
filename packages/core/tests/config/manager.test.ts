@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigManager } from "../../src/config/manager.js";
@@ -48,6 +48,19 @@ describe("ConfigManager", () => {
       expect(gitignore).toContain(".im-nobsidian/");
     });
 
+    it("읽지 못한 .gitignore 는 덮지 않는다", async () => {
+      const gitignore = join(tempDir, ".gitignore");
+      await writeFile(gitignore, "node_modules/\n");
+      await chmod(gitignore, 0o200);
+
+      await expect(manager.init({ token: "ntn_test_perm", rootPageId: "root" })).rejects.toThrow(
+        "EACCES",
+      );
+
+      await chmod(gitignore, 0o600);
+      expect(await readFile(gitignore, "utf-8")).toBe("node_modules/\n");
+    });
+
     it("기존 .gitignore에 추가 (중복 안 함)", async () => {
       await writeFile(join(tempDir, ".gitignore"), "node_modules/\n.im-nobsidian/\n");
       await manager.init({ token: "ntn_test_dup", rootPageId: "root" });
@@ -71,6 +84,15 @@ describe("ConfigManager", () => {
 
     it("설정 파일 없으면 에러", async () => {
       await expect(manager.load()).rejects.toThrow("설정 파일을 찾을 수 없습니다");
+    });
+
+    it("있는데 읽지 못하면 「찾을 수 없음」 이 아니라 읽지 못한 까닭", async () => {
+      await manager.init({ token: "ntn_test_perm", rootPageId: "page-id" });
+      await chmod(manager.configPath, 0o200);
+
+      const load = new ConfigManager(tempDir).load();
+      await expect(load).rejects.toThrow("설정 파일을 읽지 못했습니다");
+      await expect(load).rejects.toThrow("EACCES");
     });
   });
 

@@ -18,12 +18,19 @@ import {
   dimText,
   completionHeader,
   failedItem,
+  remoteScanLines,
 } from "../utils/format.js";
+import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
+  .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
   .action(async (options) => {
+    const json = options.json === true;
+    if (json) enableJsonMode();
+    // 진행 로그는 사람용이다 — JSON 모드에서는 stdout 계약(JSON 한 줄)을 지키려고 끈다.
+    const log = json ? () => {} : (line: string) => console.log(line);
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -34,45 +41,50 @@ export const syncCommand = new Command("sync")
       const vaultFs = new NodeVaultFS(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-      console.log(`\n${header("  Bidirectional Sync")}`);
-      console.log(`  ${separator()}`);
-      if (options.dryRun) console.log(dimText("  (dry-run mode)"));
+      log(`\n${header("  Bidirectional Sync")}`);
+      log(`  ${separator()}`);
+      if (options.dryRun) log(dimText("  (dry-run mode)"));
 
-      // Pull phase
-      console.log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
+      // 받기 · 올리기를 한 번에 돈다 — 플러그인 · watch 와 같은 sync 다. push 는 pull 이 방금 쓴 노트를
+      // 다시 올리지 않는다(F-j). 예전에는 pull · push 를 따로 불러 두 «sync» 가 따로 자랐다.
+      log(`\n  ${header(chalk.blue("▼ Pull"))} ${dimText("(Notion → Obsidian)")}`);
+      let pushShown = false;
+      const showPush = (): void => {
+        if (pushShown) return;
+        pushShown = true;
+        log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
+      };
 
-      const pullResult = await orchestrator.pull({
+      const result = await orchestrator.sync({
         dryRun: options.dryRun,
         onProgress: (_current, _total, item) => {
+          if (item.direction === "push") showPush();
+          if (item.unchanged) return;
           const icon = operationIcon(item.operation);
           const label = operationLabel(item.operation);
-          console.log(`    ${icon} ${item.path} ${label}`);
+          log(`    ${icon} ${item.path} ${label}`);
         },
       });
+      showPush();
+      const { pull: pullResult, push: pushResult } = result;
 
-      if (pullResult.imageCount > 0) {
-        console.log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
+      if (json) {
+        const pull = pullJson(pullResult);
+        const push = pushJson(pushResult);
+        printJson({
+          pull,
+          push,
+          churn: pull.churn + push.churn,
+          conflicts: pull.conflicts,
+          durationMs: result.duration,
+        });
+        if (pullResult.failed.length + pushResult.failed.length > 0) process.exitCode = 1;
+        return;
       }
-      if (pullResult.linkCount > 0) {
-        console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
-      }
-
-      // Push phase
-      console.log(`\n  ${header(chalk.magenta("▲ Push"))} ${dimText("(Obsidian → Notion)")}`);
-
-      const pushResult = await orchestrator.push({
-        dryRun: options.dryRun,
-        onProgress: (_current, _total, item) => {
-          const icon = operationIcon(item.operation);
-          const label = operationLabel(item.operation);
-          console.log(`    ${icon} ${item.path} ${label}`);
-        },
-      });
 
       // Summary
       // 예전엔 양쪽 failed 를 아예 찍지 않아, 전 건 실패한 sync 도 화면 끝은 초록 "complete"
       // 였다 — 실패를 헤더와 목록 양쪽에 드러낸다.
-      const totalDuration = pullResult.duration + pushResult.duration;
       const pullFailed = pullResult.failed.length;
       const pushFailed = pushResult.failed.length;
       console.log(`\n  ${completionHeader("Sync", pullFailed + pushFailed)}`);
@@ -82,22 +94,31 @@ export const syncCommand = new Command("sync")
           (pullResult.restored > 0 ? `  ${chalk.yellow(`${pullResult.restored} restored`)}` : "") +
           (pullFailed > 0 ? `  ${chalk.red(`${pullFailed} failed`)}` : ""),
       );
+      if (pullResult.imageCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.imageCount} images downloaded`);
+      }
+      if (pullResult.linkCount > 0) {
+        console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
+      }
       console.log(
-        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted)}` +
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved)}` +
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
-      console.log(`  ${duration(totalDuration)}`);
+      console.log(`  ${duration(result.duration)}`);
+      if (pullResult.remoteScan) {
+        for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
+      }
 
-      if (pullResult.conflicts.length > 0) {
+      if (result.conflicts.length > 0) {
         console.log(
-          `\n  ${icons.conflict} ${chalk.magenta(`${pullResult.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
+          `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );
       }
 
       if (pullFailed + pushFailed > 0) {
         console.log("");
-        for (const f of pullResult.failed) failedItem(`▼ ${f.path}`, f.error);
-        for (const f of pushResult.failed) failedItem(`▲ ${f.path}`, f.error);
+        for (const f of pullResult.failed) failedItem(f.path, f.error, "▼");
+        for (const f of pushResult.failed) failedItem(f.path, f.error, "▲");
         process.exitCode = 1;
       }
     } finally {

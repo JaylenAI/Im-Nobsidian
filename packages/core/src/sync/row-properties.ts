@@ -1,0 +1,62 @@
+import type { RowPropertyChanges } from "../types/sync.js";
+import { isEmptyFrontmatterValue, plainFrontmatterValue } from "../utils/frontmatter.js";
+
+/**
+ * S-01 — DB 행의 속성은 «지난 동기화 뒤 로컬에서 바뀐 것» 만 보낸다.
+ *
+ * 로컬 frontmatter 는 Notion 속성의 평문 사본이다. rich_text 의 굵게 · 링크 · 멘션 · 색은
+ * 빠져 있고, people 은 이름만 남는다. 행을 push 할 때마다 속성을 통째로 보내면 손대지 않은
+ * 속성까지 평문으로 덮여 서식이 지워지고, 그 사이 Notion 에서 바뀐 다른 속성은 옛 값으로
+ * 되돌아간다. 그래서 지난 동기화 시점의 파일(baseSnapshot)과 지금 파일의 frontmatter 를
+ * 비교해 바뀐 키만 고른다.
+ *
+ * `title` 은 여기서 다루지 않는다 — 행 제목은 속성이 아니라 `note-title.ts` 의 규칙으로 정한다.
+ */
+
+/**
+ * 두 frontmatter 의 속성 차이.
+ *
+ * @param base 지난 동기화 시점의 frontmatter. 모르면 null — 그때는 비어 있지 않은 속성을
+ *   전부 바뀐 것으로 본다(비교할 기준이 없으면 통째로 보내던 예전 동작과 같다).
+ */
+export function diffRowProperties(
+  base: Readonly<Record<string, unknown>> | null,
+  current: Readonly<Record<string, unknown>>,
+): RowPropertyChanges {
+  const changed: Record<string, unknown> = {};
+  const cleared: string[] = [];
+  const keys = new Set([...Object.keys(base ?? {}), ...Object.keys(current)]);
+  keys.delete("title");
+
+  for (const key of keys) {
+    const after = plainFrontmatterValue(current[key]);
+    if (base === null) {
+      if (!isEmptyFrontmatterValue(after)) changed[key] = after;
+      continue;
+    }
+    const before = plainFrontmatterValue(base[key]);
+    if (sameValue(before, after)) continue;
+    if (isEmptyFrontmatterValue(after)) cleared.push(key);
+    else changed[key] = after;
+  }
+  return { changed, cleared };
+}
+
+function sameValue(a: unknown, b: unknown): boolean {
+  if (isEmptyFrontmatterValue(a) && isEmptyFrontmatterValue(b)) return true;
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, i) => sameValue(item, b[i]));
+  }
+  if (a !== null && b !== null && typeof a === "object" && typeof b === "object") {
+    const ra = a as Record<string, unknown>;
+    const rb = b as Record<string, unknown>;
+    const keys = new Set([...Object.keys(ra), ...Object.keys(rb)]);
+    for (const key of keys) {
+      if (!sameValue(ra[key], rb[key])) return false;
+    }
+    return true;
+  }
+  return false;
+}

@@ -11,10 +11,9 @@ export class UnsupportedBlockStripper implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const content = input.content.replace(UNSUPPORTED_CALLOUT_REGEX, "");
-
+    // 지운 자리에 남는 빈 줄은 BlankLineCollapser 가 줄인다.
     return {
-      content: content.replace(/\n{3,}/g, "\n\n"),
+      content: input.content.replace(UNSUPPORTED_CALLOUT_REGEX, ""),
       metadata: input.metadata,
     };
   }

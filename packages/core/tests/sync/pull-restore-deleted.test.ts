@@ -88,10 +88,19 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
 
   /** 원격은 멀쩡한데 로컬 파일만 사라진 상황을 만든다. */
   function stageMissingFile(record: MutableRecord): void {
+    // 방금 전체 대조를 마쳤다 — 이번 pull 은 바뀐 것만 본다(ADR-027).
+    const lastFullPull = new Date().toISOString();
     stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
+      k === "last_pull_at"
+        ? "2026-05-01T00:00:00.000Z"
+        : k === "last_full_pull_at"
+          ? lastFullPull
+          : null,
     );
     stateDb.getAll.mockReturnValue([record]);
+    stateDb.getByPath.mockImplementation((path: string) =>
+      path === record.obsidianPath ? record : null,
+    );
     stateDb.getByNotionId.mockImplementation((id: string) =>
       id === record.notionPageId ? record : null,
     );
@@ -165,6 +174,20 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
     expect(result.restored).toBe(0);
     expect(vaultFs.writeFile).not.toHaveBeenCalled();
     expect(notion.getPage).not.toHaveBeenCalled();
+  });
+
+  it("볼트를 읽지 못하면 이번 pull 은 되살리지 않는다 (옮긴 노트와 지운 노트를 가를 수 없음)", async () => {
+    const rec = makeRecord();
+    stageMissingFile(rec);
+    // 새 자리의 파일을 읽는 사이 사라졌다 — 옮긴 것인지 모른다.
+    vaultFs.listMarkdownFileStats.mockResolvedValue([
+      { path: "notes/moved.md", mtime: "2026-05-02T00:00:00.000Z", size: 13 },
+    ]);
+
+    const result = await makeOrchestrator().pull();
+
+    expect(result.restored).toBe(0);
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
   });
 
   it("--path 범위 밖의 사라진 파일은 건드리지 않는다", async () => {
@@ -310,12 +333,32 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
 
     const result = await makeOrchestrator().pull();
 
-    // 한 번만 기록되고, 원격 변경 경로로 처리됐으므로 updated 로 집계된다.
+    // 한 번만 기록된다. 원격 변경 경로로 받았어도 볼트에서 사라진 파일이 돌아왔으므로 복원으로 센다.
     const writes = (
       vaultFs.writeFile as unknown as { mock: { calls: unknown[][] } }
     ).mock.calls.filter((c) => c[0] === "notes/gone.md");
     expect(writes).toHaveLength(1);
-    expect(result.restored).toBe(0);
-    expect(result.updated).toBe(1);
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+  });
+
+  it("dry-run 도 원격 변경으로 큐에 오른 사라진 파일을 복원으로 센다", async () => {
+    const rec = makeRecord();
+    stageMissingFile(rec);
+    notion.searchRecentPages.mockResolvedValue([
+      { id: rec.notionPageId, last_edited_time: "2026-05-02T00:00:00.000Z" },
+    ]);
+    notion.getPage.mockResolvedValue({
+      id: rec.notionPageId,
+      last_edited_time: "2026-05-02T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root-page-id" },
+      properties: { title: { type: "title", title: [{ plain_text: "Gone Note" }] } },
+    });
+
+    const result = await makeOrchestrator().pull({ dryRun: true });
+
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+    expect(vaultFs.writeFile).not.toHaveBeenCalled();
   });
 });

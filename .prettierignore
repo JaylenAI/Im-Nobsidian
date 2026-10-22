@@ -9,3 +9,7 @@ pnpm-lock.yaml
 # 형태 자체가 사라진다. 실제로 lint-staged 의 `*.md` 규칙이 커밋 시점에 이 파일들을
 # 재포맷해 게이트를 거짓 실패시킨 적이 있다.
 packages/core/tests/render/corpus/
+
+# 블록 폴백 NFM 정답 짝 — Notion Markdown API export 의 바이트 그대로다(위 코퍼스와 같은 이유).
+# 블록 JSON 도 같은 짝이라 함께 둔다.
+packages/core/tests/fixtures/nfm/

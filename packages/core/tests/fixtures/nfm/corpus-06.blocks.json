@@ -1,0 +1,347 @@
+{
+  "pageId": "3f713b18-d382-81d7-8930-e4b52a5d5b8e",
+  "blocks": [
+    {
+      "id": "570a7296-4dd7-4691-ad02-ebb759cfe008",
+      "has_children": true,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "재현 절차",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "재현 절차",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "emoji",
+          "emoji": "🧪"
+        },
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "2fd21750-5ae2-4072-b1b6-df9527c12fa2",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "def reproduce(payload):\n    # 4칸 들여쓰기가 그대로 살아야 한다\n    return payload.strip()",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "def reproduce(payload):\n    # 4칸 들여쓰기가 그대로 살아야 한다\n    return payload.strip()",
+                "href": null
+              }
+            ],
+            "language": "python"
+          }
+        },
+        {
+          "id": "0fac0456-2f0e-4007-b749-4cc18dd4ed55",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "위 코드를 붙여 넣고 실행하면 같은 오류가 난다.",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "위 코드를 붙여 넣고 실행하면 같은 오류가 난다.",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "e2ef50a0-f2ac-4de0-a1bc-b9a0ef47791b",
+      "has_children": true,
+      "type": "toggle",
+      "toggle": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "전체 로그",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "전체 로그",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "ff24a425-f901-4dce-a93d-aa44c1401b52",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "[13:20:31] WARN  대기열 지연\n[13:20:32] ERROR 커넥션 종료",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "[13:20:31] WARN  대기열 지연\n[13:20:32] ERROR 커넥션 종료",
+                "href": null
+              }
+            ],
+            "language": "javascript"
+          }
+        },
+        {
+          "id": "f0d0fbca-8db1-4daf-a8ec-61b23903dca9",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "로그의 대괄호와 공백은 원문 그대로 보존되어야 한다.",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "로그의 대괄호와 공백은 원문 그대로 보존되어야 한다.",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "b70bb7ce-c190-457e-868a-8d215c8c73b2",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "일반 문단 사이의 코드 블록이다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "일반 문단 사이의 코드 블록이다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "8e680693-c5b4-45db-bee1-356833534989",
+      "has_children": false,
+      "type": "code",
+      "code": {
+        "caption": [],
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "export function noop(): void {}",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "export function noop(): void {}",
+            "href": null
+          }
+        ],
+        "language": "typescript"
+      }
+    },
+    {
+      "id": "bcd586fc-e879-4e9f-b256-06fa24b62036",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "목록 안의 코드도 확인한다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "목록 안의 코드도 확인한다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "0ddd28f3-5975-4e3b-bcee-555a00dc83e9",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "첫 항목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "첫 항목",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "64da6f1c-b798-4214-8fc0-dd07536f39ed",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "echo hello",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "echo hello",
+                "href": null
+              }
+            ],
+            "language": "bash"
+          }
+        }
+      ]
+    },
+    {
+      "id": "17753664-ccf8-40d0-907f-0288a4bcf236",
+      "has_children": false,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "둘째 항목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "둘째 항목",
+            "href": null
+          }
+        ],
+        "color": "default"
+      }
+    }
+  ]
+}

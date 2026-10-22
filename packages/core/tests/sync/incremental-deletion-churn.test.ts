@@ -11,8 +11,9 @@
  *    new Date()(로컬 시각)를 notionLastEdited 로 저장해 다음 pull 이 가짜 modified 로 오인.
  *
  * 수정:
- *  - I10: deleteSync 가 켜지면 증분 fast-path 를 쓰지 않고 전체 스캔으로 우회 → 사라진
- *    추적 페이지를 삭제로 전파.
+ *  - I10: 원격 삭제는 전체 대조(서브트리 순회)가 가른다 → 사라진 추적 페이지를 삭제로 전파.
+ *    예전에는 deleteSync 가 켜지면 pull 마다 전체 대조했다. 이제는 주기마다 한다(ADR-027) —
+ *    전체 대조를 한 적이 없으면(업그레이드 직후 포함) 다음 pull 이 한다.
  *  - I5: pullUpdate 가 remoteContent===localContent 면 파일을 건드리지 않고 메타만 정렬
  *    (unchanged) → updated 0. pushUpdate 는 Notion 권위 last_edited 를 저장.
  *
@@ -29,6 +30,7 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  settledObservation,
 } from "../helpers/mock-orchestrator.js";
 
 type MutableRecord = {
@@ -38,6 +40,9 @@ type MutableRecord = {
   notionParentId: string | null;
   contentHash: string;
   notionLastEdited: string;
+  notionLastEditedBy?: string | null;
+  notionSeenAt?: string | null;
+  notionBodyFingerprint?: string | null;
   localLastModified: string;
   syncDirection: string;
   fileType: string;
@@ -64,10 +69,20 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
 
   // ── I10: 증분/전체 스캔 라우팅 + 삭제 전파 ──────────────────────────────────
 
-  it("deleteSync OFF: 증분 fast-path(searchRecentPages) 를 탄다", async () => {
+  /** 방금 전체 대조를 마친 상태 — 주기 안이라 이번 pull 은 증분이다(ADR-027). */
+  function justReconciled(): void {
+    const lastFullPull = new Date().toISOString();
     stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
+      k === "last_pull_at"
+        ? "2026-05-01T00:00:00.000Z"
+        : k === "last_full_pull_at"
+          ? lastFullPull
+          : null,
     );
+  }
+
+  it("전체 대조를 마친 지 주기 안이면 증분(searchRecentPages)을 탄다", async () => {
+    justReconciled();
     stateDb.getAll.mockReturnValue([{ notionPageId: "p1", obsidianPath: "a.md" }]);
 
     const orch = makeOrchestrator(
@@ -78,7 +93,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     expect(notion.searchRecentPages).toHaveBeenCalled();
   });
 
-  it("deleteSync ON: 증분을 우회해 전체 스캔(서브트리 순회)으로 삭제를 전파한다", async () => {
+  it("전체 대조를 한 적이 없으면(업그레이드 직후) 전체 스캔(서브트리 순회)으로 삭제를 전파한다", async () => {
     const gone: MutableRecord = {
       id: 1,
       obsidianPath: "gone.md",
@@ -100,6 +115,14 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     stateDb.getByNotionId.mockImplementation((id: string) => (id === "gone-page" ? gone : null));
     // 원격에 더 이상 존재하지 않음(in_trash/archived → 서브트리 순회 결과에서 사라짐).
     notion.getChildPagesRecursive.mockResolvedValue([]);
+    // 지우기 전에 원격에 물어본다(S-12) — Notion 은 휴지통의 페이지를 in_trash 로 돌려준다.
+    notion.getPage.mockResolvedValue({
+      id: "gone-page",
+      last_edited_time: "2026-05-02T00:00:00.000Z",
+      parent: { type: "page_id", page_id: "root-page-id" },
+      in_trash: true,
+      properties: { title: { type: "title", title: [{ plain_text: "gone" }] } },
+    });
 
     const orch = makeOrchestrator(
       createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: true } }),
@@ -130,9 +153,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
       localFileSize: 9,
       baseSnapshot: null,
     };
-    stateDb.getMeta.mockImplementation((k: string) =>
-      k === "last_pull_at" ? "2026-05-01T00:00:00.000Z" : null,
-    );
+    justReconciled();
     stateDb.getAll.mockReturnValue([rec]);
     stateDb.getByNotionId.mockImplementation((id: string) => (id === "page-id-123" ? rec : null));
     // upsert 결과를 레코드에 반영해 두 번째 pull 이 갱신된 상태를 본다.
@@ -194,7 +215,7 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
       notionPageId: "page-id-123",
       notionParentId: "root-page-id",
       contentHash: computeHash("# Old\n"),
-      notionLastEdited: "2026-05-01T00:00:00.000Z",
+      ...settledObservation("2026-05-01T00:00:00.000Z"),
       localLastModified: "2026-05-01T00:00:00.000Z",
       syncDirection: "both",
       fileType: "page",
@@ -208,13 +229,17 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     ]);
     vaultFs.readFile.mockResolvedValue("# New body\n\nchanged content");
     vaultFs.getFileStat.mockResolvedValue({ mtime: "2026-05-09T00:00:00.000Z", size: 40 });
-    // 블록만 바뀌고 속성 갱신은 없음(페이지 모드) → getPage 권위값 경로를 탄다.
-    notion.getPage.mockResolvedValue({
+    // 블록만 바뀌고 속성 갱신은 없음(페이지 모드) → getPage 권위값 경로를 탄다. 쓰기 전에
+    // 원격이 지난번 그대로인지 한 번 보고(N-05), 쓴 뒤의 시각을 한 번 더 받는다.
+    const remotePage = (lastEdited: string) => ({
       id: "page-id-123",
-      last_edited_time: "2026-05-09T12:34:56.000Z",
+      last_edited_time: lastEdited,
       parent: { type: "page_id", page_id: "root-page-id" },
       properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
     });
+    notion.getPage
+      .mockResolvedValueOnce(remotePage("2026-05-01T00:00:00.000Z"))
+      .mockResolvedValue(remotePage("2026-05-09T12:34:56.000Z"));
 
     const orch = makeOrchestrator(
       createConfig({ sync: { ...DEFAULT_CONFIG.sync, deleteSync: false } }),
@@ -223,6 +248,9 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
 
     // updatePageProperties(속성 갱신)는 호출되지 않고, 저장된 last_edited 는 getPage 권위값.
     expect(notion.updatePageProperties).not.toHaveBeenCalled();
-    expect(stateDb.setNotionLastEdited).toHaveBeenCalledWith(7, "2026-05-09T12:34:56.000Z");
+    expect(stateDb.setRemoteObservation).toHaveBeenCalledWith(
+      7,
+      expect.objectContaining({ lastEdited: "2026-05-09T12:34:56.000Z" }),
+    );
   });
 });

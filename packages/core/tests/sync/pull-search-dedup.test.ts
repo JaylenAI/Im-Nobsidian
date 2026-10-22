@@ -30,6 +30,7 @@ import { NotionClient } from "../../src/notion/client.js";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { Config } from "../../src/types/config.js";
+import { MOCK_BOT_USER_ID } from "../helpers/mock-orchestrator.js";
 
 const ROOT = "11111111111111111111111111111111";
 const HUB = "22222222222222222222222222222222"; // 폴더노트(본문 + 자식) — 검색에 중복 등장
@@ -80,6 +81,8 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
 
     const client = new NotionClient({ token: "offline-test" });
+    // 봇 id 는 원격 판정에 쓴다(N-05) — 오프라인 시험이 users.me 로 나가지 않게.
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
     vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue(discoveredPages);
     vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
       if (id === HUB) return HUB_PAGE;
@@ -101,6 +104,8 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     vi.spyOn(client, "getChildDatabaseIds").mockResolvedValue([]);
     // 2회차 pull 은 증분 경로(searchRecentPages)를 탄다 — 변경 없음으로 차단(실 API 방지).
     vi.spyOn(client, "searchRecentPages").mockResolvedValue([]);
+    // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
+    vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);
 
     const config: Config = {
       ...DEFAULT_CONFIG,

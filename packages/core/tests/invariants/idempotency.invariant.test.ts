@@ -143,13 +143,13 @@ describe.skipIf(SKIP)("I5 멱등성 불변식", () => {
     await cleanupVault(vault, stateDb);
   });
 
-  it("자식 페이지 보유 페이지 — 본문 push 시 자식 페이지 무손실(수정2)", async () => {
-    // 회귀 잠금: 빈 볼트 E2E 에서 발견된 폴더노트 데이터 손실 결함.
-    // child page 를 가진 페이지의 본문 push 는 replace_content[allow_deleting_content]
-    // 와 block 삭제-후-append 경로 모두 child page 를 in_trash 로 삭제한다(실Notion 확인).
-    // 수정2 가드는 살아있는 child page 가 있으면 파괴적 본문 갱신을 건너뛰어 자식을 보존한다.
-    // (구조 매퍼의 폴더노트 매핑에 의존하지 않도록 자식을 raw API 로 직접 생성 → 결정적.)
-    const root = await createIsolatedRoot(raw, "idem-childguard");
+  it("자식 페이지 · 자식 DB 가 있는 페이지 — 본문 편집이 Notion 에 가고 자식은 같은 id 로 남는다 (수정2 · S-03)", async () => {
+    // 회귀 잠금 두 가지.
+    //  - 수정2(빈 볼트 E2E): 본문 push 가 자식 페이지를 휴지통으로 보내던 데이터 손실.
+    //  - S-03(QA 실측): 그 가드가 본문 push 를 통째로 건너뛰고도 동기화됨으로 적어,
+    //    폴더 노트에서 고친 내용이 Notion 에 영영 가지 않던 것.
+    // 자식은 raw API 로 직접 만든다 — 구조 매퍼의 폴더 노트 매핑에 기대지 않게(결정적).
+    const root = await createIsolatedRoot(raw, "idem-childbody");
     createdPageIds.push(root);
     const vault = await createTmpVault();
     const { orchestrator, stateDb, vaultFs } = makeOrchestrator(vault, root);
@@ -163,23 +163,66 @@ describe.skipIf(SKIP)("I5 멱등성 불변식", () => {
     const parentId = stateDb.getByPath("parent.md")?.notionPageId;
     expect(parentId, "parent 페이지 생성").toBeTruthy();
 
-    // 부모 직속에 실제 child_page 를 생성 → 부모는 "본문 + 살아있는 자식" 상태.
     const child = (await raw.pages.create({
       parent: { type: "page_id", page_id: parentId! },
       properties: { title: { title: [{ type: "text", text: { content: "Leaf" } }] } },
     })) as { id: string };
+    const childDb = (await raw.databases.create({
+      parent: { type: "page_id", page_id: parentId! },
+      is_inline: true,
+      title: [{ type: "text", text: { content: "Leaf DB" } }],
+      initial_data_source: { properties: { 이름: { title: {} } } },
+    } as Parameters<Client["databases"]["create"]>[0])) as { id: string };
     createdPageIds.push(child.id);
     await sleep(1500);
     expect(await countAllChildPages(raw, parentId!), "사전 조건: 자식 1개").toBe(1);
 
-    // 부모 본문 편집 → push. 가드가 파괴적 replace 를 막아 push 는 성공(실패 0)하고
-    // 자식 child_page 는 그대로 보존돼야 한다.
+    // 로컬 본문에는 아직 자식 링크가 없다(pull 전) — 자식은 끝으로 가되 지워지지 않는다.
     await vaultFs.writeFile("parent.md", "# Parent\n\n부모 본문 수정됨!\n");
     const pushEdit = await orchestrator.push();
     expect(pushEdit.failed, "본문 편집 push 실패").toHaveLength(0);
+    expect(pushEdit.updated, "본문 편집이 보내지지 않음").toBe(1);
     await sleep(1500);
-    expect(await countAllChildPages(raw, parentId!), "본문 편집 후 자식 페이지 삭제됨").toBe(1);
+
+    const body = (await raw.pages.retrieveMarkdown({ page_id: parentId! })).markdown;
+    expect(body, "본문 편집이 Notion 에 가지 않음").toContain("부모 본문 수정됨!");
+    expect(body).not.toContain("부모 본문 한 줄.");
+    expect(await childOrder(parentId!), "자식이 지워지거나 바뀜").toEqual([
+      "paragraph",
+      `child_page:${child.id}`,
+      `child_database:${childDb.id}`,
+    ]);
+
+    // pull 이 만드는 모양(자식 링크 줄 · .base 임베드)이 있으면 그 자리로 자식이 옮겨 간다.
+    await vaultFs.writeFile(
+      "parent.md",
+      "# Parent\n\n[[Leaf]]\n\n부모 본문 두 번째 수정!\n\n![[Leaf DB.base|Leaf DB]]\n",
+    );
+    const pushPlaced = await orchestrator.push();
+    expect(pushPlaced.failed, "자리 잡기 push 실패").toHaveLength(0);
+    expect(pushPlaced.updated).toBe(1);
+    await sleep(1500);
+    expect(await childOrder(parentId!), "자식이 링크 자리로 가지 않음").toEqual([
+      `child_page:${child.id}`,
+      "paragraph",
+      `child_database:${childDb.id}`,
+    ]);
+
+    // 재-push 는 멱등.
+    const pushAgain = await orchestrator.push();
+    expect(pushAgain.updated).toBe(0);
+    expect(pushAgain.failed).toHaveLength(0);
 
     await cleanupVault(vault, stateDb);
   });
+
+  /** 부모 직속 블록 중 제목을 뺀 순서 — 자식은 `종류:id`, 나머지는 종류만. */
+  async function childOrder(parentId: string): Promise<string[]> {
+    const res = await raw.blocks.children.list({ block_id: parentId, page_size: 100 });
+    return (res.results as Array<{ id: string; type: string }>)
+      .filter((b) => !b.type.startsWith("heading"))
+      .map((b) =>
+        b.type === "child_page" || b.type === "child_database" ? `${b.type}:${b.id}` : b.type,
+      );
+  }
 });

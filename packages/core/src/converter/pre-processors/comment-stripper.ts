@@ -4,26 +4,21 @@ import type {
   ProcessorOutput,
   PreserveMarker,
 } from "../../types/convert.js";
-import { MARKER_BRAND } from "../../constants/markers.js";
-import { mapOutsideCodeFences, mapOutsideMarkers, computeAnchor } from "../../utils/md-regions.js";
-
-const COMMENT_REGEX = /%%([\s\S]*?)%%/g;
-const HTML_COMMENT_REGEX = /<!--([\s\S]*?)-->/g;
+import { computeAnchor } from "../../utils/md-regions.js";
+import { cutComments } from "../comments.js";
 
 /**
  * Obsidian 주석(`%%...%%`)과 HTML 주석(`<!--...-->`)은 로컬 전용 표기다 —
  * Notion 에 평문으로 노출되면 사적 메모가 유출된다(F26; HTML 주석은 P5 push
- * E2E 실측으로 확인). push 시 본문에서 제거하되, preserve marker(DB)로 남겨
- * pull 재작성 시 앵커 위치에 원래 문법(`params.style` 구분)으로 복원한다.
+ * E2E 실측으로 확인). push 시 본문에서 제거한다. 지우는 규칙과 찾는 규칙은 {@link cutComments}.
+ *
+ * pull 은 받기 직전의 로컬 노트에서 주석을 되살린다(`CommentRestorer`). 여기 남기는 preserve
+ * marker(DB)는 로컬 노트가 없을 때(지운 노트를 되살리는 pull)의 대비다 — 그때는 앵커 줄 다음에
+ * 원래 문법(`params.style` 구분)으로 끼운다(`PreserveMarkerInjector`). 앵커는 주석을 지운 글에서
+ * 잡는다 — Notion 에 있는 것은 그 글이다.
  *
  * im-nobsidian 브랜드 마커(`%%im-nobsidian:...%%`·`%% im-nobsidian:... %%`)와
  * 닫는 토큰(`%%/color%%` 류)은 동기화 자체의 운반체이므로 건드리지 않는다.
- * HTML 주석 문법은 브랜드 마커가 쓰지 않으므로 무조건 제거한다.
- *
- * 마커 회피는 **본문에서 마커 토큰을 먼저 떼어 낸 뒤**(`mapOutsideMarkers`) 남은 평문에만
- * 주석 정규식을 돌리는 방식이다. 예전처럼 매치 본문의 접두만 보고 되돌리면, 구분자 짝짓기
- * 자체는 이미 마커의 `%%` 를 소비한 뒤라 늦다 — 본문 한가운데의 홑 `%%`(예: `압축률 100%%`)가
- * 마커 여는 `%%` 와 짝지어져 그 사이 문장과 마커 내용이 통째로 삭제됐다(실측 D-COMMENT-PAIR).
  */
 export class CommentStripper implements Processor {
   readonly name = "CommentStripper";
@@ -39,31 +34,21 @@ export class CommentStripper implements Processor {
       ? [...input.metadata.preserveMarkers]
       : [];
 
-    const content = mapOutsideCodeFences(input.content, (segment) => {
-      const afterObsidian = mapOutsideMarkers(segment, (plain, base) =>
-        plain.replace(COMMENT_REGEX, (match, body: string, offset: number) => {
-          // 개행이 섞여 MARKER_TOKEN_RE 에 안 걸린 깨진 마커까지 삼키지 않도록 남겨 둔 방어선.
-          const trimmed = body.trimStart();
-          if (trimmed.startsWith(`${MARKER_BRAND}:`) || trimmed.startsWith("/")) {
-            return match;
-          }
-          markers.push({
-            type: "comment",
-            params: { text: body, __anchor: computeAnchor(segment, base + offset) },
-            startIndex: base + offset,
-          });
-          return "";
-        }),
-      );
-      return afterObsidian.replace(HTML_COMMENT_REGEX, (_match, body: string, offset: number) => {
+    const { content, cuts } = cutComments(input.content);
+    for (const cut of cuts) {
+      const anchor = computeAnchor(content, cut.at);
+      for (const comment of cut.comments) {
         markers.push({
           type: "comment",
-          params: { text: body, style: "html", __anchor: computeAnchor(afterObsidian, offset) },
-          startIndex: offset,
+          params: {
+            text: comment.text,
+            ...(comment.style === "html" ? { style: "html" } : {}),
+            __anchor: anchor,
+          },
+          startIndex: cut.at,
         });
-        return "";
-      });
-    });
+      }
+    }
 
     return {
       content,

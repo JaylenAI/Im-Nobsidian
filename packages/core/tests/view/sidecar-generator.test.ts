@@ -120,6 +120,33 @@ describe("SidecarGenerator", () => {
     expect(details.some((d) => d.includes("줄바꿈"))).toBe(true);
   });
 
+  it("수동 그룹 순서는 원래 값을 보존하고 격하를 보고한다 — 정렬된 그룹은 보고하지 않는다", () => {
+    const manual = build([
+      {
+        id: "v1",
+        name: "보드",
+        type: "board",
+        groupBy: { type: "status", propertyId: "%5BjiM", sort: "manual" },
+      },
+    ]);
+    const sorted = build([
+      {
+        id: "v1",
+        name: "보드",
+        type: "board",
+        groupBy: { type: "status", propertyId: "%5BjiM", sort: "descending" },
+      },
+    ]);
+
+    expect(manual.views[0]!.config["groupBy"]).toMatchObject({ sort: "manual" });
+    expect(manual.degraded).toContainEqual({
+      view: "보드",
+      kind: "setting-dropped",
+      detail: "수동 그룹 순서는 Bases 미지원 — 오름차순으로 격하",
+    });
+    expect(sorted.degraded.filter((d) => d.kind === "setting-dropped")).toHaveLength(0);
+  });
+
   it("속성은 이름 정렬 + select/status 옵션명 보존, title 도 포함", () => {
     const s = build([{ id: "v1", name: "표", type: "table" }]);
 

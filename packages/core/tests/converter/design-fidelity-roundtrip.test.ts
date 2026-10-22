@@ -261,6 +261,15 @@ describe("콜아웃 아이콘/색 (ADR-008)", () => {
     expect(pushed.trimEnd()).toBe(canonical);
   });
 
+  it("아이콘도 색도 없는 콜아웃: 빈 스타일 마커로 받아 아이콘 없이 다시 보낸다 (F-06)", () => {
+    // 표에 없는 종류(`[!custom]`)는 아이콘 없이 올라간다 — 받은 `[!note]` 가 📝 를 달고 가면 안 된다.
+    const canonical = ["<callout>", "\t아이콘 없는 콜아웃", "</callout>"].join("\n");
+    const { pulled, pushed } = roundtrip(canonical);
+
+    expect(pulled.trim()).toBe("> [!note] 아이콘 없는 콜아웃 %%im-nobsidian:callout-style:%%");
+    expect(pushed.trimEnd()).toBe(canonical);
+  });
+
   it("아이콘 없는 색 콜아웃: 마커에 icon 을 싣지 않고 push 도 icon 속성을 만들지 않는다", () => {
     const canonical = ['<callout color="blue_bg">', "\t아이콘 없는 파란 콜아웃", "</callout>"].join(
       "\n",

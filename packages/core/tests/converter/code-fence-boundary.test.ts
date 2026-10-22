@@ -142,7 +142,9 @@ describe("코드 내용 속 마크업은 구조가 아니다", () => {
   });
 
   it("코드블록 **밖** 의 <table> 은 그대로 표가 된다(회귀 방지)", () => {
-    const pulled = notionEnhancedToObsidian("<table>\n<tr><td>가</td><td>나</td></tr>\n</table>\n");
+    const pulled = notionEnhancedToObsidian(
+      '<table header-row="true">\n<tr><td>가</td><td>나</td></tr>\n</table>\n',
+    );
     expect(pulled).toContain("| 가 | 나 |");
   });
 });

@@ -22,6 +22,7 @@
  */
 import { MARKER_BRAND_RE, calloutIndentMarker } from "../constants/markers.js";
 import { classifyContainerLines, indentContainerBody } from "./container-indent.js";
+import { indentWidth } from "../utils/md-regions.js";
 
 /** 클램프된 인용 들여쓰기 — 코드블록 임계 미만이면서 리스트 자식 위치를 유지하는 폭. */
 export const CLAMPED_INDENT = "  ";
@@ -37,14 +38,6 @@ const CALLOUT_HEAD_RE = /^> \[!\w+\][-+]?/;
 
 /** push 가 제목에서 떼어내는 깊이 마커. */
 const CALLOUT_INDENT_MARKER_RE = new RegExp(`\\s*%%${MARKER_BRAND_RE}:callout-indent:(\\d+)%%`);
-
-/** 탭을 4칸 탭스톱으로 펼친 시각적 폭 — Obsidian 의 코드블록 판정과 같은 기준. */
-function visualWidth(ws: string): number {
-  let width = 0;
-  for (const ch of ws)
-    width = ch === "\t" ? width + CODE_INDENT_WIDTH - (width % CODE_INDENT_WIDTH) : width + 1;
-  return width;
-}
 
 // ─── Pull: 구조적 들여쓰기 → 클램프된 폭 ───
 
@@ -65,7 +58,7 @@ export function clampCalloutIndent(content: string): string {
 
   for (let i = 0; i < lines.length; i++) {
     const indent = kinds[i] === "prose" ? (INDENTED_QUOTE_RE.exec(lines[i]!)?.[1] ?? null) : null;
-    if (indent === null || visualWidth(indent) < CODE_INDENT_WIDTH) {
+    if (indent === null || indentWidth(indent) < CODE_INDENT_WIDTH) {
       out.push(lines[i]!);
       continue;
     }
@@ -82,7 +75,7 @@ export function clampCalloutIndent(content: string): string {
       end++;
     }
 
-    const depth = Math.floor(visualWidth(indent) / CODE_INDENT_WIDTH);
+    const depth = Math.floor(indentWidth(indent) / CODE_INDENT_WIDTH);
     const head = lines[i]!.slice(indent.length);
     // 깊이 마커는 콜아웃 머리줄에만 싣는다. 평범한 인용 줄에 붙이면 본문 텍스트를
     // 오염시키고, push 에 그 마커를 떼어 낼 전용 변환기도 없다(실볼트 해당 5줄 —

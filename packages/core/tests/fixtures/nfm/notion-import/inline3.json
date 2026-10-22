@@ -1,0 +1,18 @@
+{
+  "markdown": "<https://example.com/x> and &#123; and &copy; and \\<u> and <span color=\"red\">a</span><span color=\"blue\">b</span> and <span color=\"red\">open\n~single~ and ***x*** and [^1] and a<br/>b and <br> and trailing <span color=\"red\">x </span>end\n[ref]: https://example.com/r\n**b**{color=\"red\"} and x {color=\"red\"} y\n<mention-page url=\"https://www.notion.so/00000001000040008000000000000000\">custom label</mention-page> and [l](https://example.com/a \"title\") and ![i](https://example.com/i.png) inline",
+  "notion": [
+    "paragraph {} T\"<\" + T\"https://example.com/x\"→https://example.com/x + T\"> and &#123; and &copy; and <u> and \" + T\"a\"/red + T\"b\"/blue + T\" and \" + T\"open\"/red",
+    "paragraph {} T\"~single~ and \" + T\"x\"/bi + T\" and \" + T\"[1]\"→1 + T\" and a\\nb and \\n and trailing \" + T\"x \"/red + T\"end\"",
+    "paragraph {} T\"[ref]: \" + T\"https://example.com/r\"→https://example.com/r",
+    "paragraph {\"color\":\"red\"} T\"b\"/b + T\" and x {color=\\\"red\\\"} y\"",
+    "paragraph {} @page + T\" and \" + T\"l\"→https://example.com/a%20%22title%22 + T\" and !\" + T\"i\"→https://example.com/i.png + T\" inline\""
+  ],
+  "ours": [
+    "paragraph {} T\"<\" + T\"https://example.com/x\"→https://example.com/x + T\"> and &#123; and &copy; and <u> and \" + T\"a\"/red + T\"b\"/blue + T\" and \" + T\"open\"/red",
+    "paragraph {} T\"~single~ and \" + T\"x\"/bi + T\" and [^1] and a\\nb and \\n and trailing \" + T\"x \"/red + T\"end\"",
+    "paragraph {} T\"[ref]: \" + T\"https://example.com/r\"→https://example.com/r",
+    "paragraph {} T\"b\"/b + T\"{color=\\\"red\\\"} and x {color=\\\"red\\\"} y\"",
+    "paragraph {} @page + T\" and \" + T\"l\"→https://example.com/a + T\" and !\" + T\"i\"→https://example.com/i.png + T\" inline\""
+  ],
+  "why": "Notion 은 [^1] 을 주소 '1' 링크로 만든다(블록 API 는 그 주소를 거부한다) — 글자로 둔다. **b**{color} 처럼 붙은 속성은 읽지 않는다(볼트 → NFM 변환이 만들지 않는 모양)."
+}

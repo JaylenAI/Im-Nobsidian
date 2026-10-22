@@ -38,7 +38,15 @@ export function compactMarker(body: string): string {
   return `%%${MARKER_BRAND}:${body}%%`;
 }
 
-/** 토글 블록 보존 마커 (enhanced-md-converter / block-converter 공유). */
+/**
+ * 본문을 쓴 뒤 블록으로 채울 코드의 자리표시(S-22) — 코드 블록의 글로 보내 잠깐 Notion 에 머문다.
+ * Markdown API 가 받지 못하는 코드(코드 속 ``` 줄)를 대신한다. 페이지 안 몇 번째 코드인지로 가른다.
+ */
+export function deferredCodeMarker(index: number): string {
+  return compactMarker(`deferred-code:${index}`);
+}
+
+/** 토글 블록 보존 마커 (enhanced-md-converter). */
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
 
@@ -69,7 +77,7 @@ export function calloutIndentMarker(depth: number): string {
   return compactMarker(`callout-indent:${depth}`);
 }
 
-/** 컬럼 레이아웃 보존 마커 (block-converter). */
+/** 컬럼 레이아웃 보존 마커 — 옛 블록 변환기가 남긴 볼트에도 있다. */
 export const COLUMN_LIST_START = compactMarker("column-list:start");
 export const COLUMN_LIST_END = compactMarker("column-list:end");
 export const COLUMN_SEP = compactMarker("column");
@@ -118,7 +126,7 @@ export const TOC_MARKER = compactMarker("toc");
  * NFM 은 목차를 `<table_of_contents color="gray"/>` 로 내보낸다. 마크다운 표현이 없어
  * 변환하지 않으면 볼트에 원시 태그가 그대로 노출되고, 색을 버리면 push 마다 사용자가
  * 지정한 색이 기본색으로 되돌아간다. 기본색은 {@link TOC_MARKER} 를 그대로 써
- * 구버전 볼트·레거시(notion-to-md) 경로와 형식을 공유한다.
+ * 구버전 볼트(지운 옛 블록 경로가 받은 노트)와 형식을 공유한다.
  */
 export function tocMarker(color?: string): string {
   return !color || color === "default" ? TOC_MARKER : compactMarker(`toc:color=${color}`);
@@ -130,10 +138,21 @@ export function tocMarker(color?: string): string {
  * `<embed src="…"></embed>` 는 NFM 전용 태그다. 그대로 두면 볼트에 원시 태그가
  * 노출되고(실측 27개·2노트), 마커 없이 링크만 남기면 push 에서 평범한 링크 문단으로
  * 박제되어 임베드 위젯이 사라진다. {@link MARKER_PAYLOAD_CHAR} 로 읽을 수 있도록
- * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다.
+ * src 를 퍼센트 인코딩해 홑 `%` 를 남기지 않는다. 캡션이 있으면 `&caption=` 로 함께 싣는다 — 빼면
+ * push 가 캡션 없는 임베드로 되돌려 Notion 의 캡션이 지워진다.
  */
-export function embedMarker(src: string): string {
-  return compactMarker(`embed:src=${encodeURIComponent(src)}`);
+export function embedMarker(src: string, caption = ""): string {
+  const tail = caption === "" ? "" : `&caption=${encodeURIComponent(caption)}`;
+  return compactMarker(`embed:src=${encodeURIComponent(src)}${tail}`);
+}
+
+/**
+ * 자리 태그로만 오는 블록의 보존 마커 — `<unknown url="…" alt="bookmark"/>` 처럼 Markdown API 가
+ * 주소 하나로만 가리키는 블록. push 가 이 url 을 그대로 돌려보내면 Notion 이 원래 블록을 남긴다.
+ * url 을 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ */
+export function unknownUrlMarker(url: string, type: string): string {
+  return compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${type}`);
 }
 
 /**
@@ -189,6 +208,61 @@ export function blockColorMarker(color: string): string {
   return compactMarker(`block-color:${color}`);
 }
 
+/**
+ * 멘션 보존 짝 마커 — `%%im-nobsidian:mention-<종류>:<속성>%%보이는 글%%/mention%%`.
+ *
+ * Notion 은 사용자 · 날짜 멘션을 `<mention-user url="user://…"/>` · `<mention-date start="…"
+ * startTime="…"/>` 처럼 이름 없는 태그로 내보낸다. 볼트에 대응 문법이 없어 보이는 글(이름 ·
+ * 날짜)만 남기면 다음 push 가 Notion 의 멘션까지 평문으로 바꾼다(F-01). 원래 속성을 마커에
+ * 실어 두고 push 가 태그로 되돌린다. 속성 값은 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ */
+export function mentionMarker(kind: string, attrs: readonly (readonly [string, string])[]): string {
+  return compactMarker(`mention-${kind}:${attrsPayload(attrs)}`);
+}
+
+/** {@link mentionMarker} 의 닫는 토큰. */
+export const MENTION_END = "%%/mention%%";
+
+/**
+ * 태그 속성을 싣는 마커 페이로드 — `k=v&k=v`, 값은 퍼센트 인코딩해 홑 `%` · `&` 를 남기지 않는다.
+ * 되읽기는 {@link parseAttrsPayload}.
+ */
+export function attrsPayload(attrs: readonly (readonly [string, string])[]): string {
+  return attrs.map(([k, v]) => `${k}=${encodeURIComponent(v)}`).join("&");
+}
+
+/** {@link attrsPayload} 를 속성으로 되읽는다. 디코드하지 못하는 값은 받은 글자 그대로 둔다. */
+export function parseAttrsPayload(payload: string): Array<[string, string]> {
+  if (payload === "") return [];
+  return payload.split("&").map((pair) => {
+    const at = pair.indexOf("=");
+    const key = at === -1 ? pair : pair.slice(0, at);
+    const raw = at === -1 ? "" : pair.slice(at + 1);
+    try {
+      return [key, decodeURIComponent(raw)];
+    } catch {
+      return [key, raw];
+    }
+  });
+}
+
+/** 표 속성 마커가 싣는 자리 — 표 · 열(`<col>`) · 행(`<tr>`) · 셀(`<td>`). */
+export const TABLE_MARKER_PARTS = ["table", "table-col", "table-row", "table-cell"] as const;
+export type TableMarkerPart = (typeof TABLE_MARKER_PARTS)[number];
+
+/**
+ * 표 속성 보존 마커 — `%%im-nobsidian:table-row:color=gray_bg%%` (F-04).
+ *
+ * 파이프 표에는 머리 열 · 열 너비 · 행/셀/열 색을 적을 자리가 없어, pull 이 셀 머리에 이 마커로
+ * 싣고 push 가 NFM 표로 되돌린다(`converter/table.ts`).
+ */
+export function tableMarker(
+  part: TableMarkerPart,
+  attrs: readonly (readonly [string, string])[],
+): string {
+  return compactMarker(`${part}:${attrsPayload(attrs)}`);
+}
+
 /** YAML 프로퍼티 테이블 보존 태그 (yaml 코드블록 내 주석): `# im-nobsidian:properties`. */
 export const PROPERTIES_TAG = `# ${MARKER_BRAND}:properties`;
 
@@ -234,7 +308,7 @@ export const MARKER_BRAND_RE = MARKER_BRAND;
  * 자기 구분자로 오인하면 본문이 통째로 사라진다. 실측: `100%%` 같은 홑 `%%` 가 있는 문서에
  * `==하이라이트==` 가 함께 있으면, `100%%` 의 `%%` 와 색상 마커 여는 `%%` 가 짝지어져
  * 그 사이 문장 전체와 하이라이트 본문이 삭제됐다(D-COMMENT-PAIR).
- * 마커 토큰을 먼저 떼어 내는 {@link mapOutsideMarkers} 의 SSOT.
+ * 주석을 찾는 `findComments`(converter/comments.ts)가 이 패턴으로 마커 토큰을 먼저 건너뛴다.
  */
 export const MARKER_TOKEN_RE = new RegExp(
   `%%\\s*(?:${MARKER_BRAND_RE}:${MARKER_PAYLOAD_CHAR}*|/[A-Za-z][\\w-]*)\\s*%%`,

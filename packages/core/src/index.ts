@@ -4,15 +4,21 @@ export type {
   SyncRecord,
   LocalChange,
   RemoteChange,
+  RemoteObservation,
   Conflict,
   BaseSyncOptions,
   PushOptions,
+  StatusOptions,
   PullOptions,
   SyncOptions,
   PushResult,
   PullResult,
   SyncResult,
   StatusResult,
+  RemoteScanInfo,
+  FullScanReason,
+  FolderMoveChange,
+  ChangeDiff,
   FailedOperation,
   SyncDirection,
   FileType,
@@ -28,12 +34,19 @@ export type {
   ProcessorMetadata,
   ConversionContext,
   ConversionResult,
+  DeferredCode,
+  BookmarkTarget,
   PreserveMarker,
   ImageReference,
   WikilinkEntry,
 } from "./types/index.js";
 
-export { ConfigSchema, DEFAULT_CONFIG } from "./types/config.js";
+export {
+  ConfigSchema,
+  DEFAULT_CONFIG,
+  DEFAULT_TITLE_PROPERTY,
+  NOTION_TOKEN_PREFIX,
+} from "./types/config.js";
 export type { DatabaseSyncConfig } from "./types/config.js";
 export type {
   ViewType,
@@ -53,8 +66,29 @@ export type {
 export { ConfigManager } from "./config/index.js";
 
 // State
-export { StateDB } from "./state/index.js";
-export type { IStateDB } from "./state/index.js";
+export {
+  StateDB,
+  StateDbUnavailableError,
+  SavedStateDbError,
+  SAVED_STATE_TABLES_QUERY,
+  WIKILINK_LOOKUPS,
+  StateLock,
+  StateDbLockedError,
+  stateDbLockPath,
+  PendingWalError,
+  assertNoPendingWal,
+  pendingWalBytes,
+  stateDbWalPath,
+  STATE_DB_MIGRATIONS,
+} from "./state/index.js";
+export type {
+  IStateDB,
+  StateDbTool,
+  StateLockClaim,
+  StateLockOwner,
+  StateDbMigration,
+  WikilinkLookup,
+} from "./state/index.js";
 export type {
   UpsertSyncRecord,
   FileRegistryEntry,
@@ -81,10 +115,17 @@ export {
   ImageHandler,
   FileHandler,
   DatabaseSyncer,
+  SyncBusyError,
+  operationLabel,
 } from "./sync/index.js";
 export type {
   VaultFS,
   FileInfo,
+  LocalMoveAdoption,
+  LocalScan,
+  LocalScanOptions,
+  RenameHints,
+  RenameKind,
   FileStatInfo,
   NonMdFileInfo,
   ImageDownloadResult,
@@ -92,12 +133,14 @@ export type {
   FileUploadResult,
   FileDownloadResult,
   DatabaseSyncResult,
+  PlannedRow,
+  RowProgress,
+  GatedOperation,
 } from "./sync/index.js";
 
 // Converter
 export {
   ConversionPipeline,
-  BlockConverter,
   FrontmatterExtractor,
   WikilinkResolver,
   CalloutTransformer,
@@ -112,13 +155,20 @@ export {
   PreserveMarkerInjector,
   LocalImageRestorer,
   UnsupportedBlockStripper,
+  BlankLineCollapser,
   PropertiesTableInjector,
   PropertiesTableRestorer,
   InlineAnnotationPreserver,
 } from "./converter/index.js";
 
 // Conflict
-export { threeWayMerge, ConflictResolver } from "./conflict/index.js";
+export {
+  threeWayMerge,
+  ConflictResolver,
+  applicableChoices,
+  choiceForStrategy,
+  isRemoteDeletion,
+} from "./conflict/index.js";
 export type {
   MergeResult,
   MergeConflictRegion,
@@ -137,8 +187,8 @@ export type {
 } from "./structure/index.js";
 
 // Watcher
-export { FileWatcher, WatchSyncService } from "./watcher/index.js";
-export type { WatchSyncOptions } from "./watcher/index.js";
+export { FileWatcher, WatchSyncService, DEFAULT_WATCH_DEBOUNCE_MS } from "./watcher/index.js";
+export type { WatchSyncOptions, WatchSyncScope } from "./watcher/index.js";
 
 // View
 export {
@@ -160,6 +210,7 @@ export {
   getNotionColor,
   getNotionBgColor,
   generateColorCSS,
+  NOTION_COLOR_NAMES,
 } from "./view/index.js";
 export type {
   DBEntry,
@@ -213,9 +264,19 @@ export type {
 
 // Utils
 export { computeHash, computeBufferHash } from "./utils/hash.js";
-export { generateId, normalizeNotionId, notionIdsEqual, compactNotionId } from "./utils/id.js";
+export {
+  generateId,
+  normalizeNotionId,
+  notionIdsEqual,
+  compactNotionId,
+  notionIdFromInput,
+} from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";
+export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./utils/markdown-path.js";
+export { systemTimeZone } from "./utils/zoned-time.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
+export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
+export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 
@@ -239,3 +300,16 @@ export {
 // 마커 포맷 세부는 core 내부 전용이지만, 브랜드 토큰만은 플러그인 미리보기 렌더링 등
 // 패키지 외부 소비자도 마커를 식별해야 하므로 단일 진실원으로 공개한다.
 export { MARKER_BRAND } from "./constants/markers.js";
+
+// 디자인 마커 읽기(U-01) — 플러그인 렌더러가 마커가 칠하는 것을 읽는다. 마커 모양은 core 의 것이다.
+export { readDesignLine, hasDesignMarker, parseDesignColor } from "./converter/design-markers.js";
+export type {
+  CalloutDesign,
+  DesignColor,
+  DesignLine,
+  DesignSegment,
+  InlineStyle,
+  LineRange,
+  StyledRange,
+  TableLineDesign,
+} from "./converter/design-markers.js";

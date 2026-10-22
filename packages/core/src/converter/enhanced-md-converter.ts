@@ -17,17 +17,20 @@ import {
   MEDIA_PLACEHOLDER_HEAD,
   MARKER_PAYLOAD_CHAR,
   tocMarker,
-  embedMarker,
   unknownMentionMarker,
+  unknownUrlMarker,
 } from "../constants/markers.js";
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
+import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
+import { widenNestedCodeFences } from "./nested-code-fence.js";
+import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
-  codeInteriorRanges,
+  alignNestedCodeBodies,
   dedentContainerBody,
   indentContainerBody,
-  isInsideRanges,
   nfmOpenTagSource,
+  replaceOutsideCode,
   splitContainerPrefix,
 } from "./container-indent.js";
 import {
@@ -40,18 +43,29 @@ import {
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
+import { markersToMentions, mentionsToMarkers } from "./mention.js";
+import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
+import { breaksToEmptyBlocks, emptyBlocksToBreaks } from "./empty-block.js";
+import { separateLazyContinuations } from "./lazy-continuation.js";
+import { CALLOUT_HEAD_LINE_RE, TOGGLE_HEAD_SOURCE, pushContainerKind } from "./container-head.js";
+import { bookmarkBlockId, bookmarkLabel } from "./bookmark.js";
+import { DEGRADE_LINK_SOURCE, degradeLink, embedVaultLink } from "./degrade-link.js";
+import type { BookmarkTarget } from "../types/convert.js";
+import { indentPlaceholdersToNextLine } from "./placeholder-indent.js";
+import { DEFAULT_CALLOUT_TYPE, calloutIconOf, calloutTypeOf } from "./callout-types.js";
+import { startsWithParagraph } from "./nfm-to-blocks.js";
+import { quotedCodeToChildren } from "./quote-code.js";
+import { unescapeSafeLiteralDollars } from "./literal-dollar.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
-const NOTION_USER_MENTION_RE = /<mention-user id="[^"]*">([^<]*)<\/mention-user>/g;
-const NOTION_DATE_MENTION_RE = /<mention-date start="([^"]*)"(?: end="([^"]*)")?[^>]*\/>/g;
 const NOTION_UNKNOWN_RE = /<unknown id="([^"]*)"([^>]*)\/>/g;
 const NOTION_UNKNOWN_URL_RE = /<unknown url="([^"]*)"([^>]*)\/>/g;
 
-const NOTION_AUDIO_RE = /[\t ]*<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
-const NOTION_VIDEO_RE = /[\t ]*<video src="([^"]*)">([\s\S]*?)<\/video>/g;
-const NOTION_PDF_RE = /[\t ]*<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
-const NOTION_FILE_RE = /[\t ]*<file src="([^"]*)">([\s\S]*?)<\/file>/g;
+const NOTION_AUDIO_RE = /<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
+const NOTION_VIDEO_RE = /<video src="([^"]*)">([\s\S]*?)<\/video>/g;
+const NOTION_PDF_RE = /<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
+const NOTION_FILE_RE = /<file src="([^"]*)">([\s\S]*?)<\/file>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 /** 라벨 달린 Notion 페이지 링크. id 는 하이픈 유무 양쪽으로 온다(실측). */
 const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
@@ -59,10 +73,32 @@ const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
   "g",
 );
 
-export function notionEnhancedToObsidian(enhanced: string): string {
+/** {@link notionEnhancedToObsidian} 의 선택 입력. */
+export interface EnhancedToObsidianOptions {
+  /** 사용자 멘션에 보일 이름 — 사용자 id → 이름(`NotionClient.getUserNames`). */
+  readonly userNames?: ReadonlyMap<string, string>;
+  /**
+   * 페이지 코드 블록의 글(블록 API) — 코드 속 ``` 줄 때문에 코드 범위를 markdown 만으로 가를 수
+   * 없을 때만(S-22, `needsCodeBlockTexts`).
+   */
+  readonly codeTexts?: ReadonlySet<string>;
+  /**
+   * 북마크의 주소와 캡션 — 블록 ID(하이픈 없이) → 북마크(`NotionClient.getBookmarks`). 없는 북마크는
+   * Notion 의 블록을 가리키는 링크로 보인다(F-09, `converter/bookmark.ts`).
+   */
+  readonly bookmarks?: ReadonlyMap<string, BookmarkTarget>;
+}
+
+export function notionEnhancedToObsidian(
+  enhanced: string,
+  options?: EnhancedToObsidianOptions,
+): string {
   let result = enhanced;
 
-  // 토글 헤딩이 가장 먼저 — 자식을 열 0 으로 내려야 아래 컨테이너 변환이 들여쓰기를
+  // 코드 속 ``` 줄이 있는 코드의 범위를 맨 먼저 정한다 — 경계 펜스의 탭 들여쓰기가 남아 있어야
+  // 코드 줄과 가를 수 있다. 넓힌 펜스는 아래 변환이 모두 CommonMark 대로 읽는다(S-22).
+  result = widenNestedCodeFences(result, options?.codeTexts);
+  // 토글 헤딩이 그다음 — 자식을 열 0 으로 내려야 아래 컨테이너 변환이 들여쓰기를
   // 재적용하지 않는다. NFM raw 형태에만 의존하므로 어떤 변환보다 앞서도 안전하다.
   result = convertToggleHeadings(result);
   result = convertSyncedBlockRef(result);
@@ -70,23 +106,27 @@ export function notionEnhancedToObsidian(enhanced: string): string {
   result = convertFencedCallouts(result);
   result = convertPageMentions(result);
   result = convertPageLinks(result);
-  result = convertUserMentions(result);
-  result = convertDateMentions(result);
+  result = mentionsToMarkers(result, options?.userNames);
   result = convertMediaTags(result);
   result = convertTabBlocks(result);
   result = preserveUnknownBlocks(result);
   result = preserveNfmOnlyBlocks(result);
   result = convertNotionMath(result);
-  result = convertNotionTables(result);
+  result = nfmTablesToPipeTables(result);
   result = convertSpans(result);
   result = convertDatabaseBlocks(result);
   result = convertBlockColorAttrs(result);
-  result = removeEmptyBlocks(result);
+  result = emptyBlocksToBreaks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
+  // 북마크의 이름은 escape 를 푼 뒤에 넣는다 — 캡션의 대괄호 escape 가 함께 풀리지 않게(F-09).
+  result = linkBookmarks(result, options?.bookmarks);
   result = ensureCalloutContinuity(result);
   result = separateAdjacentCallouts(result);
+  result = separateLazyContinuations(result);
+  // 목록 안 코드의 코드 줄을 펜스 깊이로 — 탭 기준 들여쓰기로 부모 목록 항목을 가린다(S-24).
+  result = alignNestedCodeBodies(result);
   // 들여쓰기 클램프가 가장 마지막 — 위 변환기들은 모두 탭 기준 구조 들여쓰기를 전제로
   // 경계를 판정한다. 먼저 누르면 그 판정이 어긋난다(callout-indent 주석 참조).
   result = clampCalloutIndent(result);
@@ -125,15 +165,24 @@ function unescapeBrackets(content: string): string {
 export function obsidianToNotionEnhanced(obsidian: string): string {
   let result = obsidian;
 
+  // 일반 인용 안 코드를 인용의 자식으로 맨 먼저 꺼낸다 — 아래 변환이 모두 코드로 알아보게(S-23).
+  result = quotedCodeToChildren(result);
+  // 빈 블록 · 표가 가장 먼저 — 콜아웃 안의 줄도 아직 `> ` 접두로 있어 볼트 모양 그대로 찾는다.
+  // 바꾼 태그 줄은 아래 컨테이너 변환이 다른 본문 줄처럼 탭으로 들여쓴다.
+  result = breaksToEmptyBlocks(result);
+  result = pipeTablesToNfmTables(result);
   result = convertTogglesToHtml(result);
   result = restoreTabBlocks(result);
   result = convertObsidianCallouts(result);
   result = restoreMediaTags(result);
   result = restoreUnknownBlocks(result);
   result = restoreNfmOnlyBlocks(result);
+  result = markersToMentions(result);
   result = restoreColorSpans(result);
   result = restoreBlockColorMarkers(result);
   result = restoreUnderlineSpans(result);
+  result = restoreUnderlineTags(result);
+  result = flattenNestedSpans(result);
   result = convertMentionPageIdToUrl(result);
   result = restoreWikilinkPreserveLinks(result);
   result = restoreSyncedBlocks(result);
@@ -143,6 +192,8 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   // 토글 헤딩이 가장 마지막 — 본문이 위 변환을 모두 통과한 뒤에 탭 한 단계를 입혀야
   // 각 변환기가 열 0 기준으로 동작할 수 있다(pull 의 정확한 역순).
   result = restoreToggleHeadings(result);
+  // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
+  result = indentPlaceholdersToNextLine(result);
 
   return result;
 }
@@ -275,7 +326,7 @@ function toggleToCallout(title: string, rawBody: string, color?: string): string
 }
 
 // <columns>/<column> → 평탄화하되 경계를 컬럼 마커로 남긴다(ADR-008). 마커 어휘는
-// legacy block 경로(block-converter)와 동일 — push 가 <columns> 정준형으로 재조립한다.
+// 옛 블록 변환기가 남긴 볼트와 같다 — push 가 <columns> 정준형으로 재조립한다.
 // 각 칼럼 본문은 dedent 로 구조적 탭까지 벗긴다(결함②: 탭 하나만 벗기던 기존 동작 교체).
 //
 // **빈 칼럼도 자리를 지킨다**(D-EMPTY-COLUMN). Notion 레이아웃에서 빈 칼럼은 여백을 주는
@@ -353,9 +404,15 @@ const QUOTED_LINE_RE = /^[\t ]*>/;
  * 컬럼 경계 마커면 열 구성이 무너지고, 중첩 컨테이너의 머리면 그 컨테이너가
  * `> [!note] > [!toggle]- 제목` 한 줄로 뭉개져 push 가 `<details>` 를 되살리지 못한다
  * (실측: `<details>` 5개·3노트 소실).
+ *
+ * 맨 문단이 아닌 첫 줄도 그렇다 — 글 없는 콜아웃의 첫 자식이다(C4). 이미지 · 목록 · 제목이 제목 줄로
+ * 올라가 Obsidian 에서 자식으로 보이지 않고, 코드 · 표는 몸통 줄만 한 단계 깊어져 push 때 내용이 바뀐다.
  */
-function isStructuralFirstLine(line: string): boolean {
-  return COLUMN_MARKER_LINE_RE.test(line) || QUOTED_LINE_RE.test(line);
+function isStructuralFirstLine(lines: readonly string[]): boolean {
+  const first = lines[0] ?? "";
+  return (
+    COLUMN_MARKER_LINE_RE.test(first) || QUOTED_LINE_RE.test(first) || !startsWithParagraph(lines)
+  );
 }
 
 function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: string }): string {
@@ -363,7 +420,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   const lines = dedentContainerBody(body)
     .split("\n")
     .filter((l, i, arr) => !(i === 0 && l === "") && !(i === arr.length - 1 && l === ""));
-  const titleIndex = isStructuralFirstLine(lines[0] ?? "") ? -1 : 0;
+  const titleIndex = isStructuralFirstLine(lines) ? -1 : 0;
   const firstLine = titleIndex === 0 ? (lines[0] ?? "") : "";
 
   // NFM 정준형은 아이콘을 icon 속성으로 나른다 — 속성이 하나라도 있으면 정준형이므로
@@ -375,7 +432,7 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   // 업로드 이미지 아이콘은 만료되는 서명 URL 로만 노출된다(풀마다 서명이 바뀌어 churn,
   // push 하면 만료 URL 오염) — URL 아이콘은 마커에 싣지 않고 색만 보존한다(degrade).
   const icon = rawIcon !== undefined && /^https?:\/\//i.test(rawIcon) ? undefined : rawIcon;
-  const type = icon ? emojiToCalloutType(icon) : "note";
+  const type = icon ? calloutTypeOf(icon) : DEFAULT_CALLOUT_TYPE;
   const title = emojiMatch ? emojiMatch[2]! : firstLine;
   // 앞뒤 **빈 줄만** 떨군다. `trim()` 은 첫 줄의 선행 공백까지 먹어 버려, 같은 깊이의
   // 형제 중 첫 줄만 한 단계 얕게 렌더된다(실측: 콜아웃 안 토글 헤딩 두 개가 서로 다른
@@ -390,8 +447,11 @@ function calloutBodyToObsidian(body: string, style?: { icon?: string; color?: st
   // 단, 아이콘이 type 기본 이모지와 같고 색이 없으면 push 가 type 에서 동일 아이콘을
   // 재생성하므로 마커를 생략한다 — 흔한 기본 콜아웃에서 볼트 노이즈를 없앤다.
   // 마커의 icon 부재는 "아이콘 없는 콜아웃"을 뜻하므로, 마커를 낼 때는 실제 속성만 싣는다.
+  // 아이콘이 없는 콜아웃도 마커를 단다 — 안 달면 push 가 note 의 아이콘(📝)을 붙여 Notion 을 바꾼다(F-06).
   const needsMarker =
-    Boolean(style?.color) || (icon !== undefined && calloutTypeToEmoji(type) !== icon);
+    Boolean(style?.color) ||
+    rawIcon === undefined ||
+    (icon !== undefined && calloutIconOf(type) !== icon);
   const styleTail = needsMarker ? ` ${calloutStyleMarker({ icon, color: style?.color })}` : "";
   const calloutTitle = title ? `> [!${type}] ${title}${styleTail}` : `> [!${type}]${styleTail}`;
   const calloutBody = rest.trim() ? `\n${quoteCalloutBody(rest)}` : "";
@@ -437,34 +497,6 @@ function convertPageMentions(content: string): string {
   return result;
 }
 
-function convertUserMentions(content: string): string {
-  return content.replace(NOTION_USER_MENTION_RE, (_match, name: string) => `@${name}`);
-}
-
-function convertDateMentions(content: string): string {
-  return content.replace(NOTION_DATE_MENTION_RE, (_match, start: string, end?: string) => {
-    return end ? `${start} → ${end}` : start;
-  });
-}
-
-/**
- * 마크다운 표현이 없는 블록의 **가시 폴백** — 클릭 가능한 링크 + 권위 마커 한 쌍.
- *
- * 마커만 남기면 읽기뷰에서 빈 줄로 보여 사용자가 소실로 오해한다. 링크는 보여주기용이고
- * 왕복 권위는 뒤따르는 마커(인코딩된 원본 URL)가 갖는다. 둘을 **공백 없이** 인접시켜
- * push 때 {@link DEGRADE_LINK_SOURCE} 가 한 쌍으로 소비 → Notion drift 를 막는다.
- *
- * 목적지의 괄호는 반드시 인코딩한다. 짝 패턴이 `\([^)]*\)` 로 끝을 잡으므로 날 괄호가
- * 경계를 앞당겨 끊고, 그러면 링크 잔해가 Notion 본문에 평문으로 박제된다(실측 재현:
- * `https://ex.com/a(b)c`). `%28`/`%29` 는 경로·질의 어디서든 원문과 동치다.
- */
-function degradeLink(label: string, url: string, marker: string): string {
-  return `[${label}](${url.replace(/\(/g, "%28").replace(/\)/g, "%29")})${marker}`;
-}
-
-/** {@link degradeLink} 가 앞세운 가시 링크. 마커 패턴 앞에 붙여 한 쌍으로 소비한다. */
-const DEGRADE_LINK_SOURCE = "(?:\\[[^\\]]*\\]\\([^)]*\\))?";
-
 // 2D: <unknown> → 보존 마커 (삭제 대신 보존)
 function preserveUnknownBlocks(content: string): string {
   let result = content.replace(NOTION_UNKNOWN_RE, (_match, id: string, attrs: string) => {
@@ -476,24 +508,47 @@ function preserveUnknownBlocks(content: string): string {
   result = result.replace(NOTION_UNKNOWN_URL_RE, (_match, url: string, attrs: string) => {
     const altMatch = /alt="([^"]*)"/.exec(attrs);
     const blockType = altMatch?.[1] ?? "bookmark";
-    const marker = compactMarker(`unknown:id=${encodeURIComponent(url)}&type=${blockType}`);
+    const marker = unknownUrlMarker(url, blockType);
     const label =
       blockType === "embed"
         ? "🔗 Embed"
         : blockType === "bookmark"
-          ? "🔖 Bookmark"
+          ? bookmarkLabel()
           : `🔗 ${blockType}`;
     return degradeLink(label, url, marker);
   });
   return result;
 }
 
+/** 북마크 마커와 그 앞의 가시 링크 — 그룹 1 = 마커, 그룹 2 = 인코딩된 자리 태그 url. */
+const BOOKMARK_PAIR_RE = new RegExp(
+  `${DEGRADE_LINK_SOURCE}(%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=bookmark%%)`,
+  "g",
+);
+
+/**
+ * 북마크의 가시 링크를 그 북마크의 주소와 캡션으로 바꾼다(F-09, `converter/bookmark.ts`) —
+ * {@link preserveUnknownBlocks} 가 자리 태그만으로 만든 링크는 Notion 의 그 블록을 가리킨다.
+ * 마커는 그대로 둔다 — 왕복은 마커가 맡는다.
+ */
+function linkBookmarks(content: string, bookmarks?: ReadonlyMap<string, BookmarkTarget>): string {
+  if (bookmarks === undefined || bookmarks.size === 0) return content;
+  return content.replace(BOOKMARK_PAIR_RE, (match, marker: string, encodedUrl: string) => {
+    const id = bookmarkBlockId(decodeMarkerTarget(encodedUrl));
+    const target = id === undefined ? undefined : bookmarks.get(id);
+    return target === undefined ? match : degradeLink(bookmarkLabel(target), target.url, marker);
+  });
+}
+
 // NFM 전용 자기완결 태그들. 이름 뒤가 `\s` 또는 `/` 로 **닫히는 것**까지 확인한다 —
 // `<table>`/`<table_of_contents>` 처럼 접두가 겹치는 이름이 실재하기 때문이다
 // ({@link nfmOpenTagSource} 주석 참조).
 const NOTION_TOC_RE = /<table_of_contents(?:\s+color="([^"]*)")?\s*\/>/g;
-/** 임베드는 여는/닫는 태그 쌍으로 오지만 내부는 항상 비어 있다(코퍼스 27개 전건 실측). */
-const NOTION_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>\s*<\/embed>/g;
+/**
+ * 임베드는 여는/닫는 태그 쌍으로 온다. 안은 캡션이다 — 코퍼스 27개는 모두 비어 있었으나 실볼트 사본
+ * E2E 에서 캡션 있는 임베드 5노트가 원시 태그로 남았다.
+ */
+const NOTION_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>([^\n]*?)\s*<\/embed>/g;
 const NOTION_UNKNOWN_MENTION_RE = /<unknown_mention\s+url="([^"]*)"([^>]*?)\/>/g;
 
 /**
@@ -506,8 +561,8 @@ const NOTION_UNKNOWN_MENTION_RE = /<unknown_mention\s+url="([^"]*)"([^>]*?)\/>/g
  */
 function preserveNfmOnlyBlocks(content: string): string {
   let result = content.replace(NOTION_TOC_RE, (_match, color?: string) => tocMarker(color));
-  result = result.replace(NOTION_EMBED_RE, (_match, src: string) =>
-    degradeLink("🔗 Embed", src, embedMarker(src)),
+  result = result.replace(NOTION_EMBED_RE, (_match, src: string, caption: string) =>
+    embedVaultLink(src, caption.trim()),
   );
   return result.replace(NOTION_UNKNOWN_MENTION_RE, (_match, url: string, attrs: string) =>
     unknownMentionMarker(url, /alt="([^"]*)"/.exec(attrs)?.[1]),
@@ -597,6 +652,11 @@ function restoreSyncedBlocks(content: string): string {
 }
 
 // 2A: 미디어 태그 → Obsidian 마크다운
+/**
+ * 미디어 태그를 볼트 링크로. 줄머리 들여쓰기는 그대로 둔다 — 목록 · 문단 · 콜아웃 안 자식의 깊이다(N7).
+ * 예전에는 들여쓰기를 먹어 목록 자식 미디어가 목록 밖으로 나왔고, 콜아웃 안에서는 `>` 뒤에 붙어 push 때
+ * 콜아웃 밖으로 빠졌다.
+ */
 function convertMediaTags(content: string): string {
   let result = content;
 
@@ -635,27 +695,52 @@ function convertTabBlocks(content: string): string {
   });
 }
 
-// 2C: <span underline> / <span color> → 보존 마커 (균형 매칭, 중첩 안전)
+// 2C: <span underline> / <span color> → `<u>` · 색 보존 마커 (균형 매칭, 중첩 안전)
 //
 // 비탐욕 단일 정규식(`<span ...>([\s\S]*?)</span>`)은 중첩 span 에서 첫 `</span>` 에
 // 멈춰 바깥 span 의 닫는 토큰 순서를 뒤집는다(rank6/I3 — 사용자가 보는 Obsidian 마커가
-// `%%/color%%%%/underline%%` 처럼 잘못 중첩됨). 대신 **안쪽(중첩 없는) span 부터** 마커로
-// 치환한다: 마커엔 `<span` 이 없으므로 다음 패스에서 바깥 span 이 다시 innermost 가 되어
+// `%%/color%%%%/underline%%` 처럼 잘못 중첩됨). 대신 **안쪽(중첩 없는) span 부터** 바꾼다:
+// 바꾼 결과엔 `<span` 이 없으므로 다음 패스에서 바깥 span 이 다시 innermost 가 되어
 // 임의 깊이 중첩이 올바른 순서로 환원된다. body 패턴 `(?:(?!<span )[\s\S])*?` 가 내부에
 // 또 다른 span 시작이 없음을 보장해 "가장 안쪽"만 매칭한다.
+//
+// 속성은 집합으로 받는다 — Notion 은 빨강+밑줄을 `<span color="red" underline="true">` 한 태그로
+// 내보낸다. 속성 하나만 받던 정규식은 그 span 을 볼트에 그대로 남겼다(F-07). 둘이면 색이 바깥이다.
 const INNERMOST_SPAN_RE =
-  /<span (?:underline="true"|color="([^"]+)")>((?:(?!<span )[\s\S])*?)<\/span>/g;
+  /<span((?:\s+(?:underline="true"|color="[^"]+"))+)>((?:(?!<span )[\s\S])*?)<\/span>/g;
 
+/**
+ * 밑줄은 안이 평문일 때 Obsidian 이 그리는 `<u>` 로 받는다 — 밑줄 마커는 볼트에서 밑줄로 보이지
+ * 않았고, 사용자가 쓴 `<u>` 가 한 바퀴 돌면 마커가 됐다(F-06). push 는 `<u>` 를 span 으로 되돌린다
+ * ({@link restoreUnderlineTags}).
+ *
+ * 안에 마크다운이 있으면 지금처럼 마커로 받는다. Live Preview 는 인라인 HTML 안의 마크다운을 풀지 않아
+ * `<u>**굵게**</u>` 의 `**` · `<u>[글](주소)</u>` 의 괄호가 글자로 보인다. 강조를 `<u>` 밖으로 꺼내면
+ * 조사가 바로 붙는 글(`**<u>중요</u>**합니다`)에서 굵게가 풀린다(Obsidian 1.13.7 실측).
+ */
+const UNDERLINE_TAG_UNSAFE_RE = /[*_`[\]$<\\#]|~~|==|%%|:\/\//;
+
+function spanToVault(attrs: string, inner: string): string {
+  const color = /color="([^"]+)"/.exec(attrs)?.[1];
+  let text = inner;
+  if (/underline="true"/.test(attrs)) {
+    text = UNDERLINE_TAG_UNSAFE_RE.test(inner)
+      ? `${compactMarker("underline")}${inner}%%/underline%%`
+      : `<u>${inner}</u>`;
+  }
+  return color === undefined ? text : `${compactMarker(`color:${color}`)}${text}%%/color%%`;
+}
+
+/**
+ * 코드(펜스 · 인라인) 안의 span 은 사용자가 적은 글자다 — HTML 예제 코드가 흔하다. 예전에는 그것까지
+ * 마커로 바꿔 볼트의 코드에 마커 글자가 보였다. 바꿀 때마다 글 길이가 달라지므로 패스마다 다시 잰다.
+ */
 function convertSpans(content: string): string {
   let result = content;
   let safety = 0;
   while (safety++ < 1000) {
-    const next = result.replace(
-      INNERMOST_SPAN_RE,
-      (_match, color: string | undefined, inner: string) =>
-        color !== undefined
-          ? `${compactMarker(`color:${color}`)}${inner}%%/color%%`
-          : `${compactMarker("underline")}${inner}%%/underline%%`,
+    const next = replaceOutsideCode(result, INNERMOST_SPAN_RE, (_match, attrs, inner) =>
+      spanToVault(attrs!, inner!),
     );
     if (next === result) break;
     result = next;
@@ -680,7 +765,10 @@ function convertTogglesToHtml(content: string): string {
   // 토글들이 push 에서 **통째로 사라진다** — 실볼트 `Creai LLM.md` 왕복 실측에서
   // `<details>` 8개가 0개가 됐다. 본문 줄은 역참조 `\1` 로 같은 들여쓰기를 요구해
   // 이웃 블록을 삼키지 않는다.
-  const calloutToggleRe = /^([ \t]{0,3})> \[!toggle\]-[ \t]*(.*)((?:\n\1>.*)*)/gm;
+  const calloutToggleRe = new RegExp(
+    String.raw`${TOGGLE_HEAD_SOURCE}[ \t]*(.*)((?:\n\1>.*)*)`,
+    "gm",
+  );
 
   let result = content;
   let prev = "";
@@ -710,8 +798,9 @@ function convertTogglesToHtml(content: string): string {
   const startRe = new RegExp(escapeRegex(TOGGLE_START), "g");
   const endRe = new RegExp(escapeRegex(TOGGLE_END), "g");
 
-  safety = 0;
-  while (result.includes(TOGGLE_START) && safety++ < 100) {
+  // 한 바퀴에 시작 마커를 하나씩 없애므로 끝난다(짝 없는 마커는 멈춘다). 예전에는 100 바퀴로 끊어
+  // 101번째 토글부터 마커만 지워져 글이 토글 없이 올라갔다.
+  while (result.includes(TOGGLE_START)) {
     const startIdx = result.indexOf(TOGGLE_START);
     const endIdx = findMatchingEnd(result, startIdx + TOGGLE_START.length);
     if (endIdx === -1) break;
@@ -794,11 +883,12 @@ function convertObsidianCallouts(content: string): string {
   while (i < lines.length) {
     // 선행 들여쓰기는 pull 의 클램프(callout-indent)가 남긴 것 — 받지 않으면 리스트/칼럼
     // 안 콜아웃이 push 에서 리터럴 `> [!x]` 텍스트로 Notion 에 박제된다.
-    const headerMatch = /^([ \t]{0,3})> \[!(\w+)\]([-+])?[ \t]*(.*)$/.exec(lines[i]!);
-    const type = headerMatch?.[2]?.toLowerCase();
     // toggle/tab 헤드는 전용 변환기(convertTogglesToHtml/restoreTabBlocks) 소관 —
     // 콜아웃으로 오변환하지 않는다.
-    if (headerMatch && type !== "toggle" && type !== "tab") {
+    const headerMatch =
+      pushContainerKind(lines[i]!) === "callout" ? CALLOUT_HEAD_LINE_RE.exec(lines[i]!) : null;
+    const type = headerMatch?.[2]?.toLowerCase();
+    if (headerMatch) {
       const indentRead = readCalloutIndentDepth(headerMatch[1]!, headerMatch[4]!);
       const depth = indentRead.depth;
       let title = indentRead.title;
@@ -808,7 +898,7 @@ function convertObsidianCallouts(content: string): string {
         style = parseCalloutStyleParams(styleMatch[1]!);
         title = title.replace(CALLOUT_STYLE_MARKER_RE, "");
       } else {
-        style.icon = calloutTypeToEmoji(type!);
+        style.icon = calloutIconOf(type!);
       }
 
       const bodyLines: string[] = [];
@@ -844,47 +934,12 @@ function convertObsidianCallouts(content: string): string {
   return result.join("\n");
 }
 
-const EMOJI_TYPE_MAP: Record<string, string> = {
-  "💡": "tip",
-  ℹ️: "info",
-  "⚠️": "warning",
-  "🔥": "danger",
-  "✅": "success",
-  "❌": "failure",
-  "❓": "question",
-  "📝": "note",
-  "📌": "abstract",
-  "🐛": "bug",
-  "💬": "quote",
-  "📋": "example",
-};
-
-const TYPE_EMOJI_MAP: Record<string, string> = Object.fromEntries(
-  Object.entries(EMOJI_TYPE_MAP).map(([k, v]) => [v, k]),
-);
-
-function emojiToCalloutType(emoji: string): string {
-  return EMOJI_TYPE_MAP[emoji] ?? "note";
-}
-
-function calloutTypeToEmoji(type: string): string | undefined {
-  return TYPE_EMOJI_MAP[type.toLowerCase()];
-}
-
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
-const NOTION_PAGE_LINK_RE = /<page url="[^"]*">([\s\S]*?)<\/page>/g;
-/**
- * 빈 문단 토큰(`<empty-block/>`). 선행 여백을 **인용 접두 앞**에서 받아야 한다 —
- * 여백을 인용 뒤에만 두면 `\t> <empty-block/>`(리스트/칼럼 안 콜아웃의 빈 줄)이 매칭되지
- * 않아 토큰 원문이 그대로 볼트에 새어 나간다(실측: `Creai LLM.md` pull 961행).
- */
-const NOTION_EMPTY_BLOCK_RE = /^([\t ]*(?:>[\t ]*)*)<empty-block\/>[\t ]*\n?/gm;
-
 function convertPageLinks(content: string): string {
-  return content.replace(NOTION_PAGE_LINK_RE, (_match, text: string) => {
+  return content.replace(CHILD_PAGE_TAG_RE, (_match, _url: string, text: string) => {
     const cleaned = text.replace(/\*\*/g, "").trim();
     return `[[${cleaned}]]`;
   });
@@ -894,18 +949,15 @@ function convertPageLinks(content: string): string {
 // (db-placeholder-rewriter)가 어느 .base 로 임베드를 재작성해야 할지 알 수 없다.
 // url 호스트는 www.notion.so / app.notion.com/p 로 갈리는 것이 실측됐으므로 32-hex 만 취한다.
 function convertDatabaseBlocks(content: string): string {
-  return content.replace(
-    /<database\b([^>]*)>([\s\S]*?)<\/database>/g,
-    (_match, attrs: string, title: string) => {
-      const clean = title.trim();
-      const placeholder = `**${clean}** *(Notion DB)*`;
-      const idMatch = /\burl="[^"]*?([a-f0-9]{32})[^"]*"/.exec(attrs);
-      if (!idMatch?.[1]) return placeholder;
-      return `${placeholder}${compactMarker(
-        `child-database:id=${idMatch[1]}&title=${encodeURIComponent(clean)}`,
-      )}`;
-    },
-  );
+  return content.replace(CHILD_DATABASE_TAG_RE, (_match, attrs: string, title: string) => {
+    const clean = title.trim();
+    const placeholder = `**${clean}** *(Notion DB)*`;
+    const id = databaseTagId(attrs);
+    if (!id) return placeholder;
+    return `${placeholder}${compactMarker(
+      `child-database:id=${id}&title=${encodeURIComponent(clean)}`,
+    )}`;
+  });
 }
 
 // 블록 색: NFM raw 는 문단/제목/리스트/인용의 색을 줄 끝 `{color="…"}` 로 내보낸다
@@ -950,126 +1002,37 @@ function separateAdjacentCallouts(content: string): string {
   return out.join("\n");
 }
 
-/** 인용 접두만 남은 줄인지 — `> > ` 처럼 `>` 를 하나라도 품은 여백. */
-const QUOTE_ONLY_PREFIX_RE = /^[\t ]*(?:>[\t ]*)+$/;
-
-/**
- * 빈 문단 토큰을 실제 빈 줄로 되돌린다.
- *
- * 콜아웃 **안**의 토큰은 인용 접두를 남긴다. 열 0 빈 줄로 바꾸면 Obsidian 이 거기서
- * 인용을 닫아 버려 뒤따르는 본문이 콜아웃 밖으로 떨어진다. 중첩 컬럼에서는 이 절단이
- * 시작·끝 마커를 서로 다른 콜아웃 본문으로 갈라 놓아 push 가 레이아웃을 재조립하지
- * 못했다(실측: `건강검진.md` 등 3노트 9개 `<columns>` 소실).
- */
-function removeEmptyBlocks(content: string): string {
-  return content.replace(NOTION_EMPTY_BLOCK_RE, (_match, prefix: string) =>
-    QUOTE_ONLY_PREFIX_RE.test(prefix) ? `${prefix.trimEnd()}\n` : "\n",
-  );
-}
-
 const NOTION_INLINE_MATH_RE = /\$`([^`]+)`\$/g;
 const NOTION_BLOCK_MATH_RE = /\$\$\n```\n([\s\S]*?)\n```\n\$\$/g;
+/** 빈 인라인 수식 — Notion 이 글의 `$$` 를 이렇게 읽었다(옛 push · Notion 에서 친 `$$`). */
+const NOTION_EMPTY_MATH_RE = /\$``\$/g;
 
+/**
+ * Notion 의 수식을 Obsidian 수식으로. markdown API 는 인라인 수식을 `` $`식`$ `` 로, 글의 `$` 는 `\$` 로 준다
+ * (실측 2026-10-21).
+ *
+ * 글의 `\$` 는 수식 짝이 생길 수 있는 줄에서만 그대로 둔다({@link unescapeSafeLiteralDollars}) — Obsidian 은 `\$` 를
+ * 글 `$` 로 그리고(1.13.7 실측), push 는 Notion 에 글로 보낸다. 예전에는 `\$…\$` 를 이스케이프된 수식으로 보고 `$…$` 로 풀어, Notion 의 글 `$a$` 가 볼트에서 수식이 되고 그
+ * 노트를 push 하면 Notion 에서도 수식이 됐다. 코드 블록 안의 `\$x\$` 도 바뀌었다(C13).
+ *
+ * 빈 인라인 수식(`` $``$ ``)은 글 `\$\$` 로 — 옛 push 가 글의 `$$` 를 이렇게 올렸다(2026-10-21 실측). 그대로
+ * 쓰면 볼트에 `` $``$ `` 가 보이고, push 는 짝 없는 `$$` 를 `\$\$` 로 보내니(`MathNormalizer`) 로컬의 `$$` 와 받은
+ * 글이 Notion 에서 같은 꼴이 된다. 코드 펜스 안은 코드의 글이라 둔다.
+ */
 function convertNotionMath(content: string): string {
-  let result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
+  const result = content.replace(NOTION_BLOCK_MATH_RE, (_match, eq: string) => {
     return `$$\n${eq.trim()}\n$$`;
   });
-  result = result.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`);
-  result = result.replace(/\\\$([^$]+?)\\\$/g, (_match, inner: string) => {
-    const unescaped = inner.replace(/\\\^/g, "^").replace(/\\~/g, "~");
-    return `$${unescaped}$`;
-  });
-  return result;
+  const literal = mapOutsideCodeFences(result, (segment) =>
+    segment.replace(NOTION_EMPTY_MATH_RE, () => "\\$\\$"),
+  );
+  return unescapeSafeLiteralDollars(
+    literal.replace(NOTION_INLINE_MATH_RE, (_match, eq: string) => `$${eq}$`),
+  );
 }
 
 function unescapeNotionChars(content: string): string {
   return content.replace(/\\~/g, "~").replace(/\\\^/g, "^");
-}
-
-/**
- * NFM 표 블록. 선행 그룹으로 **컨테이너 접두**(들여쓰기 + 인용 마커)를 함께 잡는다.
- *
- * NFM 의 비대칭 들여쓰기 때문이다 — `<table>` 태그 줄만 구조 들여쓰기를 갖고 `<tr>/<td>`
- * 는 열 0 에 있다. 접두를 잡지 않고 치환하면 **첫 행만** 접두를 물려받고 나머지 행은
- * 열 0 으로 떨어진다. 그러면 (a) 콜아웃이 그 자리에서 끊기고 (b) 구분행이 표 헤더와
- * 분리돼 표가 통째로 죽는다(결함⑧⑨ — 실측 96건·15노트).
- *
- * 여는 태그는 {@link nfmOpenTagSource} 로 **이름 경계까지** 확인한다. 이름 뒤를 열어
- * 두면 `<table_of_contents/>` 가 여는 표로 잡혀 거기서 첫 `</table>` 까지의 본문이
- * 통째로 사라진다.
- */
-const NOTION_TABLE_RE = new RegExp(
-  `^(${CONTAINER_PREFIX_SOURCE})${nfmOpenTagSource("table")}([\\s\\S]*?)</table>`,
-  "gm",
-);
-/**
- * 표 행. **속성을 허용**해야 한다 — Notion 은 배경색이 지정된 행을
- * `<tr color="gray_bg">` 로 내보내고, 그 행은 대개 헤더 행이다.
- *
- * `<tr>` 만 잡으면 그 행이 통째로 조용히 사라진다. 표는 행 수만 하나 줄어든 채
- * 멀쩡해 보이고, 다음 행이 헤더 자리로 승격돼 표의 의미가 바뀐다
- * (실측: `5단계(22~28일)` 노트에서 `**결과**|**이유**|**해결책**` 헤더 소실).
- */
-const TABLE_ROW_RE = /<tr[^>]*>([\s\S]*?)<\/tr>/g;
-const TABLE_CELL_RE = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g;
-
-function isAlignmentRow(cells: string[]): boolean {
-  return cells.every((c) => /^:?-{2,}:?$/.test(c.trim()));
-}
-
-/**
- * 셀 내용을 파이프 표 한 칸에 안전하게 담는다.
- *
- * 줄바꿈은 행 자체를 끊어 표를 죽이므로 `<br>` 로 접고(Obsidian 표가 렌더하는 유일한
- * 줄바꿈 표현), 셀 안 파이프는 열 경계로 오인되므로 이스케이프한다. 이스케이프 형태는
- * pull 뒷단 `unescapePipes` 가 되돌리지 않도록 표 밖 규칙과 구분되는 `\|` 를 쓴다.
- */
-function toTableCell(raw: string): string {
-  return raw
-    .trim()
-    .replace(/\r?\n/g, "<br>")
-    .replace(/(?<!\\)\|/g, "\\|");
-}
-
-function convertNotionTables(content: string): string {
-  // 코드블록 안의 `<table>` 은 사용자가 적어 둔 **예제 코드**다. 구조로 오인해 치환하면
-  // 그 자리에서 통째로 사라진다(실측: 한 노트 `<table` 29→4 · `<tr` 158→1).
-  const code = codeInteriorRanges(content);
-  return content.replace(NOTION_TABLE_RE, (_match, prefix: string, tableBody: string, offset) => {
-    if (isInsideRanges(code, offset as number)) return _match;
-    const rows: string[][] = [];
-    let rowMatch: RegExpExecArray | null;
-    const rowRe = new RegExp(TABLE_ROW_RE.source, TABLE_ROW_RE.flags);
-
-    while ((rowMatch = rowRe.exec(tableBody)) !== null) {
-      const cells: string[] = [];
-      let cellMatch: RegExpExecArray | null;
-      const cellRe = new RegExp(TABLE_CELL_RE.source, TABLE_CELL_RE.flags);
-      while ((cellMatch = cellRe.exec(rowMatch[1]!)) !== null) {
-        cells.push(toTableCell(cellMatch[1]!));
-      }
-      if (!isAlignmentRow(cells)) {
-        rows.push(cells);
-      }
-    }
-
-    if (rows.length === 0) return _match;
-
-    const colCount = Math.max(...rows.map((r) => r.length));
-    const lines: string[] = [];
-
-    for (let i = 0; i < rows.length; i++) {
-      const padded = rows[i]!;
-      while (padded.length < colCount) padded.push("");
-      lines.push(`| ${padded.join(" | ")} |`);
-      if (i === 0) {
-        lines.push(`| ${padded.map(() => "---").join(" | ")} |`);
-      }
-    }
-
-    // 표를 감싼 컨테이너의 접두를 **모든 행**에 입힌다 — 첫 행에만 남으면 표가 죽는다.
-    return lines.map((line) => prefix + line).join("\n");
-  });
 }
 
 // ─── Push 방향: 보존 마커 → Enhanced MD 복원 ───
@@ -1146,10 +1109,11 @@ function restoreNfmOnlyBlocks(content: string): string {
   let result = content.replace(OBSIDIAN_TOC_RE, (_match, color?: string) =>
     color ? `<table_of_contents color="${color}"/>` : `<table_of_contents/>`,
   );
-  result = result.replace(
-    OBSIDIAN_EMBED_RE,
-    (_match, src: string) => `<embed src="${decodeURIComponent(src)}"></embed>`,
-  );
+  result = result.replace(OBSIDIAN_EMBED_RE, (_match, payload: string) => {
+    // src · 캡션은 각각 인코딩되어 있으므로 홑 `&` 는 우리가 넣은 구분자뿐이다.
+    const [src = "", caption = ""] = payload.split("&caption=");
+    return `<embed src="${decodeURIComponent(src)}">${decodeURIComponent(caption)}</embed>`;
+  });
   return result.replace(OBSIDIAN_UNKNOWN_MENTION_RE, (_match, payload: string) => {
     const [url, alt] = payload.split("&alt=");
     const altAttr = alt ? ` alt="${decodeURIComponent(alt)}"` : "";
@@ -1157,26 +1121,102 @@ function restoreNfmOnlyBlocks(content: string): string {
   });
 }
 
+// 안쪽(같은 마커를 품지 않은) 짝부터 바꾼다 — 비탐욕 하나로는 빨강 마커 안의 `==형광==`(노랑 배경
+// 마커)에서 바깥 여는 마커를 안쪽 닫는 마커와 짝지어 `%%/color%%` 가 글로 남았다. pull 의
+// {@link convertSpans} 와 같은 방식이다.
 const OBSIDIAN_COLOR_RE = new RegExp(
-  `%%${MARKER_BRAND_RE}:color:([^%]+)%%([\\s\\S]*?)%%\\/color%%`,
+  `%%${MARKER_BRAND_RE}:color:([^%]+)%%((?:(?!%%${MARKER_BRAND_RE}:color:)[\\s\\S])*?)%%\\/color%%`,
   "g",
 );
-
-function restoreColorSpans(content: string): string {
-  return content.replace(OBSIDIAN_COLOR_RE, (_match, color: string, text: string) => {
-    return `<span color="${color}">${text}</span>`;
-  });
-}
 
 const OBSIDIAN_UNDERLINE_RE = new RegExp(
-  `%%${MARKER_BRAND_RE}:underline%%([\\s\\S]*?)%%\\/underline%%`,
+  `%%${MARKER_BRAND_RE}:underline%%((?:(?!%%${MARKER_BRAND_RE}:underline%%)[\\s\\S])*?)%%\\/underline%%`,
   "g",
 );
 
+/** 더 바뀌지 않을 때까지 안쪽 짝부터 바꾼다. */
+function replaceInnermostFirst(
+  content: string,
+  re: RegExp,
+  replace: (match: string, ...groups: string[]) => string,
+): string {
+  let result = content;
+  for (let pass = 0; pass < 1000; pass++) {
+    const next = result.replace(re, replace);
+    if (next === result) break;
+    result = next;
+  }
+  return result;
+}
+
+function restoreColorSpans(content: string): string {
+  return replaceInnermostFirst(
+    content,
+    OBSIDIAN_COLOR_RE,
+    (_match, color, text) => `<span color="${color}">${text}</span>`,
+  );
+}
+
 function restoreUnderlineSpans(content: string): string {
-  return content.replace(OBSIDIAN_UNDERLINE_RE, (_match, text: string) => {
-    return `<span underline="true">${text}</span>`;
-  });
+  return replaceInnermostFirst(
+    content,
+    OBSIDIAN_UNDERLINE_RE,
+    (_match, text) => `<span underline="true">${text}</span>`,
+  );
+}
+
+const OBSIDIAN_U_TAG_RE = /<u>([\s\S]*?)<\/u>/g;
+
+/**
+ * 볼트의 `<u>` → NFM 밑줄 span. pull 이 밑줄을 `<u>` 로 받고({@link convertSpans}), 사용자도 `<u>` 로
+ * 밑줄을 쓴다. 코드 안의 `<u>` 는 사용자가 적은 글자라 그대로 둔다.
+ */
+function restoreUnderlineTags(content: string): string {
+  return replaceOutsideCode(
+    content,
+    OBSIDIAN_U_TAG_RE,
+    (_match, text) => `<span underline="true">${text}</span>`,
+  );
+}
+
+const NFM_SPAN_ATTRS = `((?:\\s+(?:underline="true"|color="[^"]+"))+)`;
+const WITHOUT_SPAN_TAG = `((?:(?!<\\/?span\\b)[\\s\\S])*?)`;
+/** 다른 span 하나를 바로 품은 span — 바깥 속성 · 앞 글 · 안쪽 속성 · 안쪽 글. */
+const SPAN_WITH_INNER_RE = new RegExp(
+  `<span${NFM_SPAN_ATTRS}>${WITHOUT_SPAN_TAG}<span${NFM_SPAN_ATTRS}>${WITHOUT_SPAN_TAG}<\\/span>`,
+  "g",
+);
+const EMPTY_SPAN_RE = new RegExp(`<span${NFM_SPAN_ATTRS}><\\/span>`, "g");
+
+/** 속성을 합친다 — 색은 안쪽이 이긴다. Notion 의 글 한 조각은 색을 하나만 가진다(글자색이나 배경색). */
+function mergeSpanAttrs(...attrs: string[]): string {
+  const color = attrs
+    .map((a) => /color="([^"]+)"/.exec(a)?.[1])
+    .filter((c) => c !== undefined)
+    .at(-1);
+  const underline = attrs.some((a) => /underline="true"/.test(a));
+  return `${color ? ` color="${color}"` : ""}${underline ? ' underline="true"' : ""}`;
+}
+
+/**
+ * 겹친 span 을 펼친다. Notion 은 span 안의 span 을 읽지 못한다 — 바깥 span 에 안쪽 속성을 합치고 안쪽의
+ * 닫는 태그를 글자 `</span>` 로 남긴다(2026-10-04 실측). 볼트의 색 마커 안 `<u>` · 밑줄 마커가 그 모양이
+ * 된다(F-07). 안쪽 span 은 두 속성을 합친 한 태그로, 그 앞뒤 글은 바깥 속성만 단 태그로 나눈다.
+ */
+function flattenNestedSpans(content: string): string {
+  let result = content;
+  for (let pass = 0; pass < 1000; pass++) {
+    const next = replaceOutsideCode(
+      result,
+      SPAN_WITH_INNER_RE,
+      (_match, outer, before, inner, text) =>
+        `<span${mergeSpanAttrs(outer!)}>${before}</span>` +
+        `<span${mergeSpanAttrs(outer!, inner!)}>${text}</span><span${mergeSpanAttrs(outer!)}>`,
+    ).replace(EMPTY_SPAN_RE, "");
+    if (next === result) break;
+    result = next;
+  }
+  return result;
 }
 
 // ─── 디자인 마커 재조립 (ADR-008) ───

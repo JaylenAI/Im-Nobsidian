@@ -2,6 +2,7 @@ import { Client, LogLevel } from "@notionhq/client";
 import { Sema } from "async-sema";
 import type {
   BlockObjectResponse,
+  LanguageRequest,
   PageObjectResponse,
   PartialBlockObjectResponse,
   PageMarkdownResponse,
@@ -20,9 +21,16 @@ import type {
   BasePropertyOption,
   BaseStatusGroup,
 } from "../types/view.js";
-import type { Config } from "../types/config.js";
+import { DEFAULT_CONFIG, type Config } from "../types/config.js";
+import type { BookmarkTarget } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
-import { normalizeNotionId } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import type { AbortLike } from "../utils/pool.js";
+import { throwIfAborted } from "../utils/abort.js";
+import { fileUrlOfBlock } from "../utils/notion-file-url.js";
+import { completeTruncatedMarkdown } from "./markdown-completion.js";
+import { shapeAppendRequests, type BlockRequest } from "./block-tree.js";
+import { richTextChunks } from "./rich-text.js";
 
 /**
  * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
@@ -34,6 +42,42 @@ export function isNotionObjectNotFound(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
   const e = error as { code?: unknown; status?: unknown };
   return e.code === "object_not_found" || e.status === 404;
+}
+
+/** 이 통합에 권한이 없어 거절된 요청인가(403 `restricted_resource`). */
+export function isNotionAccessDenied(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const e = error as { code?: unknown; status?: unknown };
+  return e.code === "restricted_resource" || e.status === 403;
+}
+
+/** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
+export function isTrashedOrArchived(page: PageObjectResponse): boolean {
+  // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
+  const inTrash = (page as { in_trash?: boolean }).in_trash === true;
+  return inTrash || page.archived === true;
+}
+
+/**
+ * Notion SDK 의 400(`validation_error`) 판별 — 요청이 **적용되지 않고** 거절됐다는 신호다.
+ * 본문 교체가 자식 페이지 · 자식 DB 를 지우게 될 때도 이 코드로 거절된다
+ * ({@link NotionClient.replacePageMarkdown}).
+ */
+export function isNotionValidationError(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  return (error as { code?: unknown }).code === "validation_error";
+}
+
+/**
+ * markdown 이 `# H1` 으로 시작하는가(앞의 빈 줄은 건너뛴다).
+ *
+ * Notion 은 markdown 으로 페이지 · 행을 만들 때(`pages.create`) 맨 앞의 H1 을 버린다. 가운데 H1 ·
+ * 맨 앞 `##` 는 남기고, 본문 교체(`replace_content`)는 맨 앞 H1 도 남긴다(N-04, 2026-09-27 실측).
+ * `#태그` 처럼 `#` 뒤에 공백이 없으면 제목이 아니다.
+ */
+export function startsWithHeading1(markdown: string): boolean {
+  const first = markdown.split("\n").find((line) => line.trim().length > 0);
+  return first !== undefined && /^ {0,3}#[ \t]+\S/.test(first);
 }
 
 /**
@@ -61,6 +105,77 @@ export class DiscoveryTooLargeError extends Error {
   }
 }
 
+/**
+ * 두 번 적용되면 결과가 달라지는 쓰기 — 모호한 실패(타임아웃 · 5xx)에서 다시 보내지 않는다.
+ * 판정 기준은 {@link NotionClient} 의 `withRateLimit` 주석에 있다.
+ */
+const NOT_IDEMPOTENT = { idempotent: false } as const;
+
+/** {@link NotionClient.searchRecentPages} 의 한 줄. */
+export interface RecentPage {
+  readonly id: string;
+  readonly last_edited_time: string;
+  readonly last_edited_by: { readonly id: string } | null;
+  /**
+   * DB 행이면 그 DB 의 id, 페이지면 null — 바뀐 행이 있는 DB 만 조회하는 데 쓴다(ADR-027). search 는 행의
+   * 부모를 `data_source_id` 로 주면서 DB id 를 함께 싣는다(실측 2026-09-28).
+   */
+  readonly parentDatabaseId: string | null;
+  /**
+   * 부모와 제목 — search 는 페이지 객체를 통째로 준다(실측 2026-10-21: 부모 · 제목 속성 포함). 새 페이지가 받을
+   * 것인지 가르는 데 쓴다. 예전에는 추적하지 않는 페이지마다 다시 읽어 이 둘을 얻었다 — 워크스페이스에서 최근
+   * 고친 페이지가 많을수록 pull 마다 요청이 그만큼 늘었다(B8).
+   */
+  readonly parent: PageObjectResponse["parent"];
+  readonly title: string;
+}
+
+/**
+ * {@link NotionClient.searchRecentDataSources} 의 한 줄 — 속성(스키마) · 제목이 바뀐 data source. 행을 고쳐도
+ * data source 의 수정 시각은 오르지 않는다(실측 2026-09-28) — 행의 변경은 {@link RecentPage} 로 본다.
+ */
+export interface RecentDataSource {
+  readonly id: string;
+  readonly last_edited_time: string;
+  /** 이 data source 가 속한 DB. 모르면 null. */
+  readonly databaseId: string | null;
+}
+
+/** 블록 API 의 블록 하나 — 자식이 있으면 `children` 에 담겨 온다({@link NotionClient.getBlockTree}). */
+export type BlockTreeNode = BlockObjectResponse & { children?: BlockTreeNode[] };
+
+/**
+ * DB 하나를 한 번 받은 것 — 행 조회 · 스키마 · 제목이 같은 것을 다시 받지 않고 이것을 읽는다. 예전에는 DB 하나를
+ * 받는 데 같은 DB 를 서너 번 다시 받아(요청 6~8회) 발견 DB 166개의 pull 이 분 단위였다.
+ */
+export interface DatabaseMeta {
+  readonly databaseId: string;
+  /** DB 제목. 없으면 "". */
+  readonly title: string;
+  /** 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. */
+  readonly dataSources: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /**
+   * 속성 스키마 — 읽을 수 있는 모든 data source 의 속성을 합친 것(이름이 겹치면 앞의 것). 읽을 수 있는 data
+   * source 가 없으면 DB 객체의 속성.
+   */
+  readonly properties: Readonly<Record<string, unknown>>;
+}
+
+/** 페이지가 DB 행이면 그 DB 의 id. */
+function parentDatabaseIdOf(page: { readonly parent?: unknown }): string | null {
+  const parent = page.parent as { type?: string; database_id?: string } | undefined;
+  if (parent?.type !== "data_source_id" && parent?.type !== "database_id") return null;
+  return parent.database_id ?? null;
+}
+
+/** 행을 조회할 data source — 없으면(레거시 · 단일) DB id 하나로 폴백해 늘 1개 이상. */
+function dataSourcesToQuery(
+  meta: Pick<DatabaseMeta, "databaseId" | "dataSources">,
+): Array<{ id: string; name: string }> {
+  if (meta.dataSources.length === 0) return [{ id: meta.databaseId, name: "" }];
+  return meta.dataSources.map((ds) => ({ id: ds.id, name: ds.name }));
+}
+
 export interface NotionClientOptions {
   readonly token: string;
   readonly concurrency?: number;
@@ -71,13 +186,17 @@ export interface NotionClientOptions {
   readonly retryBackoffFactor?: number;
   readonly pageSize?: number;
   readonly batchSize?: number;
+  /** 잘린 Markdown 을 채우려고 다시 받는 블록 수 상한 (S-06) */
+  readonly markdownCompletionMaxBlocks?: number;
+  /** 페이지 속성의 날짜시각을 적을 시간대(`conversion.timeZone`) — 없으면 이 컴퓨터의 시간대. */
+  readonly timeZone?: string;
   readonly fetch?: typeof globalThis.fetch;
 }
 
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
-  private readonly propertyMapper = new PropertyMapper();
+  private readonly propertyMapper: PropertyMapper;
 
   private readonly minRequestInterval: number;
   private readonly maxRetries: number;
@@ -85,21 +204,36 @@ export class NotionClient {
   private readonly retryBackoffFactor: number;
   private readonly defaultPageSize: number;
   private readonly batchSize: number;
+  private readonly markdownCompletionMaxBlocks: number;
+  /** {@link getBotUserId} 가 받은 값 — 받는 중이면 그 약속. */
+  private botUserId: Promise<string> | null = null;
+  /** {@link getUserNames} 가 물은 사용자 이름 — 읽지 못한 사용자는 null. */
+  private readonly userNames = new Map<string, string | null>();
 
   constructor(options: NotionClientOptions) {
+    // 빠진 값은 설정 기본값 한 벌(DEFAULT_CONFIG)에서 읽는다 — `init` 처럼 토큰만으로 만드는 경로도 같은 값.
+    const defaults = DEFAULT_CONFIG.advanced;
     this.client = new Client({
       auth: options.token,
-      timeoutMs: options.timeoutMs ?? 30000,
+      timeoutMs: options.timeoutMs ?? defaults.timeoutMs,
       logLevel: LogLevel.ERROR,
+      // 재시도는 withRateLimit 한 곳에서만 한다. SDK 5.x 는 기본으로 429·529 를 2회
+      // 재시도하는데, 켜 둔 채면 두 층이 곱해져 429 가 이어질 때 호출 1건이
+      // (1+2)×(1+maxRetries) 번 나간다. SDK 쪽 대기는 rate limit 슬롯을 쥔 채,
+      // 전역 쿨다운 밖에서, 로그 없이 흐른다.
+      retry: false,
       ...(options.fetch ? { fetch: options.fetch } : {}),
     });
-    this.sema = new Sema(options.concurrency ?? 3);
-    this.minRequestInterval = options.rateLimitIntervalMs ?? 350;
-    this.maxRetries = options.maxRetries ?? 5;
-    this.retryBaseDelayMs = options.retryBaseDelayMs ?? 1000;
-    this.retryBackoffFactor = options.retryBackoffFactor ?? 2;
-    this.defaultPageSize = options.pageSize ?? 100;
-    this.batchSize = options.batchSize ?? 100;
+    this.sema = new Sema(options.concurrency ?? defaults.concurrency);
+    this.minRequestInterval = options.rateLimitIntervalMs ?? defaults.rateLimitIntervalMs;
+    this.maxRetries = options.maxRetries ?? defaults.maxRetries;
+    this.retryBaseDelayMs = options.retryBaseDelayMs ?? defaults.retryBaseDelayMs;
+    this.retryBackoffFactor = options.retryBackoffFactor ?? defaults.retryBackoffFactor;
+    this.defaultPageSize = options.pageSize ?? defaults.pageSize;
+    this.batchSize = options.batchSize ?? defaults.batchSize;
+    this.markdownCompletionMaxBlocks =
+      options.markdownCompletionMaxBlocks ?? defaults.markdownCompletionMaxBlocks;
+    this.propertyMapper = new PropertyMapper({ timeZone: options.timeZone });
   }
 
   /** config.advanced 의 운영 튜닝값으로 클라이언트를 생성한다 (매직넘버 단일 진실원). */
@@ -115,12 +249,59 @@ export class NotionClient {
       retryBackoffFactor: a.retryBackoffFactor,
       pageSize: a.pageSize,
       batchSize: a.batchSize,
+      markdownCompletionMaxBlocks: a.markdownCompletionMaxBlocks,
+      timeZone: config.conversion.timeZone,
       ...(fetch ? { fetch } : {}),
     });
   }
 
   getInternalClient(): Client {
     return this.client;
+  }
+
+  /**
+   * 이 토큰의 봇 사용자 id(`GET /v1/users/me`). 이 통합이 고친 페이지는 `last_edited_by` 가 이
+   * id 다 — 같은 분 안에서 우리 뒤에 누가 고쳤는지 가르는 데 쓴다(`sync/remote-observation.ts`).
+   * 받은 값은 기억한다. 받지 못하면 던지고 기억하지 않는다 — 다음 호출이 다시 묻는다.
+   */
+  async getBotUserId(): Promise<string> {
+    this.botUserId ??= this.withRateLimit(() => this.client.users.me({})).then((me) => me.id);
+    try {
+      return await this.botUserId;
+    } catch (error) {
+      this.botUserId = null;
+      throw error;
+    }
+  }
+
+  /**
+   * 사용자 멘션에 보일 이름(`GET /v1/users/:id`). Markdown API 는 사용자 멘션을 이름 없는 태그로
+   * 내보낸다(`converter/mention.ts`).
+   *
+   * 물은 사용자는 기억한다 — 같은 사람이 여러 노트에 나와도 한 번만 묻는다. 읽지 못한 사용자(권한 없는
+   * 통합 · 나간 사용자)는 이유를 남기고 맵에서 뺀다. 그 멘션은 이름 대신 정해 둔 글로 보이지만, 멘션
+   * 자체는 id 로 보존된다.
+   */
+  async getUserNames(ids: readonly string[]): Promise<Map<string, string>> {
+    const names = new Map<string, string>();
+    for (const id of new Set(ids)) {
+      if (!this.userNames.has(id)) {
+        try {
+          const user = await this.withRateLimit(() => this.client.users.retrieve({ user_id: id }));
+          this.userNames.set(id, user.name ?? null);
+        } catch (error) {
+          getLogger().warn(
+            `[Im-Nobsidian] 사용자 이름을 읽지 못함 (${id}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+          this.userNames.set(id, null);
+        }
+      }
+      const name = this.userNames.get(id);
+      if (name) names.set(id, name);
+    }
+    return names;
   }
 
   // ─── Page CRUD ───
@@ -157,6 +338,7 @@ export class NotionClient {
           properties: properties as never,
           children: params.children as never,
         }) as Promise<PageObjectResponse>,
+      NOT_IDEMPOTENT,
     );
   }
 
@@ -186,7 +368,23 @@ export class NotionClient {
           properties: properties as never,
           markdown: params.markdown,
         }) as Promise<PageObjectResponse>,
+      NOT_IDEMPOTENT,
     );
+  }
+
+  /**
+   * {@link createPageWithMarkdown} 이 버린 맨 앞 `# H1` 을 되살린다 — 그 markdown 이 H1 으로
+   * 시작할 때만 같은 markdown 으로 본문을 한 번 바꾼다({@link startsWithHeading1}).
+   *
+   * 만든 직후, 하위 페이지를 만들기 전에 부른다 — 교체가 지울 자식이 없다. 호출측은 먼저 페이지
+   * 매핑을 적어 둔다: 여기서 실패해도 다음 push 가 새로 만들지 않고 본문을 다시 보낸다.
+   *
+   * @returns 본문을 바꿨으면 true
+   */
+  async restoreLeadingHeading(pageId: string, markdown: string): Promise<boolean> {
+    if (!startsWithHeading1(markdown)) return false;
+    await this.replacePageMarkdown(pageId, markdown);
+    return true;
   }
 
   async updatePageProperties(
@@ -204,10 +402,39 @@ export class NotionClient {
 
   // ─── Markdown API ───
 
+  /**
+   * 페이지 마크다운. 블록이 많아 잘린 부분은 블록 ID 로 다시 받아 채운다(S-06 —
+   * {@link completeTruncatedMarkdown}). 돌려준 `unknown_block_ids` 는 권한이 닿지 않아 끝내
+   * 읽지 못한 블록이고, 그 자리는 원래 블록을 지키는 태그로 남아 있다.
+   */
   async getPageMarkdown(pageId: string): Promise<PageMarkdownResponse> {
-    return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: pageId }));
+    const { response, refetched } = await completeTruncatedMarkdown(
+      await this.retrieveMarkdown(pageId),
+      (blockId) => this.retrieveMarkdown(blockId),
+      { maxFetches: this.markdownCompletionMaxBlocks, isNotFound: isNotionObjectNotFound },
+    );
+    if (refetched > 0) {
+      const left = response.unknown_block_ids.length;
+      getLogger().info(
+        `[Im-Nobsidian] Markdown API 가 잘라 보낸 블록 ${refetched}개를 다시 받아 채움 (${pageId})` +
+          (left > 0 ? ` — 권한이 없어 ${left}개는 자리표시로 남김` : ""),
+      );
+    }
+    return response;
   }
 
+  private retrieveMarkdown(id: string): Promise<PageMarkdownResponse> {
+    return this.withRateLimit(() => this.client.pages.retrieveMarkdown({ page_id: id }));
+  }
+
+  /**
+   * 본문을 통째로 바꾼다. 자식 페이지 · 자식 DB 는 **지우지 않는다**(S-03).
+   *
+   * `allow_deleting_content: true` 로 보내면 새 본문에 `<page>` · `<database>` 태그가 없는
+   * 자식을 Notion 이 휴지통으로 보낸다. 삭제를 허용하지 않으면 무엇이 지워질지 나열하며
+   * `validation_error` 로 거절하고 아무것도 바꾸지 않는다(2026-09-27 실측) — 호출측이
+   * 자식 태그를 되돌려 놓고 다시 보낸다(`sync/page-body.ts`).
+   */
   async replacePageMarkdown(pageId: string, markdown: string): Promise<PageMarkdownResponse> {
     return this.withRateLimit(() =>
       this.client.pages.updateMarkdown({
@@ -215,7 +442,7 @@ export class NotionClient {
         type: "replace_content",
         replace_content: {
           new_str: markdown,
-          allow_deleting_content: true,
+          allow_deleting_content: false,
         },
       }),
     );
@@ -225,57 +452,62 @@ export class NotionClient {
     pageId: string,
     patches: Array<{ oldStr: string; newStr: string; replaceAll?: boolean }>,
   ): Promise<PageMarkdownResponse> {
-    return this.withRateLimit(() =>
-      this.client.pages.updateMarkdown({
-        page_id: pageId,
-        type: "update_content",
-        update_content: {
-          content_updates: patches.map((p) => ({
-            old_str: p.oldStr,
-            new_str: p.newStr,
-            replace_all_matches: p.replaceAll ?? false,
-          })),
-          allow_deleting_content: true,
-        },
-      }),
+    return this.withRateLimit(
+      () =>
+        this.client.pages.updateMarkdown({
+          page_id: pageId,
+          type: "update_content",
+          update_content: {
+            content_updates: patches.map((p) => ({
+              old_str: p.oldStr,
+              new_str: p.newStr,
+              replace_all_matches: p.replaceAll ?? false,
+            })),
+            // 부분 치환도 자식을 지우지 않는다 — 이유는 replacePageMarkdown 과 같다.
+            allow_deleting_content: false,
+          },
+        }),
+      NOT_IDEMPOTENT,
     );
   }
 
   // ─── Page Move ───
 
-  async movePage(
-    pageId: string,
-    newParentId: string,
-    newParentType: "page" | "database",
-  ): Promise<PageObjectResponse> {
-    const parent =
-      newParentType === "database" ? { database_id: newParentId } : { page_id: newParentId };
-    return this.withRateLimit(
-      () =>
-        this.client.pages.update({
-          page_id: pageId,
-          parent,
-        } as never) as Promise<PageObjectResponse>,
+  /**
+   * 페이지를 다른 페이지 아래로 옮긴다 — `POST /v1/pages/{id}/move`.
+   *
+   * 페이지 갱신(pages.update)은 부모를 바꾸지 않는다 — `parent` 를 보내도 오류 없이 무시한다.
+   * 예전 movePage 가 그 길을 써서, 옮긴 노트의 Notion 부모가 한 번도 바뀌지 않았다(S-11).
+   * 같은 부모로 다시 옮겨도 결과가 같아 모호한 실패는 다시 보낸다.
+   */
+  async movePage(pageId: string, parentPageId: string): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.pages.move({
+        page_id: pageId,
+        parent: { type: "page_id", page_id: parentPageId },
+      }),
     );
   }
 
   // ─── Database / DataSource ───
 
   /**
-   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다.
-   * - title: database 객체에 그대로 존재한다.
-   * - properties(스키마): 신 모델에선 data source 에 있으므로 1차 data source 를 조회해 채운다.
+   * 데이터베이스 1개를 신 모델(2025-09-03 data source 분리)로 조회한다 — DB 1회 + data source 마다 1회.
+   * - title · data source 목록: database 객체에 그대로 존재한다.
+   * - properties(스키마): 신 모델에선 data source 에 있으므로 data source 를 조회해 채운다.
    *   data source 접근 불가(링크드 DB 등)면 database 객체의 properties 로 폴백한다(제목은 보존).
+   *
+   * 같은 DB 의 행 조회 · 스키마 · 제목은 받은 것({@link DatabaseMeta})을 넘겨 다시 받지 않는다.
    *
    * 폐기한 레거시 raw fetch(`GET /v1/databases/{id}`, Notion-Version 2022-06-28)는 신 모델로
    * 업그레이드된 다수 DB에 400 을 반환해 자동 발견 DB 가 통째 드롭(내용 손실)되던 원인이었다.
    * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
    */
-  private async fetchDatabaseModern(databaseId: string): Promise<Record<string, unknown>> {
+  async getDatabaseMeta(databaseId: string): Promise<DatabaseMeta> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
-      title?: unknown;
+      title?: Array<{ plain_text: string }>;
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
     };
@@ -304,14 +536,24 @@ export class NotionClient {
       }
     }
 
-    const properties: Record<string, unknown> = anyAccessible ? merged : (db.properties ?? {});
-    return { title: db.title, properties };
+    return {
+      databaseId,
+      title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
+      dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+      properties: anyAccessible ? merged : (db.properties ?? {}),
+    };
   }
 
-  async getDatabaseTitle(databaseId: string): Promise<string> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const titleArr = db.title as Array<{ plain_text: string }> | undefined;
-    return titleArr?.[0]?.plain_text ?? "";
+  /** `from` 이 이 DB 를 받은 것이면 그것을, 아니면 새로 받는다. */
+  private async metaOf(databaseId: string, from: DatabaseMeta | undefined): Promise<DatabaseMeta> {
+    return from && notionIdsEqual(from.databaseId, databaseId)
+      ? from
+      : this.getDatabaseMeta(databaseId);
+  }
+
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
+  async getDatabaseTitle(databaseId: string, from?: DatabaseMeta): Promise<string> {
+    return (await this.metaOf(databaseId, from)).title;
   }
 
   /**
@@ -377,17 +619,29 @@ export class NotionClient {
         return { originalDbId, viewName: view.name ?? "" };
       }
       return null;
-    } catch {
-      return null;
+    } catch (error) {
+      // 없거나 · 권한이 없거나 · 거절된 요청만 「해소 불가」 다. 429 · 5xx · 시간 초과까지 null 로 바꾸면
+      // 호출처가 이 DB 를 접근 불가로 영구 거부 목록에 올린다(`--force` 전까지 다시 보지 않는다).
+      if (
+        isNotionObjectNotFound(error) ||
+        isNotionAccessDenied(error) ||
+        isNotionValidationError(error)
+      ) {
+        return null;
+      }
+      throw error;
     }
   }
 
+  /** @param from 이미 받은 이 DB — 주면 다시 받지 않는다. */
   async getDatabaseSchema(
     databaseId: string,
+    from?: DatabaseMeta,
   ): Promise<Record<string, { id: string; type: string }>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, { id: string; type: string }> | undefined;
-    if (!properties) return {};
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      { id: string; type: string }
+    >;
     const schema: Record<string, { id: string; type: string }> = {};
     for (const [name, prop] of Object.entries(properties)) {
       schema[name] = { id: prop.id, type: prop.type };
@@ -402,11 +656,17 @@ export class NotionClient {
    * 옵션명이 아니라 **그룹명**(`To-do` 등)으로 오기 때문에 `groups[].optionIds` 를
    * 옵션명으로 되돌리려면 이 id 가 있어야 한다. 예전엔 여기서 id 를 떨궈,
    * 그룹으로 필터링된 뷰를 Bases 로 옮길 방법이 아예 없었다.
+   *
+   * @param from 이미 받은 이 DB — 주면 다시 받지 않는다.
    */
-  async getDatabaseSchemaFull(databaseId: string): Promise<Record<string, BasePropertySchema>> {
-    const db = await this.fetchDatabaseModern(databaseId);
-    const properties = db.properties as Record<string, Record<string, unknown>> | undefined;
-    if (!properties) return {};
+  async getDatabaseSchemaFull(
+    databaseId: string,
+    from?: DatabaseMeta,
+  ): Promise<Record<string, BasePropertySchema>> {
+    const properties = (await this.metaOf(databaseId, from)).properties as Record<
+      string,
+      Record<string, unknown>
+    >;
 
     const schema: Record<string, BasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
@@ -456,9 +716,18 @@ export class NotionClient {
    * 페이지네이션하면 2번째+ 의 행이 통째 침묵 유실된다. 전 data source 를 순회·페이지네이션
    * 하고 page_id 로 디듀프(소스 간 동일 페이지 방어)한 뒤 합친다. 다중 소스면 1회 경고해
    * "소스별 탭 구분이 한 폴더로 병합"되는 점을 비침묵으로 알린다.
+   *
+   * @param from 이미 받은 이 DB — 주면 data source 목록을 다시 받지 않는다.
    */
-  async queryAllDatabasePages(databaseId: string, filter?: unknown): Promise<PageObjectResponse[]> {
-    const metas = await this.getDataSourceMetas(databaseId);
+  async queryAllDatabasePages(
+    databaseId: string,
+    filter?: unknown,
+    from?: DatabaseMeta,
+  ): Promise<PageObjectResponse[]> {
+    const metas =
+      from && notionIdsEqual(from.databaseId, databaseId)
+        ? dataSourcesToQuery(from)
+        : await this.getDataSourceMetas(databaseId);
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
@@ -503,33 +772,59 @@ export class NotionClient {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as { data_sources?: Array<{ id: string; name?: string }> };
-    const list = db.data_sources ?? [];
-    if (list.length === 0) return [{ id: databaseId, name: "" }];
-    return list.map((ds) => ({ id: ds.id, name: ds.name ?? "" }));
+    return dataSourcesToQuery({
+      databaseId,
+      dataSources: (db.data_sources ?? []).map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+    });
   }
 
   async archivePage(pageId: string): Promise<void> {
     await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
   }
 
+  /**
+   * 파일 블록의 지금 받을 수 있는 주소. 블록이 없거나 볼 수 없으면 null 이다.
+   * 그 밖의 실패(일시 오류 등)는 던진다 — 예전에는 모두 null 로 삼켜 이유가 남지 않았다.
+   */
   async getFileBlockUrl(blockId: string): Promise<string | null> {
     try {
       const block = await this.withRateLimit(() =>
         this.client.blocks.retrieve({ block_id: blockId }),
       );
-      const b = block as unknown as {
-        type: string;
-        file?: { file?: { url: string }; external?: { url: string } };
-        pdf?: { file?: { url: string }; external?: { url: string } };
-        video?: { file?: { url: string }; external?: { url: string } };
-        audio?: { file?: { url: string }; external?: { url: string } };
-        image?: { file?: { url: string }; external?: { url: string } };
-      };
-      const media = b.file ?? b.pdf ?? b.video ?? b.audio ?? b.image;
-      return media?.file?.url ?? media?.external?.url ?? null;
-    } catch {
-      return null;
+      return fileUrlOfBlock(block as { type?: string });
+    } catch (error) {
+      if (isNotionObjectNotFound(error) || isNotionAccessDenied(error)) return null;
+      throw error;
     }
+  }
+
+  /**
+   * 북마크 블록의 주소와 캡션(F-09). Markdown API 는 북마크를 주소 없는 자리 태그로만 보낸다
+   * (`converter/bookmark.ts`) — 블록마다 한 번 읽는다.
+   *
+   * 읽지 못한 블록은 이유를 남기고 맵에서 뺀다. 그 북마크는 Notion 의 블록을 가리키는 링크로 보이고,
+   * 블록 자체는 마커로 보존된다. 북마크가 아닌 블록도 뺀다.
+   */
+  async getBookmarks(blockIds: readonly string[]): Promise<Map<string, BookmarkTarget>> {
+    const bookmarks = new Map<string, BookmarkTarget>();
+    for (const id of new Set(blockIds)) {
+      try {
+        const block = await this.withRateLimit(() => this.client.blocks.retrieve({ block_id: id }));
+        if ("type" in block && block.type === "bookmark") {
+          bookmarks.set(id, {
+            url: block.bookmark.url,
+            caption: block.bookmark.caption.map((t) => t.plain_text).join(""),
+          });
+        }
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 북마크 블록을 읽지 못해 Notion 블록 링크로 둠 (${id}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return bookmarks;
   }
 
   async getBlock(blockId: string): Promise<BlockObjectResponse> {
@@ -609,6 +904,23 @@ export class NotionClient {
   }
 
   /**
+   * 블록 트리 — 자식이 있는 블록은 `children` 에 자식을 담는다. 자식 페이지 · DB 는 열지 않는다. 동기화
+   * 참조 블록은 Notion 이 원본의 자식을 돌려주므로 그대로 담는다(Markdown API 도 원본 내용을 싣는다).
+   *
+   * 블록 하나라도 읽지 못하면 던진다 — 빠진 채로 노트를 쓰면 다음 push 가 그 블록을 Notion 에서 지운다.
+   */
+  async getBlockTree(blockId: string): Promise<BlockTreeNode[]> {
+    const blocks: BlockTreeNode[] = await this.fetchAllChildren(blockId);
+    for (const block of blocks) {
+      if (!block.has_children || block.type === "child_page" || block.type === "child_database") {
+        continue;
+      }
+      block.children = await this.getBlockTree(block.id);
+    }
+    return blocks;
+  }
+
+  /**
    * 자식 블록을 덧붙인다. `options.after` 를 주면 그 블록 **바로 뒤**에 삽입한다
    * (기본은 맨 끝). 자리표시자를 실제 미디어 블록으로 제자리 교체할 때 필요하다.
    *
@@ -621,27 +933,120 @@ export class NotionClient {
     children: unknown[],
     options?: { readonly after?: string },
   ): Promise<string[]> {
+    return (await this.appendChildBlocks(blockId, children, options)).map((b) => b.id);
+  }
+
+  /**
+   * {@link appendChildren} 과 같되 새로 만든 블록을 통째로 돌려준다. 파일을 붙인 미디어 블록은
+   * 응답에 Notion 이 저장한 파일의 URL 이 실려 온다 — 다시 조회하지 않고 그 파일을 알아 둔다(S-05).
+   */
+  async appendChildBlocks(
+    blockId: string,
+    children: unknown[],
+    options?: { readonly after?: string },
+  ): Promise<(BlockObjectResponse | PartialBlockObjectResponse)[]> {
     const batchSize = this.batchSize;
-    const created: string[] = [];
+    const created: (BlockObjectResponse | PartialBlockObjectResponse)[] = [];
     let after = options?.after;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
-      const response = await this.withRateLimit(() =>
-        this.client.blocks.children.append({
-          block_id: blockId,
-          children: batch as never,
-          ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
-        }),
+      const response = await this.withRateLimit(
+        () =>
+          this.client.blocks.children.append({
+            block_id: blockId,
+            children: batch as never,
+            ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
+          }),
+        NOT_IDEMPOTENT,
       );
-      const ids = response.results.slice(0, batch.length).map((b) => b.id);
-      created.push(...ids);
-      if (after && ids.length > 0) after = ids[ids.length - 1];
+      const blocks = response.results.slice(0, batch.length);
+      created.push(...blocks);
+      if (after && blocks.length > 0) after = blocks[blocks.length - 1]!.id;
     }
     return created;
   }
 
+  /**
+   * 깊이 제한 없는 블록 트리를 맨 끝에 덧붙인다 — 요청 한도(깊이 두 단계 · 100 개 · 1000 블록)를 넘는
+   * 자식은 부모를 만든 뒤 그 아래에 마저 붙인다({@link shapeAppendRequests}). 더 깊은 블록의 id 는
+   * 응답에 없어 부모의 자식 목록을 읽어 찾는다.
+   *
+   * 중간에 실패하면 그때까지 만든 블록은 남는다 — 호출측이 실패로 알린다.
+   */
+  async appendBlockTree(parentId: string, blocks: readonly BlockRequest[]): Promise<void> {
+    const listed = new Map<string, string[]>();
+    const childIds = async (id: string): Promise<string[]> => {
+      let ids = listed.get(id);
+      if (ids === undefined) {
+        ids = (await this.fetchAllChildren(id)).map((b) => b.id);
+        listed.set(id, ids);
+      }
+      return ids;
+    };
+    const queue: Array<{ parentId: string; blocks: readonly BlockRequest[] }> = [
+      { parentId, blocks },
+    ];
+    while (queue.length > 0) {
+      const next = queue.shift()!;
+      for (const request of shapeAppendRequests(next.blocks)) {
+        const created = await this.appendChildren(
+          next.parentId,
+          request.map((shaped) => shaped.body),
+        );
+        for (const [k, shaped] of request.entries()) {
+          for (const pending of shaped.pending) {
+            let id = created[k]!;
+            for (const step of pending.path) {
+              const ids = await childIds(id);
+              if (ids[step] === undefined) {
+                throw new Error(`방금 만든 블록의 자식을 찾지 못함 (${id} 의 ${step + 1}번째)`);
+              }
+              id = ids[step]!;
+            }
+            queue.push({ parentId: id, blocks: pending.children });
+          }
+        }
+      }
+    }
+  }
+
   async deleteBlock(blockId: string): Promise<void> {
     await this.withRateLimit(() => this.client.blocks.delete({ block_id: blockId }));
+  }
+
+  /**
+   * 코드 블록의 글을 바꾼다 — Markdown API 로 보낼 수 없는 코드(코드 속 ``` 줄, S-22)를 블록으로
+   * 채운다. 긴 코드는 rich text 여럿에 나눠 담는다. 같은 글로 다시 보내도 결과가 같아 모호한 실패는
+   * 다시 보낸다.
+   */
+  async updateCodeBlockText(
+    blockId: string,
+    code: string,
+    language: LanguageRequest,
+  ): Promise<void> {
+    const chunks = richTextChunks(code);
+    if (chunks === null) {
+      throw new Error(`코드가 너무 길어 Notion 코드 블록 하나에 담을 수 없음 (${code.length}자)`);
+    }
+    await this.withRateLimit(() =>
+      this.client.blocks.update({
+        block_id: blockId,
+        code: {
+          language,
+          rich_text: chunks.map((content) => ({ type: "text" as const, text: { content } })),
+        },
+      }),
+    );
+  }
+
+  /**
+   * 페이지 코드 블록의 글 — 컨테이너 안까지. 받은 markdown 만으로 코드 범위를 가를 수 없을 때(코드 속
+   * ``` 줄, S-22) 블록의 글로 맞춘다.
+   */
+  async getCodeBlockTexts(pageId: string): Promise<string[]> {
+    return (await this.fetchAllChildrenDeep(pageId)).flatMap((block) =>
+      block.type === "code" ? [block.code.rich_text.map((t) => t.plain_text).join("")] : [],
+    );
   }
 
   // ─── File Upload ───
@@ -745,12 +1150,17 @@ export class NotionClient {
     };
   }
 
-  async searchRecentPages(since: string): Promise<Array<{ id: string; last_edited_time: string }>> {
-    const results: Array<{ id: string; last_edited_time: string }> = [];
+  /**
+   * `since` 뒤에 고친 페이지 — 최근 것부터. DB 행도 온다. 누가 마지막으로 고쳤는지도 싣는다: 수정
+   * 시각은 분 단위라 같은 분 안의 편집은 편집자로만 가를 수 있다(N-05).
+   */
+  async searchRecentPages(since: string, signal?: AbortLike): Promise<RecentPage[]> {
+    const results: RecentPage[] = [];
     let cursor: string | undefined;
     const sinceDate = new Date(since);
 
     outer: do {
+      throwIfAborted(signal);
       const response = await this.withRateLimit(() =>
         this.client.search({
           filter: { property: "object", value: "page" },
@@ -765,7 +1175,54 @@ export class NotionClient {
         if (new Date(p.last_edited_time) <= sinceDate) {
           break outer;
         }
-        results.push({ id: p.id, last_edited_time: p.last_edited_time });
+        results.push({
+          id: p.id,
+          last_edited_time: p.last_edited_time,
+          last_edited_by: p.last_edited_by ? { id: p.last_edited_by.id } : null,
+          parentDatabaseId: parentDatabaseIdOf(p),
+          parent: p.parent,
+          title: this.extractTitle(p),
+        });
+      }
+
+      cursor = response.next_cursor ?? undefined;
+    } while (cursor);
+
+    return results;
+  }
+
+  /**
+   * `since` 뒤에 속성(스키마) · 제목이 바뀐 data source — 최근 것부터. 속성을 더하거나 이름을 바꾸면 행은
+   * 그대로라도 그 DB 의 `.base` 와 행의 frontmatter 가 바뀐다.
+   */
+  async searchRecentDataSources(since: string, signal?: AbortLike): Promise<RecentDataSource[]> {
+    const results: RecentDataSource[] = [];
+    let cursor: string | undefined;
+    const sinceDate = new Date(since);
+
+    outer: do {
+      throwIfAborted(signal);
+      const response = await this.withRateLimit(() =>
+        this.client.search({
+          filter: { property: "object", value: "data_source" },
+          sort: { direction: "descending", timestamp: "last_edited_time" },
+          start_cursor: cursor,
+          page_size: this.defaultPageSize,
+        }),
+      );
+
+      for (const result of response.results) {
+        const ds = result as unknown as {
+          id: string;
+          last_edited_time: string;
+          parent?: { database_id?: string };
+        };
+        if (new Date(ds.last_edited_time) <= sinceDate) break outer;
+        results.push({
+          id: ds.id,
+          last_edited_time: ds.last_edited_time,
+          databaseId: ds.parent?.database_id ?? null,
+        });
       }
 
       cursor = response.next_cursor ?? undefined;
@@ -784,14 +1241,7 @@ export class NotionClient {
     // 휴지통/아카이브된 페이지 제외: 부모 블록에는 child_page 참조가 남아 있어도
     // 대상 페이지가 삭제(in_trash)·보관(archived)된 경우 블록 조회 시 object_not_found가
     // 발생하므로 동기화 대상에서 사전 제거한다. (재귀 스캔의 무한·실패 전파 차단)
-    return pages.filter((p) => !NotionClient.isTrashedOrArchived(p));
-  }
-
-  /** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
-  private static isTrashedOrArchived(page: PageObjectResponse): boolean {
-    // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
-    const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-    return inTrash || page.archived === true;
+    return pages.filter((p) => !isTrashedOrArchived(p));
   }
 
   async getChildDatabaseIds(parentId: string): Promise<string[]> {
@@ -808,10 +1258,11 @@ export class NotionClient {
    *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
    *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
    *   미지정 시 무제한(기존 동작 유지 — 테스트 mock 경로는 영향 없음).
+   * @param opts.signal 취소되면 다음 페이지로 가기 전에 `OperationAbortedError` 로 멈춘다.
    */
   async getChildPagesRecursive(
     parentId: string,
-    opts?: { deadlineMs?: number },
+    opts?: { deadlineMs?: number; signal?: AbortLike },
   ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
@@ -821,6 +1272,7 @@ export class NotionClient {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
+        throwIfAborted(opts?.signal);
         if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
           throw new DiscoveryTooLargeError(Date.now() - start, all);
         }
@@ -850,10 +1302,11 @@ export class NotionClient {
   }
 
   /** 워크스페이스에서 통합에 공유된 모든 페이지를 bulk search 로 열거한다(100/요청). */
-  async searchAllPages(): Promise<PageObjectResponse[]> {
+  async searchAllPages(signal?: AbortLike): Promise<PageObjectResponse[]> {
     const pages: PageObjectResponse[] = [];
     let cursor: string | undefined;
     do {
+      throwIfAborted(signal);
       const r = await this.search({
         filter: { property: "object", value: "page" },
         startCursor: cursor,
@@ -878,8 +1331,11 @@ export class NotionClient {
    *  - 휴지통/보관(in_trash/archived) 페이지 제외
    *  - root 자신은 제외(직접 순회도 root 의 *자식*부터 수집)
    */
-  async getPagesUnderRootViaSearch(rootId: string): Promise<PageObjectResponse[]> {
-    const all = await this.searchAllPages();
+  async getPagesUnderRootViaSearch(
+    rootId: string,
+    signal?: AbortLike,
+  ): Promise<PageObjectResponse[]> {
+    const all = await this.searchAllPages(signal);
     const rootN = normalizeNotionId(rootId);
     const byId = new Map<string, PageObjectResponse>();
     for (const p of all) byId.set(normalizeNotionId(p.id), p);
@@ -969,11 +1425,12 @@ export class NotionClient {
 
     const out: PageObjectResponse[] = [];
     for (const p of all) {
+      throwIfAborted(signal);
       const pid = normalizeNotionId(p.id);
       if (pid === rootN) continue; // root 자신 제외
       const ptype = (p.parent as Parent).type;
       if (ptype === "data_source_id" || ptype === "database_id") continue; // DB 행 제외
-      if (NotionClient.isTrashedOrArchived(p)) continue;
+      if (isTrashedOrArchived(p)) continue;
       if (await isUnderRoot(p.id)) out.push(p);
     }
     return out;
@@ -1136,8 +1593,19 @@ export class NotionClient {
    * 268페이지 pull 이 진행 로그가 멈춘 채 수 분씩 정지하는 것으로 나타났다(R9).
    * 그래서 (1) 대기 중에는 슬롯을 반납하고, (2) 429 는 {@link cooldownUntil} 전역
    * 게이트로 함께 쉬고, (3) 모든 재시도를 경고로 남긴다.
+   *
+   * `idempotent: false` 는 두 번 적용되면 결과가 달라지는 쓰기다(페이지 생성 · 블록
+   * 덧붙이기 · 부분 치환). 이런 요청은 서버가 «처리하지 않았다» 고 분명히 말한 실패만
+   * 다시 보낸다. 타임아웃 · 연결 끊김 · 5xx 는 요청이 이미 적용됐을 수 있고 Notion 은
+   * 멱등 키를 받지 않으므로, 다시 보내면 같은 페이지 · 같은 블록이 두 벌 생긴다.
+   * 그런 실패는 호출측으로 올린다 — 페이지 생성은 WAL(pending_operations)이 부모에서
+   * 제목으로 찾아 입양한다.
    */
-  private async withRateLimit<T>(fn: () => Promise<T>): Promise<T> {
+  private async withRateLimit<T>(
+    fn: () => Promise<T>,
+    options?: { readonly idempotent?: boolean },
+  ): Promise<T> {
+    const idempotent = options?.idempotent ?? true;
     // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
     let backoffMs = 0;
 
@@ -1148,7 +1616,7 @@ export class NotionClient {
         this.lastRequestTime = Date.now();
         return await fn();
       } catch (error: unknown) {
-        if (!isRetryable(error) || attempt >= this.maxRetries) throw error;
+        if (!isRetryable(error, idempotent) || attempt >= this.maxRetries) throw error;
 
         // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
         // 절반은 서버가 말한 시각보다 일찍 두드려 429 를 다시 부른다. 서버 지정값은
@@ -1161,11 +1629,11 @@ export class NotionClient {
               Math.pow(this.retryBackoffFactor, attempt) *
               (0.5 + Math.random() * 0.5);
 
-        // 429 는 요청 하나가 아니라 워크스페이스 전체에 걸린 신호다 — 전원 대기로 승격한다.
-        // 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다. 헤더는 게이트웨이가
-        // 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이 통째로 사라지면
-        // 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
-        if (isRateLimited(error)) {
+        // 429 · 529 는 요청 하나가 아니라 워크스페이스(또는 서비스) 전체에 걸린 신호다 —
+        // 전원 대기로 승격한다. 판정 기준은 `Retry-After` 의 유무가 아니라 **상태 코드**다.
+        // 헤더는 게이트웨이가 떼어먹을 수도, 노션이 안 실어 줄 수도 있는데 그때 쿨다운이
+        // 통째로 사라지면 나머지 슬롯이 곧바로 다시 두드려 429 를 재생산한다.
+        if (isExplicitRejection(error)) {
           this.cooldownUntil = Math.max(this.cooldownUntil, Date.now() + backoffMs);
         }
 
@@ -1225,22 +1693,39 @@ function extractPropertyChoices(prop: Record<string, unknown>): {
   return result;
 }
 
-/** rate limit(429) 인가 — 이 요청만이 아니라 클라이언트 전체가 쉬어야 하는 신호. */
-function isRateLimited(error: unknown): boolean {
-  return (
-    typeof error === "object" && error !== null && (error as { status?: unknown }).status === 429
-  );
+function statusOf(error: unknown): number | null {
+  if (typeof error !== "object" || error === null) return null;
+  const status = (error as { status?: unknown }).status;
+  return typeof status === "number" ? status : null;
 }
 
-function isRetryable(error: unknown): boolean {
+/**
+ * 서버가 요청을 «처리하지 않고» 거절했다고 분명히 말한 실패 — rate limit(429) ·
+ * 서비스 과부하(529). 어떤 요청이든 다시 보내도 중복이 생기지 않는다. 이 요청만이 아니라
+ * 클라이언트 전체가 쉬어야 하는 신호이기도 하다.
+ */
+function isExplicitRejection(error: unknown): boolean {
+  const status = statusOf(error);
+  return status === 429 || status === 529;
+}
+
+/**
+ * 요청이 서버에 적용됐는지 알 수 없는 실패 — 응답을 받지 못했거나(타임아웃 · 연결 끊김)
+ * 서버가 처리 도중 넘어졌다(5xx). Notion 문서도 503 을 "60초 안에 응답하지 못함" 으로
+ * 적는다. 두 번 적용해도 결과가 같은 요청만 다시 보낸다.
+ */
+function isAmbiguousFailure(error: unknown): boolean {
   if (typeof error !== "object" || error === null) return false;
-  const code = (error as { code?: string }).code;
+  const code = (error as { code?: unknown }).code;
   if (code === "notionhq_client_request_timeout" || code === "ECONNRESET" || code === "ETIMEDOUT") {
     return true;
   }
-  if (!("status" in error)) return false;
-  const status = (error as { status: number }).status;
-  return status === 429 || status === 502 || status === 503 || status === 504;
+  const status = statusOf(error);
+  return status === 500 || status === 502 || status === 503 || status === 504;
+}
+
+function isRetryable(error: unknown, idempotent: boolean): boolean {
+  return isExplicitRejection(error) || (idempotent && isAmbiguousFailure(error));
 }
 
 /**

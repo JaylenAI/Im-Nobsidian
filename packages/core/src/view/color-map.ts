@@ -26,6 +26,9 @@ const NOTION_BG_COLORS: Record<NotionColor, string> = {
   red: "#FDEBEC",
 };
 
+/** Notion 이 쓰는 색 이름 전부(`default` 포함) — 색을 다루는 다른 곳은 이 목록을 읽는다. */
+export const NOTION_COLOR_NAMES = Object.keys(NOTION_COLORS) as readonly NotionColor[];
+
 export function getNotionColor(color: NotionColor | string): string {
   return NOTION_COLORS[color as NotionColor] ?? NOTION_COLORS.default;
 }

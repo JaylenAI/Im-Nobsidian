@@ -22,6 +22,12 @@ export interface PullConflictInput {
   readonly localExists?: boolean;
   /** Notion에서 가져와 변환한 리모트 내용. */
   readonly remoteContent: string;
+  /**
+   * 원격이 지난 동기화 사본 그대로임을 호출측이 확인했다 — 본문 지문과 본문 밖(제목 · 속성)으로
+   * (N-05). 렌더한 글이 지난 사본과 글자로는 달라도(자식 페이지 링크 · 왕복한 본문) 원격은 바뀌지
+   * 않았다. 생략하면 렌더한 글로만 가른다.
+   */
+  readonly remoteUnchanged?: boolean;
   /** 충돌 객체 구성용 리모트 변경 메타. */
   readonly remoteChange: RemoteChange;
   /** 설정된 충돌 해소 전략. */
@@ -34,6 +40,22 @@ export interface PullConflictResult {
   readonly conflict?: Conflict;
   /** 호출자가 재계산하지 않도록 제공하는 로컬 내용 해시. */
   readonly localHash: string;
+  /**
+   * 원격 내용이 지난 동기화 사본과 같다 — 원격은 그 뒤로 바뀌지 않았다. `skip` 과 함께 오며,
+   * 호출측은 원격을 본 기록만 새로 적는다(N-05).
+   */
+  readonly remoteUnchanged?: boolean;
+}
+
+/**
+ * 두 노트의 글이 같은가 — 파일 끝 개행만 다르면 같다.
+ *
+ * pull 이 렌더한 글은 파일 끝 개행이 로컬과 다를 수 있다 — frontmatter 가 없는 노트는 끝 개행
+ * 없이 나온다. 편집기가 끝에 개행을 둔 노트는 왕복하면 그 개행만 사라진다. 그것만 다른 노트를
+ * 다시 쓰거나 충돌로 올리지 않는다.
+ */
+export function sameNoteContent(a: string, b: string): boolean {
+  return a === b || a.replace(/\n+$/, "") === b.replace(/\n+$/, "");
 }
 
 /**
@@ -65,27 +87,35 @@ export function resolvePullConflict(input: PullConflictInput): PullConflictResul
     return { action: "write", localHash };
   }
 
-  // 로컬이 수정됨 → 전략에 따라 분기.
-  if (strategy === "remote-first") {
-    return { action: "write", localHash };
-  }
-  if (strategy === "local-first") {
-    return { action: "skip", localHash };
-  }
-
-  // --- manual / duplicate: 충돌로 넘기기 전에 "거짓 충돌"부터 걸러낸다 ---
+  // --- 로컬이 수정됨. 전략을 고르기 전에 원격이 실제로 바뀌었는지부터 본다 ---
+  // 전략은 «양쪽이 모두 바뀌었을 때» 무엇이 이기는지다. 예전에는 remote-first 가 이 확인보다
+  // 먼저 와서, 원격이 그대로인데도(같은 분 편집을 확인하러 다시 읽은 페이지 · 수정 시각만
+  // 바뀐 페이지) 로컬 편집을 지난 사본으로 덮었다(N-05).
 
   // 양쪽 내용이 이미 동일하면 충돌이 아니다(동일 편집으로 수렴). 덮어써도 무손실이고
   // 상태를 synced 로 정리하므로 write 로 처리한다.
-  if (localContent === remoteContent) {
+  if (sameNoteContent(localContent, remoteContent)) {
     return { action: "write", localHash };
   }
 
   // 리모트 내용이 base(마지막 동기화 스냅샷)와 같으면 리모트는 실제로 변하지 않은 것이다.
   // (notion last_edited 만 갱신된 가짜 변경.) 로컬만 바뀌었으므로 로컬을 보존(skip)한다.
   // 이때 write 로 덮어쓰면 로컬의 새 편집이 옛 내용으로 사라진다 — 반드시 skip.
+  // 호출측이 지문으로 확인한 경우도 같다. 이 도구가 만든 자식 페이지는 부모 렌더에 링크를
+  // 더하지만 부모의 본문은 그대로다 — 글로만 가르면 거짓 충돌이었다.
   const baseContent = record.baseSnapshot?.toString("utf-8") ?? null;
-  if (baseContent !== null && remoteContent === baseContent) {
+  if (
+    input.remoteUnchanged === true ||
+    (baseContent !== null && sameNoteContent(remoteContent, baseContent))
+  ) {
+    return { action: "skip", localHash, remoteUnchanged: true };
+  }
+
+  // 양쪽이 모두 바뀌었다 → 전략에 따라 분기.
+  if (strategy === "remote-first") {
+    return { action: "write", localHash };
+  }
+  if (strategy === "local-first") {
     return { action: "skip", localHash };
   }
 

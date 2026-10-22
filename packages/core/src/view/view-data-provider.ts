@@ -3,19 +3,25 @@ import type { DatabaseViewsConfig, ViewConfig } from "../types/view.js";
 import type { DBEntry, PropertyValue, ViewRenderData, PropertySchema } from "./types.js";
 import { sortEntries, groupEntries, extractCalendarEntries } from "./filter-engine.js";
 import { getVisibleProperties } from "./filter-engine.js";
-import matter from "gray-matter";
 import { DB_VIEWS_PATH } from "../constants/paths.js";
 import { selectDbRowFiles } from "../utils/db-row-path.js";
+import { splitFrontmatter } from "../utils/frontmatter.js";
+import { noteNameFromPath } from "../utils/markdown-path.js";
 
 export class ViewDataProvider {
   constructor(private readonly vaultFs: VaultFS) {}
 
+  /** 파일이 없으면 빈 객체. 있는데 읽지 못하면 던진다 — 「보기 설정이 없다」 와 「읽지 못했다」 는 다른 말이다. */
   async loadAllViewConfigs(): Promise<Record<string, DatabaseViewsConfig>> {
+    if (!(await this.vaultFs.exists(DB_VIEWS_PATH))) return {};
+    const raw = await this.vaultFs.readFile(DB_VIEWS_PATH);
     try {
-      const raw = await this.vaultFs.readFile(DB_VIEWS_PATH);
       return JSON.parse(raw) as Record<string, DatabaseViewsConfig>;
-    } catch {
-      return {};
+    } catch (error) {
+      throw new Error(
+        `DB 보기 설정 파일을 읽지 못했습니다(${DB_VIEWS_PATH}): ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
+      );
     }
   }
 
@@ -125,10 +131,9 @@ export class ViewDataProvider {
 
 function parseEntry(path: string, content: string): DBEntry | null {
   try {
-    const parsed = matter(content);
-    const fm = parsed.data as Record<string, unknown>;
+    const fm = splitFrontmatter(content).data;
 
-    const title = coerceString(fm.title) ?? extractTitleFromPath(path);
+    const title = coerceString(fm.title) ?? noteNameFromPath(path);
     const icon = coerceString(fm.icon);
     const cover = coerceCover(fm.cover);
 
@@ -226,12 +231,6 @@ function normalizePropertyValue(value: unknown): PropertyValue {
   }
 
   return String(value);
-}
-
-function extractTitleFromPath(filePath: string): string {
-  const parts = filePath.split("/");
-  const filename = parts[parts.length - 1] ?? "";
-  return filename.replace(/\.md$/, "");
 }
 
 function collectPropertyNames(entries: DBEntry[]): string[] {

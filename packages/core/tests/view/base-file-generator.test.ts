@@ -115,6 +115,43 @@ describe("BaseFileGenerator", () => {
     expect(result).toContain("- Priority");
   });
 
+  it("기간이 있는 날짜 속성은 끝 열(짝 키)을 바로 뒤에 둔다 — 숨긴 속성은 끝도 숨긴다 (B13)", () => {
+    const options = makeOptions();
+    const table = options.viewsConfig.views[0]!;
+    const shown = {
+      ...options,
+      viewsConfig: {
+        ...options.viewsConfig,
+        views: [
+          {
+            ...table,
+            properties: [
+              { propertyId: "d1", propertyName: "Due", visible: true },
+              { propertyId: "n1", propertyName: "Priority", visible: true },
+            ],
+          },
+        ],
+      },
+    };
+
+    const order = (rangeEnds?: Map<string, string>) =>
+      generator
+        .generate({ ...shown, rangeEnds })
+        .split("\n")
+        .filter((line) => line.startsWith("      - ") && !line.includes("property:"));
+    expect(order(new Map([["Due", "Due_end"]]))).toEqual([
+      "      - file.name",
+      "      - Due",
+      "      - Due_end",
+      "      - Priority",
+    ]);
+    expect(order()).toEqual(["      - file.name", "      - Due", "      - Priority"]);
+    // 숨긴 Due 는 끝 열도 없다
+    expect(
+      generator.generate({ ...options, rangeEnds: new Map([["Due", "Due_end"]]) }),
+    ).not.toContain("Due_end");
+  });
+
   it("sort를 property/direction 형식으로 변환한다 (Bases 키는 property, column 아님)", () => {
     const result = generator.generate(makeOptions());
 
@@ -352,7 +389,7 @@ describe("BaseFileGenerator", () => {
     expect(result).toContain('name: "Simple List"');
   });
 
-  it("groupBy에 direction이 없으면 생략한다", () => {
+  it("수동 그룹 순서도 direction 을 쓴다 — Bases 는 direction 없는 groupBy 를 열지 못한다", () => {
     const result = generator.generate(
       makeOptions({
         viewsConfig: {
@@ -376,8 +413,33 @@ describe("BaseFileGenerator", () => {
       }),
     );
 
-    expect(result).toContain("property: Status");
-    expect(result).not.toContain("direction:");
+    expect(result).toContain("groupBy:\n      property: Status\n      direction: ASC\n");
+  });
+
+  it.each([
+    ["descending", "DESC"],
+    ["ascending", "ASC"],
+    [undefined, "ASC"],
+  ] as const)("그룹 순서 %s → direction %s", (sort, direction) => {
+    const result = generator.generate(
+      makeOptions({
+        viewsConfig: {
+          databaseId: "db-123",
+          databaseName: "Tasks",
+          lastSynced: "2026-01-01T00:00:00.000Z",
+          views: [
+            {
+              id: "v3",
+              name: "Board",
+              type: "board",
+              groupBy: { type: "select", propertyId: "s1", propertyName: "Status", sort },
+            },
+          ],
+        },
+      }),
+    );
+
+    expect(result).toContain(`groupBy:\n      property: Status\n      direction: ${direction}\n`);
   });
 
   it("gallery의 page_content 커버를 formula.coverImage로 변환하고 formulas 섹션을 생성한다", () => {

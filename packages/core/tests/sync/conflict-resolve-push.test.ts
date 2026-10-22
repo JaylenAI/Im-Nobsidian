@@ -103,9 +103,12 @@ describe("충돌 해소 재push — 영구 유실·충돌 루프 회귀 잠금 (
     const client = new NotionClient({ token: "offline-test" });
     // leaf 페이지: 직속 child page/database 가 없어야 본문 replace 경로를 탄다.
     vi.spyOn(client, "fetchAllChildren").mockResolvedValue([] as BlockObjectResponse[]);
-    const replaceSpy = vi
-      .spyOn(client, "replacePageMarkdown")
-      .mockResolvedValue({ pageId: PAGE } as never) as unknown as ReturnType<typeof vi.fn>;
+    // 응답은 바꾼 뒤의 본문을 싣는다 — push 는 그 본문의 지문을 적는다(N-05).
+    const replaceSpy = vi.spyOn(client, "replacePageMarkdown").mockResolvedValue({
+      markdown: "",
+      truncated: false,
+      unknown_block_ids: [],
+    } as never) as unknown as ReturnType<typeof vi.fn>;
     // 본문만 push 하는 plain 시나리오에서는 updatePageProperties 가 호출되지 않아야 한다(단언).
     vi.spyOn(client, "updatePageProperties").mockResolvedValue({
       last_edited_time: REMOTE_EDITED,
@@ -186,7 +189,7 @@ describe("충돌 해소 재push — 영구 유실·충돌 루프 회귀 잠금 (
     expect(mergedOnDisk).toContain("local top line");
     expect(mergedOnDisk).toContain("remote bottom line");
 
-    // 5) notionLastEdited 가 옛 baseline 에서 전진(setNotionLastEdited 호출됨) + status synced.
+    // 5) notionLastEdited 가 옛 baseline 에서 전진(원격을 본 기록을 새로 적음) + status synced.
     const after = db.getByNotionId(PAGE)!;
     expect(after.status).toBe("synced");
     expect(after.notionLastEdited).not.toBe(SYNCED_AT);
@@ -218,6 +221,10 @@ describe("충돌 해소 재push — 영구 유실·충돌 루프 회귀 잠금 (
     const after = db.getByNotionId(PAGE)!;
     expect(after.notionLastEdited).toBe(REMOTE_EDITED);
     expect(after.status).toBe("synced");
+    // 충돌의 원격 본문을 언제 받았는지 모른다 — 다음 pull 이 내용으로 확인하고, 그 전의 push 는
+    // 원격을 덮어쓰지 않는다(N-05).
+    expect(after.notionSeenAt).toBeNull();
+    expect(after.notionBodyFingerprint).toBeNull();
   });
 
   it("manual(merge) 겹치는 편집 → 충돌 마커 잔존 시 push 안 함·conflict 유지", async () => {

@@ -1,12 +1,18 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE, compactMarker } from "../../constants/markers.js";
-import { mapOutsideCodeFences } from "../../utils/md-regions.js";
+import { replaceOutsideCode } from "../container-indent.js";
 
 /** `<u>밑줄</u>` (Obsidian·HTML 관용) — push 시 underline 마커로 승격. */
 const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
 
 /** `==하이라이트==` — 같은 줄 내, `===`(3연속)와 구분. */
 const HIGHLIGHT_REGEX = /(?<!=)==([^=\n]+?)==(?!=)/g;
+
+/**
+ * `<mark>형광</mark>` — HTML 의 형광이다. Highlightr 플러그인은 `<mark style="…">` 로 적는다. `==` 와 같이
+ * 같은 줄 안만 본다 — pull 이 형광을 `==` 로 되돌리는 것도 한 줄이다(HighlightRestorer).
+ */
+const MARK_REGEX = /<mark(?:\s[^>]*)?>([^\n]+?)<\/mark>/g;
 
 /**
  * 색상 span(`<span class="notion-red">` / `notion-yellow-bg`) — pull(notion-to-md) 경로가 만든
@@ -21,7 +27,7 @@ const SPACED_COLOR_REGEX = new RegExp(
 );
 
 /**
- * 인라인 annotation(underline·color) 무손실 보존기 — push 전처리(order 5).
+ * 인라인 annotation(underline·color) 무손실 보존기 — push 전처리(order 13).
  *
  * 과거에는 underline/color 표기를 **제거**(strip)했으나, 그러면 Notion 으로 push 할 때
  * 서식이 영구 소실됐다(I3 손실점). Notion 의 Enhanced Markdown 은 underline/color 를
@@ -40,7 +46,10 @@ const SPACED_COLOR_REGEX = new RegExp(
  */
 export class InlineAnnotationPreserver implements Processor {
   readonly name = "InlineAnnotationPreserver";
-  readonly order = 5;
+  // FrontmatterExtractor(10) · CommentStripper(11) 뒤 — 마커는 `%%` 로 쓰여, 주석 속 `==강조==` 를 먼저
+  // 마커로 바꾸면 `%%` 가 마커를 넘어 짝짓지 않아 주석이 통째로 Notion 에 올라갔다. YAML 값 속 `==` ·
+  // `<u>` 도 마커 글자로 바뀌어 속성에 실렸다(S-31).
+  readonly order = 13;
 
   process(input: ProcessorInput): ProcessorOutput {
     if (input.context.direction !== "push") {
@@ -55,30 +64,30 @@ export class InlineAnnotationPreserver implements Processor {
       (_m, color: string, text: string) => `${compactMarker(`color:${color}`)}${text}%%/color%%`,
     );
 
+    // 아래 셋은 코드 안에서는 사용자가 적은 글자다. 예전에는 펜스 안의 `<u>` 까지 바꿔 Notion 의
+    // 코드가 `<span underline="true">` 로 바뀌었고, 인라인 코드의 `a==b==c` 가 노랑 배경이 됐다.
+
     // <u>…</u> → underline 마커
-    content = content.replace(
+    content = replaceOutsideCode(
+      content,
       UNDERLINE_REGEX,
-      (_m, text: string) => `${compactMarker("underline")}${text}%%/underline%%`,
+      (_m, text) => `${compactMarker("underline")}${text}%%/underline%%`,
     );
 
     // <span class="notion-X[-bg]"> → compact 색상 마커 (-bg → _background)
-    content = content.replace(
-      COLOR_SPAN_REGEX,
-      (_m, base: string, bg: string | undefined, text: string) => {
-        const color = bg ? `${base}_background` : base;
-        return `${compactMarker(`color:${color}`)}${text}%%/color%%`;
-      },
-    );
+    content = replaceOutsideCode(content, COLOR_SPAN_REGEX, (_m, base, bg, text) => {
+      const color = bg ? `${base}_background` : base;
+      return `${compactMarker(`color:${color}`)}${text}%%/color%%`;
+    });
 
     // ==하이라이트== → 노랑 배경 (F24). Obsidian 하이라이트의 유일한 자연 대응이
     // Notion yellow 배경이다. 색상명은 pull 경로(Notion md export)가 쓰는
     // `yellow_bg` 로 맞춰 HighlightRestorer 와 왕복 대칭을 이룬다.
-    content = mapOutsideCodeFences(content, (segment) =>
-      segment.replace(
-        HIGHLIGHT_REGEX,
-        (_m, text: string) => `${compactMarker("color:yellow_bg")}${text}%%/color%%`,
-      ),
-    );
+    // <mark> 도 같다 — 그대로 보내면 Notion 이 태그를 글자로 적는다(F-06, 2026-10-04 실측).
+    const highlight = (_m: string, text: string) =>
+      `${compactMarker("color:yellow_bg")}${text}%%/color%%`;
+    content = replaceOutsideCode(content, HIGHLIGHT_REGEX, highlight);
+    content = replaceOutsideCode(content, MARK_REGEX, highlight);
 
     return { content, metadata: input.metadata };
   }

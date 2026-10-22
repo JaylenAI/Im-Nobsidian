@@ -30,6 +30,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { mockDatabaseMeta, settledObservation } from "../helpers/mock-orchestrator.js";
 
 const ROW_ID = "row-alive";
 const ROW_TITLE = "살아 있던 행";
@@ -54,6 +55,7 @@ function createMockVaultFs(): VaultFS {
     ensureFolder: vi.fn().mockResolvedValue(undefined),
     listMarkdownFiles: vi.fn().mockResolvedValue([]),
     listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
+    getFileStat: vi.fn().mockResolvedValue(null),
   };
 }
 
@@ -68,7 +70,8 @@ function createMockStateDb() {
     deleteWikilink: vi.fn(),
     updateHash: vi.fn(),
     updateStatus: vi.fn(),
-    setNotionLastEdited: vi.fn(),
+    setRemoteObservation: vi.fn(),
+    setNotionBodyFingerprint: vi.fn(),
     updatePath: vi.fn(),
     delete: vi.fn(),
     getMeta: vi.fn().mockReturnValue(null),
@@ -90,6 +93,7 @@ function createMockNotionClient() {
     getDatabaseViewsConfig: vi
       .fn()
       .mockResolvedValue({ databaseId: "db-123", lastSynced: "", views: [] }),
+    getDatabaseMeta: vi.fn(async (databaseId: string) => mockDatabaseMeta(databaseId)),
     queryAllDatabasePages: vi.fn().mockResolvedValue([
       {
         id: ROW_ID,
@@ -117,6 +121,7 @@ function createMockNotionClient() {
 
 function createMockImageHandler() {
   return {
+    restoreUploadedMedia: vi.fn().mockImplementation(async (md: string) => md),
     downloadAllImages: vi.fn().mockImplementation(async (md: string) => ({
       content: md,
       downloads: [],
@@ -142,7 +147,7 @@ function createConfig(): Config {
   };
 }
 
-/** 마지막 동기화 시점의 레코드 — 원격은 그 뒤로 한 번도 바뀌지 않았다. */
+/** 마지막 동기화 시점의 레코드 — 원격은 그 뒤로 한 번도 바뀌지 않았다(가라앉은 뒤에 봤다). */
 function syncedRecord() {
   return {
     id: 1,
@@ -150,7 +155,7 @@ function syncedRecord() {
     notionPageId: ROW_ID,
     notionParentId: "db-123",
     contentHash: computeHash("동기화 당시 본문"),
-    notionLastEdited: LAST_EDITED,
+    ...settledObservation(LAST_EDITED),
     localLastModified: LAST_EDITED,
     syncDirection: "both",
     fileType: "db-row",
@@ -234,5 +239,51 @@ describe("삭제된 DB 행 복원 (R13)", () => {
 
     expect(result.updated).toBe(0);
     expect(result.restored).toBe(1);
+  });
+
+  it("원격도 바뀐 행이라도 볼트에서 사라졌으면 복원으로 센다", async () => {
+    const changed = "2026-07-28T00:00:00.000Z";
+    notionClient.queryAllDatabasePages.mockResolvedValue([
+      {
+        id: ROW_ID,
+        last_edited_time: changed,
+        properties: { Name: { type: "title", title: [{ plain_text: ROW_TITLE }] } },
+      },
+    ]);
+    notionClient.getPage.mockResolvedValue({ id: ROW_ID, last_edited_time: changed });
+    vaultFs.exists = vi.fn().mockResolvedValue(false);
+    vaultFs.readFile = vi.fn().mockRejectedValue(new Error("ENOENT"));
+
+    const result = await syncer.pullDatabase(dbConfig);
+
+    expect(rowWrites(vaultFs)).toEqual([ROW_PATH]);
+    expect(result.restored).toBe(1);
+    expect(result.updated).toBe(0);
+  });
+
+  /**
+   * deleteSync 가 켜져 있으면 볼트에서 지운 것은 Notion 에서도 지우라는 뜻이다 — 되살리면 뒤이은
+   * push 가 지울 것을 잃는다. 페이지 경로(`detectMissingLocalFiles`)와 같은 규칙이다.
+   */
+  it("deleteSync 가 켜져 있으면 되살리지 않는다 — push 가 Notion 에서 지운다", async () => {
+    const config = createConfig();
+    syncer = new DatabaseSyncer(
+      { ...config, sync: { ...config.sync, deleteSync: true } },
+      stateDb as never,
+      notionClient as never,
+      vaultFs,
+      createDefaultPipeline({ wikilinkResolver: () => null }),
+      createMockImageHandler() as never,
+    );
+    vaultFs.exists = vi.fn().mockResolvedValue(false);
+    vaultFs.readFile = vi.fn().mockRejectedValue(new Error("ENOENT"));
+
+    const result = await syncer.pullDatabase(dbConfig);
+    const planned = await syncer.planDatabase(dbConfig);
+
+    expect(rowWrites(vaultFs)).toEqual([]);
+    expect(result).toMatchObject({ created: 0, updated: 0, restored: 0 });
+    expect(planned).toEqual([]);
+    expect(notionClient.getPageMarkdown).not.toHaveBeenCalled();
   });
 });

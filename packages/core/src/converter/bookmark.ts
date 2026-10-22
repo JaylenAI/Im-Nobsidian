@@ -1,0 +1,145 @@
+import { MARKER_BRAND_RE } from "../constants/markers.js";
+import type { BookmarkTarget } from "../types/convert.js";
+import { compactNotionId } from "../utils/id.js";
+import { mapOutsideCode } from "../utils/md-regions.js";
+
+/**
+ * F-09 — 북마크를 볼트에 그 주소로 보인다.
+ *
+ * Markdown API 는 북마크 블록을 주소 · 캡션 없이 `<unknown url="…/p/<페이지>#<블록>" alt="bookmark"/>`
+ * 로만 보낸다(실측 2026-10-04). 이 태그로만 만든 링크는 「🔖 Bookmark」 라는 이름으로 Notion 의 그
+ * 블록을 가리켜, 누르면 원래 사이트가 아니라 Notion 이 열렸다(실볼트 166개 · 54노트). 받을 때 블록을
+ * 읽어(`NotionClient.getBookmarks`) 보이는 링크에 북마크의 주소와 캡션을 넣는다.
+ *
+ * 왕복은 그대로 뒤따르는 보존 마커가 맡는다 — push 는 보이는 링크를 마커와 한 쌍으로 버리고 받은
+ * 태그를 돌려보내, Notion 이 원래 블록을 남긴다. 그래서 볼트에서 고친 주소는 Notion 에 가지 않는다.
+ */
+
+/** 블록 자리 태그 — 그룹 1 = url, 그룹 2 = 나머지 속성. */
+const UNKNOWN_URL_TAG_RE = /<unknown url="([^"]*)"([^>]*)\/>/g;
+const ALT_BOOKMARK_RE = /\balt="bookmark"/;
+/** 자리 태그 url 의 블록 ID — `#` 뒤다(하이픈 없는 32자리, 실측). */
+const BLOCK_ID_OF_URL_RE = /#([0-9a-fA-F-]{32,36})$/;
+
+/** 자리 태그 url 이 가리키는 블록 ID(하이픈 없이). 블록을 가리키지 않으면 undefined. */
+export function bookmarkBlockId(url: string): string | undefined {
+  const id = BLOCK_ID_OF_URL_RE.exec(url)?.[1];
+  return id === undefined ? undefined : compactNotionId(id);
+}
+
+/** 받은 본문의 북마크 블록 ID — 코드 안의 태그는 빼고. */
+export function bookmarkBlockIds(nfm: string): string[] {
+  const ids = new Set<string>();
+  mapOutsideCode(nfm, (segment) => {
+    for (const m of segment.matchAll(UNKNOWN_URL_TAG_RE)) {
+      const id = ALT_BOOKMARK_RE.test(m[2]!) ? bookmarkBlockId(m[1]!) : undefined;
+      if (id !== undefined) ids.add(id);
+    }
+    return segment;
+  });
+  return [...ids];
+}
+
+/** 보이는 링크의 이름 — 아이콘 뒤에 캡션, 캡션이 없으면 주소. 블록을 읽지 못했으면 정해 둔 이름. */
+export function bookmarkLabel(target?: BookmarkTarget): string {
+  if (target === undefined) return "🔖 Bookmark";
+  return `🔖 ${linkText(target.caption.trim() === "" ? target.url : target.caption)}`;
+}
+
+/**
+ * 링크 이름에 넣을 글 — 한 줄로 펴고, 링크와 뒤따르는 마커를 깨는 글자를 막는다. 대괄호는 링크를
+ * 일찍 닫고, 백틱은 코드로 대괄호를 삼키며, `%%` 는 Obsidian 주석을 열어 뒤따르는 마커까지 가린다.
+ */
+function linkText(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/%%+/g, "%")
+    .replace(/[\\[\]`]/g, "\\$&");
+}
+
+/** 볼트 링크 이름의 머리 — {@link bookmarkLabel} 이 붙인다. */
+const LABEL_HEAD = "🔖 ";
+
+/**
+ * 볼트 링크 한 쌍을 북마크로 되읽는다 — 마커로 Notion 의 블록을 가리킬 수 없는 블록 방식 push 전용.
+ * 블록을 읽지 못해 Notion 자리 주소를 가리키는 링크(`🔖 Bookmark`)면 원래 주소를 모른다 — null.
+ *
+ * @param label 링크 이름 — 대괄호 안, escape 그대로
+ * @param url 링크 주소 — `degradeLink` 가 괄호를 인코딩해 둔 것
+ * @param placeholderUrl 마커가 실은 자리 주소
+ */
+export function bookmarkOfVaultLink(
+  label: string,
+  url: string,
+  placeholderUrl: string,
+): BookmarkTarget | null {
+  if (url === placeholderUrl) return null;
+  const text = (label.startsWith(LABEL_HEAD) ? label.slice(LABEL_HEAD.length) : label).replace(
+    /\\([\\[\]`])/g,
+    "$1",
+  );
+  // degradeLink 가 링크 짝 경계 때문에 인코딩한 괄호를 푼다 — 그대로 보내면 Notion 의 북마크 주소가
+  // `a%28b%29` 로 바뀐다(실측 2026-10-12). 캡션 없는 북마크는 이름이 그 주소다.
+  const plainUrl = url.replace(/%28/g, "(").replace(/%29/g, ")");
+  return { url: plainUrl, caption: text === plainUrl ? "" : text };
+}
+
+/** 볼트의 북마크 링크 쌍 — 그룹 1 = 이름, 2 = 주소, 3 = 마커가 실은 자리 주소(인코딩). */
+const VAULT_BOOKMARK_PAIR_RE = new RegExp(
+  `\\[((?:\\\\.|[^\\\\\\]])*)\\]\\(([^)]*)\\)%%${MARKER_BRAND_RE}:unknown:id=([^&]+)&type=bookmark%%`,
+  "g",
+);
+
+/**
+ * 볼트 노트의 북마크 — 자리 주소(`<unknown url>` 에 실리는 글자) → 원래 주소 · 캡션. 블록 방식 push 는 Notion
+ * 의 블록을 남길 수 없어 이 주소로 북마크를 새로 만든다(`nfmToBlocks`). 원래 주소를 모르는 링크는 뺀다.
+ */
+export function vaultBookmarks(markdown: string): Map<string, BookmarkTarget> {
+  const bookmarks = new Map<string, BookmarkTarget>();
+  mapOutsideCode(markdown, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) {
+      const placeholder = decodeURIComponent(m[3]!);
+      const target = bookmarkOfVaultLink(m[1]!, m[2]!, placeholder);
+      if (target !== null) bookmarks.set(placeholder, target);
+    }
+    return segment;
+  });
+  return bookmarks;
+}
+
+/**
+ * 노트의 북마크 링크 글자 — 로컬 표기 유지(`local-form.ts`)가 보낼 꼴에 덧붙여 견준다. Markdown API push 는
+ * 링크를 버려 보낼 꼴이 같지만, 링크의 이름 · 주소는 Notion 의 북마크에서 온다. 견주지 않으면 받아 둔 옛
+ * 링크(Notion 블록을 가리키는 `🔖 Bookmark`)가 받을 때마다 로컬 표기로 남았다(B14).
+ */
+export function bookmarkLinks(note: string): string {
+  const links: string[] = [];
+  mapOutsideCode(note, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) links.push(`[${m[1]}](${m[2]})`);
+    return segment;
+  });
+  return links.join("\n");
+}
+
+/**
+ * 받은 글의 북마크 링크 가운데 블록을 읽지 못해 Notion 자리 주소를 가리키는 것을 로컬 노트의 같은 북마크
+ * 링크로 바꾼다 — 한 번 읽지 못했다고({@link bookmarkLabel}) 볼트의 링크가 옛 모양으로 돌아가지 않게.
+ * 코드 안은 건드리지 않는다.
+ */
+export function keepReadBookmarkLinks(pulled: string, local: string): string {
+  const read = new Map<string, string>();
+  mapOutsideCode(local, (segment) => {
+    for (const m of segment.matchAll(VAULT_BOOKMARK_PAIR_RE)) {
+      read.set(m[3]!, `[${m[1]}](${m[2]})`);
+    }
+    return segment;
+  });
+  if (read.size === 0) return pulled;
+  return mapOutsideCode(pulled, (segment) =>
+    segment.replace(VAULT_BOOKMARK_PAIR_RE, (pair, _label, url: string, placeholder: string) => {
+      const link = url === decodeURIComponent(placeholder) ? read.get(placeholder) : undefined;
+      return link === undefined ? pair : link + pair.slice(pair.indexOf(")%%") + 1);
+    }),
+  );
+}

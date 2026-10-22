@@ -6,12 +6,14 @@ import {
   SyncOrchestrator,
   NodeVaultFS,
   WatchSyncService,
+  DEFAULT_WATCH_DEBOUNCE_MS,
 } from "@im-nobsidian/core";
-import type { SyncResult } from "@im-nobsidian/core";
+import type { SyncResult, WatchSyncScope } from "@im-nobsidian/core";
 
 function formatResult(result: SyncResult): string {
   const pull = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
-  const push = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}`;
+  const moved = result.push.moved > 0 ? ` →${result.push.moved}` : "";
+  const push = `Push: +${result.push.created} ~${result.push.updated} -${result.push.deleted}${moved}`;
   const parts = [pull, push];
 
   if (result.conflicts.length > 0) {
@@ -25,11 +27,30 @@ function timestamp(): string {
   return new Date().toLocaleTimeString("ko-KR", { hour12: false });
 }
 
+/** 로그의 sync 이름 — 주기 sync 는 볼트 전체를 본다. */
+function syncLabel(scope: WatchSyncScope): string {
+  return scope === "full" ? "주기적 동기화" : "동기화";
+}
+
 export const watchCommand = new Command("watch")
   .description("파일 변경 감지 + 자동 동기화")
-  .option("-d, --debounce <ms>", "디바운스 대기 시간(ms)", "2000")
+  .option("-d, --debounce <ms>", "디바운스 대기 시간(ms)", String(DEFAULT_WATCH_DEBOUNCE_MS))
   .option("-i, --interval <seconds>", "풀 동기화 주기(초, 0이면 비활성)", "0")
   .action(async (options: { debounce: string; interval: string }) => {
+    // 숫자가 아니면 디바운스가 0 이 되거나 주기 동기화가 말없이 꺼진다 — 시작하기 전에 거절한다.
+    const debounceMs = Number(options.debounce);
+    const intervalSec = Number(options.interval);
+    if (!Number.isInteger(debounceMs) || debounceMs < 0) {
+      console.error(`--debounce 는 0 이상의 정수(ms)여야 합니다: ${options.debounce}`);
+      process.exitCode = 1;
+      return;
+    }
+    if (!Number.isInteger(intervalSec) || intervalSec < 0) {
+      console.error(`--interval 은 0 이상의 정수(초)여야 합니다: ${options.interval}`);
+      process.exitCode = 1;
+      return;
+    }
+
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
@@ -39,29 +60,38 @@ export const watchCommand = new Command("watch")
     const vaultFs = new NodeVaultFS(cwd, config.paths);
     const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
-    const debounceMs = parseInt(options.debounce, 10);
-    const intervalSec = parseInt(options.interval, 10);
-
     const service = new WatchSyncService(cwd, orchestrator, {
       debounceMs,
       onFileChange: (event, path) => {
         console.log(`[${timestamp()}] ${event}: ${path}`);
       },
-      onSyncStart: () => {
-        console.log(`[${timestamp()}] 동기화 시작...`);
+      onSyncStart: (scope) => {
+        console.log(`[${timestamp()}] ${syncLabel(scope)} 시작...`);
       },
-      onSyncComplete: (result) => {
-        console.log(`[${timestamp()}] 동기화 완료 — ${formatResult(result)}`);
+      onSyncComplete: (result, scope) => {
+        console.log(`[${timestamp()}] ${syncLabel(scope)} 완료 — ${formatResult(result)}`);
       },
-      onSyncError: (error) => {
-        console.error(`[${timestamp()}] 동기화 실패: ${error.message}`);
+      onSyncCancelled: (result, scope) => {
+        console.log(
+          `[${timestamp()}] ${syncLabel(scope)} 취소 — 멈추기 전까지 ${formatResult(result)}`,
+        );
+      },
+      onSyncError: (error, scope) => {
+        console.error(`[${timestamp()}] ${syncLabel(scope)} 실패: ${error.message}`);
       },
     });
 
     let pullTimer: ReturnType<typeof setInterval> | null = null;
+    let shuttingDown = false;
 
     const shutdown = async (): Promise<void> => {
-      console.log(`\n[${timestamp()}] 감시 종료 중...`);
+      // 도는 sync 를 기다리는 중에 한 번 더 누르면 기다리지 않고 끝낸다.
+      if (shuttingDown) {
+        console.log(`[${timestamp()}] 강제 종료`);
+        return process.exit(1);
+      }
+      shuttingDown = true;
+      console.log(`\n[${timestamp()}] 감시 종료 중... (도는 동기화를 멈추고 기다립니다)`);
       if (pullTimer) clearInterval(pullTimer);
       await service.stop();
       stateDb.close();
@@ -77,17 +107,8 @@ export const watchCommand = new Command("watch")
 
     if (intervalSec > 0) {
       console.log(`[${timestamp()}] 풀 동기화 주기: ${intervalSec}초`);
-      pullTimer = setInterval(async () => {
-        if (service.isSyncing()) return;
-        try {
-          console.log(`[${timestamp()}] 주기적 동기화 시작...`);
-          const result = await orchestrator.sync();
-          console.log(`[${timestamp()}] 주기적 동기화 완료 — ${formatResult(result)}`);
-        } catch (error) {
-          const msg = error instanceof Error ? error.message : String(error);
-          console.error(`[${timestamp()}] 주기적 동기화 실패: ${msg}`);
-        }
-      }, intervalSec * 1000);
+      // 파일 변경 sync 와 같은 줄에 세운다 — 도는 sync 가 있으면 끝난 뒤 한 번 돈다(S-09).
+      pullTimer = setInterval(() => service.requestFullSync(), intervalSec * 1000);
     }
 
     await new Promise(() => {});

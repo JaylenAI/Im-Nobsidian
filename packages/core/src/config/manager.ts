@@ -34,8 +34,14 @@ export class ConfigManager {
       if (error instanceof Error && error.name === "ZodError") {
         throw new Error(`설정 파일 검증 실패: ${error.message}`);
       }
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        throw new Error(
+          `설정 파일을 찾을 수 없습니다: ${this.configPath}\n'im-nobsidian init'을 먼저 실행하세요.`,
+        );
+      }
       throw new Error(
-        `설정 파일을 찾을 수 없습니다: ${this.configPath}\n'im-nobsidian init'을 먼저 실행하세요.`,
+        `설정 파일을 읽지 못했습니다: ${this.configPath} — ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error },
       );
     }
   }
@@ -78,7 +84,9 @@ export class ConfigManager {
       if (!content.includes(entry)) {
         await writeFile(gitignorePath, `${content.trimEnd()}\n${entry}\n`, "utf-8");
       }
-    } catch {
+    } catch (error) {
+      // 없을 때만 새로 만든다. 읽지 못한 것(권한 등)을 「없음」 으로 보면 사용자의 .gitignore 를 통째로 덮는다.
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       await writeFile(gitignorePath, `${entry}\n`, "utf-8");
     }
   }

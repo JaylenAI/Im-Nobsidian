@@ -1,0 +1,10 @@
+{
+  "id": "im-notion-sync",
+  "name": "Im-Notion Sync",
+  "version": "0.4.0",
+  "minAppVersion": "1.12.4",
+  "description": "Sync notes, databases, and attachments between your vault and Notion in both directions.",
+  "author": "hanseungheon",
+  "authorUrl": "https://github.com/JaylenAI",
+  "isDesktopOnly": true
+}

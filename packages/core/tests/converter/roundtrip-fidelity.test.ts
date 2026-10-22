@@ -11,6 +11,8 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
+import { scanCodeFences } from "../../src/utils/md-regions.js";
 import { roundtrip } from "./roundtrip-fidelity.js";
 
 const FIXTURES_DIR = join(import.meta.dirname, "../fixtures/obsidian");
@@ -40,6 +42,26 @@ describe("I1 라운드트립 deep-equal 충실도 (fixtures/obsidian 전체)", (
     }
 
     expect(r.outputBody, `${fixture}: body delta != 0`).toBe(r.inputBody);
+  });
+});
+
+/*
+ * S-26 — 왕복이 같아도 push 가 코드를 바꿔 보냈다가 pull 이 되살렸을 수 있다. 코드 줄은 Notion 에
+ * 글자 그대로 가야 한다. 예전에는 콜아웃 · 인용 · 목록 표시 줄의 펜스를 코드로 보지 않아, 코드 속
+ * 주석을 지워 보내고 pull 이 그 주석을 `>` 없이 되살려 콜아웃을 끊었다.
+ */
+describe("콜아웃 · 인용 · 목록 안 코드는 push 가 글자 그대로 보낸다 (S-26)", () => {
+  it("callout-code-note.md 의 코드 줄이 push 출력에 그대로 있고 보존 마커가 없다", () => {
+    const input = readFileSync(join(FIXTURES_DIR, "callout-code-note.md"), "utf-8");
+    const push = createDefaultPipeline().convertToNotion(input, {
+      direction: "push",
+      path: "markdown-api",
+      filePath: "callout-code-note.md",
+    });
+    const codes = (md: string) => scanCodeFences(md).map((fence) => fence.code);
+    expect(codes(input)).toHaveLength(3);
+    expect(codes(push.content)).toEqual(expect.arrayContaining(codes(input)));
+    expect(push.preserveMarkers).toEqual([]);
   });
 });
 

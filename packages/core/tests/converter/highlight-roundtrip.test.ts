@@ -43,6 +43,32 @@ describe("== 하이라이트 push 승격 (F24)", () => {
   });
 });
 
+describe("<mark> push 승격 (F-06)", () => {
+  // 그대로 보내면 Notion 이 태그를 글자로 적는다 — 받으면 `\<mark\>` 가 됐다(2026-10-04 실측).
+  it("<mark> 를 == 와 같은 yellow_bg 색상 마커로", () => {
+    expect(push("이건 <mark>중요한</mark> 부분")).toBe(
+      "이건 %%im-nobsidian:color:yellow_bg%%중요한%%/color%% 부분",
+    );
+  });
+
+  it("Highlightr 플러그인의 <mark style> 도", () => {
+    expect(push('<mark style="background: #FFB86CA6;">강조</mark>')).toBe(
+      "%%im-nobsidian:color:yellow_bg%%강조%%/color%%",
+    );
+  });
+
+  it("코드 속 · 여러 줄 <mark> 와 이름이 비슷한 태그는 그대로", () => {
+    for (const content of [
+      "`<mark>x</mark>`",
+      "```html\n<mark>x</mark>\n```",
+      "<mark>줄1\n줄2</mark>",
+      "<marker>x</marker>",
+    ]) {
+      expect(push(content)).toBe(content);
+    }
+  });
+});
+
 describe("HighlightRestorer (F24 pull)", () => {
   it("compact yellow_bg 마커를 ==텍스트== 로 복원", () => {
     expect(pull("이건 %%im-nobsidian:color:yellow_bg%%중요한%%/color%% 부분")).toBe(

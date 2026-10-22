@@ -43,7 +43,7 @@ function blockText(b: StoredBlock): string {
 
 /**
  * 페이지별 children 을 실제로 보존·변형하는 NotionClient 목.
- * createPage→빈 children 등록, appendChildren→결정적 id 부여 후 추가, deleteBlock→id 제거.
+ * createPage→빈 children 등록, appendBlockTree→결정적 id 부여 후 추가, deleteBlock→id 제거.
  */
 function makeStatefulNotion() {
   const base = createMockNotionClient();
@@ -56,10 +56,9 @@ function makeStatefulNotion() {
     pages.set(id, []);
     return { id, last_edited_time: "2026-05-30T00:00:00.000Z" };
   }) as never;
-  base.appendChildren = vi.fn(async (pageId: string, blocks: StoredBlock[]) => {
+  base.appendBlockTree = vi.fn(async (pageId: string, blocks: StoredBlock[]) => {
     const arr = pages.get(pageId) ?? pages.set(pageId, []).get(pageId)!;
     for (const b of blocks) arr.push({ ...b, id: `blk-${++blockSeq}` });
-    return {};
   }) as never;
   base.fetchAllChildren = vi.fn(async (pageId: string) =>
     (pages.get(pageId) ?? []).map((b) => ({ ...b })),
@@ -76,6 +75,13 @@ function makeStatefulNotion() {
   // 갱신 말미의 권위 last_edited 갱신(title 속성 유무 어느 분기든 안전).
   base.updatePageProperties = vi.fn(async () => ({
     last_edited_time: "2026-05-30T00:00:00.000Z",
+  })) as never;
+  // 만든 페이지의 지금 모습 — 갱신 전에 원격이 지난번 그대로인지 본다(N-05).
+  base.getPage = vi.fn(async (id: string) => ({
+    id,
+    last_edited_time: "2026-05-30T00:00:00.000Z",
+    parent: { type: "page_id", page_id: "root-page-id" },
+    properties: { title: { type: "title", title: [{ plain_text: "doc" }] } },
   })) as never;
 
   return { client: base, pages };
@@ -123,7 +129,7 @@ describe("block-API 폴백 갱신 append-then-delete 수렴 (I12, rank9)", () =>
   }
 
   it("같은 갱신을 두 번 실행해도 페이지는 정확히 한 벌로 수렴(누적·유실 0)", async () => {
-    // 1) 생성: V1 본문. block-API 경로(createPage+appendChildren).
+    // 1) 생성: V1 본문. block-API 경로(createPage+appendBlockTree).
     const push1 = await orchestrator.push();
     expect(push1.created).toBe(1);
     expect(push1.failed).toEqual([]);
@@ -152,14 +158,14 @@ describe("block-API 폴백 갱신 append-then-delete 수렴 (I12, rank9)", () =>
     db.updateHash(rec.id, computeHash(V1), Buffer.from(V1, "utf-8"));
     stat = { path: FILE, mtime: "2026-05-30T02:00:00.000Z", size: byteLen(V2) };
 
-    const appendsBefore = (notion.client.appendChildren as ReturnType<typeof vi.fn>).mock.calls
+    const appendsBefore = (notion.client.appendBlockTree as ReturnType<typeof vi.fn>).mock.calls
       .length;
     const push3 = await orchestrator.push();
     expect(push3.updated, "재감지로 같은 갱신 1회 더 실행").toBe(1);
     expect(push3.failed).toEqual([]);
 
     // append 가 실제로 한 번 더 일어났다(no-op 으로 빠지지 않음 — 수렴을 진짜 시험).
-    expect((notion.client.appendChildren as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
+    expect((notion.client.appendBlockTree as ReturnType<typeof vi.fn>).mock.calls.length).toBe(
       appendsBefore + 1,
     );
 

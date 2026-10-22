@@ -48,6 +48,13 @@ describe("CommentStripper (F26)", () => {
     expect(result.content).toBe(content);
   });
 
+  it("코드 속 ```bash 줄 뒤의 %% 도 코드다 — 마크다운 예제 코드(S-25)", () => {
+    const content = "````markdown\n예시:\n```bash\n%%코드 속 주석%%\n```\n끝\n````";
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
   it("pull 방향에서는 무동작", () => {
     const content = "%%주석%%";
     const result = run(content, "pull");
@@ -95,6 +102,60 @@ describe("CommentStripper (F26)", () => {
     const result = run(content);
     expect(result.content).toBe(content);
     expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  // S-26 — 콜아웃 속 코드의 주석을 지우고, pull 이 `>` 없이 되살려 콜아웃을 끊었다.
+  it("콜아웃 · 인용 · 목록 안 코드의 주석도 건드리지 않음", () => {
+    const content = [
+      "> [!toggle]- 참고",
+      "> ```html",
+      "> <!-- 코드 예시 주석 -->",
+      "> ```",
+      "",
+      "> > ```",
+      "> > %%코드 속 퍼센트%%",
+      "> > ```",
+      "",
+      "- ```html",
+      "  <!-- 목록 속 코드 -->",
+      "  ```",
+    ].join("\n");
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  it("콜아웃 안 코드가 끝난 뒤의 주석은 제거한다", () => {
+    const result = run("> [!note] 제목\n> ```\n> 코드\n> ```\n\n<!-- 비밀 메모 -->");
+    expect(result.content).not.toContain("비밀 메모");
+    expect(result.content).toContain("> 코드");
+    expect((result.metadata.preserveMarkers ?? [])[0]!.params.text).toBe(" 비밀 메모 ");
+  });
+
+  // S-29 — 주석 글만 지우면 `>` · 들여쓰기만 남은 줄이 Notion 에서 빈 문단이 되어 콜아웃 문단을 갈랐다.
+  it("콜아웃 · 목록 속 주석 줄은 줄째 지운다 — `>` · 들여쓰기만 남은 줄이 없다", () => {
+    const result = run(
+      "> [!note] 제목\n> 본문.\n> %%메모%%\n> 끝.\n\n- 항목\n  %%목록 메모%%\n- 다음",
+    );
+    expect(result.content).toBe("> [!note] 제목\n> 본문.\n> 끝.\n\n- 항목\n- 다음");
+    expect((result.metadata.preserveMarkers ?? []).map((m) => m.params.text)).toEqual([
+      "메모",
+      "목록 메모",
+    ]);
+  });
+
+  // S-29 — 실볼트 Blog.md 의 주석 표기 설명 3곳이 Notion 에서 사라졌다.
+  it("인라인 코드 속 주석 표기는 글자다 — 지우지 않는다", () => {
+    const content = "주석은 `<!-- 이렇게 -->` · `%%이렇게%%` 쓴다.";
+    const result = run(content);
+    expect(result.content).toBe(content);
+    expect(result.metadata.preserveMarkers ?? []).toHaveLength(0);
+  });
+
+  it("줄 속 주석은 옆 공백 하나와 함께 지운다 — 마커의 앵커는 지운 글에서 잡는다", () => {
+    const result = run("앞 문단 %%메모%% 이어서.");
+    expect(result.content).toBe("앞 문단 이어서.");
+    expect((result.metadata.preserveMarkers ?? [])[0]!.params.__anchor).toBe("앞 문단 ");
   });
 
   it("여러 줄 HTML 주석도 제거·보존", () => {

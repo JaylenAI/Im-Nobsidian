@@ -1,5 +1,4 @@
 export { ConversionPipeline } from "./pipeline.js";
-export { BlockConverter } from "./block-converter.js";
 
 // Pre-processors (Push: MD → Notion)
 export { FrontmatterExtractor } from "./pre-processors/frontmatter.js";
@@ -10,6 +9,7 @@ export { MathNormalizer } from "./pre-processors/math.js";
 export { EmbedResolver } from "./pre-processors/embed.js";
 export { PreserveMarkerCollector } from "./pre-processors/preserve-marker.js";
 export { UnsupportedBlockStripper } from "./pre-processors/unsupported-block-stripper.js";
+export { BlankLineCollapser } from "./pre-processors/blank-line-collapser.js";
 export { PropertiesTableInjector } from "./pre-processors/properties-table.js";
 export { InlineAnnotationPreserver } from "./pre-processors/html-annotation.js";
 

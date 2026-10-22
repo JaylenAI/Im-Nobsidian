@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { Command } from "commander";
 
-const mockPull = vi.fn().mockResolvedValue({
+const BASE_RESULT = {
   created: 3,
   updated: 1,
   deleted: 0,
@@ -12,14 +12,15 @@ const mockPull = vi.fn().mockResolvedValue({
   imageCount: 0,
   fileCount: 0,
   linkCount: 0,
-});
+};
+const mockPull = vi.fn().mockResolvedValue(BASE_RESULT);
 
 vi.mock("@im-nobsidian/core", () => ({
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
     load: vi.fn().mockResolvedValue({
       notion: { token: "ntn_test" },
-      paths: {},
+      paths: { attachments: "media/첨부" },
       advanced: { concurrency: 3, timeoutMs: 30000 },
     }),
   })),
@@ -73,6 +74,38 @@ describe("pull command", () => {
     spy.mockRestore();
   });
 
+  it("--rerender 옵션 전달 (B14)", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull("--rerender");
+    expect(mockPull).toHaveBeenLastCalledWith(expect.objectContaining({ rerender: true }));
+    spy.mockRestore();
+  });
+
+  it("받아 봤지만 바뀌지 않은 노트는 진행 줄을 찍지 않는다 (B14)", async () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    mockPull.mockImplementationOnce(async (options) => {
+      options.onProgress(1, 2, { path: "그대로.md", operation: "update", unchanged: true });
+      options.onProgress(2, 2, { path: "다시.md", operation: "update" });
+      return BASE_RESULT;
+    });
+    await runPull("--rerender");
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    expect(lines.some((line) => line.includes("다시.md"))).toBe(true);
+    expect(lines.some((line) => line.includes("그대로.md"))).toBe(false);
+    spy.mockRestore();
+  });
+
+  it("--rerender 는 --dry-run 과 함께 쓸 수 없다", async () => {
+    mockPull.mockClear();
+    const program = new Command();
+    program.exitOverride();
+    program.addCommand(pullCommand.exitOverride().configureOutput({ writeErr: () => {} }));
+    await expect(
+      program.parseAsync(["node", "cli", "pull", "--rerender", "--dry-run"]),
+    ).rejects.toThrow(/cannot be used with option '--dry-run'/);
+    expect(mockPull).not.toHaveBeenCalled();
+  });
+
   it("dry-run 옵션 전달", async () => {
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull("--dry-run");
@@ -119,6 +152,87 @@ describe("pull command", () => {
     spy.mockRestore();
   });
 
+  it("볼트 최상위의 실패는 빈 경로 대신 / 로 보인다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [{ path: "", operation: "update", error: "DB 자동 발견이 멈춤" }],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    const lines = spy.mock.calls.map((call) => String(call[0]));
+    expect(lines.some((line) => / \/: .*DB 자동 발견이 멈춤/.test(line))).toBe(true);
+    spy.mockRestore();
+    process.exitCode = undefined;
+  });
+
+  it("바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 적는다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 1,
+      deleted: 0,
+      conflicts: [],
+      writtenPaths: ["a.md"],
+      failed: [],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+      remoteScan: {
+        kind: "incremental",
+        lastFullAt: "2026-09-28T01:05:00.000Z",
+        nextFullAt: "2026-09-28T02:05:00.000Z",
+        deletionsDeferred: true,
+        skippedDatabases: 4,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith("  Changes-only scan · 4 unchanged databases skipped");
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringMatching(
+        /^ {2}Deletions in Notion apply at the next full scan \(.+\) — or run nobsi pull --force$/,
+      ),
+    );
+    spy.mockRestore();
+  });
+
+  it("전체 대조는 이유만 한 줄 — 원격 삭제 안내는 없다", async () => {
+    mockPull.mockResolvedValueOnce({
+      created: 0,
+      updated: 0,
+      deleted: 1,
+      conflicts: [],
+      writtenPaths: [],
+      failed: [],
+      duration: 100,
+      imageCount: 0,
+      fileCount: 0,
+      linkCount: 0,
+      remoteScan: {
+        kind: "full",
+        reason: "due",
+        lastFullAt: "2026-09-28T02:05:00.000Z",
+        nextFullAt: null,
+        deletionsDeferred: false,
+        skippedDatabases: 0,
+      },
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+    expect(lines).toContain("  Full scan (scheduled)");
+    expect(lines.join("\n")).not.toContain("Deletions in Notion");
+  });
+
   it("이미지/파일/링크 카운트 출력", async () => {
     mockPull.mockResolvedValueOnce({
       created: 1,
@@ -134,8 +248,9 @@ describe("pull command", () => {
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
     await runPull();
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files"));
+    // 첨부 폴더는 설정의 것을 보인다 — 예전에는 늘 attachments/ 라고 적었다
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images → media/첨부/"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files → media/첨부/"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
     spy.mockRestore();
   });

@@ -11,10 +11,13 @@ import { InlineAnnotationPreserver } from "./pre-processors/html-annotation.js";
 import { CommentStripper } from "./pre-processors/comment-stripper.js";
 import { FootnoteGuard } from "./pre-processors/footnote-guard.js";
 import { TableAlignmentGuard } from "./pre-processors/table-alignment.js";
+import { CodeLanguageGuard } from "./pre-processors/code-language-guard.js";
+import { BlankLineCollapser } from "./pre-processors/blank-line-collapser.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { EscapeNormalizer } from "./post-processors/escape-normalizer.js";
 import { HighlightRestorer } from "./post-processors/highlight-restorer.js";
 import { TableAlignmentRestorer } from "./post-processors/table-alignment-restorer.js";
+import { CodeLanguageRestorer } from "./post-processors/code-language-restorer.js";
 import { PreserveMarkerInjector } from "./post-processors/preserve-marker-injector.js";
 import { CalloutRestorer } from "./post-processors/callout-restorer.js";
 import { ColorAnnotator } from "./post-processors/color-annotator.js";
@@ -22,6 +25,9 @@ import { FrontmatterGenerator } from "./post-processors/frontmatter-generator.js
 import { LocalImageRestorer } from "./post-processors/local-image-restorer.js";
 import { PropertiesTableRestorer } from "./post-processors/properties-table-restorer.js";
 import { BlockSpacer } from "./post-processors/block-spacer.js";
+import { CommentRestorer } from "./post-processors/comment-restorer.js";
+import { LocalFormRestorer } from "./post-processors/local-form-restorer.js";
+import { sentForm } from "./sent-form.js";
 
 export interface PipelineOptions {
   readonly wikilinkResolver?: WikilinkResolverFn;
@@ -39,8 +45,10 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPreProcessor(new WikilinkResolver(options?.wikilinkResolver));
   pipeline.registerPreProcessor(new CalloutTransformer());
   pipeline.registerPreProcessor(new TableAlignmentGuard());
+  pipeline.registerPreProcessor(new CodeLanguageGuard());
   pipeline.registerPreProcessor(new MathNormalizer());
   pipeline.registerPreProcessor(new EmbedResolver());
+  pipeline.registerPreProcessor(new BlankLineCollapser());
   pipeline.registerPreProcessor(new PreserveMarkerCollector());
 
   pipeline.registerPostProcessor(new EscapeNormalizer());
@@ -48,12 +56,17 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPostProcessor(new LocalImageRestorer());
   pipeline.registerPostProcessor(new HighlightRestorer());
   pipeline.registerPostProcessor(new TableAlignmentRestorer());
+  pipeline.registerPostProcessor(new CodeLanguageRestorer());
   pipeline.registerPostProcessor(new PreserveMarkerInjector());
   pipeline.registerPostProcessor(new MentionToWikilink());
   pipeline.registerPostProcessor(new CalloutRestorer());
   pipeline.registerPostProcessor(new ColorAnnotator());
   pipeline.registerPostProcessor(new FrontmatterGenerator());
   pipeline.registerPostProcessor(new BlockSpacer());
+  pipeline.registerPostProcessor(new CommentRestorer());
+  pipeline.registerPostProcessor(
+    new LocalFormRestorer((note, context) => sentForm(pipeline, note, context)),
+  );
 
   return pipeline;
 }

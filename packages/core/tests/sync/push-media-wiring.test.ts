@@ -42,6 +42,13 @@ async function pushNoteWithEmbed(children: unknown[]) {
   return mockNotionClient;
 }
 
+/** 미디어 블록을 붙인 호출 — 제자리 교체(`appendChildBlocks`)와 꼬리 폴백(`appendChildren`) 둘 다. */
+function mediaAppendCalls(client: ReturnType<typeof createMockNotionClient>): unknown[][] {
+  return [client.appendChildren, client.appendChildBlocks]
+    .flatMap((fn) => (fn as ReturnType<typeof vi.fn>).mock.calls)
+    .filter((c) => Array.isArray(c[1]) && (c[1][0] as { type?: string })?.type === "image");
+}
+
 describe("SyncOrchestrator — 임베드 미디어 push 배선(R1)", () => {
   it("자리표시자가 있으면 제자리 교체만 하고 꼬리에 또 붙이지 않는다", async () => {
     const client = await pushNoteWithEmbed([
@@ -56,9 +63,7 @@ describe("SyncOrchestrator — 임베드 미디어 push 배선(R1)", () => {
     // 업로드 1회 = 중복 없음. R1 이전이라면 제자리 + 꼬리로 2회가 된다.
     expect(client.uploadFile).toHaveBeenCalledTimes(1);
 
-    const mediaAppends = (client.appendChildren as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c) => Array.isArray(c[1]) && (c[1][0] as { type?: string })?.type === "image",
-    );
+    const mediaAppends = mediaAppendCalls(client);
     expect(mediaAppends).toHaveLength(1);
     // 제자리 삽입이므로 반드시 after 옵션이 붙는다(= 본문 흐름 유지).
     expect(mediaAppends[0]![2]).toEqual({ after: "blk-ph" });
@@ -69,9 +74,7 @@ describe("SyncOrchestrator — 임베드 미디어 push 배선(R1)", () => {
     const client = await pushNoteWithEmbed([]);
 
     expect(client.uploadFile).toHaveBeenCalledTimes(1);
-    const mediaAppends = (client.appendChildren as ReturnType<typeof vi.fn>).mock.calls.filter(
-      (c) => Array.isArray(c[1]) && (c[1][0] as { type?: string })?.type === "image",
-    );
+    const mediaAppends = mediaAppendCalls(client);
     expect(mediaAppends).toHaveLength(1);
     // 폴백은 페이지 끝에 붙이므로 위치 옵션이 없다.
     expect(mediaAppends[0]![2]).toBeUndefined();

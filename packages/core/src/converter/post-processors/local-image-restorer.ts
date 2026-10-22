@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_PAYLOAD_CHAR, MEDIA_PLACEHOLDER_HEAD } from "../../constants/markers.js";
+import { mapOutsideCode } from "../../utils/md-regions.js";
 import { decodeMarkerTarget } from "../marker-url.js";
 
 /**
@@ -11,6 +12,9 @@ import { decodeMarkerTarget } from "../marker-url.js";
  * 경로는 push 가 퍼센트 인코딩해 실으므로 여기서 되돌린다. 인코딩 이전에 올라간
  * 구버전 마커는 원문 `%` 를 품고 있어 {@link MARKER_PAYLOAD_CHAR} 로 받고,
  * `decodeMarkerTarget` 이 잘못된 이스케이프에 원문을 돌려주므로 그대로 살아난다.
+ *
+ * 코드 안은 건너뛴다(S-18) — push 는 자리표시자를 코드 밖에만 심는다. 코드 안의 같은 모양 글은
+ * 형식을 설명하는 사용자의 글인데, 예전에는 그것까지 임베드로 바꿔 받은 노트의 코드가 바뀌었다.
  */
 const LOCAL_IMAGE_MARKER_REGEX = new RegExp(
   `${MEDIA_PLACEHOLDER_HEAD}(${MARKER_PAYLOAD_CHAR}+?)\\s*%%`,
@@ -26,9 +30,12 @@ export class LocalImageRestorer implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
-    const content = input.content.replace(LOCAL_IMAGE_MARKER_REGEX, (_match, target: string) => {
-      return `![[${decodeMarkerTarget(target)}]]`;
-    });
+    const content = mapOutsideCode(input.content, (segment) =>
+      segment.replace(
+        LOCAL_IMAGE_MARKER_REGEX,
+        (_match, target: string) => `![[${decodeMarkerTarget(target)}]]`,
+      ),
+    );
 
     return { content, metadata: input.metadata };
   }

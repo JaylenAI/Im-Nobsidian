@@ -1,0 +1,574 @@
+{
+  "pageId": "3f713b18-d382-812b-bef4-f4d26ab61078",
+  "blocks": [
+    {
+      "id": "41e69420-5332-4ed6-b5fd-4285290d548c",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "목록 안 코드블록이다. Notion 은 목록 자식 코드의 경계 펜스만 탭으로 들여쓰고 코드 줄은 열 0 에 둔다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "목록 안 코드블록이다. Notion 은 목록 자식 코드의 경계 펜스만 탭으로 들여쓰고 코드 줄은 열 0 에 둔다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "6942a2b7-9e7e-49a3-8d82-a8d49b134bb7",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "설치 순서",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "설치 순서",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "244aba65-260f-4c24-8ba6-21f43cfa505d",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "npm install --save-dev vitest\nnpx vitest run",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "npm install --save-dev vitest\nnpx vitest run",
+                "href": null
+              }
+            ],
+            "language": "bash"
+          }
+        }
+      ]
+    },
+    {
+      "id": "09e644e0-4526-4955-950d-d91f2769ed28",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "설정 파일",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "설정 파일",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "2131179c-1491-4bdc-947e-938420df9614",
+          "has_children": true,
+          "type": "bulleted_list_item",
+          "bulleted_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "중첩 항목의 코드",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "중첩 항목의 코드",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "0ec00615-609a-41aa-8c6b-f14308d42114",
+              "has_children": false,
+              "type": "code",
+              "code": {
+                "caption": [],
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "{\n  \"compilerOptions\": { \"strict\": true }\n}",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "{\n  \"compilerOptions\": { \"strict\": true }\n}",
+                    "href": null
+                  }
+                ],
+                "language": "json"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "b0cb8b57-2953-48bd-bd35-93eab109aa8d",
+      "has_children": true,
+      "type": "numbered_list_item",
+      "numbered_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "번호 항목의 코드",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "번호 항목의 코드",
+            "href": null
+          }
+        ],
+        "color": "default",
+        "list_format": "numbers"
+      },
+      "children": [
+        {
+          "id": "abaab5cf-6b89-4efc-b3b1-b516d0145771",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "def greet(name):\n    return f\"hello {name}\"",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "def greet(name):\n    return f\"hello {name}\"",
+                "href": null
+              }
+            ],
+            "language": "python"
+          }
+        }
+      ]
+    },
+    {
+      "id": "8a8709ef-74bd-4b59-b1b5-6d5e9dffdee2",
+      "has_children": false,
+      "type": "numbered_list_item",
+      "numbered_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "둘째 번호",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "둘째 번호",
+            "href": null
+          }
+        ],
+        "color": "default",
+        "list_format": "numbers"
+      }
+    },
+    {
+      "id": "2c860230-aa39-4645-a384-0f9ee67b3449",
+      "has_children": true,
+      "type": "to_do",
+      "to_do": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "할 일 항목의 코드",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "할 일 항목의 코드",
+            "href": null
+          }
+        ],
+        "checked": false,
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "b442f4a4-76ed-41ed-b84a-84e89446baaf",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "echo \"todo\"",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "echo \"todo\"",
+                "href": null
+              }
+            ],
+            "language": "bash"
+          }
+        }
+      ]
+    },
+    {
+      "id": "0fd83f0f-fbc2-4d59-9ec9-af9cb810bc61",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "자식 문단과 코드가 섞인 항목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "자식 문단과 코드가 섞인 항목",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "a954f42f-ecc9-4344-a7d5-eaa919fd2d9b",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "코드 앞에 오는 자식 문단이다.",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "코드 앞에 오는 자식 문단이다.",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "97b3aca3-faeb-49fc-bae9-cf10a9c2400d",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "func main() {\n\tfmt.Println(\"tab indented\")\n}",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "func main() {\n\tfmt.Println(\"tab indented\")\n}",
+                "href": null
+              }
+            ],
+            "language": "go"
+          }
+        },
+        {
+          "id": "072447e0-e3b9-43b5-945f-b9ef2c5b85c3",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "코드 뒤에 오는 자식 문단이다.",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "코드 뒤에 오는 자식 문단이다.",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "dc339e87-ebb6-45f1-9fc0-8d1100508549",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "코드 속에 펜스 모양 줄이 있는 항목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "코드 속에 펜스 모양 줄이 있는 항목",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "9398bb0a-665c-4297-b881-e5e1bdb0ca0b",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "예시 문서:",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "예시 문서:",
+                "href": null
+              }
+            ],
+            "language": "markdown"
+          }
+        }
+      ]
+    },
+    {
+      "id": "fafa7b7a-e486-4d0c-95b4-cdec6eb59bf0",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "echo nested",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "echo nested",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "49ea5537-fc91-4fcf-b121-f5b5fffc70ec",
+      "has_children": false,
+      "type": "code",
+      "code": {
+        "caption": [],
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "끝",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "끝",
+            "href": null
+          }
+        ],
+        "language": "javascript"
+      }
+    },
+    {
+      "id": "10e99b67-2d3f-4562-b3a9-edbdc9dd47eb",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "목록이 끝난 뒤의 문단이다. 코드가 목록 밖으로 새면 이 문단 앞에 코드 줄이 문단으로 보인다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "목록이 끝난 뒤의 문단이다. 코드가 목록 밖으로 새면 이 문단 앞에 코드 줄이 문단으로 보인다.",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}

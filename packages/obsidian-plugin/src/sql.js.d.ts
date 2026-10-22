@@ -25,10 +25,16 @@ declare module "sql.js" {
 
   export interface InitSqlJsOptions {
     locateFile?: (file: string) => string;
-    wasmBinary?: ArrayBuffer;
+    wasmBinary?: ArrayBuffer | Uint8Array;
   }
 
   export default function initSqlJs(
     options?: InitSqlJsOptions | Record<string, unknown>,
   ): Promise<SqlJsStatic>;
+}
+
+/** esbuild 의 binary 로더(`esbuild.config.mjs`)가 main.js 에 싣는 wasm — 파일의 바이트 그대로다. */
+declare module "*.wasm" {
+  const bytes: Uint8Array;
+  export default bytes;
 }

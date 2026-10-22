@@ -8,106 +8,21 @@ import type {
   PendingOperation,
   RecordPendingInput,
 } from "@im-nobsidian/core";
-import type { SyncRecord, SyncStatus, WikilinkEntry, PreserveMarker } from "@im-nobsidian/core";
-import { generateId } from "@im-nobsidian/core";
-
-const INITIAL_MIGRATION = `
-CREATE TABLE IF NOT EXISTS sync_state (
-    id              TEXT PRIMARY KEY,
-    obsidian_path   TEXT NOT NULL,
-    notion_page_id  TEXT,
-    notion_parent_id TEXT,
-    content_hash    TEXT NOT NULL,
-    notion_last_edited TEXT,
-    local_last_modified TEXT NOT NULL,
-    sync_direction  TEXT NOT NULL DEFAULT 'both',
-    file_type       TEXT NOT NULL DEFAULT 'file',
-    status          TEXT NOT NULL DEFAULT 'pending',
-    base_snapshot   BLOB,
-    version         INTEGER NOT NULL DEFAULT 1,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_state_path ON sync_state(obsidian_path);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_sync_state_notion ON sync_state(notion_page_id) WHERE notion_page_id IS NOT NULL;
-CREATE INDEX IF NOT EXISTS idx_sync_state_status ON sync_state(status);
-CREATE INDEX IF NOT EXISTS idx_sync_state_parent ON sync_state(notion_parent_id);
-
-CREATE TABLE IF NOT EXISTS wikilink_map (
-    obsidian_path   TEXT PRIMARY KEY,
-    notion_page_id  TEXT NOT NULL UNIQUE,
-    title           TEXT NOT NULL,
-    aliases         TEXT DEFAULT '[]',
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE INDEX IF NOT EXISTS idx_wikilink_title ON wikilink_map(title);
-CREATE INDEX IF NOT EXISTS idx_wikilink_notion ON wikilink_map(notion_page_id);
-
-CREATE TABLE IF NOT EXISTS pending_operations (
-    id              TEXT PRIMARY KEY,
-    sync_state_id   TEXT NOT NULL REFERENCES sync_state(id) ON DELETE CASCADE,
-    operation       TEXT NOT NULL,
-    direction       TEXT NOT NULL,
-    payload         TEXT,
-    retry_count     INTEGER NOT NULL DEFAULT 0,
-    error_message   TEXT,
-    status          TEXT NOT NULL DEFAULT 'pending',
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    completed_at    TEXT
-);
-
-CREATE INDEX IF NOT EXISTS idx_pending_status ON pending_operations(status, created_at);
-
-CREATE TABLE IF NOT EXISTS image_registry (
-    id              TEXT PRIMARY KEY,
-    sync_state_id   TEXT NOT NULL REFERENCES sync_state(id) ON DELETE CASCADE,
-    notion_file_url TEXT NOT NULL,
-    local_path      TEXT NOT NULL,
-    content_hash    TEXT NOT NULL,
-    file_size       INTEGER NOT NULL,
-    mime_type       TEXT NOT NULL,
-    expires_at      TEXT,
-    downloaded_at   TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_image_hash ON image_registry(content_hash);
-CREATE INDEX IF NOT EXISTS idx_image_sync ON image_registry(sync_state_id);
-
-CREATE TABLE IF NOT EXISTS sync_metadata (
-    key     TEXT PRIMARY KEY,
-    value   TEXT NOT NULL
-);
-
-INSERT OR IGNORE INTO sync_metadata (key, value) VALUES ('schema_version', '1');
-`;
-
-const FILE_REGISTRY_MIGRATION = `
-CREATE TABLE IF NOT EXISTS file_registry (
-    id              TEXT PRIMARY KEY,
-    local_path      TEXT NOT NULL,
-    notion_page_id  TEXT NOT NULL,
-    file_upload_id  TEXT NOT NULL,
-    file_type       TEXT NOT NULL DEFAULT 'file',
-    file_hash       TEXT NOT NULL,
-    file_size       INTEGER NOT NULL DEFAULT 0,
-    created_at      TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS idx_file_registry_path ON file_registry(local_path);
-CREATE INDEX IF NOT EXISTS idx_file_registry_page ON file_registry(notion_page_id);
-
-UPDATE sync_metadata SET value = '2' WHERE key = 'schema_version';
-`;
-
-const STAT_CACHE_MIGRATION = `
-ALTER TABLE sync_state ADD COLUMN local_mtime TEXT;
-ALTER TABLE sync_state ADD COLUMN local_file_size INTEGER;
-
-UPDATE sync_metadata SET value = '3' WHERE key = 'schema_version';
-`;
+import type {
+  SyncRecord,
+  SyncStatus,
+  WikilinkEntry,
+  PreserveMarker,
+  RemoteObservation,
+} from "@im-nobsidian/core";
+import {
+  SAVED_STATE_TABLES_QUERY,
+  STATE_DB_MIGRATIONS,
+  SavedStateDbError,
+  WIKILINK_LOOKUPS,
+  generateId,
+  getLogger,
+} from "@im-nobsidian/core";
 
 interface RawSyncRow {
   id: string;
@@ -116,6 +31,9 @@ interface RawSyncRow {
   notion_parent_id: string | null;
   content_hash: string;
   notion_last_edited: string | null;
+  notion_last_edited_by: string | null;
+  notion_seen_at: string | null;
+  notion_body_fingerprint: string | null;
   local_last_modified: string;
   sync_direction: string;
   file_type: string;
@@ -161,8 +79,10 @@ interface RawPendingRow {
 export class SqlJsStateDB implements IStateDB {
   private db: SqlJsDatabase;
   private dirty = false;
-  private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  private flushTimer: number | null = null;
   private readonly flushFn: ((data: Uint8Array) => Promise<void>) | null;
+  /** 파일 쓰기를 한 줄로 세운다 — 늦게 끝난 옛 사본이 새 사본을 덮지 않게 한다. */
+  private writes: Promise<void> = Promise.resolve();
 
   private constructor(db: SqlJsDatabase, flushFn?: (data: Uint8Array) => Promise<void>) {
     this.db = db;
@@ -172,7 +92,7 @@ export class SqlJsStateDB implements IStateDB {
   static async open(
     existingData?: Uint8Array | null,
     flushFn?: (data: Uint8Array) => Promise<void>,
-    wasmBinary?: ArrayBuffer,
+    wasmBinary?: ArrayBuffer | Uint8Array,
   ): Promise<SqlJsStateDB> {
     const opts: Record<string, unknown> = {};
     if (wasmBinary) {
@@ -181,20 +101,36 @@ export class SqlJsStateDB implements IStateDB {
     const SQL = await initSqlJs(opts);
 
     const db = existingData ? new SQL.Database(existingData) : new SQL.Database();
-    db.run("PRAGMA foreign_keys = ON");
-
     const stateDb = new SqlJsStateDB(db, flushFn);
-    stateDb.migrate();
+    try {
+      if (existingData) stateDb.checkSavedTables(existingData.length);
+      db.run("PRAGMA foreign_keys = ON");
+      stateDb.migrate();
+    } catch (error) {
+      db.close();
+      if (!existingData || error instanceof SavedStateDbError) throw error;
+      throw SavedStateDbError.unreadable(error);
+    }
     return stateDb;
   }
 
+  /**
+   * 저장된 파일에 동기화 기록 표가 있는지 본다 — SQLite 는 비었거나(0바이트) 앞 한 바이트만 남은 파일을 «빈 DB»
+   * 로 연다. 보지 않으면 기록을 잃은 채 처음부터 시작한다({@link SavedStateDbError.noTables}).
+   */
+  private checkSavedTables(bytes: number): void {
+    if (this.db.exec(SAVED_STATE_TABLES_QUERY).length === 0) {
+      throw SavedStateDbError.noTables(bytes);
+    }
+  }
+
+  /** core 의 스키마 목록을 돈다 — CLI 와 같은 스키마(CHECK 제약 포함)다. 스키마 SQL 의 글자에는 `;` 이 없다. */
   private migrate(): void {
     const version = this.getSchemaVersion();
-    if (version < 1) this.db.run(INITIAL_MIGRATION);
-    if (version < 2) this.db.run(FILE_REGISTRY_MIGRATION);
-    if (version < 3) {
-      for (const line of STAT_CACHE_MIGRATION.split(";")) {
-        const trimmed = line.trim();
+    for (const migration of STATE_DB_MIGRATIONS) {
+      if (version >= migration.version) continue;
+      for (const statement of migration.sql.split(";")) {
+        const trimmed = statement.trim();
         if (trimmed) this.db.run(trimmed);
       }
     }
@@ -219,33 +155,75 @@ export class SqlJsStateDB implements IStateDB {
 
   private scheduleFlush(): void {
     if (!this.flushFn || this.flushTimer) return;
-    this.flushTimer = setTimeout(() => {
+    this.flushTimer = window.setTimeout(() => {
       this.flushTimer = null;
-      void this.flush();
+      // 못 쓴 것은 «바뀜» 으로 남아 다음 쓰기(다음 변경 · 닫기)가 다시 쓴다.
+      this.flush().catch((error: unknown) => {
+        const message = error instanceof Error ? error.message : String(error);
+        getLogger().warn(`[Im-Nobsidian] 상태 DB 를 파일에 쓰지 못함: ${message}`);
+      });
     }, 5000);
   }
 
-  async flush(): Promise<void> {
+  /**
+   * 바뀐 것이 있으면 DB 를 파일에 쓴다. 쓰기는 한 줄로 서서, 앞 쓰기가 끝난 뒤에 그때의 DB 를 내보낸다.
+   *
+   * «바뀜» 은 내보낼 때 내린다 — 쓰는 동안 바뀐 것은 다시 «바뀜» 이 되어 다음 쓰기가 담는다. 예전에는 쓰기가
+   * 끝난 뒤에 내려, 쓰는 사이에 바뀐 것이 파일에 가지 않았고 설정을 바꾸거나 플러그인을 다시 불러오면
+   * 사라졌다. 못 쓰면 «바뀜» 을 되살리고 이유를 던진다.
+   */
+  flush(): Promise<void> {
+    const write = this.writes.then(() => this.writeIfDirty());
+    this.writes = write.catch(() => undefined);
+    return write;
+  }
+
+  private async writeIfDirty(): Promise<void> {
     if (!this.dirty || !this.flushFn) return;
     const data = this.db.export();
-    await this.flushFn(data);
     this.dirty = false;
+    try {
+      await this.flushFn(data);
+    } catch (error) {
+      this.dirty = true;
+      throw error;
+    }
   }
 
   export(): Uint8Array {
     return this.db.export();
   }
 
-  close(): void {
+  /**
+   * 남은 쓰기를 마치고 닫는다 — 닫은 뒤 같은 파일을 다시 여는 쪽(설정을 바꾼 플러그인 · 다시 불러온
+   * 플러그인)이 마지막 기록을 읽는다. 예전에는 쓰기를 기다리지 않고 닫았다. 못 쓰면 닫지 않고 이유를
+   * 던진다 — 닫으면 그 기록은 어디에도 남지 않는다.
+   */
+  async close(): Promise<void> {
     if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
+      window.clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    if (this.dirty && this.flushFn) {
-      const data = this.db.export();
-      void this.flushFn(data);
-    }
+    await this.flush();
     this.db.close();
+  }
+
+  /**
+   * 파일에 쓰지 않고 닫는다 — 이 사본을 쓰면 다른 곳의 기록을 지울 때(다른 곳이 파일을 바꿈). 도는 쓰기가 끝나기를
+   * 기다린 뒤 남은 변경을 버린다.
+   *
+   * @returns 버린 변경이 있었나 — 있으면 마지막으로 쓴 뒤의 기록이 어디에도 남지 않는다.
+   */
+  async discard(): Promise<boolean> {
+    if (this.flushTimer) {
+      window.clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    await this.writes;
+    const dropped = this.dirty;
+    this.dirty = false;
+    this.db.close();
+    return dropped;
   }
 
   // --- helpers ---
@@ -311,7 +289,8 @@ export class SqlJsStateDB implements IStateDB {
       this.run(
         `UPDATE sync_state SET
           notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
-          notion_last_edited = ?, local_last_modified = ?,
+          notion_last_edited = ?, notion_last_edited_by = ?, notion_seen_at = ?,
+          notion_body_fingerprint = ?, local_last_modified = ?,
           sync_direction = ?, file_type = ?, status = ?,
           base_snapshot = ?, local_mtime = ?, local_file_size = ?,
           version = version + 1, updated_at = datetime('now')
@@ -321,6 +300,9 @@ export class SqlJsStateDB implements IStateDB {
           record.notionParentId ?? null,
           record.contentHash,
           record.notionLastEdited ?? null,
+          record.notionLastEditedBy ?? null,
+          record.notionSeenAt ?? null,
+          record.notionBodyFingerprint ?? null,
           record.localLastModified,
           record.syncDirection,
           record.fileType,
@@ -338,9 +320,10 @@ export class SqlJsStateDB implements IStateDB {
     this.run(
       `INSERT INTO sync_state
         (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
-         notion_last_edited, local_last_modified, sync_direction, file_type,
+         notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
+         local_last_modified, sync_direction, file_type,
          status, base_snapshot, local_mtime, local_file_size, version)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
       [
         id,
         record.obsidianPath,
@@ -348,6 +331,9 @@ export class SqlJsStateDB implements IStateDB {
         record.notionParentId ?? null,
         record.contentHash,
         record.notionLastEdited ?? null,
+        record.notionLastEditedBy ?? null,
+        record.notionSeenAt ?? null,
+        record.notionBodyFingerprint ?? null,
         record.localLastModified,
         record.syncDirection,
         record.fileType,
@@ -381,10 +367,28 @@ export class SqlJsStateDB implements IStateDB {
     }
   }
 
-  setNotionLastEdited(id: string, lastEdited: string): void {
+  setRemoteObservation(id: string, observation: RemoteObservation): void {
+    const { lastEdited, lastEditedBy, seenAt, bodyFingerprint } = observation;
+    if (bodyFingerprint === undefined) {
+      this.run(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+          notion_seen_at = ?, updated_at = datetime('now') WHERE id = ?`,
+        [lastEdited, lastEditedBy, seenAt, id],
+      );
+    } else {
+      this.run(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+          notion_seen_at = ?, notion_body_fingerprint = ?, updated_at = datetime('now')
+        WHERE id = ?`,
+        [lastEdited, lastEditedBy, seenAt, bodyFingerprint, id],
+      );
+    }
+  }
+
+  setNotionBodyFingerprint(id: string, fingerprint: string | null): void {
     this.run(
-      "UPDATE sync_state SET notion_last_edited = ?, updated_at = datetime('now') WHERE id = ?",
-      [lastEdited, id],
+      "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
+      [fingerprint, id],
     );
   }
 
@@ -416,22 +420,11 @@ export class SqlJsStateDB implements IStateDB {
   // --- wikilink_map ---
 
   resolveWikilink(text: string): WikilinkEntry | null {
-    const byTitle = this.queryOne<RawWikilinkRow>("SELECT * FROM wikilink_map WHERE title = ?", [
-      text,
-    ]);
-    if (byTitle) return this.mapWikilinkRow(byTitle);
-
-    const byAlias = this.queryOne<RawWikilinkRow>(
-      "SELECT * FROM wikilink_map WHERE aliases LIKE ?",
-      [`%"${text}"%`],
-    );
-    if (byAlias) return this.mapWikilinkRow(byAlias);
-
-    const byFilename = this.queryOne<RawWikilinkRow>(
-      "SELECT * FROM wikilink_map WHERE obsidian_path LIKE ?",
-      [`%/${text}.md`],
-    );
-    return byFilename ? this.mapWikilinkRow(byFilename) : null;
+    for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.queryOne<RawWikilinkRow>(lookup.sql, lookup.params(text));
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
   }
 
   resolvePageId(pageId: string): WikilinkEntry | null {
@@ -608,6 +601,9 @@ export class SqlJsStateDB implements IStateDB {
       notionParentId: row.notion_parent_id,
       contentHash: row.content_hash,
       notionLastEdited: row.notion_last_edited,
+      notionLastEditedBy: row.notion_last_edited_by,
+      notionSeenAt: row.notion_seen_at,
+      notionBodyFingerprint: row.notion_body_fingerprint,
       localLastModified: row.local_last_modified,
       syncDirection: row.sync_direction as SyncRecord["syncDirection"],
       fileType: row.file_type as SyncRecord["fileType"],

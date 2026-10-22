@@ -8,8 +8,28 @@ import {
   createMockStateDb,
   createMockNotionClient,
   createConfig,
+  MOCK_REMOTE_EDITED,
+  mockDatabaseMeta,
+  settledObservation,
+  UNOBSERVED,
 } from "../helpers/mock-orchestrator.js";
 import type { WikilinkResolver } from "../../src/notion/property-mapper.js";
+import type { DbBaseFiles } from "../../src/sync/db-base-files.js";
+
+/**
+ * upsert 한 레코드를 getByPath 가 돌려주게 한다. push 는 폴더 페이지를 먼저 만들고 그 기록으로
+ * 노트의 부모를 찾는다 — 기록이 사라지는 모의 DB 에서는 부모를 찾지 못한다.
+ */
+function rememberUpserts(stateDb: ReturnType<typeof createMockStateDb>) {
+  const records = new Map<string, Record<string, unknown>>();
+  stateDb.upsert.mockImplementation((input: { obsidianPath: string }) => {
+    const next = { id: records.size + 1, ...records.get(input.obsidianPath), ...input };
+    records.set(input.obsidianPath, next);
+    return next;
+  });
+  stateDb.getByPath.mockImplementation((path: string) => records.get(path) ?? null);
+  return records;
+}
 
 describe("SyncOrchestrator", () => {
   let orchestrator: SyncOrchestrator;
@@ -104,6 +124,7 @@ describe("SyncOrchestrator", () => {
         obsidianPath: "existing.md",
         notionPageId: "page-123",
         contentHash: "old-hash",
+        ...settledObservation(MOCK_REMOTE_EDITED),
         localMtime: "2020-01-01T00:00:00.000Z",
         localFileSize: 50,
       });
@@ -125,12 +146,14 @@ describe("SyncOrchestrator", () => {
     });
 
     it("삭제된 파일 Notion에서 아카이브", async () => {
+      // 지난번에 본 원격 그대로다 — 지우기 전에 원격을 본다(F-f). 바뀌었으면 지우지 않는다.
       const deletedRecord = {
         id: 1,
         obsidianPath: "deleted.md",
         notionPageId: "page-del",
         contentHash: "some-hash",
         status: "synced",
+        ...settledObservation(MOCK_REMOTE_EDITED),
       };
 
       mockStateDb.getByPath.mockImplementation((path: string) =>
@@ -217,9 +240,14 @@ describe("SyncOrchestrator", () => {
         p === "notes/a.md" ? "# A" : "# B",
       );
 
+      const records = rememberUpserts(mockStateDb);
+
       const result = await orchestrator.push({ paths: ["notes/"] });
 
       expect(result.created).toBe(1);
+      expect(result.failed).toEqual([]);
+      expect(records.has("notes/a.md")).toBe(true);
+      expect(records.has("other/b.md")).toBe(false);
     });
 
     it("API 오류 시 failed에 기록", async () => {
@@ -278,6 +306,7 @@ describe("SyncOrchestrator", () => {
               obsidianPath: "idempotent.md",
               notionPageId: "page-id-123",
               contentHash: "",
+              ...UNOBSERVED,
             };
       });
 
@@ -382,6 +411,232 @@ describe("SyncOrchestrator", () => {
       expect(mockStateDb.markPendingFailed).toHaveBeenCalledWith("op-1", expect.any(String));
       expect(mockNotionClient.fetchAllChildren).not.toHaveBeenCalled();
     });
+
+    it("재개 중 자식 목록을 읽지 못하면 자리표시를 지우지 않는다 — 읽지 못함 ≠ 없음", async () => {
+      const path = "recover/unreadable.md";
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([incompleteCreateOp(path)]);
+      mockStateDb.getByPath.mockImplementation((p: string) =>
+        p === path ? { id: "s-1", obsidianPath: path, notionPageId: null, contentHash: "" } : null,
+      );
+      mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
+
+      await orchestrator.push();
+
+      // 예전에는 검색 실패를 "없음" 으로 보고 자리표시를 지웠다 → 다음 push 가 또 만들었다.
+      expect(mockStateDb.delete).not.toHaveBeenCalled();
+      expect(mockStateDb.markPendingCompleted).not.toHaveBeenCalledWith("op-1");
+    });
+  });
+
+  describe("S-07 같은 실행의 재시도 — 생성 요청을 두 번 보내지 않는다", () => {
+    const path = "note.md";
+    const store = new Map<string, Record<string, unknown>>();
+
+    /** 앞선 시도의 생성 요청이 응답 없이 끊긴 상황 — 서버에는 적용됐을 수 있다. */
+    function timeout(): Error {
+      return Object.assign(new Error("Request to Notion API has timed out"), {
+        code: "notionhq_client_request_timeout",
+      });
+    }
+
+    beforeEach(() => {
+      store.clear();
+      // 상태 DB 를 최소한으로 흉내 낸다 — 재시도가 앞선 시도의 자리표시와 WAL 을 보게.
+      mockStateDb.upsert.mockImplementation((r: Record<string, unknown>) => {
+        const row = { ...r, id: 1 };
+        store.set(r.obsidianPath as string, row);
+        return row;
+      });
+      mockStateDb.getByPath.mockImplementation((p: string) => store.get(p) ?? null);
+      mockStateDb.getIncompleteOpByState.mockImplementation(() =>
+        mockStateDb.recordPendingOperation.mock.calls.length > 0 ? { id: 100 } : null,
+      );
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path, mtime: new Date().toISOString(), size: 10 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# note\n\n본문");
+      mockNotionClient.createPageWithMarkdown.mockRejectedValueOnce(timeout());
+
+      orchestrator = new SyncOrchestrator(
+        createConfig({ advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 } }),
+        mockStateDb as any,
+        mockNotionClient as any,
+        mockVaultFs,
+      );
+    });
+
+    it("앞선 요청이 적용돼 있었으면 그 페이지를 입양하고 새로 만들지 않는다", async () => {
+      // 루트의 자식에만 고아가 있다 — 고아 자신은 자식이 없는 빈 페이지다.
+      mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
+        parentId === "root-page-id"
+          ? [{ id: "orphan-page", type: "child_page", child_page: { title: "note" } }]
+          : [],
+      );
+      mockNotionClient.getPage.mockResolvedValue({ id: "orphan-page", archived: false });
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(1);
+      expect(mockStateDb.markPendingCompleted).toHaveBeenCalledWith(100);
+      // 입양한 페이지에 본문을 다시 쓴다 — 앞선 요청이 본문까지 적용했는지 모르므로.
+      expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalledWith(
+        "orphan-page",
+        expect.any(String),
+      );
+      expect(result).toMatchObject({ created: 1, failed: [] });
+    });
+
+    it("앞선 요청이 적용되지 않았으면 그때 한 번 더 만든다", async () => {
+      mockNotionClient.fetchAllChildren.mockResolvedValue([]);
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(2);
+      expect(result).toMatchObject({ created: 1, failed: [] });
+    });
+
+    it("지난 실행이 남긴 자리표시 — 재개가 목록을 못 읽어도 생성 경로가 다시 확인해 입양한다", async () => {
+      mockNotionClient.createPageWithMarkdown.mockReset();
+      store.set(path, { id: 1, obsidianPath: path, notionPageId: null, contentHash: "" });
+      mockStateDb.getIncompletePendingOperations.mockReturnValue([
+        {
+          id: "op-1",
+          syncStateId: 1,
+          operation: "create",
+          direction: "push",
+          payload: JSON.stringify({ path, parentId: "root-page-id", title: "note" }),
+          status: "pending",
+        },
+      ]);
+      mockStateDb.getIncompleteOpByState.mockReturnValue({ id: "op-1" });
+      // 재개 때는 목록을 못 읽고(일시 장애), 생성 경로가 다시 볼 때는 읽힌다.
+      mockNotionClient.fetchAllChildren
+        .mockRejectedValueOnce(new Error("HTTP 502"))
+        .mockImplementation(async (parentId: string) =>
+          parentId === "root-page-id"
+            ? [{ id: "orphan-page", type: "child_page", child_page: { title: "note" } }]
+            : [],
+        );
+      mockNotionClient.getPage.mockResolvedValue({ id: "orphan-page", archived: false });
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      expect(mockStateDb.markPendingCompleted).toHaveBeenCalledWith("op-1");
+      expect(mockNotionClient.replacePageMarkdown).toHaveBeenCalledWith(
+        "orphan-page",
+        expect.any(String),
+      );
+      // 짝이 없던 파일이므로 "생성" 으로 센다 — 예전에는 "수정" 으로 세고 아무것도 보내지 않았다.
+      expect(result).toMatchObject({ created: 1, updated: 0, failed: [] });
+    });
+
+    it("부모 목록을 읽지 못하면 그 항목만 실패로 남긴다 — 새 페이지를 만들지 않는다", async () => {
+      mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledTimes(1);
+      expect(result.failed).toEqual([
+        expect.objectContaining({ path, operation: "create", error: "HTTP 502" }),
+      ]);
+      expect(mockStateDb.markPendingCompleted).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("S-07 폴더 페이지 — 만들기 전에 부모에서 먼저 찾는다", () => {
+    // 폴더 페이지 생성에는 WAL 이 없다. 생성 요청이 적용됐는데 응답을 못 받은 채 끝나면
+    // 레코드 없이 페이지만 남는다 — 다음 push 는 그 페이지를 찾아 써야 한다.
+    const store = new Map<string, Record<string, unknown>>();
+    const createdUnder = () =>
+      (mockNotionClient.createPageWithMarkdown.mock.calls[0]![0] as { parentId: string }).parentId;
+
+    beforeEach(() => {
+      store.clear();
+      mockStateDb.upsert.mockImplementation((r: Record<string, unknown>) => {
+        const row = { ...r, id: store.size + 1 };
+        store.set(r.obsidianPath as string, row);
+        return row;
+      });
+      mockStateDb.getByPath.mockImplementation((p: string) => store.get(p) ?? null);
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "projects/note.md", mtime: new Date().toISOString(), size: 10 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# note\n\n본문");
+    });
+
+    it("지난 실행이 남긴 폴더 페이지를 찾아 쓰고 새로 만들지 않는다", async () => {
+      mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
+        parentId === "root-page-id"
+          ? [{ id: "folder-orphan", type: "child_page", child_page: { title: "projects" } }]
+          : [],
+      );
+      mockNotionClient.getPage.mockResolvedValue({
+        id: "folder-orphan",
+        archived: false,
+        last_edited_time: "2026-09-27T00:00:00.000Z",
+      });
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPage).not.toHaveBeenCalled();
+      expect(store.get("projects")).toMatchObject({
+        notionPageId: "folder-orphan",
+        notionParentId: "root-page-id",
+        fileType: "folder-note",
+      });
+      expect(createdUnder()).toBe("folder-orphan");
+      expect(result).toMatchObject({ created: 1, failed: [] });
+    });
+
+    it("제목이 같아도 이미 다른 레코드의 짝인 페이지는 쓰지 않는다 — projects.md 와 projects/ 는 형제다", async () => {
+      mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
+        parentId === "root-page-id"
+          ? [{ id: "file-page", type: "child_page", child_page: { title: "projects" } }]
+          : [],
+      );
+      mockStateDb.getByNotionId.mockImplementation((id: string) =>
+        id === "file-page" ? { obsidianPath: "projects.md", notionPageId: "file-page" } : null,
+      );
+
+      await orchestrator.push();
+
+      expect(mockNotionClient.getPage).not.toHaveBeenCalledWith("file-page");
+      expect(mockNotionClient.createPage).toHaveBeenCalledTimes(1);
+      expect(store.get("projects")).toMatchObject({ notionPageId: "page-id-123" });
+      expect(createdUnder()).toBe("page-id-123");
+    });
+
+    it("휴지통에 있는 같은 제목 페이지는 쓰지 않는다", async () => {
+      mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
+        parentId === "root-page-id"
+          ? [{ id: "trashed", type: "child_page", child_page: { title: "projects" } }]
+          : [],
+      );
+      mockNotionClient.getPage.mockResolvedValue({ id: "trashed", in_trash: true });
+
+      await orchestrator.push();
+
+      expect(mockNotionClient.createPage).toHaveBeenCalledTimes(1);
+      expect(store.get("projects")).toMatchObject({ notionPageId: "page-id-123" });
+    });
+
+    it("부모 목록을 읽지 못하면 만들지 않고 그 안의 노트를 이유와 함께 실패로 남긴다 — 읽지 못함 ≠ 없음", async () => {
+      mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.createPage).not.toHaveBeenCalled();
+      expect(mockNotionClient.createPageWithMarkdown).not.toHaveBeenCalled();
+      // 예전에는 push 전체가 멈췄다 — 이제 그 폴더의 노트만 서버가 말한 이유와 함께 남는다.
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          path: "projects/note.md",
+          operation: "create",
+          error: expect.stringContaining("HTTP 502"),
+        }),
+      ]);
+    });
   });
 
   describe("pull", () => {
@@ -454,6 +709,9 @@ describe("SyncOrchestrator", () => {
       });
 
       mockVaultFs.readFile = vi.fn().mockResolvedValue("old content");
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "existing.md", mtime: "2025-01-01T00:00:00.000Z", size: 11 },
+      ]);
 
       const result = await orchestrator.pull();
 
@@ -540,9 +798,15 @@ describe("SyncOrchestrator", () => {
         )
         .mockResolvedValue(3);
       vi.spyOn(
-        orchestrator as unknown as {
-          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
-        },
+        (
+          orchestrator as unknown as {
+            discovery: {
+              pullDiscoveredDatabases: (
+                w: string[],
+              ) => Promise<{ created: number; updated: number }>;
+            };
+          }
+        ).discovery,
         "pullDiscoveredDatabases",
       ).mockImplementation(async (wp: string[]) => {
         wp.push("databases/wiki/Row.md");
@@ -565,9 +829,15 @@ describe("SyncOrchestrator", () => {
         )
         .mockResolvedValue(0);
       vi.spyOn(
-        orchestrator as unknown as {
-          pullDiscoveredDatabases: (w: string[]) => Promise<{ created: number; updated: number }>;
-        },
+        (
+          orchestrator as unknown as {
+            discovery: {
+              pullDiscoveredDatabases: (
+                w: string[],
+              ) => Promise<{ created: number; updated: number }>;
+            };
+          }
+        ).discovery,
         "pullDiscoveredDatabases",
       ).mockResolvedValue({ created: 0, updated: 0 });
 
@@ -649,11 +919,10 @@ describe("SyncOrchestrator", () => {
     });
 
     it("로컬 변경사항 감지", async () => {
-      mockVaultFs.listMarkdownFiles = vi
-        .fn()
-        .mockResolvedValue([
-          { path: "new-note.md", content: "# New", mtime: new Date().toISOString() },
-        ]);
+      (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "new-note.md", mtime: new Date().toISOString(), size: 5 },
+      ]);
+      (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# New");
 
       const result = await orchestrator.status();
 
@@ -672,11 +941,26 @@ describe("SyncOrchestrator", () => {
       (mockVaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Deep Note");
 
       mockNotionClient.listChildren.mockResolvedValue({ results: [] });
+      const records = rememberUpserts(mockStateDb);
+      let folders = 0;
+      mockNotionClient.createPage.mockImplementation(async () => ({
+        id: `folder-${++folders}`,
+        last_edited_time: now,
+      }));
 
       const result = await orchestrator.push();
 
       expect(result.created).toBe(1);
-      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalled();
+      expect(result.failed).toEqual([]);
+      // 폴더마다 폴더 페이지를 만들고, 노트는 가장 깊은 폴더 페이지 아래에 둔다.
+      expect(mockNotionClient.createPage).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ parentId: "folder-1", title: "deep" }),
+      );
+      expect(records.get("projects/deep")?.notionPageId).toBe("folder-2");
+      expect(mockNotionClient.createPageWithMarkdown).toHaveBeenCalledWith(
+        expect.objectContaining({ parentId: "folder-2", parentType: "page" }),
+      );
     });
 
     it("다중 파일 동시 push", async () => {
@@ -899,18 +1183,30 @@ describe("SyncOrchestrator.resolveNotionLinks 해시 동기화 (I5 fixpoint 잠�
   });
 });
 
-// 수정2 잠금: child page/database 를 보유한 페이지의 본문 push 는 자식을 삭제하지
-// 않도록 가드된다(실Notion probe 확인: replace_content[allow_deleting_content] 와
-// block 삭제-후-append 경로 모두 자식 child_page 를 in_trash 로 삭제). 가드는 본문
-// 갱신을 건너뛰고 destructive API 를 호출하지 않는다.
-describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실 방지)", () => {
-  it("자식 페이지 보유 시 replacePageMarkdown/deleteBlock 을 호출하지 않는다", async () => {
-    const notion = createMockNotionClient();
-    // 직속 자식에 child_page 1개 존재
-    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
-      { id: "leaf-1", type: "child_page" },
-    ]);
+// S-03: 자식 페이지 · DB 를 가진 페이지도 본문을 보낸다 — 자식은 지우지 않는다.
+// 예전 가드는 본문 push 를 통째로 건너뛰고도 동기화됨으로 기록해 폴더 노트 편집이 영영
+// Notion 에 가지 않았다(QA 실측). 지금은 삭제 불허로 보내고, 거절되면 자식 태그를
+// 제자리에 되돌려 다시 보낸다(sync/page-body.ts).
+describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)", () => {
+  type PushPage = { pushUpdatePage(id: string, md: string): Promise<void> };
+  const CHILD_PAGE = "3e713b18d38281138edfe9ad1d430774";
+  const CHILD_DB = "7cd6bb576d0944d78b190709e034f895";
+  const PAGE_TAG = `<page url="https://app.notion.com/p/${CHILD_PAGE}">QA-A 하위 페이지</page>`;
+  const DB_TAG = `<database url="https://app.notion.com/p/${CHILD_DB}" inline="true">QA 과제 DB</database>`;
+  const BASE_PATH = "QA-A/QA-과제-DB/QA 과제 DB.base";
+  // pipeline 이 내보내는 모양 — 추적 중인 자식은 멘션, .base 임베드는 첨부 자리표시자.
+  const LOCAL =
+    "# Hub\n\n수정된 본문.\n\n" +
+    `<mention-page id="${CHILD_PAGE}">QA-A 하위 페이지</mention-page>\n\n` +
+    `> 📎 QA 과제 DB.base %% im-nobsidian:local-file:${encodeURIComponent(`${BASE_PATH}|다른 별칭`)} %%\n`;
+  const wouldDelete = () =>
+    Object.assign(new Error("This operation would delete 2 child page(s) …"), {
+      code: "validation_error",
+      status: 400,
+    });
 
+  it("Markdown API 경로는 자식 조회 없이 먼저 보낸다 — 자식이 없으면 한 번으로 끝", async () => {
+    const notion = createMockNotionClient();
     const orchestrator = new SyncOrchestrator(
       createConfig(),
       createMockStateDb() as any,
@@ -918,36 +1214,147 @@ describe("SyncOrchestrator.pushUpdatePage 자식 삭제 가드 (데이터 손실
       createMockVaultFs(),
     );
 
-    await (
-      orchestrator as unknown as {
-        pushUpdatePage(id: string, md: string): Promise<void>;
-      }
-    ).pushUpdatePage("hub-page", "# Hub\n\n수정된 본문.\n");
-
-    // 파괴적 본문 갱신 경로(둘 다)를 절대 타지 않아야 한다
-    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
-    expect(notion.deleteBlock).not.toHaveBeenCalled();
-    expect(notion.appendChildren).not.toHaveBeenCalled();
-  });
-
-  it("자식이 없으면 정상적으로 replacePageMarkdown 으로 본문을 갱신한다", async () => {
-    const notion = createMockNotionClient();
-    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([]); // 자식 없음
-
-    const orchestrator = new SyncOrchestrator(
-      createConfig(),
-      createMockStateDb() as any,
-      notion as any,
-      createMockVaultFs(),
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "leaf-page",
+      "# Leaf\n\n본문.\n",
     );
-
-    await (
-      orchestrator as unknown as {
-        pushUpdatePage(id: string, md: string): Promise<void>;
-      }
-    ).pushUpdatePage("leaf-page", "# Leaf\n\n본문.\n");
 
     expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(1);
+    expect(notion.fetchAllChildren).not.toHaveBeenCalled();
+    expect(notion.getPageMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("거절되면 자식 태그를 제자리에 되돌려 다시 보낸다 — .base 는 사이드카의 DB id 로 맞춘다", async () => {
+    const notion = createMockNotionClient();
+    notion.replacePageMarkdown.mockRejectedValueOnce(wouldDelete());
+    notion.getPageMarkdown.mockResolvedValue({
+      markdown: `# Hub\n옛 본문.\n${PAGE_TAG}\n${DB_TAG}\n`,
+      truncated: false,
+      unknown_block_ids: [],
+    });
+    const vaultFs = createMockVaultFs();
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockImplementation(async (path: string) => {
+      if (path === "QA-A/QA-과제-DB/QA 과제 DB.notion.json") {
+        return JSON.stringify({ databaseId: "7cd6bb57-6d09-44d7-8b19-0709e034f895" });
+      }
+      throw new Error(`ENOENT ${path}`);
+    });
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      createMockStateDb() as any,
+      notion as any,
+      vaultFs,
+    );
+
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "hub-page",
+      LOCAL,
+    );
+
+    expect(notion.replacePageMarkdown).toHaveBeenCalledTimes(2);
+    const sent = notion.replacePageMarkdown.mock.calls[1]![1] as string;
+    expect(sent).toContain("수정된 본문.");
+    expect(sent.indexOf(PAGE_TAG)).toBeGreaterThan(sent.indexOf("수정된 본문."));
+    expect(sent.indexOf(DB_TAG)).toBeGreaterThan(sent.indexOf(PAGE_TAG));
+    expect(sent).not.toContain("📎");
+    expect(notion.deleteBlock).not.toHaveBeenCalled();
+  });
+
+  it("다시 보내도 거절되면 실패로 남기고 동기화됨으로 적지 않는다", async () => {
+    const path = "Hub/Hub.md";
+    const before = "# Hub\n\n옛 본문.\n";
+    const stateDb = createMockStateDb();
+    const record = {
+      id: "rec-hub",
+      obsidianPath: path,
+      notionPageId: "hub-page",
+      notionParentId: "root-page-id",
+      contentHash: computeHash(before),
+      ...settledObservation(MOCK_REMOTE_EDITED),
+      localLastModified: "2026-01-01T00:00:00.000Z",
+      syncDirection: "both",
+      fileType: "file",
+      status: "synced",
+      baseSnapshot: Buffer.from(before, "utf-8"),
+      localMtime: "2020-01-01T00:00:00.000Z",
+      localFileSize: 1,
+    };
+    stateDb.getByPath.mockImplementation((p: string) => (p === path ? record : null));
+    const vaultFs = createMockVaultFs();
+    (vaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { path, mtime: new Date().toISOString(), size: 100 },
+    ]);
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue("# Hub\n\n새 본문.\n");
+    const notion = createMockNotionClient();
+    notion.replacePageMarkdown.mockRejectedValue(wouldDelete());
+    notion.getPageMarkdown.mockResolvedValue({
+      markdown: `# Hub\n옛 본문.\n${PAGE_TAG}\n`,
+      truncated: false,
+      unknown_block_ids: [],
+    });
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, advanced: { ...config.advanced, retryWaitMs: 0 } },
+      stateDb as any,
+      notion as any,
+      vaultFs,
+    );
+
+    const result = await orchestrator.push();
+
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.path).toBe(path);
+    expect(result.failed[0]!.error).toContain("본문 교체를 거절");
+    expect(result.failed[0]!.error).toContain("would delete");
+    expect(stateDb.updateHash).not.toHaveBeenCalled();
+    expect(stateDb.updateStatus).not.toHaveBeenCalledWith("rec-hub", "synced");
+  });
+
+  it("블록 방식(preferMarkdownApi: false)은 자식이 있으면 지우지 않고 실패로 알린다", async () => {
+    const notion = createMockNotionClient();
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "para-1", type: "paragraph" },
+      { id: "leaf-1", type: "child_page" },
+    ]);
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, conversion: { ...config.conversion, preferMarkdownApi: false } },
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await expect(
+      (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+        "hub-page",
+        "# Hub\n\n수정.\n",
+      ),
+    ).rejects.toThrow(/자식까지 지워져 보내지 않음/);
+    expect(notion.deleteBlock).not.toHaveBeenCalled();
+    expect(notion.appendBlockTree).not.toHaveBeenCalled();
+    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("블록 방식도 자식이 없으면 예전대로 새 블록을 붙이고 옛 블록을 지운다", async () => {
+    const notion = createMockNotionClient();
+    (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+      { id: "para-1", type: "paragraph" },
+    ]);
+    const config = createConfig();
+    const orchestrator = new SyncOrchestrator(
+      { ...config, conversion: { ...config.conversion, preferMarkdownApi: false } },
+      createMockStateDb() as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "leaf-page",
+      "# Leaf\n\n본문.\n",
+    );
+
+    expect(notion.appendBlockTree).toHaveBeenCalledTimes(1);
+    expect(notion.deleteBlock).toHaveBeenCalledWith("para-1");
   });
 });
 
@@ -973,7 +1380,7 @@ describe("SyncOrchestrator — 접근불가 링크드 DB graceful degrade (결�
       notion as any,
       createMockVaultFs(),
     );
-    return { orch: orch as unknown as Privates, notion, sdb };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb };
   }
 
   describe("layer 1 — 발견 단계 선제 차단 (buildDiscoveredDbConfig)", () => {
@@ -1126,7 +1533,7 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
       notion as any,
       createMockVaultFs(),
     );
-    return { orch: orch as unknown as Privates, notion, sdb };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb };
   }
 
   it("발견 단계: queryable=true 라도 ds 소유자가 다르면 kind=linked 로 원본 id 전달", async () => {
@@ -1210,7 +1617,10 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
     await orch.pullDiscoveredDatabases([], [], []);
 
     // 정상 pull 경로 진입(행 소유 유지) — 스키마 로드가 그 증거.
-    expect(notion.getDatabaseSchema).toHaveBeenCalledWith("db-linked");
+    expect(notion.getDatabaseSchema).toHaveBeenCalledWith(
+      "db-linked",
+      mockDatabaseMeta("db-linked"),
+    );
     // linked 매핑은 기록하지 않고, 캐시 재기록이 있어도 컨테이너는 유지된다.
     expect(setMetaCalls.find(([k]) => k === "linked_dbs")).toBeUndefined();
     const discoveredWrite = setMetaCalls.filter(([k]) => k === "discovered_dbs").pop();
@@ -1239,7 +1649,7 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
       parentPageId: string,
     ): Promise<{ kind: string; config?: { localFolder: string } }>;
     databaseSyncer: {
-      baseFileInfo: Map<string, { basePath: string; title: string }>;
+      baseFileInfo: Pick<DbBaseFiles, "get" | "set">;
       pullDatabase: (cfg: unknown) => Promise<unknown>;
     };
   };
@@ -1249,7 +1659,7 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
     const sdb = stateDb ?? createMockStateDb();
     const vaultFs = createMockVaultFs();
     const orch = new SyncOrchestrator(createConfig(), sdb as any, notion as any, vaultFs);
-    return { orch: orch as unknown as Privates, notion, sdb, vaultFs };
+    return { orch: (orch as unknown as { discovery: Privates }).discovery, notion, sdb, vaultFs };
   }
 
   it("재작성은 DatabaseSyncer 가 실제 기록한 .base 경로(baseFileInfo)를 쓴다 — 폴더명 추측 금지", async () => {

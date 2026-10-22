@@ -1,0 +1,42 @@
+{
+  "markdown": "| A | **B** |\n| :--- | ---: |\n| a \\| pipe | `c` |\n| only |\n| x | y | z |\n\nA | B\n--- | ---\nc | d\n\n- item\n\t| P | Q |\n\t| --- | --- |\n\t| p | q |\n\n> > nested quote\nline with hard  \nnext line\npara\\\nafter backslash",
+  "notion": [
+    "table {\"has_column_header\":true,\"table_width\":3} ",
+    "  row T\"A\" | T\"B\"/b | ",
+    "  row T\"a \\\\\" | T\"pipe\" | T\"c\"/c",
+    "  row T\"only\" |  | ",
+    "  row T\"x\" | T\"y\" | T\"z\"",
+    "paragraph {} T\"A | B\"",
+    "paragraph {} T\"--- | ---\"",
+    "paragraph {} T\"c | d\"",
+    "bulleted_list_item {} T\"item\"",
+    "  table {\"has_column_header\":true,\"table_width\":2} ",
+    "    row T\"P\" | T\"Q\"",
+    "    row T\"p\" | T\"q\"",
+    "quote {} T\"> nested quote\"",
+    "paragraph {} T\"line with hard  \"",
+    "paragraph {} T\"next line\"",
+    "paragraph {} T\"para\\\\\"",
+    "paragraph {} T\"after backslash\""
+  ],
+  "ours": [
+    "table {\"has_column_header\":true,\"table_width\":3} ",
+    "  row T\"A\" | T\"B\"/b | ",
+    "  row T\"a | pipe\" | T\"c\"/c | ",
+    "  row T\"only\" |  | ",
+    "  row T\"x\" | T\"y\" | T\"z\"",
+    "paragraph {} T\"A | B\"",
+    "paragraph {} T\"--- | ---\"",
+    "paragraph {} T\"c | d\"",
+    "bulleted_list_item {} T\"item\"",
+    "  table {\"has_column_header\":true,\"table_width\":2} ",
+    "    row T\"P\" | T\"Q\"",
+    "    row T\"p\" | T\"q\"",
+    "quote {} T\"> nested quote\"",
+    "paragraph {} T\"line with hard  \"",
+    "paragraph {} T\"next line\"",
+    "paragraph {} T\"para\\\\\"",
+    "paragraph {} T\"after backslash\""
+  ],
+  "why": "Notion 은 칸 속 \\| 에서도 칸을 가른다 — 블록 방식은 볼트의 뜻대로 | 글자로 둔다."
+}

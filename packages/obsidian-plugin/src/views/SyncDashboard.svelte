@@ -1,6 +1,9 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import type { LocalChange, RemoteChange, Conflict } from "@im-nobsidian/core";
+  import { setIcon } from "obsidian";
+  import { noteNameFromPath, stripMarkdownExtension } from "@im-nobsidian/core";
+  import type { LocalChange, FolderMoveChange, RemoteChange, SyncRecord } from "@im-nobsidian/core";
+  import type { DirectionBlocks } from "../sync/direction.js";
 
   interface SyncProgress {
     current: number;
@@ -10,26 +13,35 @@
 
   interface SyncStateUpdate {
     lastSyncAt: string | null;
+    lastFullScanAt: string | null;
     localChanges: LocalChange[];
+    folderMoves?: FolderMoveChange[];
     remoteChanges?: RemoteChange[];
-    conflicts: Conflict[];
+    conflictRecords: SyncRecord[];
     syncState: "ready" | "syncing" | "error" | "conflict";
     operationType: "pull" | "push" | "sync" | null;
     progress: SyncProgress | null;
     errorMessage: string | null;
     completionSummary: string | null;
+    blocked: DirectionBlocks;
   }
 
   interface Props {
     lastSyncAt: string | null;
+    /** 마지막으로 원격을 전체 대조한 때 — Notion 에서 지운 노트는 그때 볼트에 반영된다. */
+    lastFullScanAt: string | null;
     localChanges: LocalChange[];
+    folderMoves?: FolderMoveChange[];
     remoteChanges: RemoteChange[];
-    conflicts: Conflict[];
+    /** 충돌로 표시된 노트 — 상태 DB 의 충돌 기록. */
+    conflictRecords: SyncRecord[];
     syncState: "ready" | "syncing" | "error" | "conflict";
     operationType: "pull" | "push" | "sync" | null;
     progress: SyncProgress | null;
     errorMessage: string | null;
     completionSummary: string | null;
+    /** 동기화 방향이 막는 Push · Pull — 그 단추를 끄고 까닭을 설명으로 보인다. */
+    blocked: DirectionBlocks;
     onReady: (updater: (state: SyncStateUpdate) => void) => void;
     onPull: () => void;
     onPush: () => void;
@@ -37,19 +49,28 @@
     onRefresh: () => void;
     onCancel: () => void;
     onOpenFile: (path: string) => void;
+    onPushPath: (path: string) => void;
+    /** 로컬 변경 하나를 되돌린다 — 되돌릴지는 받는 쪽(플러그인)이 확인 창으로 묻는다. */
+    onDiscard: (change: LocalChange) => void;
+    onPullPath: (path: string) => void;
+    onShowLocalDiff: (change: LocalChange) => void;
+    onShowRemoteDiff: (change: RemoteChange) => void;
     onResolveConflict: () => void;
   }
 
   let {
     lastSyncAt: initialLastSyncAt,
+    lastFullScanAt: initialLastFullScanAt,
     localChanges: initialLocalChanges,
+    folderMoves: initialFolderMoves = [],
     remoteChanges: initialRemoteChanges,
-    conflicts: initialConflicts,
+    conflictRecords: initialConflictRecords,
     syncState: initialSyncState,
     operationType: initialOperationType,
     progress: initialProgress,
     errorMessage: initialErrorMessage,
     completionSummary: initialCompletionSummary,
+    blocked: initialBlocked,
     onReady,
     onPull,
     onPush,
@@ -57,30 +78,41 @@
     onRefresh,
     onCancel,
     onOpenFile,
+    onPushPath,
+    onDiscard,
+    onPullPath,
+    onShowLocalDiff,
+    onShowRemoteDiff,
     onResolveConflict,
   }: Props = $props();
 
   let lastSyncAt: string | null = $state(initialLastSyncAt);
+  let lastFullScanAt: string | null = $state(initialLastFullScanAt);
   let localChanges: LocalChange[] = $state(initialLocalChanges);
+  let folderMoves: FolderMoveChange[] = $state(initialFolderMoves);
   let remoteChanges: RemoteChange[] = $state(initialRemoteChanges);
-  let conflicts: Conflict[] = $state(initialConflicts);
+  let conflictRecords: SyncRecord[] = $state(initialConflictRecords);
   let syncState: "ready" | "syncing" | "error" | "conflict" = $state(initialSyncState);
   let operationType: "pull" | "push" | "sync" | null = $state(initialOperationType);
   let progress: SyncProgress | null = $state(initialProgress);
   let errorMessage: string | null = $state(initialErrorMessage);
   let completionSummary: string | null = $state(initialCompletionSummary);
+  let blocked: DirectionBlocks = $state(initialBlocked);
   let completionVisible = $state(false);
   let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
   function applyUpdate(s: SyncStateUpdate) {
     lastSyncAt = s.lastSyncAt;
+    lastFullScanAt = s.lastFullScanAt;
     localChanges = s.localChanges;
+    if (s.folderMoves) folderMoves = s.folderMoves;
     if (s.remoteChanges) remoteChanges = s.remoteChanges;
-    conflicts = s.conflicts;
+    conflictRecords = s.conflictRecords;
     syncState = s.syncState;
     operationType = s.operationType ?? null;
     progress = s.progress;
     errorMessage = s.errorMessage;
+    blocked = s.blocked;
 
     if (s.completionSummary && s.completionSummary !== completionSummary) {
       completionSummary = s.completionSummary;
@@ -118,22 +150,20 @@
       : 0
   );
 
-  const changesByType = $derived({
-    created: localChanges.filter((c) => c.type === "created"),
-    modified: localChanges.filter((c) => c.type === "modified"),
-    deleted: localChanges.filter((c) => c.type === "deleted"),
-    moved: localChanges.filter((c) => c.type === "moved"),
-  });
+  /**
+   * 충돌 중인 노트는 충돌 칸에서만 다룬다(VS Code 의 「병합 변경」 처럼) — 변경 목록에 두면 올리기는 그 노트를
+   * 건너뛰어 눌러도 아무 일이 없고, 되돌리기는 거절된다. 원격 목록의 받기도 충돌을 풀지 않는다.
+   */
+  const conflictPaths = $derived(new Set(conflictRecords.map((record) => record.obsidianPath)));
+  const shownLocalChanges = $derived(
+    localChanges.filter((change) => !conflictPaths.has(change.path)),
+  );
+  const shownRemoteChanges = $derived(
+    remoteChanges.filter((change) => !change.path || !conflictPaths.has(change.path)),
+  );
 
-  const totalChanges = $derived(localChanges.length);
-  const totalRemoteChanges = $derived(remoteChanges.length);
-
-  const remoteChangesByType = $derived({
-    created: remoteChanges.filter((c) => c.type === "created"),
-    modified: remoteChanges.filter((c) => c.type === "modified"),
-    deleted: remoteChanges.filter((c) => c.type === "deleted"),
-    moved: remoteChanges.filter((c) => c.type === "moved"),
-  });
+  const totalChanges = $derived(shownLocalChanges.length + folderMoves.length);
+  const totalRemoteChanges = $derived(shownRemoteChanges.length);
 
   const statusIcon = $derived(
     syncState === "syncing"
@@ -151,12 +181,13 @@
       : syncState === "error"
         ? "오류 발생"
         : syncState === "conflict"
-          ? `충돌 ${conflicts.length}건`
+          ? `충돌 ${conflictRecords.length}건`
           : "준비됨",
   );
 
-  function formatTime(iso: string | null): string {
-    if (!iso) return "아직 동기화 안됨";
+  /** 지난 때를 「N분 전」 처럼 — 없으면 `never` 를 보인다. */
+  function formatTime(iso: string | null, never: string): string {
+    if (!iso) return never;
     const d = new Date(iso);
     const now = Date.now();
     const diff = now - d.getTime();
@@ -202,13 +233,89 @@
   }
 
   function fileName(path: string): string {
-    return path.split("/").pop()?.replace(/\.md$/, "") ?? path;
+    return noteNameFromPath(path);
+  }
+
+  function folderOf(path: string): string {
+    return path.substring(0, path.lastIndexOf("/"));
+  }
+
+  /** 옮긴 노트는 어디서 왔는지를 보인다 — 새 이름만 보이면 새 노트와 구분되지 않는다. */
+  function localWhere(change: LocalChange): string {
+    return change.type === "moved" && change.movedFrom
+      ? `← ${stripMarkdownExtension(change.movedFrom)}`
+      : folderOf(change.path);
+  }
+
+  /** 원격 변경의 이름 — 볼트에 있는 노트는 노트 이름, 아직 없는 새 페이지는 Notion 제목. */
+  function remoteName(change: RemoteChange): string {
+    if (change.path) return fileName(change.path);
+    return change.title ?? "Notion 페이지";
+  }
+
+  function remotePullLabel(change: RemoteChange): string {
+    return change.type === "deleted"
+      ? "Notion 에서 지운 대로 이 노트도 지우기"
+      : "이 노트만 Notion 에서 받기";
+  }
+
+  /*
+   * 항목을 누르면 줄 비교 창을 연다(Obsidian Git 처럼) — 노트는 열기 단추로 연다. 컴포넌트 밖(core)으로 나가는
+   * 값이라 반응 프록시가 아닌 평범한 사본을 넘긴다 — 프록시는 복제(structuredClone)하면 깨진다.
+   */
+  function showLocalDiff(change: LocalChange): void {
+    onShowLocalDiff($state.snapshot(change));
+  }
+
+  /** 아직 받지 않은 새 페이지는 견줄 지난 글이 없다 — 받은 뒤에 견준다. */
+  function showRemoteDiff(change: RemoteChange): void {
+    if (change.path) onShowRemoteDiff($state.snapshot(change));
+  }
+
+  function discard(change: LocalChange): void {
+    onDiscard($state.snapshot(change));
+  }
+
+  /** 단추의 아이콘 — 열기 · 되돌리기는 Obsidian Git 의 파일 단추, 올리기 · 받기는 그 Push · Pull 과 같은 것이다. */
+  const ICON = {
+    open: "go-to-file",
+    push: "upload",
+    pull: "download",
+    discard: "undo",
+    refresh: "refresh-cw",
+  } as const;
+
+  /**
+   * 「전체 확인」 줄의 툴팁. 동기화는 평소 바뀐 노트만 확인해 빠르다 — 대신 Notion 에서 지운 노트는 전체
+   * 확인 때 반영된다. 주기는 설정이 정하므로 숫자는 적지 않는다.
+   */
+  const FULL_SCAN_HINT =
+    "Notion 에서 지운 노트는 전체 확인 때 볼트에 반영됩니다. 전체 확인은 동기화가 주기마다 함께 하고, 그 사이에는 바뀐 노트만 확인합니다. 지금 하려면 명령 「Pull from Notion (전체 확인)」 을 실행하세요.";
+
+  /**
+   * 단추에 Obsidian 아이콘을 넣는다 — 글 없이 아이콘만 두고, 무엇을 하는지는 `aria-label` 이 마우스를 올렸을
+   * 때 Obsidian 툴팁으로 보인다. `title` 은 두지 않는다 — 브라우저 툴팁이 한 번 더 뜬다.
+   */
+  function icon(node: HTMLElement, name: string): void {
+    setIcon(node, name);
   }
 
   let changesExpanded = $state(true);
   let remoteExpanded = $state(true);
   let conflictsExpanded = $state(true);
 </script>
+
+<!-- 항목 동작 — 아이콘만 두고 설명은 aria-label(툴팁)로. 쓰는 동작은 동기화 중에 막는다. -->
+{#snippet action(name: string, label: string, run: () => void, disabled: boolean)}
+  <button
+    class="im-sync-file-action clickable-icon"
+    aria-label={label}
+    {disabled}
+    onclick={run}
+    type="button"
+    use:icon={name}
+  ></button>
+{/snippet}
 
 <div class="im-sync-dashboard">
   <!-- Status Header -->
@@ -222,16 +329,25 @@
       onclick={onRefresh}
       disabled={isSyncing}
       aria-label="새로고침"
-    >
-      ↻
-    </button>
+      type="button"
+      use:icon={ICON.refresh}
+    ></button>
   </div>
 
-  <!-- Last Sync Time -->
-  <div class="im-sync-meta">
-    <span class="im-sync-meta-label">마지막 동기화</span>
-    <span class="im-sync-meta-value">{formatTime(lastSyncAt)}</span>
-  </div>
+  <!-- Last Sync Time — 오류 중에 마지막 동기화를 모르면 줄을 뺀다. 초기화가 실패하면 기록을 못 읽었으므로 「아직 동기화 안됨」 이 거짓일 수 있다. -->
+  {#if lastSyncAt || syncState !== "error"}
+    <div class="im-sync-meta">
+      <span class="im-sync-meta-label">마지막 동기화</span>
+      <span class="im-sync-meta-value">{formatTime(lastSyncAt, "아직 동기화 안됨")}</span>
+    </div>
+  {/if}
+  <!-- 마지막 전체 확인 — 동기화는 평소 바뀐 노트만 확인한다. Notion 에서 지운 노트가 언제 반영되는지를 여기서 안다(ADR-027). -->
+  {#if lastFullScanAt || syncState !== "error"}
+    <div class="im-sync-meta im-sync-meta-full" aria-label={FULL_SCAN_HINT}>
+      <span class="im-sync-meta-label">전체 확인</span>
+      <span class="im-sync-meta-value">{formatTime(lastFullScanAt, "아직 안 함")}</span>
+    </div>
+  {/if}
 
   <!-- Error Message -->
   {#if errorMessage}
@@ -275,10 +391,20 @@
 
   <!-- Action Buttons -->
   <div class="im-sync-actions">
-    <button class="im-sync-btn im-sync-btn-pull" onclick={onPull} disabled={isSyncing}>
+    <button
+      class="im-sync-btn im-sync-btn-pull"
+      onclick={onPull}
+      disabled={isSyncing || blocked.pull !== null}
+      title={blocked.pull}
+    >
       ↓ Pull
     </button>
-    <button class="im-sync-btn im-sync-btn-push" onclick={onPush} disabled={isSyncing}>
+    <button
+      class="im-sync-btn im-sync-btn-push"
+      onclick={onPush}
+      disabled={isSyncing || blocked.push !== null}
+      title={blocked.push}
+    >
       ↑ Push
     </button>
     <button class="im-sync-btn im-sync-btn-sync" onclick={onSync} disabled={isSyncing}>
@@ -300,24 +426,66 @@
       </button>
       {#if changesExpanded}
         <div class="im-sync-file-list">
-          {#each localChanges as change (change.path)}
-            <button
-              class="im-sync-file-item"
-              onclick={() => change.type !== "deleted" && onOpenFile(change.path)}
-              type="button"
-            >
-              <span class="im-sync-file-type {typeClass(change.type)}">{typeIcon(change.type)}</span
+          {#each folderMoves as move (move.to)}
+            <div class="im-sync-file-row">
+              <div class="im-sync-file-item" title="{move.from} → {move.to}">
+                <span class="im-sync-file-type {typeClass('moved')}">{typeIcon("moved")}</span>
+                <span class="im-sync-file-name">{fileName(move.to)}/</span>
+                <span class="im-sync-file-path">← {move.from}</span>
+              </div>
+              <span class="im-sync-file-actions">
+                {@render action(
+                  ICON.push,
+                  blocked.push ?? "이 폴더의 이동을 Notion 에 올리기",
+                  () => onPushPath(move.to),
+                  isSyncing || blocked.push !== null,
+                )}
+              </span>
+            </div>
+          {/each}
+          {#each shownLocalChanges as change (change.path)}
+            <div class="im-sync-file-row">
+              <button
+                class="im-sync-file-item"
+                onclick={() => showLocalDiff(change)}
+                type="button"
               >
-              <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
-              <span class="im-sync-file-path" title={change.path}
-                >{change.path.substring(0, change.path.lastIndexOf("/"))}</span
-              >
-            </button>
+                <span class="im-sync-file-type {typeClass(change.type)}"
+                  >{typeIcon(change.type)}</span
+                >
+                <span class="im-sync-file-name" title={change.path}>{fileName(change.path)}</span>
+                <span
+                  class="im-sync-file-path"
+                  title={change.movedFrom ? `${change.movedFrom} → ${change.path}` : change.path}
+                  >{localWhere(change)}</span
+                >
+              </button>
+              <span class="im-sync-file-actions">
+                {#if change.type !== "deleted"}
+                  {@render action(ICON.open, "노트 열기", () => onOpenFile(change.path), false)}
+                {/if}
+                {@render action(
+                  ICON.push,
+                  blocked.push ?? "이 노트만 Notion 에 올리기",
+                  () => onPushPath(change.path),
+                  isSyncing || blocked.push !== null,
+                )}
+                {#if change.type === "modified" || change.type === "deleted"}
+                  {@render action(
+                    ICON.discard,
+                    "지난 동기화 때의 글로 되돌리기",
+                    () => discard(change),
+                    isSyncing,
+                  )}
+                {/if}
+              </span>
+            </div>
           {/each}
         </div>
       {/if}
     </div>
-  {:else if syncState !== "syncing"}
+  {:else if syncState === "ready" && conflictRecords.length === 0}
+    <!-- 오류가 났으면 목록을 다 읽었다고 말할 수 없다 — 읽지 못한 것을 「변경 사항 없음」 이라 하지 않는다. -->
     <div class="im-sync-empty">변경 사항 없음</div>
   {/if}
 
@@ -335,15 +503,41 @@
       </button>
       {#if remoteExpanded}
         <div class="im-sync-file-list">
-          {#each remoteChanges as change (change.pageId)}
-            <div class="im-sync-file-item">
-              <span class="im-sync-file-type {typeClass(change.type)}">{typeIcon(change.type)}</span>
-              <span class="im-sync-file-name" title={change.pageId}>
-                {change.pageId.slice(0, 8)}...
-              </span>
-              <span class="im-sync-file-path">
-                {change.type === "created" ? "새 페이지" : change.type === "modified" ? "수정됨" : change.type === "deleted" ? "삭제됨" : "이동됨"}
-              </span>
+          {#each shownRemoteChanges as change (change.pageId)}
+            <div class="im-sync-file-row">
+              <button
+                class="im-sync-file-item"
+                class:im-sync-file-item-static={!change.path}
+                title={change.path ? undefined : "아직 받지 않은 새 페이지 — 받은 뒤에 견줄 수 있습니다"}
+                onclick={() => showRemoteDiff(change)}
+                type="button"
+              >
+                <span class="im-sync-file-type {typeClass(change.type)}"
+                  >{typeIcon(change.type)}</span
+                >
+                <span class="im-sync-file-name" title={change.path ?? change.title}
+                  >{remoteName(change)}</span
+                >
+                <span class="im-sync-file-path" title={change.path}
+                  >{change.path
+                    ? folderOf(change.path)
+                    : change.type === "created"
+                      ? "새 페이지"
+                      : ""}</span
+                >
+              </button>
+              {#if change.path}
+                {@const path = change.path}
+                <span class="im-sync-file-actions">
+                  {@render action(ICON.open, "노트 열기", () => onOpenFile(path), false)}
+                  {@render action(
+                    ICON.pull,
+                    blocked.pull ?? remotePullLabel(change),
+                    () => onPullPath(path),
+                    isSyncing || blocked.pull !== null,
+                  )}
+                </span>
+              {/if}
             </div>
           {/each}
         </div>
@@ -352,7 +546,7 @@
   {/if}
 
   <!-- Conflicts Section -->
-  {#if conflicts.length > 0}
+  {#if conflictRecords.length > 0}
     <div class="im-sync-section im-sync-section-conflict">
       <button
         class="im-sync-section-header"
@@ -361,16 +555,21 @@
       >
         <span class="im-sync-section-chevron" class:im-sync-expanded={conflictsExpanded}>›</span>
         <span>충돌</span>
-        <span class="im-sync-badge im-sync-badge-warn">{conflicts.length}</span>
+        <span class="im-sync-badge im-sync-badge-warn">{conflictRecords.length}</span>
       </button>
       {#if conflictsExpanded}
         <div class="im-sync-file-list">
-          {#each conflicts as conflict (conflict.syncRecord.id)}
-            <div class="im-sync-file-item im-sync-conflict-item">
-              <span class="im-sync-file-type im-sync-change-conflict">C</span>
-              <span class="im-sync-file-name" title={conflict.localChange.path}
-                >{fileName(conflict.localChange.path)}</span
-              >
+          {#each conflictRecords as record (record.id)}
+            <div class="im-sync-file-row">
+              <div class="im-sync-file-item im-sync-conflict-item">
+                <span class="im-sync-file-type im-sync-change-conflict">C</span>
+                <span class="im-sync-file-name" title={record.obsidianPath}
+                  >{fileName(record.obsidianPath)}</span
+                >
+              </div>
+              <span class="im-sync-file-actions">
+                {@render action(ICON.open, "노트 열기", () => onOpenFile(record.obsidianPath), false)}
+              </span>
             </div>
           {/each}
         </div>
@@ -433,9 +632,15 @@
       transform: rotate(360deg);
     }
   }
-  .im-sync-refresh-btn {
-    font-size: 16px;
+  /* 아이콘 단추(새로고침 · 항목 동작) — Obsidian 의 clickable-icon 에 아이콘만 둔다. */
+  .im-sync-refresh-btn,
+  .im-sync-file-action {
     cursor: pointer;
+  }
+  .im-sync-refresh-btn:disabled,
+  .im-sync-file-action:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
   }
 
   /* Meta */
@@ -446,13 +651,21 @@
     color: var(--text-muted);
     font-size: var(--font-ui-smaller);
   }
+  /* 마지막 동기화 · 전체 확인을 한 덩어리로 — 두 줄 사이를 벌리지 않는다. */
+  .im-sync-meta + .im-sync-meta {
+    padding-top: 0;
+  }
 
-  /* Error */
+  /*
+   * Error — 옅은 빨강 바탕(main.css 의 `--im-nobsidian-tint`)에 보통 글색. 오류 바탕 변수는 테마에서 오류
+   * 글색과 같은 색일 수 있어, 예전처럼 함께 쓰면 실패 이유가 바탕에 묻혀 읽히지 않았다(1.13 기본 테마).
+   */
   .im-sync-error {
     margin: 4px 12px;
     padding: 6px 10px;
-    background: var(--background-modifier-error);
-    color: var(--text-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
+    border-left: 3px solid var(--text-error);
+    color: var(--text-normal);
     border-radius: 4px;
     font-size: var(--font-ui-smaller);
   }
@@ -517,7 +730,7 @@
     margin-left: 8px;
   }
   .im-sync-cancel-btn:hover {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
   }
 
   /* Completion Summary */
@@ -622,7 +835,7 @@
     font-weight: 500;
   }
   .im-sync-badge-warn {
-    background: var(--background-modifier-error);
+    background: rgba(var(--color-red-rgb), var(--im-nobsidian-tint));
     color: var(--text-error);
   }
   .im-sync-badge-remote {
@@ -648,6 +861,9 @@
   }
   .im-sync-file-item:hover {
     background: var(--background-modifier-hover);
+  }
+  .im-sync-file-item-static {
+    cursor: default;
   }
   .im-sync-file-type {
     font-family: var(--font-monospace);
@@ -711,5 +927,26 @@
   }
   .im-sync-resolve-btn:hover {
     background: var(--background-modifier-hover);
+  }
+  .im-sync-file-row {
+    display: flex;
+    align-items: center;
+  }
+  .im-sync-file-row > .im-sync-file-item {
+    flex: 1;
+    min-width: 0;
+  }
+  .im-sync-file-actions {
+    display: flex;
+    gap: 2px;
+    opacity: 0;
+  }
+  .im-sync-file-row:hover .im-sync-file-actions,
+  .im-sync-file-row:focus-within .im-sync-file-actions {
+    opacity: 1;
+  }
+  .im-sync-file-action {
+    --icon-size: var(--icon-s);
+    padding: var(--size-2-1) var(--size-2-2);
   }
 </style>

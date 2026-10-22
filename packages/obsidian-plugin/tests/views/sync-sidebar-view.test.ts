@@ -106,6 +106,60 @@ describe("SyncSidebarView", () => {
     expect(mount).toHaveBeenCalledTimes(1);
   });
 
+  it("변경 패널의 항목별 올리기 · 받기는 그 노트 경로로, 되돌리기는 그 변경으로 넘긴다", () => {
+    const actions = {
+      onPull: vi.fn(),
+      onPush: vi.fn(),
+      onSync: vi.fn(),
+      onRefresh: vi.fn(),
+      onResolveConflict: vi.fn(),
+      onCancel: vi.fn(),
+      onOpenFile: vi.fn(),
+      onPushPath: vi.fn().mockResolvedValue(undefined),
+      onDiscard: vi.fn().mockResolvedValue(undefined),
+      onPullPath: vi.fn().mockResolvedValue(undefined),
+    };
+    view.setActions(actions);
+    view.updateState({ lastSyncAt: null });
+
+    // 되돌리기는 확인 창이 고친 노트인지 지운 노트인지를 말하므로 변경을 통째로 넘긴다.
+    const change = { path: "b.md", type: "deleted", currentHash: "", previousHash: "h1" };
+    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (p: unknown) => void>;
+    props.onPushPath!("a.md");
+    props.onDiscard!(change);
+    props.onPullPath!("c.md");
+    expect(actions.onPushPath).toHaveBeenCalledWith("a.md");
+    expect(actions.onDiscard).toHaveBeenCalledWith(change);
+    expect(actions.onPullPath).toHaveBeenCalledWith("c.md");
+  });
+
+  it("변경 패널에서 누른 변경을 그대로 줄 비교로 넘긴다", () => {
+    const actions = {
+      onPull: vi.fn(),
+      onPush: vi.fn(),
+      onSync: vi.fn(),
+      onRefresh: vi.fn(),
+      onResolveConflict: vi.fn(),
+      onCancel: vi.fn(),
+      onOpenFile: vi.fn(),
+      onPushPath: vi.fn(),
+      onDiscard: vi.fn(),
+      onPullPath: vi.fn(),
+      onShowLocalDiff: vi.fn(),
+      onShowRemoteDiff: vi.fn(),
+    };
+    view.setActions(actions);
+    view.updateState({ lastSyncAt: null });
+
+    const local = { path: "a.md", type: "modified", currentHash: "h2", previousHash: "h1" };
+    const remote = { pageId: "p1", type: "modified", path: "b.md", lastEdited: "t" };
+    const props = vi.mocked(mount).mock.calls[0]![1]!.props as Record<string, (c: unknown) => void>;
+    props.onShowLocalDiff!(local);
+    props.onShowRemoteDiff!(remote);
+    expect(actions.onShowLocalDiff).toHaveBeenCalledWith(local);
+    expect(actions.onShowRemoteDiff).toHaveBeenCalledWith(remote);
+  });
+
   it("actions 없으면 mount 안 함", () => {
     view.updateState({});
     expect(mount).not.toHaveBeenCalled();

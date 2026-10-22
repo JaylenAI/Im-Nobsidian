@@ -8,6 +8,12 @@ export interface BaseFileOptions {
   readonly schema: Record<string, BasePropertySchema>;
   readonly viewsConfig: DatabaseViewsConfig;
   readonly folderPath: string;
+  /**
+   * 날짜 속성 이름 → 기간의 끝을 적는 짝 키(`<이름>_end`). 행 노트는 기간을 두 키로 적으므로 표에 그 속성이
+   * 보이면 끝 열도 바로 뒤에 둔다(B13). 받은 행 가운데 기간이 있는 속성만 — 기간을 쓰지 않는 날짜 속성에
+   * 늘 빈 열을 두지 않는다.
+   */
+  readonly rangeEnds?: ReadonlyMap<string, string>;
 }
 
 export type BasesViewType = "table" | "cards" | "list";
@@ -70,7 +76,7 @@ interface BasesView {
   name: string;
   order?: string[];
   sort?: Array<{ property: string; direction: string }>;
-  groupBy?: { property: string; direction?: string };
+  groupBy?: { property: string; direction: string };
   image?: string;
   filters?: BasesFilterNode;
 }
@@ -95,7 +101,7 @@ export class BaseFileGenerator {
     this.writeFilters(lines, options.folderPath);
     this.writeFormulas(lines, options.viewsConfig.views);
     this.writePropertyDisplayNames(lines, options.schema);
-    this.writeViews(lines, options.viewsConfig.views, options.schema);
+    this.writeViews(lines, options.viewsConfig.views, options.schema, options.rangeEnds);
 
     // YAML 파일은 말미 개행으로 끝낸다(POSIX 텍스트 관례·diff 안정성).
     return lines.join("\n") + "\n";
@@ -146,9 +152,10 @@ export class BaseFileGenerator {
     lines: string[],
     views: ViewConfig[],
     schema: Record<string, BasePropertySchema>,
+    rangeEnds: ReadonlyMap<string, string> = new Map(),
   ): void {
     const basesViews = views
-      .map((v) => this.convertView(v, schema))
+      .map((v) => this.convertView(v, schema, rangeEnds))
       .filter((v): v is NonNullable<typeof v> => v !== null);
 
     if (basesViews.length === 0) {
@@ -187,9 +194,7 @@ export class BaseFileGenerator {
       if (view.groupBy) {
         lines.push("    groupBy:");
         lines.push(`      property: ${this.propRef(view.groupBy.property)}`);
-        if (view.groupBy.direction) {
-          lines.push(`      direction: ${view.groupBy.direction}`);
-        }
+        lines.push(`      direction: ${view.groupBy.direction}`);
       }
 
       if (view.image) {
@@ -270,6 +275,7 @@ export class BaseFileGenerator {
   private convertView(
     view: ViewConfig,
     schema: Record<string, BasePropertySchema>,
+    rangeEnds: ReadonlyMap<string, string>,
   ): BasesView | null {
     const basesType = basesViewMappingOf(view.type).type;
     if (!basesType) return null;
@@ -282,15 +288,17 @@ export class BaseFileGenerator {
     if (view.properties && view.properties.length > 0) {
       const visible = view.properties
         .filter((p) => p.visible !== false)
-        .map((p) => {
+        .flatMap((p) => {
           const name = p.propertyName ?? this.resolvePropertyName(p.propertyId, schema);
-          if (!name) return null;
+          if (!name) return [];
           // title 타입 속성은 카드/표 제목(file.name)과 중복되고, 프론트매터엔
           // title 키가 없어(본문 H1·파일명으로 보존) 빈 컬럼으로 표시되므로 제외한다.
-          if (schema[name]?.type === "title") return null;
-          return this.toNoteRef(name);
-        })
-        .filter((name): name is string => !!name);
+          if (schema[name]?.type === "title") return [];
+          const end = rangeEnds.get(name);
+          return end === undefined
+            ? [this.toNoteRef(name)]
+            : [this.toNoteRef(name), this.toNoteRef(end)];
+        });
 
       if (visible.length > 0) {
         result.order = ["file.name", ...visible];
@@ -321,14 +329,12 @@ export class BaseFileGenerator {
       const propName =
         view.groupBy.propertyName ?? this.resolvePropertyName(view.groupBy.propertyId, schema);
       if (propName) {
+        // Bases 는 direction 이 없는 groupBy 를 읽지 못한다(「베이스 파일을 읽어들일 수 없음」).
+        // Notion 의 수동 그룹 순서는 Bases 에 대응이 없어 오름차순으로 쓰고, 원래 값은
+        // 사이드카(`groupBy.sort`)에 남긴다 — 손실은 사이드카의 degrade 리포트가 알린다.
         result.groupBy = {
           property: this.toNoteRef(propName),
-          direction:
-            view.groupBy.sort === "ascending"
-              ? "ASC"
-              : view.groupBy.sort === "descending"
-                ? "DESC"
-                : undefined,
+          direction: view.groupBy.sort === "descending" ? "DESC" : "ASC",
         };
       }
     }

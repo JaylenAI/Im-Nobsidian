@@ -1,0 +1,2655 @@
+{
+  "pageId": "3f713b18-d382-8141-b140-e0654a343de4",
+  "blocks": [
+    {
+      "id": "3f713b18-d382-810a-969c-fe109ae082c6",
+      "has_children": false,
+      "type": "child_page",
+      "child_page": {
+        "title": "__bf_nfm_child"
+      }
+    },
+    {
+      "id": "a5a68faa-1a21-44b6-a8ff-aff450a3ed20",
+      "has_children": false,
+      "type": "child_database",
+      "child_database": {
+        "title": "__bf_nfm_db"
+      }
+    },
+    {
+      "id": "3f713b18-d382-819a-9f49-db2e93378d4b",
+      "has_children": false,
+      "type": "heading_1",
+      "heading_1": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "제목 하나",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "제목 하나",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-815d-bc84-ff9ad54d29a7",
+      "has_children": false,
+      "type": "heading_2",
+      "heading_2": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "파란 제목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "파란 제목",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "blue"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8106-ac0d-dac39411f2e6",
+      "has_children": false,
+      "type": "heading_3",
+      "heading_3": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "세 번째",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "세 번째",
+            "href": null
+          }
+        ],
+        "is_toggleable": false,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8131-ae5c-fa1b8f7861c0",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "굵게",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "굵게",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "기울임",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": true,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "기울임",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "취소",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": true,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "취소",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "밑줄",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": true,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "밑줄",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "코드",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": true,
+              "color": "default"
+            },
+            "plain_text": "코드",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "굵은기울임",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": true,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "굵은기울임",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8162-936d-cd2badaa04e5",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "파랑",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "blue"
+            },
+            "plain_text": "파랑",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " · ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " · ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "노랑배경",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "yellow_background"
+            },
+            "plain_text": "노랑배경",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " · ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " · ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "빨강굵게밑줄",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": true,
+              "code": false,
+              "color": "red"
+            },
+            "plain_text": "빨강굵게밑줄",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " · ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " · ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "링크",
+              "link": {
+                "url": "https://example.com/x?a=1&b=2"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "링크",
+            "href": "https://example.com/x?a=1&b=2"
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " · ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " · ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "굵은링크",
+              "link": {
+                "url": "https://example.com/y"
+              }
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "굵은링크",
+            "href": "https://example.com/y"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81be-97b8-f79c497951c3",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "특수 * _ # | < > ` ~ [ ] \\ $5 와 $10 · <b>태그</b> · &amp; · 1. 숫자",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "특수 * _ # | < > ` ~ [ ] \\ $5 와 $10 · <b>태그</b> · &amp; · 1. 숫자",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81cf-9717-ee7759001c84",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "# 줄 머리 샵",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "# 줄 머리 샵",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8170-a693-ddea3abf4f1c",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "- 줄 머리 대시",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "- 줄 머리 대시",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8115-96dd-ec18a8e3d456",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "> 줄 머리 꺾쇠",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "> 줄 머리 꺾쇠",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8139-a3a7-c8e97efec7e8",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "첫 줄\n둘째 줄(soft)",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "첫 줄\n둘째 줄(soft)",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-811b-98e2-cb1906b596c5",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "수식 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "수식 ",
+            "href": null
+          },
+          {
+            "type": "equation",
+            "equation": {
+              "expression": "x^2 + y"
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "x^2 + y",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " 와 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " 와 ",
+            "href": null
+          },
+          {
+            "type": "equation",
+            "equation": {
+              "expression": "\\frac{a}{b}"
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "\\frac{a}{b}",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81bb-9982-f91e39510e28",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "U ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "U ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "user",
+              "user": {
+                "object": "user",
+                "id": "00000000-0000-4000-8000-000000000001"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "@사용자",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " B ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " B ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "user",
+              "user": {
+                "object": "user",
+                "id": "00000000-0000-4000-8000-000000000003",
+                "type": "bot"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "@사용자",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81e2-a08d-cebc395e4a8e",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "D ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "D ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "date",
+              "date": {
+                "start": "2026-09-26",
+                "end": null,
+                "time_zone": null
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "2026-09-26",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "date",
+              "date": {
+                "start": "2026-09-26",
+                "end": "2026-09-27",
+                "time_zone": null
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "2026-09-26 → 2026-09-27",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "date",
+              "date": {
+                "start": "2026-09-26T09:00:00.000+09:00",
+                "end": null,
+                "time_zone": null
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "2026-09-26T09:00:00.000+09:00",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "date",
+              "date": {
+                "start": "2026-09-26T09:00:00.000+05:30",
+                "end": null,
+                "time_zone": null
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "2026-09-26T09:00:00.000+05:30",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8104-b812-e1b72cd65837",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "P ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "P ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "page",
+              "page": {
+                "id": "3f713b18-d382-810a-969c-fe109ae082c6"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_child",
+            "href": "https://app.notion.com/p/3f713b18d382810a969cfe109ae082c6"
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": " DB ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": " DB ",
+            "href": null
+          },
+          {
+            "type": "mention",
+            "mention": {
+              "type": "database",
+              "database": {
+                "id": "a5a68faa-1a21-44b6-a8ff-aff450a3ed20"
+              }
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "__bf_nfm_db",
+            "href": "https://app.notion.com/p/a5a68faa1a2144b6a8ffaff450a3ed20"
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-813a-a3ba-d08d64ab3ac0",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "배경 문단",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "배경 문단",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "gray_background"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81c7-9dad-ef7288883fd9",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [],
+        "icon": null,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81e3-aaee-db04f7cde7c7",
+      "has_children": false,
+      "type": "divider",
+      "divider": {}
+    },
+    {
+      "id": "3f713b18-d382-81bb-beeb-c9851f38a3c5",
+      "has_children": true,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "하나",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "하나",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81cf-91dc-e7caad9a66bf",
+          "has_children": true,
+          "type": "bulleted_list_item",
+          "bulleted_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "하나-가",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "하나-가",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "3f713b18-d382-814f-9152-c27b94f1466d",
+              "has_children": false,
+              "type": "bulleted_list_item",
+              "bulleted_list_item": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "하나-가-ㄱ",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "하나-가-ㄱ",
+                    "href": null
+                  }
+                ],
+                "color": "default"
+              }
+            }
+          ]
+        },
+        {
+          "id": "3f713b18-d382-8151-90b6-eef11534faee",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "하나 아래 문단",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "하나 아래 문단",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-8193-9b2c-f6c37f5d529a",
+      "has_children": false,
+      "type": "bulleted_list_item",
+      "bulleted_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "둘",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "둘",
+            "href": null
+          }
+        ],
+        "color": "red"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81ce-886c-ff504864cb1f",
+      "has_children": true,
+      "type": "numbered_list_item",
+      "numbered_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "첫째",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "첫째",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-817e-b0e7-fbd316f26cd2",
+          "has_children": false,
+          "type": "numbered_list_item",
+          "numbered_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "첫째-1",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "첫째-1",
+                "href": null
+              }
+            ],
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-8113-876f-cfa506459f43",
+      "has_children": false,
+      "type": "numbered_list_item",
+      "numbered_list_item": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "둘째",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "둘째",
+            "href": null
+          }
+        ],
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-815c-ab06-d78a04e33a9c",
+      "has_children": true,
+      "type": "to_do",
+      "to_do": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "할 일",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "할 일",
+            "href": null
+          }
+        ],
+        "checked": false,
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-8137-85c9-de0d22d57f13",
+          "has_children": false,
+          "type": "to_do",
+          "to_do": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "끝낸 일",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "끝낸 일",
+                "href": null
+              }
+            ],
+            "checked": true,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-818a-8bb7-e2d4bf2c806d",
+      "has_children": false,
+      "type": "to_do",
+      "to_do": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "끝",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "끝",
+            "href": null
+          }
+        ],
+        "checked": true,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-813e-9262-f19c7a248dc4",
+      "has_children": true,
+      "type": "quote",
+      "quote": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "인용",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "인용",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81b9-9ff3-ce37dd7ae778",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "인용 안 문단",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "인용 안 문단",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-811c-a7d7-e166266380b8",
+      "has_children": false,
+      "type": "quote",
+      "quote": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "갈색 인용",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "갈색 인용",
+            "href": null
+          }
+        ],
+        "color": "brown_background"
+      }
+    },
+    {
+      "id": "3f713b18-d382-812f-a09a-cb01b509ca5a",
+      "has_children": true,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "알림 ",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "알림 ",
+            "href": null
+          },
+          {
+            "type": "text",
+            "text": {
+              "content": "굵게",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "굵게",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "emoji",
+          "emoji": "💡"
+        },
+        "color": "gray_background"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81aa-9b68-e0fbd20cc88b",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "알림 안 문단",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "알림 안 문단",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "3f713b18-d382-81d9-8599-c185a94d0f89",
+          "has_children": false,
+          "type": "bulleted_list_item",
+          "bulleted_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "알림 안 목록",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "알림 안 목록",
+                "href": null
+              }
+            ],
+            "color": "default"
+          }
+        },
+        {
+          "id": "3f713b18-d382-8146-8a1b-e5497346c51b",
+          "has_children": false,
+          "type": "code",
+          "code": {
+            "caption": [],
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "echo hi",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "echo hi",
+                "href": null
+              }
+            ],
+            "language": "bash"
+          }
+        },
+        {
+          "id": "3f713b18-d382-8155-b756-f3224c9478c0",
+          "has_children": true,
+          "type": "toggle",
+          "toggle": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "알림 안 토글",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "알림 안 토글",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "3f713b18-d382-8198-b96a-f9dcfcd37534",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "깊은 문단",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "깊은 문단",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-8122-b17d-cef7a2127897",
+      "has_children": false,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "경고",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "경고",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "emoji",
+          "emoji": "⚠️"
+        },
+        "color": "red_background"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8195-9dfa-f68112df4b3c",
+      "has_children": false,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "아이콘 없는 알림",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "아이콘 없는 알림",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "emoji",
+          "emoji": "💡"
+        },
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81b3-bbd7-c6fbf359ebf3",
+      "has_children": true,
+      "type": "toggle",
+      "toggle": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "토글",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "토글",
+            "href": null
+          }
+        ],
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81ed-9756-d0d9d8bc4fa6",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "토글 안",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "토글 안",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "3f713b18-d382-8146-a0cb-de1ed094432e",
+          "has_children": false,
+          "type": "bookmark",
+          "bookmark": {
+            "caption": [],
+            "url": "https://example.com/in-toggle"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-8167-8068-d26d5b3a7eda",
+      "has_children": true,
+      "type": "toggle",
+      "toggle": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "초록 토글",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "초록 토글",
+            "href": null
+          }
+        ],
+        "color": "green_background"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-8122-a4c2-c64b0654840d",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "안",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "안",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-81c2-b944-e0fbb90b94cc",
+      "has_children": false,
+      "type": "toggle",
+      "toggle": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "빈 토글",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "빈 토글",
+            "href": null
+          }
+        ],
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-816d-99bd-fe95474d367a",
+      "has_children": true,
+      "type": "heading_2",
+      "heading_2": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "접는 제목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "접는 제목",
+            "href": null
+          }
+        ],
+        "is_toggleable": true,
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81b3-8c81-f86f20606204",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "접힌 문단",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "접힌 문단",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "3f713b18-d382-8101-8d84-e44d43cf7ed2",
+          "has_children": false,
+          "type": "bulleted_list_item",
+          "bulleted_list_item": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "접힌 목록",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "접힌 목록",
+                "href": null
+              }
+            ],
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-819b-866e-de53c8cbc72d",
+      "has_children": false,
+      "type": "heading_3",
+      "heading_3": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "빈 접는 제목",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "빈 접는 제목",
+            "href": null
+          }
+        ],
+        "is_toggleable": true,
+        "color": "default"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81b8-a5cc-e1d9ff6e161c",
+      "has_children": false,
+      "type": "code",
+      "code": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "설명",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "설명",
+            "href": null
+          }
+        ],
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "const a = `${b}`;\n// ``` 안\nconsole.log(a);",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "const a = `${b}`;\n// ``` 안\nconsole.log(a);",
+            "href": null
+          }
+        ],
+        "language": "javascript"
+      }
+    },
+    {
+      "id": "3f713b18-d382-819c-b615-e31e1d6aa6ec",
+      "has_children": false,
+      "type": "code",
+      "code": {
+        "caption": [],
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "평문",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "평문",
+            "href": null
+          }
+        ],
+        "language": "plain text"
+      }
+    },
+    {
+      "id": "3f713b18-d382-815e-8e4d-f6b96219bada",
+      "has_children": false,
+      "type": "equation",
+      "equation": {
+        "expression": "E = mc^2"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8128-baf1-e4271cde475c",
+      "has_children": true,
+      "type": "table",
+      "table": {
+        "table_width": 3,
+        "has_column_header": true,
+        "has_row_header": true
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81c5-8470-e2251b71b804",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "항목",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "항목",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "값",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": true,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "값",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "비고",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "비고",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3f713b18-d382-8193-b849-e64328a8843d",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "파이프",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "파이프",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "a | b",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "a | b",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "코드",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": true,
+                    "color": "default"
+                  },
+                  "plain_text": "코드",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        },
+        {
+          "id": "3f713b18-d382-81bb-a271-c723e4cc2d0c",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "빈",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "빈",
+                  "href": null
+                }
+              ],
+              [],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "줄\n바꿈",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "줄\n바꿈",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-81ce-b083-d23db5c792b4",
+      "has_children": true,
+      "type": "table",
+      "table": {
+        "table_width": 2,
+        "has_column_header": false,
+        "has_row_header": false
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-819f-aaef-eaf20847a45e",
+          "has_children": false,
+          "type": "table_row",
+          "table_row": {
+            "cells": [
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "ㄱ",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "ㄱ",
+                  "href": null
+                }
+              ],
+              [
+                {
+                  "type": "text",
+                  "text": {
+                    "content": "ㄴ",
+                    "link": null
+                  },
+                  "annotations": {
+                    "bold": false,
+                    "italic": false,
+                    "strikethrough": false,
+                    "underline": false,
+                    "code": false,
+                    "color": "default"
+                  },
+                  "plain_text": "ㄴ",
+                  "href": null
+                }
+              ]
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-8136-a98a-e0f8cd810ec2",
+      "has_children": true,
+      "type": "column_list",
+      "column_list": {},
+      "children": [
+        {
+          "id": "3f713b18-d382-818d-928b-f654963cff0b",
+          "has_children": true,
+          "type": "column",
+          "column": {},
+          "children": [
+            {
+              "id": "3f713b18-d382-81f7-8468-fc291e4c99c9",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "왼쪽",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "왼쪽",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            }
+          ]
+        },
+        {
+          "id": "3f713b18-d382-8141-935d-de84c2562c87",
+          "has_children": true,
+          "type": "column",
+          "column": {},
+          "children": [
+            {
+              "id": "3f713b18-d382-8141-8d7b-d507f0b80b84",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "오른쪽",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "오른쪽",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            },
+            {
+              "id": "3f713b18-d382-8137-9861-c8302de1636a",
+              "has_children": false,
+              "type": "bulleted_list_item",
+              "bulleted_list_item": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "오른 목록",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "오른 목록",
+                    "href": null
+                  }
+                ],
+                "color": "default"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-81ea-8186-cf29c667b2c1",
+      "has_children": false,
+      "type": "image",
+      "image": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "그림 설명",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "그림 설명",
+            "href": null
+          }
+        ],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/pic.png"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-8172-9275-d378928e112f",
+      "has_children": false,
+      "type": "image",
+      "image": {
+        "caption": [],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/plain.jpg"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-8119-a936-cc7601647647",
+      "has_children": false,
+      "type": "video",
+      "video": {
+        "caption": [],
+        "type": "external",
+        "external": {
+          "url": "https://www.youtube.com/watch?v=abc"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-8185-a506-dec5cdd3d46b",
+      "has_children": false,
+      "type": "file",
+      "file": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "파일",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "파일",
+            "href": null
+          }
+        ],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/doc.zip"
+        },
+        "name": "doc.zip"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81c5-8413-cc4dc9dc05f1",
+      "has_children": false,
+      "type": "pdf",
+      "pdf": {
+        "caption": [],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/a.pdf"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-8137-b909-ceb8a0609e77",
+      "has_children": false,
+      "type": "audio",
+      "audio": {
+        "caption": [],
+        "type": "external",
+        "external": {
+          "url": "https://example.com/a.mp3"
+        }
+      }
+    },
+    {
+      "id": "3f713b18-d382-81fa-bac8-c5e5d5b2f94f",
+      "has_children": false,
+      "type": "bookmark",
+      "bookmark": {
+        "caption": [
+          {
+            "type": "text",
+            "text": {
+              "content": "캡션 [1]",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "캡션 [1]",
+            "href": null
+          }
+        ],
+        "url": "https://example.com/a(b)"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8170-9eb1-f331fdad181a",
+      "has_children": false,
+      "type": "bookmark",
+      "bookmark": {
+        "caption": [],
+        "url": "https://example.com/plain"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8127-9b70-db12d7948334",
+      "has_children": false,
+      "type": "embed",
+      "embed": {
+        "caption": [],
+        "url": "https://example.com/watch?v=1&t=2"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8176-b305-f33916c594ac",
+      "has_children": false,
+      "type": "link_to_page",
+      "link_to_page": {
+        "type": "page_id",
+        "page_id": "3f713b18-d382-810a-969c-fe109ae082c6"
+      }
+    },
+    {
+      "id": "3f713b18-d382-81d9-92d1-ead83bb131fa",
+      "has_children": false,
+      "type": "table_of_contents",
+      "table_of_contents": {
+        "color": "gray"
+      }
+    },
+    {
+      "id": "3f713b18-d382-8162-978a-ede3cffd1d23",
+      "has_children": false,
+      "type": "breadcrumb",
+      "breadcrumb": {}
+    },
+    {
+      "id": "3f713b18-d382-8109-8cee-df11e6af2596",
+      "has_children": true,
+      "type": "synced_block",
+      "synced_block": {
+        "synced_from": null
+      },
+      "children": [
+        {
+          "id": "3f713b18-d382-81f4-acb2-c3e28d242ea6",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "동기화 원본",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "동기화 원본",
+                "href": null
+              }
+            ],
+            "icon": null,
+            "color": "default"
+          }
+        }
+      ]
+    },
+    {
+      "id": "3f713b18-d382-81ee-b93d-e850c74da406",
+      "has_children": false,
+      "type": "paragraph",
+      "paragraph": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "끝 문단",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "끝 문단",
+            "href": null
+          }
+        ],
+        "icon": null,
+        "color": "default"
+      }
+    }
+  ]
+}

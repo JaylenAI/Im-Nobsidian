@@ -3,6 +3,7 @@
  * 한곳에서 보장한다. 토글/콜아웃/칼럼(enhanced-md-converter)과 토글 헤딩
  * (toggle-heading)이 같은 기준을 공유해야 왕복이 수렴한다.
  */
+import { indentWidth, inlineCodeRanges } from "../utils/md-regions.js";
 
 /**
  * 컨테이너 본문 한 줄의 성격. 들여쓰기를 **붙일 때도 뗄 때도** 같은 기준으로 갈라야
@@ -92,21 +93,53 @@ export function dedentContainerBody(text: string): string {
     min = Math.min(min, /^[\t ]*/.exec(l)![0].length);
   });
   if (!Number.isFinite(min)) min = 0;
+  const listCode = listChildCodeIndents(lines, blocks, kinds, min);
 
   // 3패스: 경계(fence)→열0 정렬, 내부(code)→원문 보존, 산문(prose)→공통 들여쓰기 제거.
+  // 목록 항목의 자식 코드는 경계 · 내부 모두 항목 안 깊이({@link listChildCodeIndents})로 둔다.
   return lines
     .map((l, i) => {
       if (l.trim() === "") return "";
-      if (kinds[i] === "code") return l;
+      const nested = listCode.get(i);
+      if (kinds[i] === "code") return nested === undefined ? l : nested + l;
       if (kinds[i] === "fence") {
         // 구조 들여쓰기만 걷어내 접두(`>`)와 언어 정보는 남기고, 폭만 갈아 끼운다.
-        const flat = l.replace(/^[\t ]+/, "");
+        const flat = (nested ?? "") + l.replace(/^[\t ]+/, "");
         const bar = widened.get(i);
         return bar === undefined ? flat : flat.replace(/`{3,}|~{3,}/, bar);
       }
       return l.slice(min);
     })
     .join("\n");
+}
+
+/**
+ * 컨테이너 본문에서 목록 항목의 자식인 코드블록 — 줄마다 내어쓴 뒤 남길 들여쓰기.
+ *
+ * 경계 펜스를 열 0 으로 당기면 콜아웃 · 토글 안 목록의 자식 코드가 항목 밖, 컨테이너 바로 아래로
+ * 빠진다 — 목록이 둘로 갈리고 그 노트를 올리면 Notion 에서도 코드가 항목 밖으로 옮겨진다. 항목의
+ * 자식이면 경계는 산문과 같이 공통 들여쓰기만 걷고, 열 0 의 코드 줄에는 경계와 같은 들여쓰기를
+ * 입힌다 — 맨 위 목록의 {@link alignNestedCodeBodies} 와 같은 모양이다. 닫는 펜스의 들여쓰기가
+ * 다르거나 탭이 아니면 어디까지가 코드인지 확신할 수 없어 예전처럼 열 0 으로 둔다.
+ */
+function listChildCodeIndents(
+  lines: readonly string[],
+  blocks: readonly ContainerBlock[],
+  kinds: readonly ContainerLineKind[],
+  min: number,
+): Map<number, string> {
+  const indents = new Map<number, string>();
+  for (const b of blocks) {
+    if (b.type !== "code" || !b.fence || b.close === null) continue;
+    const indent = b.fence.indent;
+    if (!/^\t+$/.test(indent) || indent.length <= min) continue;
+    if (matchFence(lines[b.close]!)?.indent !== indent) continue;
+    if (!isListItemChild(lines, kinds, b.open)) continue;
+
+    const kept = indent.slice(min);
+    for (let j = b.open; j <= b.close; j++) indents.set(j, kept);
+  }
+  return indents;
 }
 
 /**
@@ -263,6 +296,69 @@ function widenAmbiguousFences(
   return widened;
 }
 
+/** 목록 항목 줄 — 글머리표 · 번호 · 할 일(`- [ ]`). */
+const LIST_ITEM_LINE_RE = /^[\t ]*(?:[-*+]|\d{1,9}[.)])[\t ]/;
+
+/**
+ * 목록 안 코드블록의 코드 줄을 경계 펜스와 같은 깊이로 들여쓴다(S-24).
+ *
+ * NFM 은 목록 항목의 자식 코드블록도 컨테이너 안처럼 경계 펜스만 탭으로 들여쓰고 코드는 열 0 에
+ * 둔다(비대칭 들여쓰기). 그대로 두면 Obsidian 은 열 0 의 코드 줄에서 목록을 끝낸다 — 목록 안에는
+ * 빈 코드블록이, 목록 밖에는 코드가 문단으로 보인다(실볼트 12노트 · 37곳). 코드 줄에 펜스와 같은
+ * 탭을 입히면 CommonMark 가 그 폭만큼 떼고 읽으므로 코드는 그대로다.
+ *
+ * 고치는 것은 **부모가 목록 항목인** 코드블록뿐이다 — 들여쓰기가 더 얕은 가장 가까운 앞 줄이 목록
+ * 항목이면 그 항목의 자식이다. 문단 · 인용의 자식은 Obsidian 에 들여쓸 자리가 없어 둔다. 닫는
+ * 펜스의 들여쓰기가 여는 펜스와 다르면 어디까지가 코드인지 확신할 수 없어 둔다.
+ *
+ * 코드 줄이 경계와 같은 깊이가 되면 코드 속 ``` 줄을 닫는 줄과 가를 근거가 사라진다 — 경계 펜스를
+ * 코드 속 어떤 펜스보다 길게 넓힌다({@link widenAmbiguousFences}).
+ *
+ * 탭 기준 구조 들여쓰기로 부모를 가리므로 콜아웃 들여쓰기 클램프보다 **먼저** 부른다. 원시 export
+ * 에 한 번만 쓴다 — 코드 줄마다 탭을 한 겹 더하므로 두 번 쓰면 코드가 바뀐다.
+ */
+export function alignNestedCodeBodies(text: string): string {
+  const lines = text.split("\n");
+  const blocks = scanContainerBlocks(lines);
+  const kinds = kindsOf(lines, blocks);
+  const widened = widenAmbiguousFences(lines, blocks);
+
+  for (const b of blocks) {
+    if (b.type !== "code" || !b.fence || b.close === null) continue;
+    const indent = b.fence.indent;
+    if (!/^\t+$/.test(indent) || matchFence(lines[b.close]!)?.indent !== indent) continue;
+    if (!isListItemChild(lines, kinds, b.open)) continue;
+
+    for (let j = b.open + 1; j < b.close; j++) {
+      if (lines[j] !== "") lines[j] = indent + lines[j]!;
+    }
+    const bar = widened.get(b.open);
+    if (bar === undefined) continue;
+    lines[b.open] = lines[b.open]!.replace(/`{3,}|~{3,}/, bar);
+    lines[b.close] = lines[b.close]!.replace(/`{3,}|~{3,}/, bar);
+  }
+  return lines.join("\n");
+}
+
+/**
+ * 여는 펜스의 부모가 목록 항목인가 — 들여쓰기가 더 얕은 가장 가까운 앞 줄을 본다. 빈 줄과 다른
+ * 코드블록 · 표의 안쪽 줄은 건너뛴다 — 비대칭 들여쓰기로 열 0 에 있어 부모처럼 보인다.
+ */
+function isListItemChild(
+  lines: readonly string[],
+  kinds: readonly ContainerLineKind[],
+  open: number,
+): boolean {
+  const width = indentWidth(/^[\t ]*/.exec(lines[open]!)![0]);
+  for (let i = open - 1; i >= 0; i--) {
+    const line = lines[i]!;
+    if (line.trim() === "" || kinds[i] === "code") continue;
+    if (indentWidth(/^[\t ]*/.exec(line)![0]) >= width) continue;
+    return LIST_ITEM_LINE_RE.test(line);
+  }
+  return false;
+}
+
 /**
  * 코드블록 **내부**의 문자 구간 — 코드에 적힌 마크업을 구조로 오인하지 않기 위한 경계.
  *
@@ -298,6 +394,43 @@ export function isInsideRanges(
   offset: number,
 ): boolean {
   return ranges.some(([start, end]) => offset >= start && offset < end);
+}
+
+/**
+ * 코드의 문자 구간 전부 — 펜스 줄 · 코드블록 안 · 인라인 코드.
+ *
+ * 인라인 코드는 펜스 밖 줄에서만 찾는다. 펜스의 백틱까지 짝으로 세면 한 코드블록의 닫는 펜스와 다음
+ * 코드블록의 여는 펜스 사이 글을 통째로 코드로 본다.
+ */
+export function codeRanges(text: string): Array<readonly [number, number]> {
+  const lines = text.split("\n");
+  const kinds = classifyContainerLines(lines.map((l) => splitContainerPrefix(l).body));
+  const ranges: Array<readonly [number, number]> = [];
+  let offset = 0;
+  lines.forEach((line, i) => {
+    if (kinds[i] !== "prose") ranges.push([offset, offset + line.length + 1] as const);
+    offset += line.length + 1;
+  });
+  // 코드 줄은 같은 길이의 공백으로 지워 offset 을 지킨다 — 빈 줄이 되어 문단도 끊긴다.
+  const prose = lines.map((l, i) => (kinds[i] === "prose" ? l : " ".repeat(l.length))).join("\n");
+  return [...ranges, ...inlineCodeRanges(prose)];
+}
+
+/**
+ * 코드 밖에서 시작하는 일치에만 치환을 건다. 일치가 인라인 코드를 품어도 된다(`<u>a \`b\` c</u>`) —
+ * 코드 밖 조각마다 치환하는 `mapOutsideCode` 는 코드를 사이에 둔 짝을 찾지 못한다.
+ */
+export function replaceOutsideCode(
+  content: string,
+  re: RegExp,
+  replace: (match: string, ...groups: string[]) => string,
+): string {
+  const code = codeRanges(content);
+  return content.replace(re, (match: string, ...rest: unknown[]) => {
+    const at = rest.findIndex((arg) => typeof arg === "number");
+    if (isInsideRanges(code, rest[at] as number)) return match;
+    return replace(match, ...(rest.slice(0, at) as string[]));
+  });
 }
 
 /**

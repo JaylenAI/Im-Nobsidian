@@ -26,7 +26,12 @@ export {
   filterEntries,
 } from "./filter-engine.js";
 export type { FilterCondition } from "./filter-engine.js";
-export { getNotionColor, getNotionBgColor, generateColorCSS } from "./color-map.js";
+export {
+  getNotionColor,
+  getNotionBgColor,
+  generateColorCSS,
+  NOTION_COLOR_NAMES,
+} from "./color-map.js";
 export type {
   DBEntry,
   PropertyValue,

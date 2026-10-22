@@ -3,7 +3,6 @@ import {
   notionEnhancedToObsidian,
   obsidianToNotionEnhanced,
 } from "../../src/converter/enhanced-md-converter.js";
-import { BlockConverter } from "../../src/converter/block-converter.js";
 import { TOC_MARKER, tocMarker, embedMarker } from "../../src/constants/markers.js";
 
 /**
@@ -38,19 +37,6 @@ describe("NFM 전용 블록 보존", () => {
       const raw = `> <table_of_contents color="blue"/>`;
       expect(notionEnhancedToObsidian(raw)).toContain(tocMarker("blue"));
       expect(roundTrip(raw).trim()).toBe(raw);
-    });
-
-    it("색 마커도 legacy 블록 경로에서 table_of_contents 로 복원된다", () => {
-      // 마커 형식이 넓어졌는데 읽는 쪽이 하나만 알면, 그 문서만 마커가 평범한
-      // 문단으로 Notion 에 기록된다(P1 과 같은 "한쪽 경로 누락" 결함).
-      const blocks = new BlockConverter().markdownToNotionBlocks(
-        `# Title\n\n${tocMarker("gray")}\n\nBody`,
-      ) as Array<Record<string, unknown>>;
-
-      const toc = blocks.find((b) => b.type === "table_of_contents");
-      expect(toc, "색 마커가 table_of_contents 로 복원되지 않음").toBeDefined();
-      expect((toc!.table_of_contents as { color: string }).color).toBe("gray");
-      expect(JSON.stringify(blocks)).not.toContain("im-nobsidian:toc");
     });
   });
 
@@ -90,6 +76,30 @@ describe("NFM 전용 블록 보존", () => {
     it("들여쓴 임베드는 깊이를 잃지 않는다", () => {
       const raw = `\t<embed src="https://ex.com/x"></embed>`;
       expect(roundTrip(raw)).toContain(`\t<embed src="https://ex.com/x"></embed>`);
+    });
+
+    // 실볼트 사본 E2E — 캡션 있는 임베드 5노트가 원시 태그로 남았다. 캡션은 태그 안에 온다.
+    it("캡션 있는 임베드도 원시 태그를 남기지 않고 캡션을 이름으로 보인다", () => {
+      const raw = `<embed src="https://ex.com/v">**굵은** 설명</embed>`;
+      const pulled = notionEnhancedToObsidian(raw).trim();
+
+      expect(pulled).not.toContain("<embed");
+      expect(pulled).toBe(
+        `[🔗 **굵은** 설명](https://ex.com/v)${embedMarker("https://ex.com/v", "**굵은** 설명")}`,
+      );
+    });
+
+    it("캡션까지 왕복한다 — 빼면 push 가 Notion 의 캡션을 지운다", () => {
+      const raw = `<embed src="https://ex.com/v">**굵은** 설명</embed>`;
+      expect(roundTrip(raw).trim()).toBe(raw);
+    });
+
+    it("캡션의 대괄호 · 태그가 링크 이름 끝을 앞당기지 않는다", () => {
+      const raw = `<embed src="https://ex.com/v">a [b] <span color="red">c</span></embed>`;
+      const pulled = notionEnhancedToObsidian(raw).trim();
+
+      expect(pulled.startsWith("[🔗 a b c](https://ex.com/v)")).toBe(true);
+      expect(roundTrip(raw).trim()).toBe(raw);
     });
   });
 

@@ -1,6 +1,7 @@
 import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import SyncDashboard from "./SyncDashboard.svelte";
+import type { LocalChange, RemoteChange } from "@im-nobsidian/core";
 import type { SyncDashboardState, SyncStatePatch } from "../sync/sync-controller.js";
 
 export const SYNC_SIDEBAR_TYPE = "im-notion-sync-sidebar";
@@ -10,9 +11,16 @@ interface SyncActions {
   onPush: () => Promise<void>;
   onSync: () => Promise<void>;
   onRefresh: () => Promise<void>;
-  onResolveConflict: () => void;
+  onResolveConflict: () => Promise<void>;
   onCancel: () => void;
   onOpenFile: (path: string) => void;
+  onPushPath: (path: string) => Promise<void>;
+  /** 로컬 변경 하나를 지난 동기화 때의 글로 되돌린다 — 되돌리기 전에 확인 창이 묻는다. */
+  onDiscard: (change: LocalChange) => Promise<void>;
+  onPullPath: (path: string) => Promise<void>;
+  /** 변경 하나의 줄 비교 창을 연다 — 보기만 한다. */
+  onShowLocalDiff: (change: LocalChange) => void;
+  onShowRemoteDiff: (change: RemoteChange) => void;
 }
 
 // 동기화 상태 형태는 SyncController(SSOT)에서 가져온다. 사이드바는 상태를 표시·전달만 한다.
@@ -24,14 +32,17 @@ export class SyncSidebarView extends ItemView {
   private stateUpdater: ((state: SyncState) => void) | null = null;
   private state: SyncState = {
     lastSyncAt: null,
+    lastFullScanAt: null,
     localChanges: [],
+    folderMoves: [],
     remoteChanges: [],
-    conflicts: [],
+    conflictRecords: [],
     syncState: "ready",
     operationType: null,
     progress: null,
     errorMessage: null,
     completionSummary: null,
+    blocked: { push: null, pull: null },
   };
 
   constructor(leaf: WorkspaceLeaf) {
@@ -82,6 +93,11 @@ export class SyncSidebarView extends ItemView {
         onRefresh: () => this.actions!.onRefresh(),
         onCancel: () => this.actions!.onCancel(),
         onOpenFile: (path: string) => this.actions!.onOpenFile(path),
+        onPushPath: (path: string) => void this.actions!.onPushPath(path),
+        onDiscard: (change: LocalChange) => void this.actions!.onDiscard(change),
+        onPullPath: (path: string) => void this.actions!.onPullPath(path),
+        onShowLocalDiff: (change: LocalChange) => this.actions!.onShowLocalDiff(change),
+        onShowRemoteDiff: (change: RemoteChange) => this.actions!.onShowRemoteDiff(change),
         onResolveConflict: () => this.actions!.onResolveConflict(),
       },
     });
@@ -94,7 +110,7 @@ export class SyncSidebarView extends ItemView {
 
   async onClose(): Promise<void> {
     if (this.component) {
-      unmount(this.component);
+      void unmount(this.component);
       this.component = null;
     }
   }

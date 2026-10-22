@@ -1,14 +1,23 @@
 import { Command } from "commander";
-import { ConfigManager, NotionClient } from "@im-nobsidian/core";
+import {
+  ConfigManager,
+  NOTION_TOKEN_PREFIX,
+  NotionClient,
+  notionIdFromInput,
+} from "@im-nobsidian/core";
 import { input, confirm } from "@inquirer/prompts";
 import ora from "ora";
 import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
 
+/** 루트 페이지에서 ID 를 못 찾았을 때 — 주소를 그대로 붙여 넣어도 된다고 말한다. */
+const ROOT_PAGE_UNREADABLE =
+  "루트 페이지에서 Notion 페이지 ID(32자리)를 찾지 못했습니다 — 페이지 주소나 ID 를 넣으세요.";
+
 export const initCommand = new Command("init")
   .description("Im-Nobsidian 초기 설정")
   .option("--token <token>", "Notion Integration Token")
-  .option("--root-page-id <id>", "루트 페이지 ID")
+  .option("--root-page-id <id>", "루트 페이지 ID 또는 페이지 주소")
   .option("--non-interactive", "비대화형 모드")
   .action(async (options: { token?: string; rootPageId?: string; nonInteractive?: boolean }) => {
     const cwd = process.cwd();
@@ -24,8 +33,15 @@ export const initCommand = new Command("init")
         return;
       }
 
-      if (!options.token.startsWith("ntn_")) {
-        console.error("토큰은 ntn_으로 시작해야 합니다.");
+      if (!options.token.startsWith(NOTION_TOKEN_PREFIX)) {
+        console.error(`토큰은 ${NOTION_TOKEN_PREFIX}으로 시작해야 합니다.`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const rootPageId = notionIdFromInput(options.rootPageId);
+      if (rootPageId === null) {
+        console.error(ROOT_PAGE_UNREADABLE);
         process.exitCode = 1;
         return;
       }
@@ -37,9 +53,8 @@ export const initCommand = new Command("init")
         spinner.stop();
         console.log(`  ${icons.success} Token validated`);
 
-        await configManager.init({ token: options.token, rootPageId: options.rootPageId });
+        await configManager.init({ token: options.token, rootPageId });
         console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
-        console.log(`  ${icons.success} State DB initialized`);
         console.log(
           `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
         );
@@ -62,7 +77,9 @@ export const initCommand = new Command("init")
 
     const token = await input({
       message: "Notion Integration Token:",
-      validate: (v) => v.startsWith("ntn_") || "ntn_으로 시작하는 토큰을 입력하세요",
+      validate: (v) =>
+        v.startsWith(NOTION_TOKEN_PREFIX) ||
+        `${NOTION_TOKEN_PREFIX}으로 시작하는 토큰을 입력하세요`,
     });
 
     const spinner = ora("Notion 연결 확인 중...").start();
@@ -89,14 +106,15 @@ export const initCommand = new Command("init")
         console.log(`    ${dimText(`${i + 1}.`)} ${title}`);
       }
 
-      const rootPageId = await input({
-        message: "루트 페이지 ID (위에서 선택하거나 직접 입력):",
+      const rootPageInput = await input({
+        message: "루트 페이지 ID 또는 주소 (위에서 선택하거나 직접 입력):",
         default: result.results[0]?.id,
+        validate: (value) => notionIdFromInput(value) !== null || ROOT_PAGE_UNREADABLE,
       });
+      const rootPageId = notionIdFromInput(rootPageInput)!;
 
       await configManager.init({ token, rootPageId });
       console.log(`\n  ${icons.success} Config saved to ${dimText(configManager.configPath)}`);
-      console.log(`  ${icons.success} State DB initialized`);
       console.log(
         `\n  ${header(chalk.green("Ready!"))} Run ${chalk.cyan("nobsi sync")} to start syncing.`,
       );

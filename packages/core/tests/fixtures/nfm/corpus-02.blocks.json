@@ -1,0 +1,170 @@
+{
+  "pageId": "3f713b18-d382-8191-836a-d8efb6098326",
+  "blocks": [
+    {
+      "id": "85656d28-faa5-4fc9-b237-c259930a3642",
+      "has_children": true,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "주간 회의 준비물",
+              "link": null
+            },
+            "annotations": {
+              "bold": true,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "주간 회의 준비물",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "icon",
+          "icon": {
+            "name": "drafts",
+            "color": "lightgray"
+          }
+        },
+        "color": "default"
+      },
+      "children": [
+        {
+          "id": "7b7191ac-9e64-442e-8c20-fcb5aafb03b9",
+          "has_children": false,
+          "type": "paragraph",
+          "paragraph": {
+            "rich_text": [],
+            "icon": null,
+            "color": "default"
+          }
+        },
+        {
+          "id": "b01a0882-aee3-415f-9641-09a52b88e0f6",
+          "has_children": true,
+          "type": "toggle",
+          "toggle": {
+            "rich_text": [
+              {
+                "type": "text",
+                "text": {
+                  "content": "회의록 양식",
+                  "link": null
+                },
+                "annotations": {
+                  "bold": false,
+                  "italic": false,
+                  "strikethrough": false,
+                  "underline": false,
+                  "code": false,
+                  "color": "default"
+                },
+                "plain_text": "회의록 양식",
+                "href": null
+              }
+            ],
+            "color": "default"
+          },
+          "children": [
+            {
+              "id": "1524dd59-6100-4c5f-b0f4-599ffd95c15c",
+              "has_children": false,
+              "type": "paragraph",
+              "paragraph": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "일시, 참석자, 안건, 결정사항, 후속조치 순서로 적는다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "일시, 참석자, 안건, 결정사항, 후속조치 순서로 적는다.",
+                    "href": null
+                  }
+                ],
+                "icon": null,
+                "color": "default"
+              }
+            },
+            {
+              "id": "0d54dbbc-f178-45e8-a9f1-f468704b06c0",
+              "has_children": false,
+              "type": "callout",
+              "callout": {
+                "rich_text": [
+                  {
+                    "type": "text",
+                    "text": {
+                      "content": "결정사항이 없으면 회의를 다시 잡는다.",
+                      "link": null
+                    },
+                    "annotations": {
+                      "bold": false,
+                      "italic": false,
+                      "strikethrough": false,
+                      "underline": false,
+                      "code": false,
+                      "color": "default"
+                    },
+                    "plain_text": "결정사항이 없으면 회의를 다시 잡는다.",
+                    "href": null
+                  }
+                ],
+                "icon": {
+                  "type": "emoji",
+                  "emoji": "⚠️"
+                },
+                "color": "default"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "dbbaaaf6-a812-4f3a-ab93-58dd16800ff9",
+      "has_children": false,
+      "type": "callout",
+      "callout": {
+        "rich_text": [
+          {
+            "type": "text",
+            "text": {
+              "content": "형제 콜아웃이다. 앞 콜아웃과 붙어 한 덩어리로 합쳐지면 안 된다.",
+              "link": null
+            },
+            "annotations": {
+              "bold": false,
+              "italic": false,
+              "strikethrough": false,
+              "underline": false,
+              "code": false,
+              "color": "default"
+            },
+            "plain_text": "형제 콜아웃이다. 앞 콜아웃과 붙어 한 덩어리로 합쳐지면 안 된다.",
+            "href": null
+          }
+        ],
+        "icon": {
+          "type": "emoji",
+          "emoji": "💡"
+        },
+        "color": "default"
+      }
+    }
+  ]
+}

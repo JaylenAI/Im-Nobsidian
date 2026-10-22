@@ -50,7 +50,7 @@ Every other tool is one-way. Im-Nobsidian is the first and only open-source proj
 
 **Notion DB → Obsidian Bases** &nbsp; Notion databases are automatically converted to Obsidian Bases `.base` files. Gallery views get cover images via `file.embeds[0]` formulas. Table, cards, list views with sorting, grouping, and property ordering — all mapped from Notion's Views API.
 
-**Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, bidirectional change detection, cancel button), 6 DB view types, and ribbon icons for one-click sync.
+**Obsidian Plugin** &nbsp; Install as an Obsidian plugin with sync sidebar dashboard (Push/Pull/Sync buttons, progress bar, cancel button, and a Git-style change list — click a file to see its line diff, then push, revert or pull just that file), 6 DB view types, and ribbon icons for one-click sync.
 
 **Library + CLI + Plugin** &nbsp; Use it as a CLI tool, import it as a Node.js library for custom integrations, or install it as an Obsidian plugin.
 
@@ -153,20 +153,23 @@ That's it. Your vault and Notion workspace are now linked.
 
 ## CLI Reference
 
-| Command             | Description                                                                     |
-| ------------------- | ------------------------------------------------------------------------------- |
-| `nobsi init`        | Interactive setup — Notion token + root page                                    |
-| `nobsi push`        | Push local changes to Notion                                                    |
-| `nobsi pull`        | Pull Notion changes to local                                                    |
-| `nobsi sync`        | Bidirectional sync (pull → push)                                                |
-| `nobsi status`      | Show sync status + conflicts (add `--full` for bidirectional)                   |
-| `nobsi diff [path]` | Show diff between local and Notion                                              |
-| `nobsi fetch`       | Scan remote for new / modified / deleted pages (read-only)                      |
-| `nobsi verify`      | Verify completeness — every remote row **and page** is in the vault (read-only) |
-| `nobsi resolve`     | Resolve sync conflicts                                                          |
-| `nobsi watch`       | Watch for changes + auto-sync                                                   |
+| Command                   | Description                                                                     |
+| ------------------------- | ------------------------------------------------------------------------------- |
+| `nobsi init`              | Interactive setup — Notion token + root page                                    |
+| `nobsi push`              | Push local changes to Notion                                                    |
+| `nobsi pull`              | Pull Notion changes to local                                                    |
+| `nobsi sync`              | Bidirectional sync (pull → push)                                                |
+| `nobsi status`            | Show sync status + conflicts (add `--full` for bidirectional)                   |
+| `nobsi diff [path]`       | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)  |
+| `nobsi discard <path...>` | Discard local edits — restore notes to the last synced text (Notion untouched)  |
+| `nobsi fetch`             | Scan remote for new / modified / deleted pages (read-only)                      |
+| `nobsi verify`            | Verify completeness — every remote row **and page** is in the vault (read-only) |
+| `nobsi resolve`           | Resolve sync conflicts                                                          |
+| `nobsi watch`             | Watch for changes + auto-sync                                                   |
 
-`push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` skips incremental detection for a full rescan (recovers pages missed by Notion's search indexing lag).
+`push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` runs a full scan now instead of fetching only what changed — it applies deletions made in Notion and recovers pages missed by Notion's search indexing lag (see [Pull](#pull-notion--obsidian)).
+
+`pull --rerender` re-renders notes you already pulled with the current converter, even when the Notion page has not changed — it fixes notes left in an older form after an update (such as `🔖 Bookmark` links pointing at the Notion block). Notes you edited in the vault and notes in conflict are left alone. It reads every note from Notion, so a large vault takes a while (narrow it with `--path`). In the plugin, run the command **Pull from Notion (받아 둔 노트 다시 그리기)**.
 
 `verify` answers a different question from `status`: not "is anything out of date?" but **"is anything
 missing?"**. It compares _sets_ of ids, not counts, on two axes — database rows (per database) and pages
@@ -184,7 +187,7 @@ that cries wolf gets ignored. Page verification is skipped in database mode (the
 ### Non-interactive mode (CI / scripts)
 
 ```bash
-nobsi init --token ntn_xxx --root-page-id abc123 --non-interactive
+nobsi init --token ntn_xxx --root-page-id "https://www.notion.so/myspace/Notes-0123456789abcdef0123456789abcdef" --non-interactive
 nobsi sync --dry-run
 ```
 
@@ -213,10 +216,19 @@ Obsidian Vault                        Notion Workspace
 
 ### Pull (Notion → Obsidian)
 
-1. Recursively reads pages under your root page
-2. Detects changes by `last_edited_time`
-3. Converts Notion blocks → markdown, properties → frontmatter
-4. Downloads images to your attachments folder (deduplicated)
+1. Finds what changed in Notion since the last pull — pages, database rows, and databases whose schema
+   changed — and queries only those databases. Unchanged databases cost no requests
+2. Once an hour (`sync.fullReconcileInterval`) it runs a **full scan** instead: reads every page under
+   your root page and every database. Only the full scan notices pages deleted in Notion or moved out of
+   scope — Notion's search doesn't return trashed pages
+3. Detects changes by `last_edited_time`
+4. Converts Notion blocks → markdown, properties → frontmatter
+5. Downloads images to your attachments folder (deduplicated)
+
+The first pull, `pull --force` and database mode always run a full scan. `pull`, `sync` and `status`
+say which scan ran and when the last full scan was; after a changes-only scan with `sync.deleteSync` on,
+they also say when deletions in Notion will be applied. In the plugin, the sidebar shows the last full
+scan (hover for details) and the command **Pull from Notion (전체 확인)** runs one now.
 
 ### Conflict Resolution
 
@@ -227,6 +239,19 @@ When both sides change the same file, `pull`/`sync` flags it as a conflict inste
 - `duplicate` — keep both (writes a `.conflict` copy)
 
 Interactive mode adds a **merge** option (3-way auto-merge with conflict markers). The default `sync.conflictStrategy` is `manual` — conflicts are flagged and left for you to resolve.
+
+### CLI and Plugin on the Same Vault
+
+The CLI and the Obsidian plugin share one sync-state database per vault (`.im-nobsidian/sync.db`),
+so only one of them can have it open at a time. While one holds it, the other stops and says who
+holds it — for example, close Obsidian or disable the plugin for that vault before running CLI
+commands on it. A lock left behind by a process that crashed on the same machine is taken over
+automatically. If the message persists while nothing is running, delete `.im-nobsidian/sync.db.lock`.
+
+If a CLI run was killed before it finished, run any CLI command in the vault once (for example
+`nobsi status`) to merge its last records, then refresh the plugin.
+
+Update the CLI and the plugin together — older versions don't take the lock.
 
 ## Supported Conversions
 
@@ -271,6 +296,8 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "deleteSync": false, // true: deleting a note deletes it on the other side too (the plugin always does)
+    "fullReconcileInterval": 3600, // seconds between full scans of Notion — 0 = every pull
   },
   "paths": {
     "include": ["**/*"], // glob patterns to include
@@ -297,9 +324,12 @@ due: 2026-06-30 # → Date property
 
 Enable it:
 
-```bash
-# Set parentMode to "database" and point to your database ID
-nobsi init  # select a database as your root
+```jsonc
+// .im-nobsidian/config.json — `nobsi init` does not ask for these
+"notion": {
+  "parentMode": "database",
+  "databaseId": "<database ID>" // without it the vault stays in page mode
+}
 ```
 
 ## Packages
@@ -308,7 +338,7 @@ nobsi init  # select a database as your root
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.3.2 (release assets / BRAT)                                                                              |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.4.0 (release assets / BRAT)                                                                              |
 
 ### Using as a Library
 
@@ -341,23 +371,31 @@ await orchestrator.sync({ dryRun: false });
 
 ## Known Limitations
 
-Sync is **lossless, idempotent and convergent**: no content is dropped, re-syncing an unchanged
-vault produces zero churn, and where a rendition has to change it settles on the **first**
-round-trip and never moves again. The tables below list every place where Notion's storage model
-constrains the _rendition_ — grouped by whether the constraint is permanent or a one-time
-normalization.
+Sync is **idempotent and convergent**: re-syncing an unchanged vault produces zero churn, and where
+a rendition has to change it settles on the **first** round-trip and never moves again. Content
+survives the round-trip except where the tables below say otherwise — they list the places we know
+of where Notion's storage model constrains the _rendition_, grouped by whether the constraint is
+permanent or a one-time normalization. The block-API mode (`conversion.preferMarkdownApi: false`)
+loses more; see [Configuration](docs/05-guides/CONFIGURATION.md#prefermarkdownapi).
 
 ### Permanent limitations
 
-| Limitation                       | Reason                                                                        | Workaround                                                                                                                                                                                                                                                         |
-| -------------------------------- | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Notion-only blocks               | API returns `unsupported` for buttons, forms, synced blocks                   | Preserved as callout placeholders                                                                                                                                                                                                                                  |
-| Rate limit                       | Notion enforces 3 requests/second                                             | Built-in rate limiter with exponential backoff                                                                                                                                                                                                                     |
-| Soft breaks split blocks         | A single newline becomes a separate paragraph block in Notion                 | Use hard paragraph breaks (blank line) for intended splits                                                                                                                                                                                                         |
-| Consecutive blank lines          | Notion has no "N empty paragraphs" concept — collapses to one                 | No semantic difference — spacing is restored on pull                                                                                                                                                                                                               |
-| Note embeds (`![[note]]`)        | Notion has no note-transclusion concept, and drops custom-scheme links        | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                     |
-| First-push wikilinks             | Cross-references between new pages may not resolve on first sync              | Resolved automatically on subsequent syncs                                                                                                                                                                                                                         |
-| Links to pages outside the vault | The target isn't shared with your integration, or isn't part of what you pull | Kept as a **clickable `https://www.notion.so/…` link** instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
+| Limitation                                         | Reason                                                                                                                               | Workaround                                                                                                                                                                                                                                                         |
+| -------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Notion-only blocks                                 | API returns `unsupported` for buttons, forms, synced blocks                                                                          | Preserved as callout placeholders                                                                                                                                                                                                                                  |
+| Rate limit                                         | Notion enforces 3 requests/second                                                                                                    | Built-in rate limiter with exponential backoff                                                                                                                                                                                                                     |
+| Soft breaks split blocks                           | A single newline becomes a separate paragraph block in Notion                                                                        | Use hard paragraph breaks (blank line) for intended splits                                                                                                                                                                                                         |
+| Consecutive blank lines                            | Notion has no "N empty paragraphs" concept — collapses to one                                                                        | No semantic difference — spacing is restored on pull                                                                                                                                                                                                               |
+| Note embeds (`![[note]]`)                          | Notion has no note-transclusion concept, and drops custom-scheme links                                                               | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                     |
+| First-push wikilinks                               | Notion needs the target page to exist before a link can point at it                                                                  | The same push sends the linking note again once its targets exist (since v0.4.0) — except notes outside a narrowed push or with unpushed edits, which resolve on a later push                                                                                      |
+| Links to pages outside the vault                   | The target isn't shared with your integration, or isn't part of what you pull                                                        | Kept as a **clickable `https://www.notion.so/…` link** instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
+| Deletions/DB renames arrive late                   | Search skips trash, and a DB rename keeps its edit time — full scan only                                                             | `nobsi pull --force`, or **Pull from Notion (전체 확인)** in the plugin, runs a full scan now. Set the interval to `0` to scan fully on every pull                                                                                                                 |
+| Bot mentions                                       | Notion's Markdown API does not export mentions of bots or integrations                                                               | They are missing from pulled notes, and pushing that note removes them in Notion too — re-add them in Notion                                                                                                                                                       |
+| Callout aliases and folding (`[!faq]-`, `[!tldr]`) | Notion callouts have no type name or fold state                                                                                      | The vault that pushed keeps its spelling; another vault pulling fresh gets the base type with the same icon (`[!question]`)                                                                                                                                        |
+| Edits from the same token elsewhere                | Another device using the same integration token looks like this tool's own write                                                     | None yet. Separately, a Notion edit made within about a second of a push can still be overwritten — Notion has no conditional write ([ADR-017](docs/02-architecture/adr/017-same-minute-remote-edit.md))                                                           |
+| Block colour on headings                           | The colour rides on a `%%im-nobsidian:block-color:…%%` marker at the end of the heading line, and Obsidian counts it as heading text | The marker shows in the outline and heading-link suggestions. None yet                                                                                                                                                                                             |
+| `\|` inside code in a table cell                   | A pipe in a table cell must be written `\|`, and Obsidian shows the backslash inside code                                            | Notion gets the plain pipe — only the vault display differs                                                                                                                                                                                                        |
+| `$$` in running text                               | Notion reads a text `$$` as an empty equation, and `$$ x $$` sharing a line with text as empty equations around text                 | An unpaired `$$` is sent as text and `$$ x $$` as an inline equation (since v0.4.0). A `$$` pair spread over several lines of one paragraph is math only in Obsidian                                                                                               |
 
 ### One-time normalizations
 
@@ -377,6 +415,12 @@ Escapes inside fenced or inline code are untouched, and `\\[` (an escaped backsl
 ## Roadmap
 
 ```
+v0.4.0 ✅ incremental sync like Obsidian Git (per-note push/pull/discard, line diff,
+        periodic full reconcile, pull --rerender, --json), data safety (23 deep-QA
+        defects and those found after: lost edits, duplicate pages, missed changes),
+        block mode through the NFM converter, 3-file plugin, keychain token,
+        real-vault copy E2E (3,235 files, 0 failures,
+        no churn on repeat), 3980 tests
 v0.3.2 ✅ render fidelity (toggles/tables/callouts/code fences — 15 defect classes +
         document-swallowing code-fence fix), sync resilience (pull stalls, network
         deadlines, Retry-After, 4 link classes, CLI exit codes), deleted DB-row

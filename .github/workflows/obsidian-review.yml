@@ -1,0 +1,25 @@
+name: Obsidian directory checks
+
+# The community directory's own checks (manifest, versions.json, README, LICENSE, registry) on every
+# change, so a manifest edit that the directory would reject fails here instead of at submission.
+# Build and lint already run in CI. The scanner lint (eslint-plugin-obsidianmd) is the directory
+# review's own step — run it locally with scanner-lint: true (ADR-032).
+on:
+  push:
+    branches: [dev, main]
+  pull_request:
+    branches: [dev, main]
+
+jobs:
+  directory:
+    name: Directory checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: obsidianmd/obsidian-workflows@v1
+        with:
+          type: plugin
+          mode: pr
+          build: "false"
+          lint: "false"
