@@ -125,6 +125,7 @@
 | 4 뒤 | `fix/db-query-nested-data-source`            | 실데이터 E2E — DB 행 조회에 섞인 하위 DB 를 행으로 받아 pull 마다 실패 2                                                                                                                                                           | 완료           |
 | 4 뒤 | `fix/push-create-synced-ref`                 | 실데이터 E2E — 동기화 블록 참조가 든 노트를 새로 올리지 못해 폴더째 실패                                                                                                                                                           | 완료           |
 | 4 뒤 | `fix/child-tag-title-underscore`             | 실데이터 E2E — 폴더 노트를 올리면 `__이름__` 하위 페이지 제목이 굵게 바뀜                                                                                                                                                          | 완료           |
+| 4 뒤 | `fix/marker-autolink`                        | 실데이터 E2E — 자리표시자 마커의 파일 이름에 Notion 이 자동 링크를 걸어 임베드가 깨짐                                                                                                                                              | 완료           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

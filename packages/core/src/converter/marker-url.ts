@@ -17,12 +17,22 @@ export function encodeMarkerTarget(target: string): string {
   return encodeURIComponent(target).replace(/\(/g, "%28").replace(/\)/g, "%29");
 }
 
+/**
+ * Notion 이 도메인처럼 보이는 글에 거는 자동 링크 — `[9.23.13.mov](http://9.23.13.mov)`. 마커 안의
+ * 파일 이름(`.mov` 는 최상위 도메인이다)까지 링크가 되어 경로가 깨졌다(2026-10-22 실데이터 E2E).
+ * 글자와 주소가 같을 때만 걷는다 — 다르면 글에 적힌 링크다.
+ */
+const NOTION_AUTOLINK_RE = /\[([^\][()\s]+)\]\(https?:\/\/([^()\s]+)\)/g;
+
 /** {@link encodeMarkerTarget} 의 역변환. 잘못 인코딩된 입력은 원문을 그대로 돌려준다. */
 export function decodeMarkerTarget(encoded: string): string {
+  const unlinked = encoded.replace(NOTION_AUTOLINK_RE, (link, text: string, host: string) =>
+    text === host ? text : link,
+  );
   try {
-    return decodeURIComponent(encoded);
+    return decodeURIComponent(unlinked);
   } catch {
-    return encoded;
+    return unlinked;
   }
 }
 
