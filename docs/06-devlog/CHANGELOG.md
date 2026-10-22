@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **pull 마다 실패 2건이 남던 것** — DB 안에 둔 DB(인라인)는 행 조회 결과에 `data_source` 로 섞여 온다. 행으로 받으려다 `object_not_found` 로 실패했다. 행이 아니므로 뺀다(2026-10-22 실데이터 E2E — 두 하위 DB 모두 행 0, 빠진 내용 없음).
+
 ## [0.4.0] - 2026-10-21
 
 > 0단계 · Phase 1 — 2026-09-27 심층 QA 가 찾은 결함 23건(S- · N- · F-)과 그 뒤 찾은 것을 봉합한 트랙.

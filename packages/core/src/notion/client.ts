@@ -692,8 +692,12 @@ export class NotionClient {
         filter: options?.filter as never,
       }),
     );
+    // DB 안에 둔 DB 는 결과에 `object: "data_source"` 로 섞여 온다 — 행이 아니므로 뺀다.
+    // 페이지로 받으면 `object_not_found` 로 pull 마다 실패로 남았다(2026-10-22 실데이터 E2E).
     return {
-      results: response.results as PageObjectResponse[],
+      results: response.results.filter(
+        (result) => result.object !== "data_source",
+      ) as PageObjectResponse[],
       nextCursor: response.next_cursor,
     };
   }
