@@ -2,6 +2,7 @@ import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoint
 import { Sema } from "async-sema";
 import { vaultBookmarks } from "../converter/bookmark.js";
 import { obsidianToNotionEnhanced } from "../converter/enhanced-md-converter.js";
+import { encodeMarkerTarget } from "../converter/marker-url.js";
 import {
   replaceMissingUnknownTags,
   unknownTagFallbacks,
@@ -26,6 +27,11 @@ import type { ImageHandler } from "./image-handler.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
+import {
+  deferSyncedReferences,
+  fillSyncedReferences,
+  type DeferredSyncedRef,
+} from "./deferred-synced-ref.js";
 import { moveOrigin } from "./local-moves.js";
 import type { PendingFolderMove } from "./local-planner.js";
 import {
@@ -67,24 +73,21 @@ interface PushedBody {
   readonly kept: readonly UploadedMedia[];
   /** 보낸 본문 — 남은 자리표시자만 올린다. */
   readonly sent: string;
+  /** 본문을 쓴 뒤 붙일 동기화 블록 참조({@link deferSyncedReferences}). */
+  readonly syncedRefs: readonly DeferredSyncedRef[];
+  /** 보내지 않은 참조 안의 글 — 그 안의 첨부는 올리지 않는다. */
+  readonly syncedRefText: string;
 }
 
 /**
- * push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낼 markdown — 블록으로 보냈으면 null.
- * `bodyDeferred` 면 빈 페이지로 만들었고 본문은 아직 보내지 않았다({@link hasSyncedBlockReference}).
+ * push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null.
+ * 동기화 블록 참조는 보내지 않고 만든 뒤 붙인다({@link deferSyncedReferences}).
  */
 interface CreatedPage {
   readonly page: PageObjectResponse;
   readonly markdown: string | null;
-  readonly bodyDeferred: boolean;
-}
-
-/**
- * Notion 은 동기화 블록 참조가 든 markdown 으로 페이지를 만들지 못한다(`Block not found in record map`).
- * 본문 교체는 받고 참조도 남긴다(2026-10-22 실측) — 그런 본문은 빈 페이지를 만든 뒤 교체로 보낸다.
- */
-function hasSyncedBlockReference(markdown: string): boolean {
-  return markdown.includes("<synced_block_reference");
+  readonly syncedRefs: readonly DeferredSyncedRef[];
+  readonly syncedRefText: string;
 }
 
 /** 페이지의 속성(`page.properties`) — 없으면 빈 객체. */
@@ -322,11 +325,12 @@ export class PagePusher {
     const pushed = await this.pushUpdatePage(record.notionPageId, conversionResult.content, path);
     let bodyFingerprint = pushed.fingerprint;
 
-    // 코드 · 첨부가 본문을 고쳤으면 고친 뒤의 지문을 다시 받는다.
-    let touched = await this.fillCodeBlocks(
+    // 코드 · 참조 · 첨부가 본문을 고쳤으면 고친 뒤의 지문을 다시 받는다.
+    let touched = await this.fillDeferredBlocks(
       record.id,
       record.notionPageId,
       conversionResult.deferredCode,
+      pushed.syncedRefs,
     );
     if (await this.syncEmbeddedMedia(record.notionPageId, conversionResult, path, pushed)) {
       touched = true;
@@ -673,6 +677,7 @@ export class PagePusher {
     conversionResult: ConversionResult,
     path: string,
     pushed?: PushedBody,
+    syncedRefText = pushed?.syncedRefText ?? "",
   ): Promise<boolean> {
     // 보낸 본문으로 자리표시자가 남았는지 본다 — 모두 그대로 뒀으면 블록을 조회하지 않는다.
     const { handledTargets, touched } = await this.imageHandler.materializeLocalMedia(
@@ -681,8 +686,12 @@ export class PagePusher {
       path,
       pushed?.kept,
     );
+    // 동기화 블록 참조 안의 첨부는 원본의 것이다 — 보내지 않은 참조 안에만 있으면 페이지 끝에 붙이지 않는다.
     const leftovers = conversionResult.images.filter(
-      (img) => !img.localPath || !handledTargets.has(img.localPath),
+      (img) =>
+        !img.localPath ||
+        (!handledTargets.has(img.localPath) &&
+          !syncedRefText.includes(encodeMarkerTarget(img.localPath))),
     );
     let appended = 0;
     if (leftovers.length > 0) {
@@ -809,7 +818,12 @@ export class PagePusher {
       });
       const pushed = await this.pushUpdatePage(pageId, conversionResult.content, path);
       bodyFingerprint = pushed.fingerprint;
-      let touched = await this.fillCodeBlocks(record.id, pageId, conversionResult.deferredCode);
+      let touched = await this.fillDeferredBlocks(
+        record.id,
+        pageId,
+        conversionResult.deferredCode,
+        pushed.syncedRefs,
+      );
       if (await this.syncEmbeddedMedia(pageId, conversionResult, path, pushed)) touched = true;
       if (touched) {
         bodyFingerprint = await this.drift.remoteBodyFingerprintOf(pageId);
@@ -946,20 +960,20 @@ export class PagePusher {
   ): Promise<CreatedPage> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       // 새 페이지에는 아무 블록도 없다 — 자리 태그는 모두 Notion 이 거절한다(N6).
+      const deferred = deferSyncedReferences(obsidianToNotionEnhanced(markdownContent));
       const markdown = replaceMissingUnknownTags(
-        obsidianToNotionEnhanced(markdownContent),
+        deferred.nfm,
         new Set(),
         unknownTagFallbacks(markdownContent),
       ).nfm;
-      const bodyDeferred = hasSyncedBlockReference(markdown);
       const page = await this.notionClient.createPageWithMarkdown({
         parentId,
         parentType,
         title,
-        markdown: bodyDeferred ? "" : markdown,
+        markdown,
         properties,
       });
-      return { page, markdown, bodyDeferred };
+      return { page, markdown, syncedRefs: deferred.refs, syncedRefText: deferred.removed };
     }
 
     const { blocks } = blockModeBody(markdownContent);
@@ -972,7 +986,7 @@ export class PagePusher {
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(page.id, blocks);
     }
-    return { page, markdown: null, bodyDeferred: false };
+    return { page, markdown: null, syncedRefs: [], syncedRefText: "" };
   }
 
   /**
@@ -990,13 +1004,24 @@ export class PagePusher {
     path: string,
   ): Promise<{ page: RemotePageStamp; bodyFingerprint: string | null }> {
     let page = await this.restoreCreatedHeading(created, path);
-    // 자리표시로 보낸 코드를 채운다 — 맨 앞 제목을 되살리는 교체가 자리표시를 다시 쓰므로 그 뒤에.
-    let touched = await this.fillCodeBlocks(
+    // 자리표시로 보낸 코드 · 참조를 채운다 — 맨 앞 제목을 되살리는 교체가 자리표시를 다시 쓰므로 그 뒤에.
+    let touched = await this.fillDeferredBlocks(
       recordId,
       created.page.id,
       conversionResult.deferredCode,
+      created.syncedRefs,
     );
-    if (await this.syncEmbeddedMedia(created.page.id, conversionResult, path)) touched = true;
+    if (
+      await this.syncEmbeddedMedia(
+        created.page.id,
+        conversionResult,
+        path,
+        undefined,
+        created.syncedRefText,
+      )
+    ) {
+      touched = true;
+    }
     if (touched) {
       // 코드 · 첨부가 본문을 고쳤다 — 수정 시각을 다시 받는다(I5). 옛 시각을 적으면 다음 push 가
       // 이 변경을 원격 편집으로 본다.
@@ -1011,7 +1036,6 @@ export class PagePusher {
   /**
    * 만들며 버려진 맨 앞 `# H1` 을 되살리고(N-04) 적을 원격 페이지를 돌려준다. 되살렸으면 서버가
    * 다시 준 페이지다 — 만들 때의 시각을 적으면 다음 pull 이 이 교체를 원격 수정으로 본다(I5).
-   * 빈 페이지로 만들었으면(`bodyDeferred`) 여기서 본문 전체를 보낸다 — 교체는 맨 앞 H1 도 남긴다.
    *
    * 호출측이 매핑을 먼저 적고, 첨부를 올리기 전에 부른다 — 교체가 자리표시자를 첨부로 바꾼 본문을
    * 되돌리지 않는다. 여기서 던지면 그 항목만 실패하고, 다음 push 는 새로 만들지 않고 갱신으로 본문을
@@ -1021,18 +1045,16 @@ export class PagePusher {
     created: CreatedPage,
     path: string,
   ): Promise<RemotePageStamp> {
-    const { page, markdown, bodyDeferred } = created;
+    const { page, markdown } = created;
     if (markdown === null) return page;
     try {
-      if (bodyDeferred) {
-        await this.notionClient.replacePageMarkdown(page.id, markdown);
-      } else if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
+      if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
         return page;
       }
       return await this.notionClient.getPage(page.id);
     } catch (error) {
       throw new Error(
-        `${bodyDeferred ? "본문을 Notion 에 보내지" : "맨 앞 제목을 Notion 에 되살리지"} 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
+        `맨 앞 제목을 Notion 에 되살리지 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
@@ -1080,9 +1102,10 @@ export class PagePusher {
     notePath: string,
   ): Promise<PushedBody> {
     if (this.config.conversion.preferMarkdownApi !== false) {
+      const deferred = deferSyncedReferences(obsidianToNotionEnhanced(markdownContent));
       const { markdown, kept } = await this.imageHandler.keepUploadedMedia(
         pageId,
-        obsidianToNotionEnhanced(markdownContent),
+        deferred.nfm,
         notePath,
       );
       const written = await replacePageBody(this.notionClient, pageId, markdown, {
@@ -1094,7 +1117,13 @@ export class PagePusher {
         written.truncated || (written.unknown_block_ids ?? []).length > 0
           ? await this.drift.remoteBodyFingerprintOf(pageId)
           : remoteBodyFingerprint(written.markdown);
-      return { fingerprint, kept, sent: markdown };
+      return {
+        fingerprint,
+        kept,
+        sent: markdown,
+        syncedRefs: deferred.refs,
+        syncedRefText: deferred.removed,
+      };
     }
 
     // 휴지통 자식은 children.list 에 잡히지 않으므로 여기 보이는 자식은 모두 살아 있다.
@@ -1121,11 +1150,12 @@ export class PagePusher {
         }
       }),
     );
-    return { fingerprint: null, kept: [], sent: nfm };
+    return { fingerprint: null, kept: [], sent: nfm, syncedRefs: [], syncedRefText: "" };
   }
 
   /**
-   * 자리표시로 보낸 코드를 채운다(S-22) — 본문을 바꾼 뒤(블록 방식이면 옛 블록을 지운 뒤) 부른다.
+   * 자리표시로 보낸 코드를 채우고(S-22) 동기화 블록 참조를 붙인다({@link deferSyncedReferences}) — 본문을
+   * 바꾼 뒤(블록 방식이면 옛 블록을 지운 뒤) 부른다.
    *
    * 채우다 멈추면 지금 원격을 «지난번에 본 원격» 으로 적고 던진다 — 원격은 이 도구가 막 쓴
    * 본문이다. 다음 push(이번 실행의 재시도 포함)는 이 쓰기를 pull 하지 않은 Notion 편집으로 보지
@@ -1134,20 +1164,22 @@ export class PagePusher {
    *
    * @returns 채웠으면 true — 본문이 바뀌었다.
    */
-  private async fillCodeBlocks(
+  private async fillDeferredBlocks(
     recordId: string,
     pageId: string,
     deferredCode: readonly DeferredCode[],
+    syncedRefs: readonly DeferredSyncedRef[],
   ): Promise<boolean> {
     try {
-      return await fillDeferredCode(this.notionClient, pageId, deferredCode);
+      const filled = await fillDeferredCode(this.notionClient, pageId, deferredCode);
+      return (await fillSyncedReferences(this.notionClient, pageId, syncedRefs)) || filled;
     } catch (error) {
       try {
         const page = await this.notionClient.getPage(pageId);
         this.observation.record(recordId, page, await this.drift.remoteBodyFingerprintOf(pageId));
       } catch (readError) {
         getLogger().warn(
-          `[Im-Nobsidian] 코드를 채우다 멈춘 페이지를 다시 읽지 못함 — 다음 push 가 pull 을 먼저 ` +
+          `[Im-Nobsidian] 코드 · 참조를 채우다 멈춘 페이지를 다시 읽지 못함 — 다음 push 가 pull 을 먼저 ` +
             `하라며 거절하면 pull 한 뒤 다시 push 하세요: ${
               readError instanceof Error ? readError.message : String(readError)
             }`,

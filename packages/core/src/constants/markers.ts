@@ -46,6 +46,14 @@ export function deferredCodeMarker(index: number): string {
   return compactMarker(`deferred-code:${index}`);
 }
 
+/**
+ * 본문을 쓴 뒤 블록으로 붙일 동기화 블록 참조의 자리표시 — 문단의 글로 보내 잠깐 Notion 에 머문다.
+ * 참조를 Markdown API 로 보내면 Notion 이 다른 페이지에 있는 원본을 보낸 내용으로 다시 쓴다.
+ */
+export function deferredSyncedRefMarker(index: number): string {
+  return compactMarker(`deferred-synced-ref:${index}`);
+}
+
 /** 토글 블록 보존 마커 (enhanced-md-converter). */
 export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
