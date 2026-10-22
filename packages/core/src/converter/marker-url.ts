@@ -12,9 +12,18 @@
  * 고치면 기존 페이지가 영영 깨진 채로 남는다.
  */
 
-/** 마커 URL 에 실을 대상 문자열 인코딩. */
+/**
+ * 마커 URL 에 실을 대상 문자열 인코딩.
+ *
+ * `_` 도 인코딩한다 — 첨부 자리표시자(`%% im-nobsidian:local-file:<대상> %%`)는 링크 주소가 아니라
+ * 글이라 Notion 이 마크다운으로 읽는다. 경로의 `__폴더__` 가 굵게가 되어 굵은 `폴더` 로 돌아와
+ * 임베드가 깨졌다(2026-10-22 실데이터 E2E). 밑줄이 그대로 든 옛 마커도 {@link decodeMarkerTarget} 가 받는다.
+ */
 export function encodeMarkerTarget(target: string): string {
-  return encodeURIComponent(target).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return encodeURIComponent(target)
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29")
+    .replace(/_/g, "%5F");
 }
 
 /**
