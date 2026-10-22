@@ -36,7 +36,7 @@ export async function fillDeferredCode(
         if (code === undefined) continue;
         await client.updateCodeBlockText(block.id, code, block.code.language);
         pending.delete(token);
-      } else if (block.has_children && descends(block)) {
+      } else if (block.has_children && descendsForDeferred(block)) {
         await visit(block.id);
       }
     }
@@ -52,7 +52,11 @@ export async function fillDeferredCode(
   return true;
 }
 
-function descends(block: BlockObjectResponse): boolean {
+/**
+ * 본문을 쓴 뒤 채울 자리표시를 찾으러 들어갈 블록인가 — 다른 페이지 · DB · 표 안과 다른 곳이 원본인
+ * 동기화 블록 안은 이 페이지가 보낸 본문이 아니다.
+ */
+export function descendsForDeferred(block: BlockObjectResponse): boolean {
   switch (block.type) {
     case "child_page":
     case "child_database":
