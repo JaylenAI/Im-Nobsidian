@@ -69,10 +69,22 @@ interface PushedBody {
   readonly sent: string;
 }
 
-/** push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낸 markdown — 블록으로 보냈으면 null. */
+/**
+ * push 가 만든 페이지 · 행. `markdown` 은 본문으로 보낼 markdown — 블록으로 보냈으면 null.
+ * `bodyDeferred` 면 빈 페이지로 만들었고 본문은 아직 보내지 않았다({@link hasSyncedBlockReference}).
+ */
 interface CreatedPage {
   readonly page: PageObjectResponse;
   readonly markdown: string | null;
+  readonly bodyDeferred: boolean;
+}
+
+/**
+ * Notion 은 동기화 블록 참조가 든 markdown 으로 페이지를 만들지 못한다(`Block not found in record map`).
+ * 본문 교체는 받고 참조도 남긴다(2026-10-22 실측) — 그런 본문은 빈 페이지를 만든 뒤 교체로 보낸다.
+ */
+function hasSyncedBlockReference(markdown: string): boolean {
+  return markdown.includes("<synced_block_reference");
 }
 
 /** 페이지의 속성(`page.properties`) — 없으면 빈 객체. */
@@ -939,14 +951,15 @@ export class PagePusher {
         new Set(),
         unknownTagFallbacks(markdownContent),
       ).nfm;
+      const bodyDeferred = hasSyncedBlockReference(markdown);
       const page = await this.notionClient.createPageWithMarkdown({
         parentId,
         parentType,
         title,
-        markdown,
+        markdown: bodyDeferred ? "" : markdown,
         properties,
       });
-      return { page, markdown };
+      return { page, markdown, bodyDeferred };
     }
 
     const { blocks } = blockModeBody(markdownContent);
@@ -959,7 +972,7 @@ export class PagePusher {
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(page.id, blocks);
     }
-    return { page, markdown: null };
+    return { page, markdown: null, bodyDeferred: false };
   }
 
   /**
@@ -998,6 +1011,7 @@ export class PagePusher {
   /**
    * 만들며 버려진 맨 앞 `# H1` 을 되살리고(N-04) 적을 원격 페이지를 돌려준다. 되살렸으면 서버가
    * 다시 준 페이지다 — 만들 때의 시각을 적으면 다음 pull 이 이 교체를 원격 수정으로 본다(I5).
+   * 빈 페이지로 만들었으면(`bodyDeferred`) 여기서 본문 전체를 보낸다 — 교체는 맨 앞 H1 도 남긴다.
    *
    * 호출측이 매핑을 먼저 적고, 첨부를 올리기 전에 부른다 — 교체가 자리표시자를 첨부로 바꾼 본문을
    * 되돌리지 않는다. 여기서 던지면 그 항목만 실패하고, 다음 push 는 새로 만들지 않고 갱신으로 본문을
@@ -1007,16 +1021,18 @@ export class PagePusher {
     created: CreatedPage,
     path: string,
   ): Promise<RemotePageStamp> {
-    const { page, markdown } = created;
+    const { page, markdown, bodyDeferred } = created;
     if (markdown === null) return page;
     try {
-      if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
+      if (bodyDeferred) {
+        await this.notionClient.replacePageMarkdown(page.id, markdown);
+      } else if (!(await this.notionClient.restoreLeadingHeading(page.id, markdown))) {
         return page;
       }
       return await this.notionClient.getPage(page.id);
     } catch (error) {
       throw new Error(
-        `맨 앞 제목을 Notion 에 되살리지 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
+        `${bodyDeferred ? "본문을 Notion 에 보내지" : "맨 앞 제목을 Notion 에 되살리지"} 못함 — 다음 push 가 본문을 다시 보낸다 (${path}): ${
           error instanceof Error ? error.message : String(error)
         }`,
       );
