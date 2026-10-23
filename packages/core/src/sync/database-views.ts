@@ -110,8 +110,28 @@ function requestOf(view: SidecarSchemaView, newIdOf: (id: string) => string): Vi
     }
     if (Object.keys(kept).length > 0) remapped.quick_filters = kept;
   }
-  remapped.configuration = remap(configuration, newIdOf);
+  remapped.configuration = acceptedByCreate(
+    remap(configuration, newIdOf) as Record<string, unknown>,
+  );
   return remapped as unknown as ViewRequest;
+}
+
+/**
+ * 받아 온 보기 설정 중 `views.create` 가 거절하는 값을 같은 뜻의 받는 값으로 — 2026-10-23 전체 E2E 에서 보기
+ * 306개가 이 둘 때문에만 만들어지지 않았다.
+ *
+ * - `frozen_column_index: -1` 은 「고정한 열 없음」 이다. 만들 때는 0 이상만 받는다 — 빼면 같은 뜻
+ * - 표지 `page_content_first` 는 응답에만 있다(SDK 의 요청 타입은 `page_cover | page_content | property`).
+ *   가장 가까운 `page_content` 로
+ */
+function acceptedByCreate(configuration: Record<string, unknown>): Record<string, unknown> {
+  const out = { ...configuration };
+  if (typeof out.frozen_column_index === "number" && out.frozen_column_index < 0) {
+    delete out.frozen_column_index;
+  }
+  const cover = out.cover as Record<string, unknown> | undefined;
+  if (cover?.type === "page_content_first") out.cover = { ...cover, type: "page_content" };
+  return out;
 }
 
 /** 속성 id 를 새 DB 의 것으로. 없는 속성을 가리키면 {@link MissingProperty} — 열 목록만 그 열을 뺀다. */
