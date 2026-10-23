@@ -614,7 +614,7 @@ export class PropertyMapper {
       }
       case "formula": {
         const formula = prop.formula as { type: string; [k: string]: unknown } | undefined;
-        if (!formula) return null;
+        if (!formula || formula.type === UNCOMPUTED) return null;
         if (formula.type === "date") return dateValue(formula.date, zone);
         return formula[formula.type];
       }
@@ -631,7 +631,7 @@ export class PropertyMapper {
       }
       case "rollup": {
         const rollup = prop.rollup as { type: string; [k: string]: unknown } | undefined;
-        if (!rollup) return null;
+        if (!rollup || rollup.type === UNCOMPUTED) return null;
         if (rollup.type === "array") {
           const arr = asArray<{ type: string; [k: string]: unknown }>(rollup.array);
           return arr.map((item) => this.extractValue(item, zone));
@@ -661,6 +661,12 @@ export class PropertyMapper {
     }
   }
 }
+
+/**
+ * API 가 계산하지 못한 수식 · 롤업의 값 타입 — 관계가 너무 많은 값(2026-08-05 changelog). 값이 `{}` 로 와서 그대로
+ * 적으면 노트에 `수식: {}` 가 남았다. 값을 모르므로 적지 않는다 — 읽기 전용 속성이라 보내지도 않는다.
+ */
+const UNCOMPUTED = "unsupported";
 
 /** 날짜(시각) 값 — 기간이면 끝까지. */
 interface DateRangeValue {
