@@ -41,7 +41,7 @@ import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-generator.js";
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
-import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
+import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles } from "./db-base-files.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
@@ -136,6 +136,8 @@ export class DatabaseSyncer {
    */
   private readonly appearances = new WeakMap<DatabaseMeta, Promise<SidecarAppearance>>();
   private readonly baseFileGenerator = new BaseFileGenerator();
+  /** 사용자가 만든 `.base` 라 덮어쓰지 않았다고 이미 알린 경로 — 한 pull 이 같은 DB 를 여러 번 다시 쓴다. */
+  private readonly keptUserBases = new Set<string>();
   private readonly sidecarGenerator = new SidecarGenerator();
 
   /**
@@ -768,7 +770,16 @@ export class DatabaseSyncer {
 
       const safeName = sanitizeFileName(dbName);
       const basePath = `${dbConfig.localFolder}/${safeName}.base`;
-      await this.vaultFs.writeFile(basePath, baseContent);
+      if (await this.isUserFile(basePath)) {
+        if (!this.keptUserBases.has(basePath)) {
+          this.keptUserBases.add(basePath);
+          getLogger().warn(
+            `[DB Sync] 직접 만든 .base 라 Notion 보기로 덮어쓰지 않음: ${basePath} — Notion 보기를 받으려면 이 파일의 이름을 바꾸세요`,
+          );
+        }
+      } else {
+        await this.vaultFs.writeFile(basePath, baseContent);
+      }
       this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
@@ -816,6 +827,12 @@ export class DatabaseSyncer {
     };
   }
 
+  /** pull 이 쓰지 않은 `.base` · 사이드카가 이미 있는가 — 없거나 읽지 못하면 false. */
+  private async isUserFile(path: string): Promise<boolean> {
+    const content = await this.vaultFs.readFile(path).catch(() => null);
+    return content !== null && !isGeneratedDbArtifact(path, content);
+  }
+
   /**
    * DB 제목이 바뀌면 `.base`/`.notion.json` 파일명(safeName)이 바뀌어 옛 이름의 산출물이
    * 같은 폴더에 고아로 잔존한다(drift·부활 원인). DB 폴더 **직속**의 산출물 중 현재 이름이
@@ -830,6 +847,7 @@ export class DatabaseSyncer {
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
       for (const path of stale) {
+        if (await this.isUserFile(path)) continue;
         await this.vaultFs.deleteFile(path);
         getLogger().info(`[DB Sync] 고아 DB 산출물 삭제(rename): ${path}`);
       }
@@ -868,6 +886,7 @@ export class DatabaseSyncer {
       // 불필요한 IO 를 없애고, 내용이 실제로 바뀔 때만 알린다.
       const existing = await this.vaultFs.readFile(sidecarPath).catch(() => null);
       if (existing === serialized) return;
+      if (existing !== null && !isGeneratedDbArtifact(sidecarPath, existing)) return;
       await this.vaultFs.writeFile(sidecarPath, serialized);
 
       if (sidecar.degraded.length > 0) {

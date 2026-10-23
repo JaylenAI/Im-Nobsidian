@@ -7,6 +7,8 @@
  * 삭제 대상으로 고를지를 **부수효과 없이 결정**한다(테스트·재사용 용이).
  */
 
+import { BASE_FILE_HEADER } from "../view/base-file-generator.js";
+
 /** 볼트 파일 참조의 최소 형태(경로만 필요). */
 export interface VaultFileRef {
   readonly path: string;
@@ -25,7 +27,23 @@ export function isDbArtifactPath(path: string): boolean {
 }
 
 /**
- * `localFolder` **직속**의 고아 `.base`/`.notion.json` 경로를 고른다.
+ * pull 이 쓴 산출물인가 — `.base` 는 생성 머리({@link BASE_FILE_HEADER})로, 사이드카는 `generator` 로 가린다.
+ * 사용자가 DB 폴더에 직접 만든 Bases 파일은 아니다 — 예전 pull 은 그것을 고아로 보고 지우거나 같은 이름이면
+ * 덮어썼다.
+ */
+export function isGeneratedDbArtifact(path: string, content: string): boolean {
+  if (path.endsWith(".base")) return content.startsWith(BASE_FILE_HEADER);
+  if (!path.endsWith(".notion.json")) return false;
+  try {
+    return (JSON.parse(content) as { generator?: unknown }).generator === "im-nobsidian";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `localFolder` **직속**의 고아 `.base`/`.notion.json` 경로를 고른다. 지우기 전에
+ * {@link isGeneratedDbArtifact} 로 pull 이 쓴 것인지 한 번 더 본다 — 여기서는 내용을 읽지 않는다.
  *
  * 규칙:
  * - `localFolder/` 로 시작하고 그 뒤에 `/` 가 없는 **직속 파일만** 대상 — 하위 폴더(중첩 DB)의
