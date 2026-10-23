@@ -603,21 +603,31 @@ describe("R12-A — 마감 초과 시 순회 부분 결과를 버리지 않는�
 
   it("DiscoveryTooLargeError 가 포기 시점까지 찾은 페이지를 partial 로 싣는다", async () => {
     const client = createClient();
-    const BUDGET_MS = 20;
-    // root 조회가 예산을 다 쓰고 자식 2개를 낸다 → 다음 레벨 진입 시 마감 초과.
+    const spend = (n: number) =>
+      Promise.all(
+        Array.from({ length: n }, () =>
+          (
+            client as unknown as { withRateLimit: (fn: () => Promise<number>) => Promise<number> }
+          ).withRateLimit(async () => 0),
+        ),
+      );
+    // root 조회가 예산을 다 쓰고 자식 2개를 낸다 → 다음 레벨 진입 시 예산 초과.
     // (실제 대규모 서브트리에서 벌어지는 일: 얕은 레벨을 찾아 놓고 깊은 가지에서 걸린다.)
+    const visited: string[] = [];
     vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) => {
+      visited.push(id);
       if (id !== "root") return [];
-      await new Promise((r) => setTimeout(r, BUDGET_MS * 2));
+      await spend(5);
       return [makePage("lvl1-a"), makePage("lvl1-b")];
     });
 
     const err = await client
-      .getChildPagesRecursive("root", { deadlineMs: Date.now() + BUDGET_MS })
+      .getChildPagesRecursive("root", { maxRequests: 5 })
       .then(() => null)
       .catch((e: unknown) => e);
 
     expect(err).toBeInstanceOf(DiscoveryTooLargeError);
+    expect(visited).toEqual(["root"]);
     // 수정 전에는 partial 자체가 없어 이미 치른 순회 비용이 통째로 버려졌다.
     expect((err as DiscoveryTooLargeError).partial.map((p) => p.id).sort()).toEqual([
       "lvl1-a",
@@ -625,13 +635,14 @@ describe("R12-A — 마감 초과 시 순회 부분 결과를 버리지 않는�
     ]);
   });
 
-  it("마감을 안 넘기면 종전대로 전량을 반환한다(회귀 없음)", async () => {
+  it("예산은 시간이 아니라 요청 수다 — 느려도 예산 안이면 끝까지 훑는다", async () => {
     const client = createClient();
-    vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) =>
-      id === "root" ? [makePage("a")] : [],
-    );
+    vi.spyOn(client, "getChildPages").mockImplementation(async (id: string) => {
+      await new Promise((r) => setTimeout(r, 30));
+      return id === "root" ? [makePage("a")] : [];
+    });
 
-    const all = await client.getChildPagesRecursive("root", { deadlineMs: Date.now() + 60_000 });
+    const all = await client.getChildPagesRecursive("root", { maxRequests: 270 });
     expect(all.map((p) => p.id)).toEqual(["a"]);
   });
 });

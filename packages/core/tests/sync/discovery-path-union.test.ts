@@ -2,7 +2,7 @@
  * R12-A 회귀 잠금 — 디스커버리 두 경로를 **경합시키지 않고 합집합**으로 쓴다.
  *
  * 결함: 페이지 모드 디스커버리에는 경로가 둘이다.
- *   ① 직접 순회 getChildPagesRecursive — 시간 예산(90s) 초과 시 DiscoveryTooLargeError
+ *   ① 직접 순회 getChildPagesRecursive — 예산(예전 90초 · 지금 270 요청) 초과 시 DiscoveryTooLargeError
  *   ② search 폴백 getPagesUnderRootViaSearch — ① 이 던지면 갈아탄다
  * ① 이 그때까지 찾은 결과를 **버리고** 던졌기 때문에, 어느 경로의 결과를 쓰는지를
  * 벽시계가 정했다. 두 경로는 같은 집합을 내지 않는다 — search 는 워크스페이스 색인에
@@ -122,6 +122,36 @@ describe("R12-A — 디스커버리 경로 합집합", () => {
 
     await expect(makeOrchestrator(createConfig()).pull()).rejects.toThrow("401 unauthorized");
     expect(notion.getPagesUnderRootViaSearch).not.toHaveBeenCalled();
+  });
+
+  it("추적 중인 페이지만으로 순회 예산을 넘으면 순회 없이 search 로 찾는다", async () => {
+    const records = Array.from({ length: 136 }, (_, i) => ({
+      id: i + 1,
+      obsidianPath: `p${i}.md`,
+      notionPageId: `p${i}`,
+      notionParentId: ROOT,
+      contentHash: "h",
+      notionLastEdited: "2026-01-01T00:00:00.000Z",
+      localLastModified: "2026-01-01T00:00:00.000Z",
+      syncDirection: "both",
+      fileType: "page",
+      localMtime: null,
+      localFileSize: null,
+      baseSnapshot: null,
+    }));
+    stateDb.getAll.mockReturnValue(records);
+    notion.getPagesUnderRootViaSearch.mockResolvedValue([pg("new")] as never);
+
+    const result = await makeOrchestrator(createConfig()).pull({ force: true });
+
+    expect(notion.getChildPagesRecursive).not.toHaveBeenCalled();
+    expect(result.created).toBe(1);
+
+    // 135개면 예산(270) 안 — 순회한다.
+    stateDb.getAll.mockReturnValue(records.slice(1));
+    notion.getChildPagesRecursive.mockResolvedValue([] as never);
+    await makeOrchestrator(createConfig()).pull({ force: true });
+    expect(notion.getChildPagesRecursive).toHaveBeenCalledTimes(1);
   });
 
   it("순회가 예산 안에 끝나면 search 를 부르지 않는다(폴백 비용 미발생)", async () => {
