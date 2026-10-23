@@ -1159,7 +1159,9 @@ export class SyncOrchestrator {
 
   /** pull 이 쓴 노트의 Notion 링크를 볼트 링크로 푼다 — 푼 링크 수를 돌려준다. */
   private async resolveNotionLinks(paths: string[]): Promise<number> {
-    return resolveNotionLinks(this.stateDb, this.vaultFs, paths);
+    return resolveNotionLinks(this.stateDb, this.vaultFs, paths, async (pageId) =>
+      this.notionClient.extractTitle(await this.notionClient.getPage(pageId)),
+    );
   }
 
   // ──────────────────────────────────────────────────────────────────────────
