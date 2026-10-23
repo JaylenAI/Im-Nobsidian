@@ -17,16 +17,16 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
 
 ### 실측 — 지금 API 로 되는 것 (2026-10-23, SDK 5.23.1 · API `2025-09-03`)
 
-| 무엇                                                  | 결과                                                                                                                                                                                                                                                           |
-| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `databases.create` + `initial_data_source.properties` | 18 타입 모두 만듦 — title · rich_text · number(format) · select · multi_select(옵션 색) · date · people · files · checkbox · url · email · phone_number · formula · unique_id(prefix 2자 이상) · created_time · last_edited_time · created_by · last_edited_by |
-| `dataSources.update` 로 status 추가                   | 됨. 옵션을 주면 그 옵션(첫 옵션이 기본값), 안 주면 Not started · In progress · Done. **그룹은 정하지 못한다** — 준 옵션은 모두 To-do 에 들고 `groups` 를 보내도 무시된다. 기본 세 옵션만 제 그룹에 든다                                                        |
-| unique_id prefix                                      | **워크스페이스에서 하나뿐** — 같은 워크스페이스의 DB 가 이미 쓰면 409 `conflict_error` "Unique ID prefix is already in use."                                                                                                                                   |
-| relation 추가                                         | dual · single 둘 다. dual 은 대상 DB 에 맞짝 속성이 생긴다                                                                                                                                                                                                     |
-| rollup 추가                                           | 됨(relation · 대상 속성 이름 · 함수)                                                                                                                                                                                                                           |
-| 행 만들기                                             | `parent.data_source_id` · 스키마에 없는 select 옵션은 Notion 이 더한다                                                                                                                                                                                         |
-| 뷰                                                    | `GET /v1/views?database_id=` · `POST /v1/views` 로 table · board · calendar · timeline · gallery · list 만듦. 속성은 **이름이 아니라 id** 로 가리킨다. board 는 `group_by.sort` 가, calendar · timeline 은 `date_property_id` 가 있어야 한다                   |
-| 다시 읽기                                             | formula 는 `prop("수") * 2` 처럼 다시 보낼 수 있는 식으로, relation 은 대상 data source id 로, rollup 은 이름으로 돌려준다                                                                                                                                     |
+| 무엇                                                  | 결과                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `databases.create` + `initial_data_source.properties` | 18 타입 모두 만듦 — title · rich_text · number(format) · select · multi_select(옵션 색) · date · people · files · checkbox · url · email · phone_number · formula · unique_id(prefix 2자 이상) · created_time · last_edited_time · created_by · last_edited_by                                                                                                                                                                         |
+| `dataSources.update` 로 status 추가                   | 됨. 옵션을 주면 그 옵션(첫 옵션이 기본값), 안 주면 Not started · In progress · Done. **그룹은 정하지 못한다** — 준 옵션은 모두 To-do 에 들고 `groups` 를 보내도 무시된다. 기본 세 옵션만 제 그룹에 든다                                                                                                                                                                                                                                |
+| unique_id prefix                                      | **워크스페이스에서 하나뿐** — 같은 워크스페이스의 DB 가 이미 쓰면 409 `conflict_error` "Unique ID prefix is already in use."                                                                                                                                                                                                                                                                                                           |
+| relation 추가                                         | dual · single 둘 다. dual 은 대상 DB 에 맞짝 속성이 생긴다                                                                                                                                                                                                                                                                                                                                                                             |
+| rollup 추가                                           | 됨(relation · 대상 속성 이름 · 함수)                                                                                                                                                                                                                                                                                                                                                                                                   |
+| 행 만들기                                             | `parent.data_source_id` · 스키마에 없는 select 옵션은 Notion 이 더한다                                                                                                                                                                                                                                                                                                                                                                 |
+| 뷰                                                    | `POST /v1/views` 는 `database_id` 와 `data_source_id` 를 함께 받는다. table · board · list · gallery · calendar · timeline · form · chart 를 보낸 필터 · 정렬 · 그룹 · 열 설정 · 빠른 필터 그대로 만듦. map 은 장소 속성(`map_by`)이 있어야 한다. 속성은 **이름이 아니라 id** 로 가리킨다(보기는 `}TfS`, 속성 목록은 `%7DTfS` 꼴). DB 의 마지막 보기는 지우지 못한다(400). 보기 이름을 바꿔도 DB · data source 의 수정 시각은 그대로다 |
+| 다시 읽기                                             | formula 는 `prop("수") * 2` 처럼 다시 보낼 수 있는 식으로, relation 은 대상 data source id 로, rollup 은 이름으로 돌려준다                                                                                                                                                                                                                                                                                                             |
 
 ## 결정
 
@@ -48,8 +48,11 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
    - 행을 만들 때 대상이 아직 없는 relation 값은 행을 모두 만든 뒤 한 번 더 보낸다.
 5. **부모 본문의 자리.** `.base` 임베드는 `created_dbs` 로 새 DB 를 가리킨다 — 부모 본문을 다시 보낼 때 DB 가 임베드
    자리에 선다(ADR-009 의 자식 되돌림).
-6. **뷰** 는 사이드카의 원래 설정으로 만든다. 속성 id 는 이름을 거쳐 새 id 로 바꾼다. Notion 이 만든 기본 뷰는 사이드카에
-   뷰가 하나라도 있으면 지운다. form · chart · map · dashboard 는 만들지 않는다(API 가 만들지 못하거나 읽기 전용).
+6. **뷰** 는 사이드카에 적힌 원래 설정(`configuration` · `filter` · `sorts` · `quickFilters`)으로, 속성을 다 붙인 뒤
+   차례대로 만든다(`sync/database-views.ts`). 속성 id 는 받아 온 DB 의 id → 이름 → 새 id 로 바꾼다. 새 DB 에 없는 속성의
+   열 · 정렬은 빼고, 필터 · 그룹이 그런 속성을 가리키면 그 보기를 만들지 않고 알린다. 보기를 하나라도 만들면 Notion 이
+   넣은 기본 보기를 지운다. dashboard 는 만들지 않는다(위젯은 옮기지 않는다). 끊기면 다음 push 가 이미 만든 보기(이름)를
+   건너뛰고 이어 만든다 — 올릴 노트가 없는 push 도 이어 만든다.
 7. 끌 수 있다 — `sync.createDatabases: false` 면 예전처럼 폴더 · 페이지로 올린다.
 
 ## 이유
@@ -69,9 +72,9 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
 - 속성 순서 — data source 의 속성은 순서 없는 맵이다. 다시 받으면 frontmatter · `.base` 의 속성 순서가 바뀔 수 있다.
 - 루트 아래 DB 들의 폴더(`databases/`)는 pull 이 만든 자리다 — 페이지로 만들지 않고 그 안의 DB 를 루트 아래에 만든다.
 - people 값은 이름으로만 볼트에 있어 보내지 않는다(사용자 id 를 알 수 없다).
-- form · chart · map · dashboard 뷰, button · verification 속성은 만들 수 없다.
+- dashboard 보기(위젯), button · verification 속성은 만들지 않는다.
 - 볼트 밖 DB 를 가리키던 relation · 그 relation 을 쓰는 rollup 은 만들지 않는다.
-- 뷰의 열 너비 · 커버 크기 등 API 가 받지 않는 설정은 빠진다.
+- 보기 설정은 받은 그대로 보낸다 — Notion 이 거절한 보기(장소 속성 없는 map 등)는 알리고 건너뛴다. 보기 id 는 새로 매겨진다.
 
 ## 영향
 

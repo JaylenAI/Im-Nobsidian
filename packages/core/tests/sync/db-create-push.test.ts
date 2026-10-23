@@ -21,7 +21,12 @@ const CREATED_AT = "2026-10-23T03:00:00.000Z";
 const SOURCE_TASKS = "aaaaaaaa000000000000000000000001";
 const SOURCE_PEOPLE = "aaaaaaaa000000000000000000000002";
 
-function sidecar(databaseId: string, name: string, properties: unknown[]): string {
+function sidecar(
+  databaseId: string,
+  name: string,
+  properties: unknown[],
+  views: unknown[] = [],
+): string {
   return JSON.stringify({
     generator: "im-nobsidian",
     schemaVersion: 2,
@@ -29,7 +34,7 @@ function sidecar(databaseId: string, name: string, properties: unknown[]): strin
     databaseName: name,
     isInline: true,
     properties,
-    views: [],
+    views,
     degraded: [],
   });
 }
@@ -91,6 +96,7 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
   let records: Map<string, Rec>;
   let meta: Map<string, string>;
   let warn: ReturnType<typeof vi.fn>;
+  let viewsOf: Map<string, Array<{ id: string; name: string }>>;
 
   const config = (sync: Partial<Config["sync"]> = {}): Config =>
     createConfig({
@@ -177,6 +183,32 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
       return { databaseId: `db-new-${nextDb}`, dataSourceId: `ds-new-${nextDb}` };
     });
     notion.primaryDataSourceId = vi.fn(async (id: string) => `ds-of-${id}`);
+    // 만든 DB 마다 Notion 이 넣는 기본 보기 하나.
+    viewsOf = new Map();
+    let nextView = 0;
+    notion.listDatabaseViews = vi.fn(async (databaseId: string) => [
+      ...(viewsOf.get(databaseId) ?? [{ id: `default-${databaseId}`, name: "Default view" }]),
+    ]);
+    notion.createView = vi.fn(async (p: { databaseId: string; request: { name: string } }) => {
+      const id = `view-${++nextView}`;
+      const list = viewsOf.get(p.databaseId) ?? [
+        { id: `default-${p.databaseId}`, name: "Default view" },
+      ];
+      viewsOf.set(p.databaseId, [...list, { id, name: p.request.name }]);
+      return id;
+    });
+    notion.deleteView = vi.fn(async (viewId: string) => {
+      for (const [db, list] of viewsOf)
+        viewsOf.set(
+          db,
+          list.filter((v) => v.id !== viewId),
+        );
+    });
+    notion.getDataSourceProperties = vi.fn(async () => ({
+      이름: { id: "title" },
+      진척: { id: "new%3Ap1" },
+      상태: { id: "new-p2" },
+    }));
     notion.updateDataSourceProperties = vi.fn(
       async (_ds: string, props: Record<string, unknown>) =>
         "담당" in props
@@ -537,6 +569,135 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
     expect(notion.createDatabase.mock.calls[0]![0]).toMatchObject({
       parentPageId: "root-page-id",
       title: "과제",
+    });
+  });
+
+  describe("보기 — 사이드카의 보기를 새 DB 에", () => {
+    const VIEWS = [
+      {
+        id: "sv1",
+        name: "진척 순",
+        notionType: "table",
+        basesType: "table",
+        config: {
+          sorts: [{ property: "p1", direction: "descending" }],
+          configuration: { type: "table" },
+        },
+      },
+      {
+        id: "sv2",
+        name: "상태 보드",
+        notionType: "board",
+        basesType: "cards",
+        config: {
+          configuration: {
+            type: "board",
+            group_by: {
+              type: "status",
+              property_id: "p2",
+              group_by: "group",
+              sort: { type: "manual" },
+            },
+          },
+        },
+      },
+    ];
+    const withViews = (): void => {
+      const tasks = JSON.parse(TASKS_SIDECAR) as { properties: unknown[] };
+      files.set("P/과제/과제.notion.json", sidecar(SOURCE_TASKS, "과제", tasks.properties, VIEWS));
+    };
+    const viewCalls = () =>
+      notion.createView.mock.calls.map((c) => [c[0].databaseId, c[0].request.name]);
+
+    it("속성이 다 붙은 뒤 차례대로 만들고 Notion 의 기본 보기를 지운다", async () => {
+      withViews();
+      await build().push();
+
+      expect(notion.createView.mock.calls.map((c) => c[0])).toEqual([
+        {
+          databaseId: "db-new-1",
+          dataSourceId: "ds-new-1",
+          request: {
+            name: "진척 순",
+            type: "table",
+            sorts: [{ property: "new:p1", direction: "descending" }],
+            configuration: { type: "table" },
+          },
+        },
+        {
+          databaseId: "db-new-1",
+          dataSourceId: "ds-new-1",
+          request: {
+            name: "상태 보드",
+            type: "board",
+            configuration: {
+              type: "board",
+              group_by: {
+                type: "status",
+                property_id: "new-p2",
+                group_by: "group",
+                sort: { type: "manual" },
+              },
+            },
+          },
+        },
+      ]);
+      // 속성(formula 까지)을 다 붙인 다음이다 — 보기가 가리킬 속성이 있어야 한다.
+      expect(notion.createView.mock.invocationCallOrder[0]!).toBeGreaterThan(
+        notion.updateDataSourceProperties.mock.invocationCallOrder.at(-1)!,
+      );
+      expect(notion.deleteView.mock.calls).toEqual([["default-db-new-1"]]);
+      // 보기가 없는 사이드카(사람)는 기본 보기를 그대로 둔다.
+      expect(viewsOf.get("db-new-2")).toBeUndefined();
+      expect(JSON.parse(meta.get("created_dbs")!)[SOURCE_TASKS]).toMatchObject({ viewsDone: true });
+
+      notion.createView.mockClear();
+      await build().push();
+      expect(notion.createView).not.toHaveBeenCalled();
+    });
+
+    it("끊기면 다음 push 가 이미 만든 보기는 건너뛰고 이어 만든다 — 기본 보기는 그때 지운다", async () => {
+      withViews();
+      const create = notion.createView.getMockImplementation()!;
+      notion.createView.mockImplementationOnce(create).mockImplementationOnce(async () => {
+        throw Object.assign(new Error("Service Unavailable"), { status: 503 });
+      });
+      await build().push();
+
+      expect(viewCalls()).toEqual([
+        ["db-new-1", "진척 순"],
+        ["db-new-1", "상태 보드"],
+      ]);
+      expect(notion.deleteView).not.toHaveBeenCalled();
+      expect(JSON.parse(meta.get("created_dbs")!)[SOURCE_TASKS].viewsDone).toBeFalsy();
+
+      notion.createView.mockClear();
+      await build().push();
+      expect(viewCalls()).toEqual([["db-new-1", "상태 보드"]]);
+      expect(notion.deleteView.mock.calls).toEqual([["default-db-new-1"]]);
+      expect(viewsOf.get("db-new-1")!.map((v) => v.name)).toEqual(["진척 순", "상태 보드"]);
+    });
+
+    it("Notion 이 거절한 보기는 알리고 나머지를 만든다", async () => {
+      withViews();
+      notion.createView.mockImplementationOnce(async () => {
+        throw Object.assign(new Error("validation_error"), { status: 400 });
+      });
+      await build().push();
+
+      expect(viewsOf.get("db-new-1")!.map((v) => v.name)).toEqual(["상태 보드"]);
+      expect(warn.mock.calls.flat().join("\n")).toContain("보기를 만들지 못함 (P/과제 · 진척 순)");
+      expect(JSON.parse(meta.get("created_dbs")!)[SOURCE_TASKS]).toMatchObject({ viewsDone: true });
+    });
+
+    it("하나도 만들지 못하면 기본 보기를 남긴다", async () => {
+      withViews();
+      notion.createView.mockImplementation(async () => {
+        throw Object.assign(new Error("validation_error"), { status: 400 });
+      });
+      await build().push();
+
+      expect(notion.deleteView).not.toHaveBeenCalled();
     });
   });
 

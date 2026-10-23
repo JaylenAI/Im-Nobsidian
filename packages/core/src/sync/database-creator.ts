@@ -2,6 +2,7 @@ import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { LocalChange } from "../types/sync.js";
+import type { ViewRequest } from "../types/view.js";
 import { compactNotionId } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import {
@@ -13,6 +14,7 @@ import {
   type PlannedStatus,
   type SidecarSchema,
 } from "./database-schema.js";
+import { planViews } from "./database-views.js";
 import {
   DISCOVERED_DBS_META_KEY,
   loadInaccessibleDbIds,
@@ -49,6 +51,10 @@ export interface CreatedDatabase {
   readonly title: string;
   /** relation · rollup · formula 를 다 붙였나 — 아니면 다음 push 가 이어 붙인다. */
   readonly schemaDone: boolean;
+  /** 사이드카의 보기를 다 만들었나 — 아니면 다음 push 가 이어 만든다. */
+  readonly viewsDone?: boolean;
+  /** DB 를 만들 때 Notion 이 넣은 기본 보기 — 사이드카의 보기를 만든 뒤 지운다. */
+  readonly initialViewIds?: readonly string[];
 }
 
 /** 사이드카가 있고 Notion 에 아직 없는 DB 폴더. */
@@ -83,6 +89,7 @@ const SIDECAR_RE = /\.notion\.json$/i;
  * 2. {@link create} — 폴더의 자리를 마련할 때(`FolderPlacement.prepareFolders`) 부모 페이지 아래에 만들고,
  *    자동 발견 목록에 적는다. 그 폴더의 노트는 행으로 간다(`pushCreateRow`).
  * 3. {@link completeSchemas} — 이번에 만든 DB 가 모두 생긴 뒤 relation → rollup → formula 를 붙인다.
+ * 4. {@link completeViews} — 속성이 다 붙은 뒤 사이드카의 보기를 만들고 기본 보기를 지운다.
  *
  * 🔴 사이드카가 가리키는 DB 에는 쓰지 않는다 — 받아 온 곳(다른 루트 · 사용자의 실제 워크스페이스)일 수 있다.
  */
@@ -413,6 +420,100 @@ export class DatabaseCreator {
       if (entry && !retry.has(item.source)) latest.set(item.source, { ...entry, schemaDone: true });
     }
     saveCreatedDatabases(this.stateDb, latest);
+  }
+
+  /**
+   * 속성을 다 붙인 DB 에 사이드카의 보기를 차례대로 만들고, Notion 이 넣은 기본 보기를 지운다. 이어 만들 때는
+   * 이미 만든 보기(이름)를 건너뛴다 — 만드는 요청은 다시 보내면 보기가 둘 생긴다.
+   */
+  async completeViews(): Promise<void> {
+    for (const [source, entry] of loadCreatedDatabases(this.stateDb)) {
+      if (entry.viewsDone || !entry.schemaDone || !entry.databaseId || !entry.dataSourceId)
+        continue;
+      const schema = await this.sidecarIn(entry.folder, source);
+      // pull 이 사이드카를 새 DB 로 고쳐 썼으면 원래 보기는 이제 없다 — 새 DB 의 보기가 곧 사이드카다.
+      if (!schema || schema.databaseId !== source || schema.views.length === 0) {
+        this.record(source, { ...entry, viewsDone: true });
+        continue;
+      }
+      let done = false;
+      try {
+        done = await this.createViews(source, entry, schema);
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 보기를 만들지 못함 (${entry.folder}) — 다음 push 가 이어 만든다: ${messageOf(error)}`,
+        );
+      }
+      const latest = loadCreatedDatabases(this.stateDb).get(source);
+      if (done && latest) this.record(source, { ...latest, viewsDone: true });
+    }
+  }
+
+  /** @returns 다 만들었나 — false 면 다음 push 가 이어 만든다. */
+  private async createViews(
+    source: string,
+    entry: CreatedDatabase,
+    schema: SidecarSchema,
+  ): Promise<boolean> {
+    const databaseId = entry.databaseId!;
+    const dataSourceId = entry.dataSourceId!;
+    const views = await this.notionClient.listDatabaseViews(databaseId);
+    const initial = entry.initialViewIds ?? views.map((v) => v.id);
+    if (!entry.initialViewIds) this.record(source, { ...entry, initialViewIds: initial });
+    const made = new Map<string, number>();
+    for (const view of views) {
+      if (!initial.includes(view.id)) made.set(view.name, (made.get(view.name) ?? 0) + 1);
+    }
+
+    const plan = planViews(schema, await this.notionClient.getDataSourceProperties(dataSourceId));
+    for (const skip of plan.skipped) {
+      getLogger().warn(
+        `[Im-Nobsidian] 보기를 만들지 않음 (${entry.folder} · ${skip.name}): ${skip.reason}`,
+      );
+    }
+    let count = [...made.values()].reduce((a, b) => a + b, 0);
+    for (const request of plan.requests) {
+      const already = made.get(request.name) ?? 0;
+      if (already > 0) {
+        made.set(request.name, already - 1);
+        continue;
+      }
+      const sent = await this.sendView(entry.folder, databaseId, dataSourceId, request);
+      if (sent === "retry") return false;
+      if (sent === "made") count++;
+    }
+    if (count === 0) return true; // 하나도 못 만들었으면 기본 보기를 남긴다 — DB 에 보기가 없을 수는 없다.
+    for (const id of initial) {
+      try {
+        await this.notionClient.deleteView(id);
+      } catch (error) {
+        if (statusOf(error) !== 404) {
+          getLogger().warn(
+            `[Im-Nobsidian] 기본 보기를 지우지 못함 (${entry.folder}): ${messageOf(error)}`,
+          );
+        }
+      }
+    }
+    return true;
+  }
+
+  private async sendView(
+    folder: string,
+    databaseId: string,
+    dataSourceId: string,
+    request: ViewRequest,
+  ): Promise<"made" | "refused" | "retry"> {
+    try {
+      await this.notionClient.createView({ databaseId, dataSourceId, request });
+      return "made";
+    } catch (error) {
+      const refused = statusOf(error) === 400;
+      getLogger().warn(
+        `[Im-Nobsidian] 보기를 만들지 못함 (${folder} · ${request.name})` +
+          `${refused ? "" : " — 다음 push 가 다시 만든다"}: ${messageOf(error)}`,
+      );
+      return refused ? "refused" : "retry";
+    }
   }
 
   /**

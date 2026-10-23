@@ -50,6 +50,23 @@ export interface ViewConfig {
   readonly datePropertyId?: string;
   readonly datePropertyName?: string;
   readonly viewRange?: "week" | "month";
+  /**
+   * 보기 설정 원본(`views.retrieve` 의 `configuration`) — push 가 새 DB 에 같은 보기를 만들 때 속성 id 만
+   * 바꿔 그대로 보낸다(ADR-036). 위의 낱낱 항목은 `.base` 와 격하 보고가 읽는다.
+   */
+  readonly configuration?: Readonly<Record<string, unknown>>;
+  /** 빠른 필터 — 속성 id → 조건. */
+  readonly quickFilters?: Readonly<Record<string, unknown>>;
+}
+
+/** `views.create` 에 보낼 보기 — `database_id` · `data_source_id` 는 보내는 쪽이 붙인다. */
+export interface ViewRequest {
+  readonly name: string;
+  readonly type: string;
+  readonly filter?: unknown;
+  readonly sorts?: unknown[];
+  readonly quick_filters?: Record<string, unknown>;
+  readonly configuration?: Record<string, unknown>;
 }
 
 export interface DatabaseViewsConfig {
