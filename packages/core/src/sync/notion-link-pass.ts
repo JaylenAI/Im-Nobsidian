@@ -1,8 +1,10 @@
 import {
   degradeUnresolvedNotionIdWikilinks,
   degradeUnresolvedNotionRelativePageLinks,
+  linkLabelOfTitle,
   resolveNotionIdWikilinks,
   resolveNotionRelativePageLinks,
+  unlabeledNotionIds,
 } from "../converter/notion-id-links.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { computeHash } from "../utils/hash.js";
@@ -21,15 +23,20 @@ import { isMarkdownPath } from "../utils/markdown-path.js";
  * 남긴다. 바꾼 노트는 해시 · 사본 · stat 도 새 내용으로 적는다 — 아니면 다음 실행이 로컬 수정으로
  * 본다(I5).
  *
+ * 볼트 밖 페이지의 멘션은 Notion 이 제목 없이 준다 — 남기기 전에 `pageTitle` 로 제목을 한 번씩 읽어 링크 글자로
+ * 쓴다. 읽지 못하면 id 를 쓴다.
+ *
  * @returns 푼 링크 수.
  */
 export async function resolveNotionLinks(
   stateDb: IStateDB,
   vaultFs: VaultFS,
   paths: string[],
+  pageTitle?: (pageId: string) => Promise<string | null>,
 ): Promise<number> {
   let totalResolved = 0;
   let totalDegraded = 0;
+  const titles = new Map<string, string>();
   const allRecords = stateDb.getAll();
   const idToTitle = new Map<string, string>();
   const idToPath = new Map<string, string>();
@@ -91,8 +98,15 @@ export async function resolveNotionLinks(
       // 외부 링크로 굳는다). **두 표기 모두** 격하한다 — 한쪽만 하면 다른 쪽 표기로
       // 들어온 볼트 밖 링크가 끊긴 채 남는다(R10-B 는 위키링크형만 고쳐 상대 url 형
       // 89건이 남았다 → R10-D).
+      if (pageTitle) {
+        for (const id of unlabeledNotionIds(content)) {
+          if (titles.has(id)) continue;
+          // 휴지통 · 권한 밖이면 못 읽는다 — 빈 제목으로 적어 다시 묻지 않고 id 를 쓴다.
+          titles.set(id, linkLabelOfTitle((await pageTitle(id).catch(() => null)) ?? ""));
+        }
+      }
       for (const degrade of [
-        degradeUnresolvedNotionIdWikilinks,
+        (markdown: string) => degradeUnresolvedNotionIdWikilinks(markdown, titles),
         degradeUnresolvedNotionRelativePageLinks,
       ]) {
         const degradation = degrade(content);

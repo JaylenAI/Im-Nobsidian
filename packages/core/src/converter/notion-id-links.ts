@@ -87,20 +87,45 @@ export interface NotionIdWikilinkDegradation {
  * 라벨 달린 페이지 링크 규칙이 다시 `[[notion:<id>|라벨]]` 로 환원하므로 id 가 살아
  * 있고, 그 페이지가 나중에 볼트에 들어오면 그때 정식 위키링크로 해소된다.
  */
-export function degradeUnresolvedNotionIdWikilinks(markdown: string): NotionIdWikilinkDegradation {
+export function degradeUnresolvedNotionIdWikilinks(
+  markdown: string,
+  titles: ReadonlyMap<string, string> = new Map(),
+): NotionIdWikilinkDegradation {
   let degraded = 0;
   const out = markdown.replace(
     NOTION_ID_WIKILINK_RE,
     (_match, id: string, alias: string | undefined) => {
       degraded++;
       const compact = compactId(id);
-      // 라벨 없는 mention(`<mention-page url=…/>`)은 Notion 이 제목을 안 주므로
-      // id 를 라벨로 쓴다. 읽기 좋진 않지만 **동작하는** 링크이고, 해소 경로가
-      // 이 라벨을 별칭으로 오인하지 않도록 위에서 되돌린다.
-      return `[${alias ?? compact}](https://www.notion.so/${compact})`;
+      // 라벨 없는 mention(`<mention-page url=…/>`)은 Notion 이 제목을 안 준다 — 호출측이 읽어 둔
+      // 제목을 쓰고, 못 읽었으면 id 를 쓴다. 읽기 좋진 않지만 **동작하는** 링크이고, 해소 경로가
+      // id 라벨을 별칭으로 오인하지 않도록 위에서 되돌린다.
+      return `[${alias ?? (titles.get(compact) || compact)}](https://www.notion.so/${compact})`;
     },
   );
   return { markdown: out, degraded };
+}
+
+/** 라벨 없이 남은 `[[notion:<id>]]` 의 id(압축형) — 격하하기 전에 제목을 읽을 대상. */
+export function unlabeledNotionIds(markdown: string): string[] {
+  const ids = new Set<string>();
+  for (const m of markdown.matchAll(NOTION_ID_WIKILINK_RE)) {
+    if (m[2] === undefined) ids.add(compactId(m[1]!));
+  }
+  return [...ids];
+}
+
+/**
+ * 페이지 제목을 링크 글자로 — 제목은 글이라 강조 기호를 escape 한다(`__초안__` 이 굵게 보이지 않게).
+ * 링크 글자에 대괄호는 쓰지 못한다(`MARKER_LABEL_CAPTURE`) — 받기가 다시 읽을 때 링크가 끊기지 않게 `( )` 로 바꾼다.
+ */
+export function linkLabelOfTitle(title: string): string {
+  return title
+    .replace(/[\r\n]+/g, " ")
+    .trim()
+    .replace(/\[/g, "(")
+    .replace(/\]/g, ")")
+    .replace(/[\\*_`~]/g, "\\$&");
 }
 
 /**

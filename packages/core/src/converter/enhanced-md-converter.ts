@@ -41,7 +41,8 @@ import {
   restoreBodyIndent,
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
-import { mapOutsideCodeFences } from "../utils/md-regions.js";
+import { mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
+import { sanitizeFileName } from "../utils/sanitize.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
 import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
@@ -194,8 +195,25 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreToggleHeadings(result);
   // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
   result = indentPlaceholdersToNextLine(result);
+  result = underscoreItalicsWithStar(result);
 
   return result;
+}
+
+/**
+ * 글 `*`(`\*`)가 든 기울임 `*…*` 를 `_…_` 로 — Notion 은 `*기울 \* 임*` 의 `\*` 에서 기울임을 닫아 `기울 \` 만
+ * 기울이고 ` 임*` 를 글로 남긴다(2026-10-23 탐침). `_기울 \* 임_` 은 `기울 * 임` 을 기울인다. 굵게는 문제없다.
+ *
+ * `_` 는 낱말 안에서 기울임을 열고 닫지 못한다 — 앞뒤가 글자 · 숫자인 기울임과 `_` 가 든 기울임은 그대로 둔다.
+ */
+const ITALIC_WITH_ESCAPED_STAR_RE =
+  /(?<![\\*\p{L}\p{N}])\*(?![\s*])((?:[^*_\n\\]|\\[^\n])*?\\\*(?:[^*_\n\\]|\\[^\n])*?)(?<![\s\\])\*(?![*\p{L}\p{N}])/gu;
+
+function underscoreItalicsWithStar(content: string): string {
+  if (!content.includes("\\*")) return content;
+  return mapOutsideCode(content, (segment) =>
+    segment.replace(ITALIC_WITH_ESCAPED_STAR_RE, (_match, inner: string) => `_${inner}_`),
+  );
 }
 
 // ─── Push 방향: 위키링크 → Notion markdown API 호환 표현 ───
@@ -938,9 +956,20 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * 자식 페이지 태그 → `[[제목]]`. 제목이 파일 이름이 될 수 없으면(`a / b` 의 노트는 `a _ b.md`) `[[제목]]` 은 다른
+ * 노트를 가리킨다 — id 로 남겨(`[[notion:<id>|제목]]`) 링크 패스가 실제 노트로 풀게 한다. 별칭의 대괄호는 괄호로
+ * 바꾼다 — 남기면 링크가 첫 `]]` 에서 끊긴다.
+ */
 function convertPageLinks(content: string): string {
-  return content.replace(CHILD_PAGE_TAG_RE, (_match, _url: string, text: string) => {
+  return content.replace(CHILD_PAGE_TAG_RE, (_match, url: string, text: string) => {
     const cleaned = text.replace(/\*\*/g, "").trim();
+    const id = /[a-f0-9]{32}/.exec(url.replace(/-/g, ""))?.[0];
+    // Notion 은 태그 속 제목의 대괄호를 `\[` `\]` 로 준다(2026-10-23 실측).
+    const title = cleaned.replace(/\\([[\]])/g, "$1");
+    if (id && title !== "" && sanitizeFileName(title) !== title) {
+      return `[[notion:${id}|${title.replace(/\[/g, "(").replace(/\]/g, ")")}]]`;
+    }
     return `[[${cleaned}]]`;
   });
 }

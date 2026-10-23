@@ -1,3 +1,5 @@
+import type { ChildTag } from "../converter/child-tags.js";
+
 export type ConversionPath = "markdown-api" | "block-api";
 
 export interface ProcessorInput {
@@ -32,6 +34,11 @@ export interface ProcessorMetadata {
    * 이 밖의 키(`aliases` 등)는 로컬 것으로 두고, 키 차례 · 적은 모양도 로컬을 따른다(F-08).
    */
   readonly notionKeys?: readonly string[];
+  /**
+   * 받은 본문(원시 글)에 실린 자식 페이지 · 자식 DB — 페이지를 받을 때만. push 는 가리키는 줄이 없는 자식을
+   * 본문 끝에 되돌려 놓으므로(`restoreChildTags`), 로컬 표기를 되살릴 때 보낼 꼴을 그와 같이 만든다.
+   */
+  readonly remoteChildren?: readonly ChildTag[];
   /** Markdown API 로 보낼 수 없어 본문을 쓴 뒤 블록으로 채울 코드({@link DeferredCode}). */
   readonly deferredCode?: DeferredCode[];
   readonly [key: string]: unknown;

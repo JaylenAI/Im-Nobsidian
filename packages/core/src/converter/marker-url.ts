@@ -12,17 +12,39 @@
  * 고치면 기존 페이지가 영영 깨진 채로 남는다.
  */
 
-/** 마커 URL 에 실을 대상 문자열 인코딩. */
+/**
+ * 마커 URL 에 실을 대상 문자열 인코딩.
+ *
+ * 강조 문자 `_` · `*` · `~` 도 인코딩한다 — 첨부 자리표시자(`%% im-nobsidian:local-file:<대상> %%`)는
+ * 링크 주소가 아니라 글이라 Notion 이 마크다운으로 읽는다. 경로의 `__폴더__` 가 굵게가 되어 굵은 `폴더` 로
+ * 돌아와 임베드가 깨졌고, 별칭의 `*w*` 도 기울임으로 읽혀 사라졌다(2026-10-22 실데이터 E2E). 퍼센트 인코딩한
+ * 글은 Notion 이 그대로 돌려준다(실측). 그대로 든 옛 마커도 {@link decodeMarkerTarget} 가 받는다.
+ */
 export function encodeMarkerTarget(target: string): string {
-  return encodeURIComponent(target).replace(/\(/g, "%28").replace(/\)/g, "%29");
+  return encodeURIComponent(target)
+    .replace(/\(/g, "%28")
+    .replace(/\)/g, "%29")
+    .replace(/_/g, "%5F")
+    .replace(/\*/g, "%2A")
+    .replace(/~/g, "%7E");
 }
+
+/**
+ * Notion 이 도메인처럼 보이는 글에 거는 자동 링크 — `[9.23.13.mov](http://9.23.13.mov)`. 마커 안의
+ * 파일 이름(`.mov` 는 최상위 도메인이다)까지 링크가 되어 경로가 깨졌다(2026-10-22 실데이터 E2E).
+ * 글자와 주소가 같을 때만 걷는다 — 다르면 글에 적힌 링크다.
+ */
+const NOTION_AUTOLINK_RE = /\[([^\][()\s]+)\]\(https?:\/\/([^()\s]+)\)/g;
 
 /** {@link encodeMarkerTarget} 의 역변환. 잘못 인코딩된 입력은 원문을 그대로 돌려준다. */
 export function decodeMarkerTarget(encoded: string): string {
+  const unlinked = encoded.replace(NOTION_AUTOLINK_RE, (link, text: string, host: string) =>
+    text === host ? text : link,
+  );
   try {
-    return decodeURIComponent(encoded);
+    return decodeURIComponent(unlinked);
   } catch {
-    return encoded;
+    return unlinked;
   }
 }
 

@@ -101,6 +101,12 @@ const LINE_RE = /^([ \t]*(?:>[ \t]*)*)(.*?)[ \t\r]*$/;
 /** push 가 해석된 `[[자식]]` 을 바꿔 놓는 멘션 — `<mention-page url="…"/>`. */
 const MENTION_LINE_RE =
   /^<mention-(?:page|database)\b[^>]*?\burl="([^"]*)"[^>]*?(?:\/>|>[^<]*<\/mention-(?:page|database)>)$/;
+/**
+ * push 가 별칭 달린 `[[자식|제목]]` 을 바꿔 놓는 Notion 페이지 링크 — 파일 이름이 될 수 없는 제목의 자식은
+ * 받기가 이렇게 쓴다(`convertPageLinks`). 그룹 1 = id.
+ */
+const NOTION_LINK_LINE_RE =
+  /^\[[^[\]]*\]\(https?:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/(?:p\/)?(?:[^/\s()]*-)?([a-f0-9]{32})\)$/;
 /** 해석되지 않은 채 나가는 `[[대상]]` · `[[대상|별칭]]`. */
 const WIKILINK_LINE_RE = /^\[\[([^[\]|]+)(?:\|[^[\]]*)?\]\]$/;
 /**
@@ -173,7 +179,7 @@ export function restoreChildTags(
       ? takeBaseEmbed(content, pending, options.databaseIdsOfBase)
       : takeLineChild(content, pending);
     if (child) {
-      lines[i] = prefix + child.tag;
+      lines[i] = prefix + sendableTag(child);
       placed++;
     }
   }
@@ -181,9 +187,21 @@ export function restoreChildTags(
   const appended = pending.remaining();
   let out = lines.join("\n");
   if (appended.length > 0) {
-    out = `${out.replace(/\s+$/, "")}\n\n${appended.map((c) => c.tag).join("\n\n")}\n`;
+    out = `${out.replace(/\s+$/, "")}\n\n${appended.map(sendableTag).join("\n\n")}\n`;
   }
   return { markdown: out, placed, appended };
+}
+
+/**
+ * 되보낼 태그. Notion 은 자식 페이지 제목의 `_` 를 그대로 돌려주지만(`<page …>__a__</page>`) 받을 때는
+ * 마크다운으로 읽는다 — 그대로 보내면 자식 제목이 굵은 `a` 로 바뀐다. `\_` 로 보내면 제목이 남고 다시 받는
+ * 태그도 `__a__` 그대로다(2026-10-22 실측). DB 태그는 재 보지 않아 받은 그대로 보낸다.
+ */
+function sendableTag(child: ChildTag): string {
+  if (child.kind !== "page" || !child.title.includes("_")) return child.tag;
+  const close = "</page>";
+  const head = child.tag.slice(0, child.tag.length - close.length - child.title.length);
+  return `${head}${child.title.replace(/(?<!\\)_/g, "\\_")}${close}`;
 }
 
 /** NFM 컨테이너를 여는 줄 · 닫는 줄 — 줄에 컨테이너 태그만 있을 때. 그룹 1 = 종류. */
@@ -270,6 +288,9 @@ class PendingChildren {
 function takeLineChild(content: string, pending: PendingChildren): ChildTag | undefined {
   const mention = MENTION_LINE_RE.exec(content);
   if (mention) return pending.takeId(ID32_RE.exec(mention[1]!)?.[0]);
+
+  const link = NOTION_LINK_LINE_RE.exec(content);
+  if (link) return pending.takeId(link[1]);
 
   const dbPlaceholder = DB_PLACEHOLDER_LINE_RE.exec(content);
   if (dbPlaceholder) return pending.takeId(dbPlaceholder[1]);

@@ -1,5 +1,9 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
-import { hasBodyBesidesChildren } from "../converter/child-tags.js";
+import {
+  extractChildTags,
+  hasBodyBesidesChildren,
+  type ChildTag,
+} from "../converter/child-tags.js";
 import { notionBodyToObsidian, pageBlocksToObsidian } from "./page-body.js";
 import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
@@ -444,7 +448,11 @@ export class PagePuller {
   private async renderPageNote(input: {
     readonly pageId: string;
     readonly page: PageObjectResponse;
-    readonly fetched: { readonly content: string; readonly compact: boolean };
+    readonly fetched: {
+      readonly content: string;
+      readonly compact: boolean;
+      readonly children: readonly ChildTag[];
+    };
     readonly filePath: string;
     readonly title: string;
     /** 파일 이름으로 제목을 되살릴 수 있다 — frontmatter 에 `title:` 을 넣지 않는다(D2). */
@@ -506,6 +514,7 @@ export class PagePuller {
         notionExportCompact: input.fetched.compact,
         localContent: input.local?.content,
         notionKeys,
+        remoteChildren: input.fetched.children,
       },
     );
     return { content, properties };
@@ -517,13 +526,17 @@ export class PagePuller {
    * @returns `fingerprint` 는 받은 원격 본문의 지문({@link remoteBodyFingerprint}). 블록 API 로
    *   받았으면 null — 지문은 Markdown API 의 본문으로만 견준다.
    */
-  async fetchPageMarkdown(
-    pageId: string,
-  ): Promise<{ content: string; compact: boolean; fingerprint: string | null }> {
+  async fetchPageMarkdown(pageId: string): Promise<{
+    content: string;
+    compact: boolean;
+    children: ChildTag[];
+    fingerprint: string | null;
+  }> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
+        this.detector.noteBodyChildren(pageId, result.markdown);
         return {
           content: this.resolveNotionIdWikilinks(
             await notionBodyToObsidian(this.notionClient, result.markdown, pageId),
@@ -531,6 +544,7 @@ export class PagePuller {
           // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
           // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
           compact: isCompactExport(result.markdown),
+          children: extractChildTags(result.markdown),
           fingerprint: remoteBodyFingerprint(result.markdown),
         };
       } catch (error) {
@@ -546,9 +560,11 @@ export class PagePuller {
     // 지문은 Markdown API 의 본문끼리만 견준다.
     const fallback = await pageBlocksToObsidian(this.notionClient, pageId);
     this.discovery.collectInlineDbRefs(pageId, fallback.markdown);
+    this.detector.noteBodyChildren(pageId, fallback.markdown);
     return {
       content: this.resolveNotionIdWikilinks(fallback.content),
       compact: isCompactExport(fallback.markdown),
+      children: extractChildTags(fallback.markdown),
       fingerprint: null,
     };
   }

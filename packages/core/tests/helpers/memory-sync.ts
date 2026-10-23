@@ -5,7 +5,7 @@
  * 수정 시각을, Notion 은 만든 페이지의 제목 · 부모 · 수정 시각을 기억해야 한다. 시험마다 따로
  * 두면 한쪽만 고쳐져 같은 동작을 서로 다르게 흉내 낸다.
  */
-import { deferredCodeMarker } from "../../src/constants/markers.js";
+import { deferredCodeMarker, deferredSyncedRefMarker } from "../../src/constants/markers.js";
 import { NotionClient } from "../../src/notion/client.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { EDIT_TIME_RESOLUTION_MS } from "../../src/sync/remote-observation.js";
@@ -132,6 +132,14 @@ export const HUMAN_USER_ID = "human-user-id";
 
 /** 본문을 쓴 뒤 블록으로 채우는 코드의 자리표시(S-22) — 한 페이지에 이만큼 넘게 쓰는 시험은 없다. */
 const DEFERRED_CODE_TOKENS = new Set(Array.from({ length: 100 }, (_, i) => deferredCodeMarker(i)));
+
+/** 본문을 쓴 뒤 블록으로 붙이는 동기화 블록 참조의 자리표시 — 문단으로 보인다. */
+const DEFERRED_SYNCED_REF_TOKENS = new Set(
+  Array.from({ length: 100 }, (_, i) => deferredSyncedRefMarker(i)),
+);
+
+/** 메모리 Notion 이 참조 블록을 내보낼 때 싣는 원본의 글 — Notion 처럼 원본의 내용을 보인다. */
+export const SYNCED_ORIGINAL_TEXT = "Original synced text";
 
 export interface MemoryNotionOptions {
   /**
@@ -274,9 +282,16 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
   };
 
   // Notion 은 markdown 으로 만들 때 맨 앞 `# H1` 을 버린다(N-04, 실측). 본문 교체는 남긴다.
+  // 동기화 블록 참조가 든 markdown 으로는 만들지 못한다 — 본문 교체는 받는다(2026-10-22 실측).
   client.createPageWithMarkdown.mockImplementation(
-    async (params: { parentId: string; title: string; markdown: string }) =>
-      create({ ...params, markdown: params.markdown.replace(/^\n*# [^\n]*\n?/, "") }),
+    async (params: { parentId: string; title: string; markdown: string }) => {
+      if (params.markdown.includes("<synced_block_reference")) {
+        throw new Error(
+          "Failed to parse markdown content: Block not found in record map: {blockId}",
+        );
+      }
+      return create({ ...params, markdown: params.markdown.replace(/^\n*# [^\n]*\n?/, "") });
+    },
   );
   client.createPage.mockImplementation(create);
   // 되살릴지는 제품이 정한다 — 전송(replacePageMarkdown)만 이 메모리로 흉내 낸다.
@@ -383,9 +398,50 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     codeTexts.set(id, [...(codeTexts.get(id) ?? []), code]);
   });
   client.getCodeBlockTexts.mockImplementation(async (id: string) => codeTexts.get(id) ?? []);
+  // 동기화 블록 참조는 본문을 쓴 뒤 자리표시 문단 뒤에 블록으로 붙인다 — 참조는 원본의 글을 싣고
+  // 내보낸다. 맨 위 자리표시만 흉내 낸다(컨테이너 안은 deferred-synced-ref 시험이 본다).
+  const deferredRefBlocks = (id: string) =>
+    (pages.get(id)?.body ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter((text) => DEFERRED_SYNCED_REF_TOKENS.has(text))
+      .map((token) => ({
+        id: `${id}#${token}`,
+        type: "paragraph",
+        has_children: false,
+        paragraph: { rich_text: [{ plain_text: token }] },
+      }));
+  client.appendChildren.mockImplementation(
+    async (
+      parentId: string,
+      children: Array<{ synced_block?: { synced_from?: { block_id: string } } }>,
+      options?: { after?: string },
+    ) => {
+      const [id, token] = (options?.after ?? "").split("#") as [string, string | undefined];
+      const source = children[0]?.synced_block?.synced_from?.block_id;
+      if (token === undefined || source === undefined || id !== parentId) return undefined;
+      const page = touch(id);
+      const ref = `<synced_block_reference url="https://www.notion.so/p/${"9".repeat(32)}#${source.replace(/-/g, "")}">\n\t${SYNCED_ORIGINAL_TEXT}\n</synced_block_reference>`;
+      page.body = page.body
+        .split("\n")
+        .flatMap((line) => (line.trim() === token ? [line, ref] : [line]))
+        .join("\n");
+      return [`${id}#ref:${token}`];
+    },
+  );
+  client.deleteBlock.mockImplementation(async (blockId: string) => {
+    const [id, token] = blockId.split("#") as [string, string | undefined];
+    if (token === undefined || !DEFERRED_SYNCED_REF_TOKENS.has(token)) return;
+    const page = touch(id);
+    page.body = page.body
+      .split("\n")
+      .filter((line) => line.trim() !== token)
+      .join("\n");
+  });
   // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
   client.fetchAllChildren.mockImplementation(async (parentId: string) => [
     ...deferredCodeBlocks(parentId),
+    ...deferredRefBlocks(parentId),
     ...[...pages.values()]
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),

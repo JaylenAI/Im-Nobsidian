@@ -146,3 +146,42 @@ describe("다중 data source 무손실 (I4)", () => {
     expect(querySpy).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * 행 조회 결과에 섞인 하위 data source — 2026-10-22 실데이터 E2E.
+ * DB 안에 둔 DB(인라인)는 `dataSources.query` 결과에 `object: "data_source"` 로 같이 온다.
+ * 페이지로 받으려다 `object_not_found` 로 실패하고, pull 마다 실패 2건으로 남았다.
+ */
+describe("행 조회 — 하위 data source 는 행이 아니다", () => {
+  it("queryAllDatabasePages · queryDatabase 는 data_source 결과를 빼고 페이지만 돌려준다", async () => {
+    const client = new NotionClient({
+      token: "offline-test",
+      rateLimitIntervalMs: 0,
+      maxRetries: 0,
+    });
+    const internal = client.getInternalClient() as unknown as {
+      databases: { retrieve: (args: unknown) => Promise<unknown> };
+      dataSources: { query: (args: unknown) => Promise<unknown> };
+    };
+    vi.spyOn(internal.databases, "retrieve").mockResolvedValue({
+      data_sources: [{ id: "ds-A" }],
+    } as never);
+    vi.spyOn(internal.dataSources, "query").mockResolvedValue({
+      results: [
+        { ...pageStub("row-1"), object: "page" },
+        { object: "data_source", id: "nested-ds" },
+        { ...pageStub("row-2"), object: "page" },
+      ],
+      next_cursor: null,
+    } as never);
+
+    expect((await client.queryAllDatabasePages("db-1")).map((r) => r.id)).toEqual([
+      "row-1",
+      "row-2",
+    ]);
+    expect((await client.queryDatabase("db-1")).results.map((r) => r.id)).toEqual([
+      "row-1",
+      "row-2",
+    ]);
+  });
+});

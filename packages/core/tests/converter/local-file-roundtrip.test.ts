@@ -256,3 +256,47 @@ describe("PreserveMarkerInjector — local-file 의미 복원 판정 (D5)", () =
     expect(new PreserveMarkerInjector().process(input).content).toBe(content);
   });
 });
+
+/**
+ * 2026-10-22 실데이터 E2E — 업로드하지 못한 `.mov` 의 자리표시자에서 Notion 이 도메인처럼 보이는 글
+ * (`9.23.13.mov` — `.mov` 는 최상위 도메인이다)에 자동 링크 `[T](http://T)` 를 걸었다. 마커 안 경로까지
+ * 링크가 되어 pull 이 `![[attachments/…[9.23.13.mov](http://9.23.13.mov)…]]` 로 깨진 임베드를 썼다.
+ */
+describe("자리표시자 마커에 Notion 이 건 자동 링크", () => {
+  const sent = push("![[attachments/rec 9.23.13.mov|rec 9.23.13.mov]]");
+  const linkify = (s: string) => s.replace(/9\.23\.13\.mov/g, "[9.23.13.mov](http://9.23.13.mov)");
+
+  it("받은 마커의 자동 링크를 걷어 원래 임베드로 되돌린다", () => {
+    expect(pull(linkify(sent))).toBe(pull(sent));
+    expect(pull(sent)).toBe("![[attachments/rec 9.23.13.mov|rec 9.23.13.mov]]");
+  });
+
+  it("글자와 주소가 다른 링크는 사용자가 쓴 것 — 그대로 둔다", () => {
+    const own = "> 📎 a.pdf %% im-nobsidian:local-file:[a.pdf](http://example.com) %%";
+    expect(pull(own)).toContain("[a.pdf](http://example.com)");
+  });
+});
+
+/**
+ * 2026-10-22 실데이터 E2E — 마커는 `%% … %%` 글이라 Notion 이 마크다운으로 읽는다. 경로의
+ * `__폴더__` 가 굵은 `폴더` 로 바뀌어 돌아와 임베드가 깨졌다. 밑줄을 퍼센트 인코딩해 보낸다.
+ */
+describe("자리표시자 마커 경로의 밑줄", () => {
+  it("`_` 를 퍼센트 인코딩해 보내고 받을 때 되돌린다", () => {
+    const sent = push("![[__a__/__b__/doc.pdf]]");
+    expect(sent).not.toContain("_");
+    expect(pull(sent)).toBe("![[__a__/__b__/doc.pdf]]");
+  });
+
+  it("별칭의 `*` · `~` 도 퍼센트 인코딩해 강조로 읽히지 않게 한다", () => {
+    const sent = push("![[~~d~~/doc.pdf|*w* x]]");
+    expect(sent).not.toMatch(/local-file:[^%\n]*[*~]/);
+    expect(pull(sent)).toBe("![[~~d~~/doc.pdf|*w* x]]");
+  });
+
+  it("밑줄이 그대로 든 옛 마커도 받는다", () => {
+    expect(pull("> 📎 doc.pdf %% im-nobsidian:local-file:a_b%2Fdoc.pdf %%")).toBe(
+      "![[a_b/doc.pdf]]",
+    );
+  });
+});

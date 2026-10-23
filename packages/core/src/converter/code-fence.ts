@@ -19,6 +19,17 @@ export function hasBacktickFenceLine(fence: CodeFence): boolean {
 }
 
 /**
+ * 코드의 모든 줄이 들여쓰기로 시작하는가 — Notion 은 그런 코드에서 공통 들여쓰기를 떼고 저장한다. 빈 줄이
+ * 섞여도, 탭이어도 같다(2026-10-22 실데이터 E2E 실측). 첫 줄이 열 0 이면 그대로 남는다.
+ *
+ * @param code Obsidian 이 보여 주는 코드({@link fenceCodeText})
+ */
+export function hasCommonCodeIndent(code: string): boolean {
+  const lines = code.split("\n").filter((line) => line.trim() !== "");
+  return lines.length > 0 && lines.every((line) => /^[\t ]/.test(line));
+}
+
+/**
  * 코드 줄의 머리 — 여는 줄의 인용 표시와, 펜스까지의 들여쓰기(목록 표시는 같은 폭의 공백으로).
  * 코드 줄을 새로 쓸 때 이 머리를 붙이면 같은 컨테이너 · 같은 깊이의 코드 줄이 된다.
  */

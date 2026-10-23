@@ -1,4 +1,5 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
+import { extractChildTags } from "../converter/child-tags.js";
 import type { NotionClient } from "../notion/client.js";
 import { DiscoveryTooLargeError } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
@@ -59,6 +60,11 @@ export class RemoteDetector {
   // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
   private readonly _childParentIds = new Set<string>();
 
+  // 받은 본문에 실린 자식 페이지(정규화 id → 그 본문의 페이지)와 이번 실행이 이미 받기로 한 페이지.
+  // 감지가 빠뜨린 자식을 {@link takeUndiscoveredChildren} 가 둘의 차로 고른다.
+  private readonly _bodyChildren = new Map<string, string>();
+  private readonly _queued = new Set<string>();
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -69,6 +75,61 @@ export class RemoteDetector {
   /** 이번 감지에서 자식 페이지를 가진 것으로 본 페이지인가 — 폴더노트 판정의 1차 근거. */
   hasChildPages(pageId: string): boolean {
     return this._childParentIds.has(normalizeNotionId(pageId));
+  }
+
+  /** 받은 페이지 본문(Notion 이 돌려준 원문)에 실린 자식 페이지를 적는다. */
+  noteBodyChildren(pageId: string, rawMarkdown: string): void {
+    for (const child of extractChildTags(rawMarkdown)) {
+      if (child.kind === "page") this._bodyChildren.set(normalizeNotionId(child.id), pageId);
+    }
+  }
+
+  /**
+   * 받은 본문에는 실렸는데 감지가 찾지 못한 자식 페이지를 새 페이지로 낸다 — 낸 것은 다시 내지 않는다.
+   *
+   * 큰 트리는 순회가 시간 상한을 넘어 search 로 보충하는데, search 는 갓 만든 페이지를 아직 돌려주지
+   * 않을 수 있다(2026-10-22 실데이터 E2E: 1,614 가운데 40 이 빠진 채 실패 0). 다음 실행은 증분이라 그
+   * 수정 시각이 조회 창 밖이면 다시 보이지 않는다. 부모 본문의 자식 태그는 이미 받은 것이라 찾는 데
+   * 요청이 들지 않는다 — 고른 자식만 한 번씩 읽어, 휴지통에 있거나 그 부모 아래가 아니면 뺀다.
+   *
+   * DB 모드는 행만 받는다 — 행의 하위 페이지는 예전처럼 받지 않는다.
+   */
+  async takeUndiscoveredChildren(signal?: AbortLike): Promise<RemoteChange[]> {
+    if (isDatabaseMode(this.config)) return [];
+    const changes: RemoteChange[] = [];
+    for (const [childId, parentId] of this._bodyChildren) {
+      if (this._queued.has(childId) || this.stateDb.getByNotionId(childId)) continue;
+      this._queued.add(childId);
+      throwIfAborted(signal);
+      try {
+        const page = await this.notionClient.getPage(childId);
+        if (page.in_trash || page.archived) continue;
+        const actualParent = await extractParentId(this.notionClient, page);
+        if (!actualParent || !notionIdsEqual(actualParent, parentId)) continue;
+        this._childParentIds.add(normalizeNotionId(parentId));
+        changes.push({
+          pageId: page.id,
+          type: "created",
+          title: this.notionClient.extractTitle(page),
+          lastEdited: page.last_edited_time,
+          previousEdited: null,
+        });
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 본문에 실린 자식 페이지를 읽지 못함 (${childId}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return changes;
+  }
+
+  /** 새 감지를 시작한다 — 지난 실행의 본문 자식과 받기로 한 페이지를 비우고 이번 변경을 적는다. */
+  private beginDetection(changes: readonly RemoteChange[]): void {
+    this._bodyChildren.clear();
+    this._queued.clear();
+    for (const change of changes) this._queued.add(normalizeNotionId(change.pageId));
   }
 
   /**
@@ -102,10 +163,12 @@ export class RemoteDetector {
     scan: RemoteScan,
     options: { readonly signal?: AbortLike; readonly databases: boolean },
   ): Promise<RemoteDetection> {
-    if (scan.kind === "full") {
-      return { changes: await this.detectRemoteChanges(options.signal), databaseIds: null };
-    }
-    return this.detectRemoteChangesIncremental(scan.since, options);
+    const detection =
+      scan.kind === "full"
+        ? { changes: await this.detectRemoteChanges(options.signal), databaseIds: null }
+        : await this.detectRemoteChangesIncremental(scan.since, options);
+    this.beginDetection(detection.changes);
+    return detection;
   }
 
   /**

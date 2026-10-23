@@ -231,3 +231,33 @@ describe("childLayout — 자식이 놓인 자리(차례 · 감싼 컨테이너)
     expect(childLayout(`\`\`\`html\n${DB_TAG}\n\`\`\`\n${PAGE_TAG}`)).toEqual([`${PAGE_ID}@+0`]);
   });
 });
+
+/**
+ * 2026-10-22 실데이터 E2E — Notion 은 자식 제목의 `_` 를 그대로 돌려주지만(`<page …>__a__</page>`)
+ * 받을 때는 마크다운으로 읽는다. 받은 태그를 그대로 되보내면 자식 제목이 굵은 `a` 로 바뀌었다.
+ * `\_` 로 보내면 제목이 남고, 다시 받는 태그는 `__a__` 그대로다(실측).
+ */
+describe("restoreChildTags — 자식 제목의 밑줄", () => {
+  const tag = (title: string) => `<page url="https://app.notion.com/p/${PAGE_ID}">${title}</page>`;
+  const child = (title: string): ChildTag => ({
+    kind: "page",
+    id: PAGE_ID,
+    title,
+    tag: tag(title),
+  });
+
+  it("제목의 `_` 를 `\\_` 로 보내 Notion 이 굵게 · 기울임으로 읽지 않게 한다", () => {
+    const out = restoreChildTags("[[__a__]]\n", [child("__a__")]);
+    expect(out.markdown).toBe(`${tag("\\_\\_a\\_\\_")}\n`);
+  });
+
+  it("본문 끝에 덧붙이는 자식도 같다", () => {
+    const out = restoreChildTags("Body\n", [child("snake_case")]);
+    expect(out.markdown).toContain(tag("snake\\_case"));
+  });
+
+  it("밑줄 없는 제목 · 이미 이스케이프된 밑줄은 그대로", () => {
+    expect(restoreChildTags(`${mention(PAGE_ID)}\n`, [PAGE]).markdown).toBe(`${PAGE_TAG}\n`);
+    expect(restoreChildTags("Body\n", [child("a\\_b")]).markdown).toContain(tag("a\\_b"));
+  });
+});
