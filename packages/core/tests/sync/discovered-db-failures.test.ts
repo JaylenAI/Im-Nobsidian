@@ -68,9 +68,13 @@ describe("발견한 DB 를 읽지 못하면 실패로 싣고 다음 pull 이 다
 
   const rows = () => [...vault.files.keys()].filter((path) => /\/R\d\.md$/.test(path)).sort();
 
-  /** 루트 아래 DB Zero, 페이지 P 아래 DB One — 행이 하나씩 있다. */
+  /**
+   * 루트 아래 DB Zero, 페이지 P 아래 DB One — 행이 하나씩 있다. Notion 처럼 P 의 본문에도 One 이 실린다 —
+   * pull 은 본문을 받은 페이지의 블록을 다시 훑지 않는다.
+   */
   function twoDatabases(): { page: string } {
-    const page = notion.add(ROOT, "P", "p 본문");
+    const oneTag = `<database url="https://www.notion.so/${ONE_DB.replace(/-/g, "")}" inline="false">One</database>`;
+    const page = notion.add(ROOT, "P", `p 본문\n${oneTag}`);
     notion.add(ZERO_DB, "R0", "", {});
     notion.add(ONE_DB, "R1", "", {});
     return { page: page.id };
@@ -155,7 +159,8 @@ describe("발견한 DB 를 읽지 못하면 실패로 싣고 다음 pull 이 다
 
   it("연결된 보기의 원본을 읽지 못해도 실패로 싣고 다음 pull 이 원본을 등록한다", async () => {
     const LINKED_VIEW = "db000000-0000-4000-8000-0000000000e9";
-    const page = notion.add(ROOT, "P", "p 본문").id;
+    const zeroTag = `<database url="https://www.notion.so/${ZERO_DB.replace(/-/g, "")}" inline="false">Zero</database>`;
+    const page = notion.add(ROOT, "P", `p 본문\n${zeroTag}`).id;
     notion.add(ZERO_DB, "R0", "", {});
     notion.add(ONE_DB, "R1", "", {});
     notion.client.getChildDatabaseIds.mockImplementation(async (parentId: string) =>
