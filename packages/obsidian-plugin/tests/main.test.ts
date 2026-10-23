@@ -747,11 +747,13 @@ describe("ImNobsidianPlugin", () => {
       addCommand: (command: { id: string; callback: () => unknown }) => void;
       executePull: (options?: { force?: boolean }) => Promise<void>;
       registerDesignRenderer: () => void;
+      registerFolderMenu: () => void;
       registerVaultEvents: () => void;
     };
     internals.addCommand = (command) => commands.set(command.id, command.callback);
     // 볼트 · 편집기에 거는 것은 이 시험의 관심 밖이다 — 스텁 앱에는 없다.
     internals.registerDesignRenderer = () => {};
+    internals.registerFolderMenu = () => {};
     internals.registerVaultEvents = () => {};
     const executePull = vi.fn(async () => {});
     internals.executePull = executePull;

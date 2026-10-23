@@ -253,6 +253,7 @@ export default class ImNobsidianPlugin extends Plugin {
     }
 
     this.registerDesignRenderer();
+    this.registerFolderMenu();
     this.registerVaultEvents();
   }
 
@@ -609,6 +610,21 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   /** 디자인 마커(색 · 밑줄 · 멘션 · 블록 색 · 콜아웃 · 표)를 읽기 보기와 편집 화면에서 칠한다(U-01). */
+  /** 볼트에서 만든 노트 폴더를 Notion DB 로 올린다(#75) — 폴더의 오른쪽 클릭 메뉴. */
+  private registerFolderMenu(): void {
+    this.registerEvent(
+      this.app.workspace.on("file-menu", (menu, file) => {
+        if (!(file instanceof TFolder) || file.isRoot()) return;
+        menu.addItem((item) =>
+          item
+            .setTitle("Notion DB 로 올릴 준비")
+            .setIcon("database")
+            .onClick(() => void this.prepareDatabase(file.path)),
+        );
+      }),
+    );
+  }
+
   private registerDesignRenderer(): void {
     const options = { calloutColorIsCss: requireApiVersion("1.13.0") };
     // 읽기 보기는 마커(주석)를 그리기 전에 지운다 — 칠할 것은 그 섹션의 원문 줄로 안다.
@@ -789,6 +805,14 @@ export default class ImNobsidianPlugin extends Plugin {
    * 변경 패널에서 누른 로컬 변경 하나를 되돌린다 — 지난 동기화 뒤의 로컬 편집이 사라지므로 먼저 확인 창으로
    * 묻는다. 되돌리기를 누르지 않고 닫으면 아무것도 하지 않는다.
    */
+  private async prepareDatabase(folder: string): Promise<void> {
+    if (!this.syncController) {
+      new Notice(this.notReadyReason());
+      return;
+    }
+    await this.syncController.prepareDatabase(folder, this.app.vault.configDir);
+  }
+
   private async discardLocal(change: LocalChange): Promise<void> {
     const confirmed = await new Promise<boolean>((resolve) =>
       new DiscardConfirmModal(this.app, change, resolve).open(),

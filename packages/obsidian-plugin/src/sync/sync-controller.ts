@@ -371,6 +371,33 @@ export class SyncController {
   }
 
   /**
+   * 볼트의 노트 폴더를 다음 push 에서 Notion DB 로 만들도록 사이드카를 써 둔다(#75). Notion 에는 쓰지 않는다.
+   * 거절은 사용자가 고를 수 있는 일(이미 올린 폴더 · 이미 DB)이라 오류 상태로 두지 않고 까닭만 알린다.
+   *
+   * @param configDir Obsidian 설정 폴더 — 속성 타입을 읽는다.
+   */
+  async prepareDatabase(folder: string, configDir: string): Promise<void> {
+    if (!this.admit("prepare-database")) return;
+    await this.exclusive("prepare-database", async () => {
+      try {
+        const report = await this.orchestrator.prepareFolderDatabase(folder, configDir);
+        const skipped =
+          report.skipped.length > 0 ? ` · 옮기지 않은 것 ${report.skipped.length}` : "";
+        this.hooks.onNotice?.(
+          `Im-Nobsidian: ${report.folder} 를 다음 push 에서 Notion DB 로 만듭니다 — 행 ${report.rows} · ` +
+            `속성 ${report.properties.length} · 보기 ${report.views.length}${skipped}. ` +
+            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.`,
+        );
+        await this.refreshLocal(true);
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `Im-Nobsidian: DB 로 올릴 준비를 하지 못함 — ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    });
+  }
+
+  /**
    * 로컬 변경 하나의 두 글 — 지난 동기화 때의 글과 지금 볼트의 글(변경 패널의 줄 비교 창). 읽기만
    * 하므로 줄에 서지 않는다 — 긴 pull 이 도는 동안에도 볼 수 있다. 못 견주면 이유를 담아 거절한다.
    */
