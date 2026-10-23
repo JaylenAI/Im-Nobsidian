@@ -42,6 +42,7 @@ import {
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
 import { mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
+import { sanitizeFileName } from "../utils/sanitize.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
 import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
@@ -955,9 +956,20 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * 자식 페이지 태그 → `[[제목]]`. 제목이 파일 이름이 될 수 없으면(`a / b` 의 노트는 `a _ b.md`) `[[제목]]` 은 다른
+ * 노트를 가리킨다 — id 로 남겨(`[[notion:<id>|제목]]`) 링크 패스가 실제 노트로 풀게 한다. 별칭의 대괄호는 괄호로
+ * 바꾼다 — 남기면 링크가 첫 `]]` 에서 끊긴다.
+ */
 function convertPageLinks(content: string): string {
-  return content.replace(CHILD_PAGE_TAG_RE, (_match, _url: string, text: string) => {
+  return content.replace(CHILD_PAGE_TAG_RE, (_match, url: string, text: string) => {
     const cleaned = text.replace(/\*\*/g, "").trim();
+    const id = /[a-f0-9]{32}/.exec(url.replace(/-/g, ""))?.[0];
+    // Notion 은 태그 속 제목의 대괄호를 `\[` `\]` 로 준다(2026-10-23 실측).
+    const title = cleaned.replace(/\\([[\]])/g, "$1");
+    if (id && title !== "" && sanitizeFileName(title) !== title) {
+      return `[[notion:${id}|${title.replace(/\[/g, "(").replace(/\]/g, ")")}]]`;
+    }
     return `[[${cleaned}]]`;
   });
 }
