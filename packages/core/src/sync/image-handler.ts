@@ -41,6 +41,8 @@ export interface ImageDownloadResult {
   readonly size: number;
   /** 받은 파일의 전체 sha256 — 받은 미디어 기록에 적어 push 가 그 파일이 그대로인지 본다. */
   readonly fileHash?: string;
+  /** 임베드 별칭으로 쓸 이름 — 받은 이름에서 이 볼트가 붙인 내용 해시를 뗀 것({@link withoutOwnHash}). */
+  readonly name?: string;
 }
 
 /** 다운로드는 됐지만 아직 디스크에 쓰지 않은 이미지 — D6 dedup 판정 후 persist 한다. */
@@ -412,6 +414,19 @@ function stripAlias(target: string): string {
  * 받은 이미지 파일 이름의 앞부분 — 올라간 파일 이름(`pic.png` → `pic`). 그 이름이 없거나 Notion 의 자리 이름이면
  * 노트 제목이다. 뒤에 내용 해시를 붙이므로 같은 이름의 다른 이미지와 겹치지 않는다.
  */
+/**
+ * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
+ *
+ * 받은 파일은 `이름-<해시>.확장자` 로 저장하고, push 는 그 파일 이름 그대로 올린다. 다른 볼트로 다시 받으면 올라간
+ * 이름 뒤에 같은 해시가 또 붙어(`이름-<해시>-<해시>.png`) 받을 때마다 이름이 길어졌다(2026-10-23 전체 E2E 첨부 41개).
+ * 해시는 받은 내용의 것과 같을 때만 뗀다 — 사람이 지은 이름은 그대로다.
+ */
+export function withoutOwnHash(name: string, hash: string): string {
+  if (!/^[0-9a-f]{12}$/.test(hash)) return name;
+  const stripped = name.replace(new RegExp(`-${hash}(\\.[^./]*)?$`), "");
+  return stripped === "" ? name : stripped;
+}
+
 function imageStemOf(uploadedName: string, pageTitle: string): string {
   const stem = safeImageStem(uploadedName.replace(/\.[^.]*$/, ""));
   return stem && !PLACEHOLDER_IMAGE_STEMS.has(stem.toLowerCase()) ? stem : safeImageStem(pageTitle);
@@ -565,7 +580,7 @@ export class ImageHandler {
         const buffer = Buffer.from(await response.arrayBuffer());
         const fullHash = createHash("sha256").update(buffer).digest("hex");
         const hash = fullHash.slice(0, 12);
-        const fileName = `${imageStemOf(uploadedName, pageTitle)}-${hash}${extension}`;
+        const fileName = `${imageStemOf(withoutOwnHash(uploadedName, hash), pageTitle)}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 
         return { originalUrl: url, localPath, hash, fullHash, buffer };
@@ -1317,11 +1332,15 @@ export class ImageHandler {
         if (!download.localPath) continue;
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         // 이름 · 캡션에 `$` 가 있어도(`가격$&.pdf`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
         result = result.replace(span.full, () => obsidianLink);
         received.push(
-          receivedMediaOf(span.url, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            span.url,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
@@ -1348,10 +1367,14 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(span.full, () => obsidianLink);
         received.push(
-          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            realUrl,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
@@ -1368,10 +1391,14 @@ export class ImageHandler {
         const download = await this.downloadFile(url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
         received.push(
-          receivedMediaOf(url, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            url,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
@@ -1399,10 +1426,14 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
         received.push(
-          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            realUrl,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
@@ -1470,7 +1501,8 @@ export class ImageHandler {
         const hash = fileHash.slice(0, 12);
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
-        const safeName = caption
+        const name = withoutOwnHash(caption, hash);
+        const safeName = name
           .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
           .replace(/\s+/g, "-")
           .slice(0, 80);
@@ -1480,7 +1512,7 @@ export class ImageHandler {
         await this.vaultFs.ensureFolder(this.attachmentFolder);
         await this.vaultFs.writeBinary(localPath, buffer);
 
-        return { originalUrl: url, localPath, hash, size: buffer.length, fileHash };
+        return { originalUrl: url, localPath, hash, size: buffer.length, fileHash, name };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }
