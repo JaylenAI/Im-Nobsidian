@@ -2,6 +2,7 @@ import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/con
 import { MARKER_PAYLOAD_CHAR, MEDIA_PLACEHOLDER_HEAD } from "../../constants/markers.js";
 import { mapOutsideCode } from "../../utils/md-regions.js";
 import { decodeMarkerTarget } from "../marker-url.js";
+import { CLAMPED_INDENT } from "../callout-indent.js";
 
 /**
  * push 가 심은 미디어 자리표시자를 원래 임베드로 되돌린다.
@@ -13,6 +14,11 @@ import { decodeMarkerTarget } from "../marker-url.js";
  * 구버전 마커는 원문 `%` 를 품고 있어 {@link MARKER_PAYLOAD_CHAR} 로 받고,
  * `decodeMarkerTarget` 이 잘못된 이스케이프에 원문을 돌려주므로 그대로 살아난다.
  *
+ * 들여쓴 자리표시자는 인용이라 앞 단계가 2칸으로 눌러 두었다(`clampCalloutIndent` — Obsidian 이 4칸 인용을 코드로
+ * 그린다). 임베드가 되면 그럴 까닭이 없으므로 원래 깊이(탭 한 단계)로 되돌린다 — 뒤의 간격 정리가 목록 자식이면
+ * 4칸, 문단 자식이면 2칸으로 편다. 2칸 그대로면 목록 속 임베드 `    ![[a.png]]` 가 받은 볼트에서 `  ![[a.png]]` 가 됐다
+ * (실데이터 E2E — 무료 플랜 5MB 한도로 올리지 못한 첨부).
+ *
  * 코드 안은 건너뛴다(S-18) — push 는 자리표시자를 코드 밖에만 심는다. 코드 안의 같은 모양 글은
  * 형식을 설명하는 사용자의 글인데, 예전에는 그것까지 임베드로 바꿔 받은 노트의 코드가 바뀌었다.
  */
@@ -20,6 +26,8 @@ const LOCAL_IMAGE_MARKER_REGEX = new RegExp(
   `${MEDIA_PLACEHOLDER_HEAD}(${MARKER_PAYLOAD_CHAR}+?)\\s*%%`,
   "g",
 );
+/** 2칸으로 눌린 자리표시자 줄의 머리. */
+const CLAMPED_PLACEHOLDER_RE = new RegExp(`^${CLAMPED_INDENT}(?=${MEDIA_PLACEHOLDER_HEAD})`, "gm");
 
 export class LocalImageRestorer implements Processor {
   readonly name = "LocalImageRestorer";
@@ -31,10 +39,12 @@ export class LocalImageRestorer implements Processor {
     }
 
     const content = mapOutsideCode(input.content, (segment) =>
-      segment.replace(
-        LOCAL_IMAGE_MARKER_REGEX,
-        (_match, target: string) => `![[${decodeMarkerTarget(target)}]]`,
-      ),
+      segment
+        .replace(CLAMPED_PLACEHOLDER_RE, "\t")
+        .replace(
+          LOCAL_IMAGE_MARKER_REGEX,
+          (_match, target: string) => `![[${decodeMarkerTarget(target)}]]`,
+        ),
     );
 
     return { content, metadata: input.metadata };
