@@ -67,6 +67,14 @@ export function isTrashedOrArchived(page: PageObjectResponse): boolean {
 }
 
 /**
+ * Notion 이 요청을 받지 않고 거절했다(HTTP 400) — 같은 요청을 다시 보내도 같다. 검증 오류(`validation_error`)
+ * 밖의 잘못된 요청(`invalid_request` 등)도 든다.
+ */
+export function isNotionBadRequest(error: unknown): boolean {
+  return notionStatusOf(error) === 400;
+}
+
+/**
  * Notion SDK 의 400(`validation_error`) 판별 — 요청이 **적용되지 않고** 거절됐다는 신호다.
  * 본문 교체가 자식 페이지 · 자식 DB 를 지우게 될 때도 이 코드로 거절된다
  * ({@link NotionClient.replacePageMarkdown}).
@@ -1988,7 +1996,8 @@ function definitionField(prop: Record<string, unknown>): {
   return definition ? { definition } : {};
 }
 
-function statusOf(error: unknown): number | null {
+/** 실패의 HTTP 상태 — SDK 오류가 아니라 상태가 없으면 null. */
+export function notionStatusOf(error: unknown): number | null {
   if (typeof error !== "object" || error === null) return null;
   const status = (error as { status?: unknown }).status;
   return typeof status === "number" ? status : null;
@@ -2000,7 +2009,7 @@ function statusOf(error: unknown): number | null {
  * 클라이언트 전체가 쉬어야 하는 신호이기도 하다.
  */
 function isExplicitRejection(error: unknown): boolean {
-  const status = statusOf(error);
+  const status = notionStatusOf(error);
   return status === 429 || status === 529;
 }
 
@@ -2015,7 +2024,7 @@ function isAmbiguousFailure(error: unknown): boolean {
   if (code === "notionhq_client_request_timeout" || code === "ECONNRESET" || code === "ETIMEDOUT") {
     return true;
   }
-  const status = statusOf(error);
+  const status = notionStatusOf(error);
   return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
