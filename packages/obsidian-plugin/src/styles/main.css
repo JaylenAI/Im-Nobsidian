@@ -399,3 +399,35 @@ td.im-nobsidian-table-header-column {
   font-weight: inherit;
   background-color: transparent;
 }
+
+/*
+ * 펼친 Notion 컬럼(#74) — Obsidian 은 블록을 옆으로 나란히 그리지 못한다. 열마다 왼쪽에 색 줄을 긋고 열의
+ * 첫 블록에 `열 2/3 · 50%` 이름표를 단다. 색은 열 번호를 넷으로 돌려 쓴다.
+ */
+.im-nobsidian-column {
+  --im-nobsidian-column-rule: var(--color-blue);
+  border-inline-start: 2px solid var(--im-nobsidian-column-rule);
+  padding-inline-start: 10px;
+}
+/* 편집 화면의 줄은 Obsidian 이 여백을 0 으로 박는다 — 더 좁게 지목해야 색 줄과 글 사이가 벌어진다. 목록 줄은
+   Obsidian 이 줄에 직접 들여쓰기를 적으므로 그대로 둔다. */
+.markdown-source-view.mod-cm6 .cm-line.im-nobsidian-column {
+  padding-inline-start: 10px;
+}
+.im-nobsidian-column[data-im-nobsidian-column="1"] {
+  --im-nobsidian-column-rule: var(--color-purple);
+}
+.im-nobsidian-column[data-im-nobsidian-column="2"] {
+  --im-nobsidian-column-rule: var(--color-green);
+}
+.im-nobsidian-column[data-im-nobsidian-column="3"] {
+  --im-nobsidian-column-rule: var(--color-orange);
+}
+
+.im-nobsidian-column-head::before {
+  content: attr(data-im-nobsidian-column-label);
+  display: block;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: var(--line-height-tight);
+}

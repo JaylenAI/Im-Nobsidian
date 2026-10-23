@@ -15,7 +15,15 @@ export const DESIGN_CLASS = {
   calloutEmoji: "im-nobsidian-callout-emoji",
   /** Notion 에서 아이콘을 지운 콜아웃의 아이콘 자리 — 숨긴다. */
   calloutNoIcon: "im-nobsidian-callout-no-icon",
+  /** 펼친 Notion 컬럼 안의 블록 · 줄 — 열마다 왼쪽에 색 줄을 긋는다(#74). */
+  column: "im-nobsidian-column",
+  /** 열의 첫 블록 · 줄 — `열 2/3 · 50%` 이름표를 단다. */
+  columnHead: "im-nobsidian-column-head",
 } as const;
+
+/** 열 색을 고르는 속성 — 값은 열 번호를 4 로 나눈 나머지. 이름표는 {@link COLUMN_LABEL_ATTR}. */
+export const COLUMN_INDEX_ATTR = "data-im-nobsidian-column";
+export const COLUMN_LABEL_ATTR = "data-im-nobsidian-column-label";
 
 /** `red` → `im-nobsidian-color-red`, `red_bg` → `im-nobsidian-bg-red`. */
 export function colorClass(color: DesignColor): string {
