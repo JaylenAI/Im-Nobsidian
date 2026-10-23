@@ -40,6 +40,7 @@ const DEFAULTS = {
     fullReconcileInterval: 3600,
     deleteSync: false,
     syncFiles: true,
+    createDatabases: true,
   },
   paths: {
     include: ["**/*"],
@@ -101,6 +102,8 @@ export const ConfigSchema = z.object({
       .default(D.sync.fullReconcileInterval),
     deleteSync: z.boolean().default(D.sync.deleteSync),
     syncFiles: z.boolean().default(D.sync.syncFiles),
+    // 사이드카가 있는 새 DB 폴더를 push 가 Notion DB 로 만든다(ADR-036). 끄면 폴더 · 페이지로 올린다.
+    createDatabases: z.boolean().default(D.sync.createDatabases),
   }),
   paths: z.object({
     include: z.array(z.string()).default(() => [...D.paths.include]),

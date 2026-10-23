@@ -141,6 +141,8 @@ export interface PullOptions extends BaseSyncOptions {
 export type SyncOptions = BaseSyncOptions;
 
 export interface PushResult {
+  /** 사이드카로 만든(dry-run 은 만들) Notion DB 수(ADR-036). 없으면 0. */
+  readonly createdDatabases?: number;
   readonly created: number;
   readonly updated: number;
   readonly deleted: number;

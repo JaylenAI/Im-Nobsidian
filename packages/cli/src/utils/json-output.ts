@@ -22,6 +22,8 @@ export interface PushJson {
   readonly moved: number;
   /** 원격에 실제로 쓴(또는 dry-run 이면 쓸) 항목 수. 멱등 판정의 기준값. */
   readonly churn: number;
+  /** 사이드카로 만든(dry-run 은 만들) Notion DB 수 — churn 에도 든다. */
+  readonly createdDatabases: number;
   readonly failed: readonly FailedOperation[];
   readonly durationMs: number;
 }
@@ -50,7 +52,13 @@ export function pushJson(result: PushResult): PushJson {
     updated: result.updated,
     deleted: result.deleted,
     moved: result.moved,
-    churn: result.created + result.updated + result.deleted + result.moved,
+    churn:
+      result.created +
+      result.updated +
+      result.deleted +
+      result.moved +
+      (result.createdDatabases ?? 0),
+    createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
     durationMs: result.duration,
   };
