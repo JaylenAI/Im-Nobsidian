@@ -65,7 +65,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPostProcessor(new BlockSpacer());
   pipeline.registerPostProcessor(new CommentRestorer());
   pipeline.registerPostProcessor(
-    new LocalFormRestorer((note, context) => sentForm(pipeline, note, context)),
+    new LocalFormRestorer((note, context, children) => sentForm(pipeline, note, context, children)),
   );
 
   return pipeline;

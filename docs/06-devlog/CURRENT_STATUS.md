@@ -130,6 +130,7 @@
 | 4 뒤 | `fix/synced-ref-original`                    | 🔴 실데이터 E2E — 참조가 든 노트를 올리면 다른 페이지의 원본 동기화 블록이 다시 쓰임(실제 페이지 4)                                                                                                                                | 완료           |
 | 4 뒤 | `fix/code-common-indent`                     | 실데이터 E2E — 모든 줄이 들여쓰인 코드 블록을 Notion 이 내어쓰기 함                                                                                                                                                                | 완료           |
 | 4 뒤 | `fix/discovery-child-refs`                   | 실데이터 E2E — 큰 트리를 만든 직후 받기가 40 페이지를 실패 0 으로 빠뜨림                                                                                                                                                           | 완료           |
+| 4 뒤 | `fix/self-pull-churn`                        | 실데이터 E2E — 올린 직후 같은 볼트로 받으면 13 노트를 다시 씀                                                                                                                                                                      | 완료           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·

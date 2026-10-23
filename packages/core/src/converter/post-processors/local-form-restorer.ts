@@ -7,9 +7,17 @@ import type {
 import { restoreLocalForm } from "../local-form.js";
 import { keepReadBookmarkLinks } from "../bookmark.js";
 import { splitFrontmatter } from "../../utils/frontmatter.js";
+import type { ChildTag } from "../child-tags.js";
 
-/** 노트를 push 가 보낼 꼴로 — 파이프라인이 자기로 만들어 넘긴다(`sentForm`). */
-export type SentFormFn = (note: string, context: ConversionContext) => string;
+/**
+ * 노트를 push 가 보낼 꼴로 — 파이프라인이 자기로 만들어 넘긴다(`sentForm`). `children` 은 받은 본문의 자식
+ * 페이지 · DB — push 가 하듯 가리키는 줄이 없는 자식을 본문 끝에 둔다.
+ */
+export type SentFormFn = (
+  note: string,
+  context: ConversionContext,
+  children: readonly ChildTag[],
+) => string;
 
 /**
  * 받은 글에서 Notion 에 같은 모양으로 올라가는 자리를 받기 직전의 로컬 노트(`localContent`) 표기로
@@ -41,7 +49,9 @@ export class LocalFormRestorer implements Processor {
     // 북마크 블록을 이번에 읽지 못했으면 볼트에 이미 있는 그 북마크의 링크를 쓴다 — 아래 비교는 링크를 Notion
     // 의 것으로 맞춘다(B14).
     const content = restoreLocalForm(keepReadBookmarkLinks(input.content, local), local, (note) =>
-      readable(note) ? this.sent(note, input.context) : UNREADABLE,
+      readable(note)
+        ? this.sent(note, input.context, input.metadata.remoteChildren ?? [])
+        : UNREADABLE,
     );
     return { content, metadata: input.metadata };
   }

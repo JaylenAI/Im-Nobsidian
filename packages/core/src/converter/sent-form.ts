@@ -2,6 +2,7 @@ import type { ConversionPipeline } from "./pipeline.js";
 import type { ConversionContext } from "../types/convert.js";
 import { obsidianToNotionEnhanced } from "./enhanced-md-converter.js";
 import { MATH_FENCE_RE, codeLineMask } from "../utils/md-regions.js";
+import { restoreChildTags, type ChildTag } from "./child-tags.js";
 
 /**
  * push 가 Notion 에 보낼 꼴 — 경로 · 본문 · 속성 · 미룬 코드 · 올릴 파일을 한 글로. 두 노트의 꼴이 같으면
@@ -13,11 +14,14 @@ import { MATH_FENCE_RE, codeLineMask } from "../utils/md-regions.js";
  * 속성은 키 차례를 보지 않는다 — Notion 속성에는 차례가 없다. 페이지 노트의 frontmatter 는 본문의 속성 코드
  * 블록(`PropertiesTableInjector`)에 차례째 실려 본문이 견준다. 보존 마커 목록은 견주지 않는다 — Notion 이
  * 아니라 로컬 상태 DB 에 적고, 자리(`startIndex`)가 노트마다 다르다.
+ *
+ * @param children 그 페이지의 자식 페이지 · DB — push 가 하듯 가리키는 줄에 두고, 없으면 본문 끝에 둔다.
  */
 export function sentForm(
   pipeline: ConversionPipeline,
   note: string,
   context: ConversionContext,
+  children: readonly ChildTag[] = [],
 ): string {
   const path = pipeline.selectPath(note);
   const result = pipeline.convertToNotion(note, {
@@ -28,7 +32,11 @@ export function sentForm(
   });
   const body =
     path === "markdown-api"
-      ? canonicalBody(obsidianToNotionEnhanced(result.content))
+      ? canonicalBody(
+          sameInNotion(
+            restoreChildTags(obsidianToNotionEnhanced(result.content), children).markdown,
+          ),
+        )
       : result.content;
   return JSON.stringify([
     path,
@@ -37,6 +45,36 @@ export function sentForm(
     result.deferredCode,
     result.images,
   ]);
+}
+
+/** 동기화 블록 참조의 url — 그룹 1 = 참조를 둔 페이지 조각, 2 = `#원본 블록 id`. */
+const SYNCED_REF_URL_RE = /(<synced_block_reference\s+url=")[^"#]*(#[0-9a-fA-F-]{32,36}")/g;
+/** Notion 페이지 링크 — 앱 주소 · 워크스페이스 · 제목 조각을 떼면 `notion.so/<id>`. 그룹 1 = id. */
+const NOTION_PAGE_URL_RE =
+  /https?:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/(?:[^/\s()"<>]+\/)?(?:[^/\s()"<>]*-)?([0-9a-f]{32})(?![0-9a-f])/g;
+/**
+ * 받을 때 아직 볼트에서 찾지 못한 페이지 링크 — 쓴 뒤 `[라벨](https://www.notion.so/<id>)` 로 바뀐다
+ * (`degradeUnresolvedNotionIdWikilinks`). 그룹 1 = id, 2 = 라벨.
+ */
+const PENDING_NOTION_LINK_RE = /\[\[notion:([0-9a-f]{32})\|([^\][|]+)\]\]/g;
+/** 글자와 주소가 같은 도메인 꼴 링크 — `[x.md](http://x.md)`. 그룹 1 = 글자. */
+const DOMAIN_AUTOLINK_RE = /\[([^\][()\s]+\.[^\][()\s]+)\]\(https?:\/\/\1\)/g;
+
+/**
+ * 보내면 Notion 에서 같은 것이 되는 표기를 하나로 — 다르게 적었어도 Notion 에서 같으면 로컬 표기를 남긴다.
+ *
+ * - 동기화 블록 참조의 url 은 참조를 둔 페이지마다 다르다. push 는 `#원본 블록 id` 만 쓴다(deferred-synced-ref).
+ * - Notion 페이지 링크는 `notion.so/제목-<id>` 로 보내도 `notion.so/<id>` 로 돌아온다(2026-10-22 실데이터 E2E).
+ *   블록 링크(`notion.so/<id>#블록`)는 `app.notion.com/p/<id>#블록` 으로 돌아온다.
+ *   받을 때는 볼트 밖 페이지면 `[[notion:<id>|라벨]]` 이었다가 쓴 뒤 그 링크가 된다.
+ * - Notion 은 글 속 도메인 꼴 글자(`x.md` · `a.com`)에 같은 주소의 링크를 건다 — 그 링크를 보내도 같다.
+ */
+function sameInNotion(nfm: string): string {
+  return nfm
+    .replace(SYNCED_REF_URL_RE, "$1$2")
+    .replace(PENDING_NOTION_LINK_RE, "[$2](https://www.notion.so/$1)")
+    .replace(NOTION_PAGE_URL_RE, "https://www.notion.so/$1")
+    .replace(DOMAIN_AUTOLINK_RE, "$1");
 }
 
 /** 줄머리 들여쓰기. */
