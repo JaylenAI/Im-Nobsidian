@@ -44,6 +44,9 @@ export interface SidecarSchemaView {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
+/** 제목 속성의 이름을 모를 때 — Notion 이 새 DB 에 붙이는 이름과 같다. */
+export const DEFAULT_TITLE_PROPERTY = "Name";
+
 /** status 의 그룹 — Notion 이 정해 두고 이름을 바꾸지 못하게 한다. 옵션의 `group` 은 이 가운데 하나다. */
 export const NOTION_STATUS_GROUPS: readonly string[] = ["To-do", "In progress", "Complete"];
 
@@ -233,7 +236,7 @@ export function planDatabaseSchema(schema: SidecarSchema): DatabaseSchemaPlan {
   }
   // 제목 없는 DB 는 없다 — 사이드카가 비었어도 Notion 의 기본 이름으로 만든다.
   if (!titleProperty) {
-    titleProperty = "Name";
+    titleProperty = DEFAULT_TITLE_PROPERTY;
     initial[titleProperty] = { title: {} };
   }
   return { titleProperty, initial, statuses, relations, rollups, formulas, skipped };

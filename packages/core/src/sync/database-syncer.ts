@@ -773,7 +773,8 @@ export class DatabaseSyncer {
       if (await this.isUserFile(basePath)) {
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
-          getLogger().warn(
+          // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
+          getLogger().info(
             `[DB Sync] 직접 만든 .base 라 Notion 보기로 덮어쓰지 않음: ${basePath} — Notion 보기를 받으려면 이 파일의 이름을 바꾸세요`,
           );
         }

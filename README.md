@@ -153,19 +153,20 @@ That's it. Your vault and Notion workspace are now linked.
 
 ## CLI Reference
 
-| Command                   | Description                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------- |
-| `nobsi init`              | Interactive setup — Notion token + root page                                    |
-| `nobsi push`              | Push local changes to Notion                                                    |
-| `nobsi pull`              | Pull Notion changes to local                                                    |
-| `nobsi sync`              | Bidirectional sync (pull → push)                                                |
-| `nobsi status`            | Show sync status + conflicts (add `--full` for bidirectional)                   |
-| `nobsi diff [path]`       | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)  |
-| `nobsi discard <path...>` | Discard local edits — restore notes to the last synced text (Notion untouched)  |
-| `nobsi fetch`             | Scan remote for new / modified / deleted pages (read-only)                      |
-| `nobsi verify`            | Verify completeness — every remote row **and page** is in the vault (read-only) |
-| `nobsi resolve`           | Resolve sync conflicts                                                          |
-| `nobsi watch`             | Watch for changes + auto-sync                                                   |
+| Command                     | Description                                                                                                                                      |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `nobsi init`                | Interactive setup — Notion token + root page                                                                                                     |
+| `nobsi push`                | Push local changes to Notion                                                                                                                     |
+| `nobsi pull`                | Pull Notion changes to local                                                                                                                     |
+| `nobsi sync`                | Bidirectional sync (pull → push)                                                                                                                 |
+| `nobsi status`              | Show sync status + conflicts (add `--full` for bidirectional)                                                                                    |
+| `nobsi diff [path]`         | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)                                                                   |
+| `nobsi discard <path...>`   | Discard local edits — restore notes to the last synced text (Notion untouched)                                                                   |
+| `nobsi prepare-db <folder>` | Turn a vault folder of notes (+ its `.base`) into a Notion database on the next push — infers property types and views, writes nothing to Notion |
+| `nobsi fetch`               | Scan remote for new / modified / deleted pages (read-only)                                                                                       |
+| `nobsi verify`              | Verify completeness — every remote row **and page** is in the vault (read-only)                                                                  |
+| `nobsi resolve`             | Resolve sync conflicts                                                                                                                           |
+| `nobsi watch`               | Watch for changes + auto-sync                                                                                                                    |
 
 `push`, `pull`, and `sync` support `--dry-run` to preview changes without applying them. `pull --force` runs a full scan now instead of fetching only what changed — it applies deletions made in Notion and recovers pages missed by Notion's search indexing lag (see [Pull](#pull-notion--obsidian)).
 

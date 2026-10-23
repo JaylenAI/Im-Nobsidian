@@ -13,7 +13,8 @@
  */
 
 /** 잠그는 작업 — 볼트 · 상태 DB · 원격을 바꾸거나 이번 실행의 기준을 정하는 것. */
-export type GatedOperation = "push" | "pull" | "sync" | "status" | "fetch" | "resolve" | "discard";
+export type GatedOperation =
+  "push" | "pull" | "sync" | "status" | "fetch" | "resolve" | "discard" | "prepare-database";
 
 /** 사용자에게 보이는 이름 — 내부 코드값을 화면에 내보내지 않는다. */
 const OPERATION_LABELS: Readonly<Record<GatedOperation, string>> = {
@@ -24,6 +25,7 @@ const OPERATION_LABELS: Readonly<Record<GatedOperation, string>> = {
   fetch: "원격 확인",
   resolve: "충돌 해결",
   discard: "변경 되돌리기",
+  "prepare-database": "DB 로 올릴 준비",
 };
 
 export function operationLabel(operation: GatedOperation): string {

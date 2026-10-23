@@ -69,7 +69,9 @@ import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { rerenderTargets } from "./rerender-targets.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
+import { randomUUID } from "node:crypto";
 import { DatabaseCreator } from "./database-creator.js";
+import { prepareFolderDatabase, type FolderDatabaseReport } from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
@@ -1334,6 +1336,21 @@ export class SyncOrchestrator {
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
+  }
+
+  /**
+   * 볼트에서 만든 노트 폴더를 Notion DB 로 올릴 준비 — frontmatter · `.base` 로 사이드카를 써 둔다(#75).
+   * Notion 에는 쓰지 않는다. 다음 push 가 DB 를 만들고 노트를 행으로 올린다(ADR-036 · ADR-037).
+   *
+   * @param configDir Obsidian 설정 폴더 — 속성 타입(`types.json`)을 읽는다.
+   */
+  async prepareFolderDatabase(folder: string, configDir?: string): Promise<FolderDatabaseReport> {
+    return this.gate.run("prepare-database", () =>
+      prepareFolderDatabase(this.vaultFs, this.stateDb, folder, {
+        databaseId: randomUUID(),
+        ...(configDir === undefined ? {} : { configDir }),
+      }),
+    );
   }
 
   /** 충돌 미리보기용 줄 비교(로컬 vs 원격). 해소 없이 표시 전용. */

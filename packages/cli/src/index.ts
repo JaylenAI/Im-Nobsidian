@@ -11,6 +11,7 @@ import { fetchCommand } from "./commands/fetch.js";
 import { resolveCommand } from "./commands/resolve.js";
 import { watchCommand } from "./commands/watch.js";
 import { verifyCommand } from "./commands/verify.js";
+import { prepareDbCommand } from "./commands/prepare-db.js";
 import { scheduleForcedExit } from "./utils/exit.js";
 import { reportStateDbFailure } from "./utils/state-db-failure.js";
 
@@ -37,6 +38,7 @@ program.addCommand(fetchCommand);
 program.addCommand(resolveCommand);
 program.addCommand(watchCommand);
 program.addCommand(verifyCommand);
+program.addCommand(prepareDbCommand);
 
 // 강제 종료하되 명령이 정한 종료 코드를 보존한다 — 근거는 utils/exit.ts 참조(R11-C).
 // 상태 DB 를 쓸 수 없어 명령이 던졌으면 이유와 할 일을 보이고 1 로 끝낸다 — utils/state-db-failure.ts.
