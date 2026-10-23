@@ -651,54 +651,58 @@ export class DatabaseSyncer {
     return { deleted, conflicts };
   }
 
+  /**
+   * DB 의 보기를 Notion 에서 다시 읽어 `db-views.json` 에 적는다. DB 를 통째로 받을 때(행이 바뀐 DB · 전체 대조)
+   * 마다 부른다 — 보기만 고친 것은 DB 의 수정 시각을 바꾸지 않아(2026-10-23 실측) 다음 전체 대조가 받는다.
+   * 예전에는 처음 받은 보기를 끝까지 썼다 — Notion 에서 더하거나 고친 보기가 `.base` 에 오지 않았다.
+   * 읽지 못하면 받아 둔 보기를 쓴다 — 보기가 빠진 `.base` 를 쓰지 않는다.
+   */
   private async pullDatabaseViews(
     dbConfig: DatabaseSyncConfig,
-    force = false,
   ): Promise<DatabaseViewsConfig | null> {
+    const configPath = DB_VIEWS_PATH;
+    // 파일이 없을 때만 빈 객체에서 시작한다. 있는데 읽지 못하면(깨진 JSON 등) 이 DB 의 설정만 담아 쓰면
+    // 다른 DB 들의 보기 설정이 모두 지워진다 — 이번에는 쓰지 않고 받은 설정만 돌려준다.
+    let allViewsConfigs: Record<string, DatabaseViewsConfig> | null = {};
     try {
-      const configPath = DB_VIEWS_PATH;
-
-      if (!force) {
-        try {
-          const existing = await this.vaultFs.readFile(configPath);
-          const parsed = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
-          if (parsed[dbConfig.databaseId]) return parsed[dbConfig.databaseId]!;
-        } catch {
-          // 파일 없으면 계속 진행
-        }
-      }
-
-      const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
-      await this.vaultFs.ensureFolder(INTERNAL_DIR);
-
-      // 파일이 없을 때만 빈 객체에서 시작한다. 있는데 읽지 못하면(깨진 JSON 등) 이 DB 의 설정만 담아 쓰면
-      // 다른 DB 들의 보기 설정이 모두 지워진다 — 이번에는 쓰지 않고 받은 설정만 돌려준다.
-      let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
       if (await this.vaultFs.exists(configPath)) {
-        try {
-          allViewsConfigs = JSON.parse(await this.vaultFs.readFile(configPath)) as Record<
-            string,
-            DatabaseViewsConfig
-          >;
-        } catch (error) {
-          getLogger().warn(
-            `[DB Sync] ${configPath} 를 읽지 못해 이 DB 의 보기 설정을 저장하지 않음(파일은 그대로 둠):`,
-            error,
-          );
-          return viewsConfig;
-        }
+        allViewsConfigs = JSON.parse(await this.vaultFs.readFile(configPath)) as Record<
+          string,
+          DatabaseViewsConfig
+        >;
       }
+    } catch (error) {
+      getLogger().warn(
+        `[DB Sync] ${configPath} 를 읽지 못해 이 DB 의 보기 설정을 저장하지 않음(파일은 그대로 둠):`,
+        error,
+      );
+      allViewsConfigs = null;
+    }
+    const cached = allViewsConfigs?.[dbConfig.databaseId] ?? null;
 
+    let viewsConfig: DatabaseViewsConfig;
+    try {
+      viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
+    } catch (error) {
+      getLogger().warn(
+        `[DB Sync] 뷰 설정을 받지 못함 — ${cached ? "받아 둔 보기로 씀" : "보기 없이 씀"}:`,
+        error,
+      );
+      return cached;
+    }
+    if (!allViewsConfigs) return viewsConfig;
+
+    try {
+      await this.vaultFs.ensureFolder(INTERNAL_DIR);
       allViewsConfigs[dbConfig.databaseId] = viewsConfig;
       await this.vaultFs.writeFile(configPath, JSON.stringify(allViewsConfigs, null, 2));
       getLogger().debug(
         `[DB Sync] 뷰 설정 ${viewsConfig.views.length}개 저장: ${dbConfig.databaseId}`,
       );
-      return viewsConfig;
     } catch (error) {
-      getLogger().warn(`[DB Sync] 뷰 설정 Pull 실패 (계속 진행):`, error);
-      return null;
+      getLogger().warn(`[DB Sync] 뷰 설정을 저장하지 못함 (계속 진행):`, error);
     }
+    return viewsConfig;
   }
 
   /** 행들 가운데 한 번이라도 기간인 날짜 속성 → 그 짝 키. */

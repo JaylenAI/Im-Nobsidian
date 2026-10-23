@@ -1526,13 +1526,11 @@ export class NotionClient {
       );
 
       const viewRefs = (response as ListDatabaseViewsResponse).results;
+      // 보기 하나를 읽지 못하면 통째로 실패한다 — 빠진 목록으로 `.base` · 사이드카를 다시 쓰면 그 보기가
+      // 볼트에서 사라진다. 부른 쪽이 받아 둔 보기를 쓴다.
       for (const ref of viewRefs) {
-        try {
-          const detail = await this.getView(ref.id as string);
-          if (detail) allViews.push(detail);
-        } catch {
-          // 뷰 상세 조회 실패 시 스킵
-        }
+        const detail = await this.getView(ref.id as string);
+        if (detail) allViews.push(detail);
       }
 
       cursor = (response as ListDatabaseViewsResponse).next_cursor as string | undefined;

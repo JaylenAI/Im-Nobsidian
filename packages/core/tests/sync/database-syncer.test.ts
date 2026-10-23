@@ -1379,6 +1379,61 @@ describe("DatabaseSyncer", () => {
       expect(content).toContain("- type: cards");
     });
 
+    describe("보기는 DB 를 받을 때마다 다시 읽는다 — 받아 둔 보기는 읽지 못할 때만", () => {
+      const cached = (type: string) =>
+        JSON.stringify({
+          "db-123": {
+            databaseId: "db-123",
+            lastSynced: "2026-05-18T00:00:00.000Z",
+            views: [{ id: "v1", name: "옛 보기", type }],
+          },
+        });
+      const baseContent = () =>
+        (mockVaultFs.writeFile as any).mock.calls.find((c: any[]) =>
+          String(c[0]).endsWith(".base"),
+        )?.[1] as string;
+
+      beforeEach(() => {
+        mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+        (mockVaultFs.exists as any).mockImplementation(
+          async (p: string) => p === ".im-nobsidian/db-views.json",
+        );
+        (mockVaultFs.readFile as any).mockImplementation(async (p: string) =>
+          p === ".im-nobsidian/db-views.json" ? cached("table") : "# Test\n\nContent",
+        );
+      });
+
+      it("Notion 에서 더한 보기가 .base 에 들어온다 — 예전에는 처음 받은 보기에 머물렀다", async () => {
+        mockNotionClient.getDatabaseViewsConfig.mockResolvedValue({
+          databaseId: "db-123",
+          lastSynced: "2026-10-23T00:00:00.000Z",
+          views: [
+            { id: "v1", name: "옛 보기", type: "table" },
+            { id: "v2", name: "새 갤러리", type: "gallery" },
+          ],
+        });
+
+        await syncer.pullAll();
+
+        expect(mockNotionClient.getDatabaseViewsConfig).toHaveBeenCalledWith("db-123");
+        expect(baseContent()).toContain("새 갤러리");
+      });
+
+      it("보기를 읽지 못하면 받아 둔 보기로 쓴다 — 보기가 사라진 .base 를 쓰지 않는다", async () => {
+        (mockVaultFs.readFile as any).mockImplementation(async (p: string) =>
+          p === ".im-nobsidian/db-views.json" ? cached("gallery") : "# Test\n\nContent",
+        );
+        mockNotionClient.getDatabaseViewsConfig.mockRejectedValue(
+          Object.assign(new Error("Service Unavailable"), { status: 503 }),
+        );
+
+        await syncer.pullAll();
+
+        expect(baseContent()).toContain("옛 보기");
+        expect(baseContent()).toContain("- type: cards");
+      });
+    });
+
     it("사이드카가 디스크와 동일 바이트면 재기록하지 않는다 (degrade 로그 중복 제거)", async () => {
       // 같은 DB 가 한 번의 pull 에서 임베드 재작성 때마다 재생성돼(실측 최대 67회)
       // degrade 로그가 그만큼 반복됐다 — 동일 바이트면 쓰기·로그 모두 생략한다.
