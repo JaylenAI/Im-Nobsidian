@@ -117,17 +117,17 @@ export function startsWithHeading1(markdown: string): boolean {
  *
  * `partial` 은 **포기 시점까지 확정적으로 찾은 페이지**다(R12-A). 두 경로는 같은 집합을
  * 낸다고 가정할 수 없다 — search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수
- * 있고, 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 어느 쪽이 도는지를 벽시계가
- * 정하므로(같은 볼트에서 첫 pull=search, 재 pull=순회), 결과를 **경합시키면** 실행마다
- * 집합이 달라진다. 그래서 부분 결과를 버리지 않고 실어 보내 호출측이 **합집합**을 만든다.
+ * 있고, 직접 순회는 예산 때문에 깊은 가지가 빠질 수 있다. 예전에는 어느 쪽이 도는지를 벽시계가
+ * 정해(같은 볼트에서 첫 pull=search, 재 pull=순회) 결과를 **경합시키면** 실행마다 집합이 달라졌다.
+ * 예산은 이제 요청 수다 — 다른 작업과 속도 한도를 나눠 느려져도 같은 서브트리는 같은 길로 간다. 그래서 부분 결과를 버리지 않고 실어 보내 호출측이 **합집합**을 만든다.
  * 이미 치른 순회 비용을 버리지 않는 것이라 추가 요청도 없다.
  */
 export class DiscoveryTooLargeError extends Error {
   constructor(
-    elapsedMs: number,
+    spentRequests: number,
     readonly partial: readonly PageObjectResponse[] = [],
   ) {
-    super(`subtree discovery exceeded time budget (${elapsedMs}ms)`);
+    super(`subtree discovery exceeded request budget (${spentRequests} requests)`);
     this.name = "DiscoveryTooLargeError";
   }
 }
@@ -262,6 +262,8 @@ export class NotionClient {
    * 발견한 DB 는 곧장 행을 받으므로 같은 두 요청(DB · data source)을 되풀이하지 않는다.
    */
   private readonly checkedDatabases = new Map<string, { meta: DatabaseMeta; at: number }>();
+  /** 보낸 요청 수(재시도는 세지 않는다) — 순회 예산을 잰다. */
+  private requestsSent = 0;
 
   constructor(options: NotionClientOptions) {
     // 빠진 값은 설정 기본값 한 벌(DEFAULT_CONFIG)에서 읽는다 — `init` 처럼 토큰만으로 만드는 경로도 같은 값.
@@ -1497,7 +1499,7 @@ export class NotionClient {
    * root 서브트리를 직접 BFS 순회해 하위 페이지를 모두 수집한다(중첩 깊이 무관·무손실).
    * 비용은 서브트리 전체 블록 수에 비례한다.
    *
-   * @param opts.deadlineMs `Date.now()` 기준 마감 시각. 각 페이지 처리 전 초과를 검사해
+   * @param opts.maxRequests 이 순회가 쓸 요청 수. 각 페이지 처리 전 초과를 검사해
    *   초과 시 {@link DiscoveryTooLargeError}를 던진다(대규모 서브트리 → search 폴백 유도).
    *   **그때까지 찾은 페이지는 에러의 `partial` 에 실어 보낸다** — 버리면 호출측이 두
    *   경로를 경합시키게 되고, 어느 쪽이 이기는지를 벽시계가 정하게 된다(R12-A).
@@ -1506,19 +1508,20 @@ export class NotionClient {
    */
   async getChildPagesRecursive(
     parentId: string,
-    opts?: { deadlineMs?: number; signal?: AbortLike },
+    opts?: { maxRequests?: number; signal?: AbortLike },
   ): Promise<PageObjectResponse[]> {
     const all: PageObjectResponse[] = [];
     let currentLevel: string[] = [parentId];
-    const start = Date.now();
+    const start = this.requestsSent;
 
     while (currentLevel.length > 0) {
       const nextLevel: string[] = [];
 
       for (const id of currentLevel) {
         throwIfAborted(opts?.signal);
-        if (opts?.deadlineMs !== undefined && Date.now() > opts.deadlineMs) {
-          throw new DiscoveryTooLargeError(Date.now() - start, all);
+        const spent = this.requestsSent - start;
+        if (opts?.maxRequests !== undefined && spent >= opts.maxRequests) {
+          throw new DiscoveryTooLargeError(spent, all);
         }
         let children: PageObjectResponse[];
         try {
@@ -1865,6 +1868,7 @@ export class NotionClient {
     options?: { readonly idempotent?: boolean },
   ): Promise<T> {
     const idempotent = options?.idempotent ?? true;
+    this.requestsSent++;
     // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
     let backoffMs = 0;
 
