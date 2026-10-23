@@ -28,7 +28,11 @@ v0.8 빌드 이전의 전체 E2E(실데이터 사본 → 탐침 아래 새 루�
   같은 표기뿐 · 값 13건은 같은 제목 행의 이름 꼬리(id) 자리바꿈
 - API 한계로 남는 것: 관계 페이지 값을 계산하는 수식 · 롤업의 롤업 · 버튼 속성 만들기 · 사용자 이모지 · 손님 사람 값 ·
   같은 토큰 같은 분 안의 편집(ADR-017)
-- 남은 것: 현재 빌드 RC 전체 E2E(`__e2e_v090__`) 결과 기록 · 릴리스(승인 뒤)
+- RC 전체 E2E(`__e2e_v090__` · 1,225 노트)가 찾은 6건: `fix/row-subpage-discovery`(행 하위 페이지 4 미수신) ·
+  `fix/row-child-folder`(그 자리) · `fix/link-text-brackets`(9줄) · `fix/compact-export-whitespace`(빈 줄 210줄) ·
+  `fix/placeholder-list-indent`(42 노트) · `fix/nested-container-depth`(목록 속 깊은 콜아웃 · 토글). 나머지 차이는 API
+  한계 · Notion 표기 정리 — `journal/2026-10-23.md` 「RC 전체 E2E」
+- 남은 것: 릴리스(승인 뒤)
 
 ### v0.8.0 — 연결 폴더 (dev 머지)
 
