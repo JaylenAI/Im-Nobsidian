@@ -32,3 +32,29 @@ export const WIKILINK_LOOKUPS: readonly WikilinkLookup[] = [
     params: (text) => [`${text}.md`, `%/${escapeLike(text)}.md`],
   },
 ];
+
+/**
+ * relation 값의 위키링크 → 대상 DB(`parentIds` — DB id · data source id)의 행만 보는 조회들.
+ *
+ * - 대상 DB 밖 페이지는 고르지 않는다. Notion 은 relation 에 다른 DB 의 페이지를 넣으면 오류 없이 빼 버린다
+ *   (2026-10-23 실측: 200 응답 · 값만 빠짐) — 제목이 같은 다른 DB 의 행으로 풀리면 relation 이 조용히 사라졌다.
+ * - 파일 이름 → 제목 → 별칭 차례. pull 은 relation 값을 파일 이름으로 적는다. 제목을 먼저 보면 제목이 같은
+ *   두 행(한쪽 파일 이름에 `(id)` 가 붙은) 가운데 엉뚱한 행을 걸었다.
+ */
+export function wikilinkLookupsIn(parentIds: readonly string[]): WikilinkLookup[] {
+  const ids = parentIds.map((id) => id.replace(/-/g, ""));
+  const scoped = (condition: string) =>
+    "SELECT w.* FROM wikilink_map w JOIN sync_state s ON s.obsidian_path = w.obsidian_path " +
+    `WHERE REPLACE(s.notion_parent_id, '-', '') IN (${ids.map(() => "?").join(", ")}) AND (${condition})`;
+  return [
+    {
+      sql: scoped(`w.obsidian_path = ? OR w.obsidian_path LIKE ? ESCAPE '${LIKE_ESCAPE}'`),
+      params: (text) => [...ids, `${text}.md`, `%/${escapeLike(text)}.md`],
+    },
+    { sql: scoped("w.title = ?"), params: (text) => [...ids, text] },
+    {
+      sql: scoped(`w.aliases LIKE ? ESCAPE '${LIKE_ESCAPE}'`),
+      params: (text) => [...ids, `%${escapeLike(JSON.stringify(text))}%`],
+    },
+  ];
+}

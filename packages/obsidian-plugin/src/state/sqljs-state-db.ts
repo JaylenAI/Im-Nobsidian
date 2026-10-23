@@ -20,6 +20,7 @@ import {
   STATE_DB_MIGRATIONS,
   SavedStateDbError,
   WIKILINK_LOOKUPS,
+  wikilinkLookupsIn,
   generateId,
   getLogger,
 } from "@im-nobsidian/core";
@@ -421,6 +422,15 @@ export class SqlJsStateDB implements IStateDB {
 
   resolveWikilink(text: string): WikilinkEntry | null {
     for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.queryOne<RawWikilinkRow>(lookup.sql, lookup.params(text));
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
+  }
+
+  resolveWikilinkIn(text: string, parentIds: readonly string[]): WikilinkEntry | null {
+    if (parentIds.length === 0) return null;
+    for (const lookup of wikilinkLookupsIn(parentIds)) {
       const row = this.queryOne<RawWikilinkRow>(lookup.sql, lookup.params(text));
       if (row) return this.mapWikilinkRow(row);
     }

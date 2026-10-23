@@ -197,6 +197,8 @@ export class SyncOrchestrator {
     // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 propertyMapper 가 처리).
     const wikilinkResolver: WikilinkResolver = {
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
+      resolveIn: (title, parentIds) =>
+        stateDb.resolveWikilinkIn(title, parentIds)?.notionPageId ?? null,
       resolvePageId: (pageId: string) => {
         const entry = stateDb.resolvePageId(pageId);
         return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;

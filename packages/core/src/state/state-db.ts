@@ -11,7 +11,7 @@ import { generateId } from "../utils/id.js";
 import { STATE_DB_MIGRATIONS } from "./migrations/index.js";
 import type { IStateDB } from "./state-db-interface.js";
 import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
-import { WIKILINK_LOOKUPS } from "./wikilink-lookup.js";
+import { WIKILINK_LOOKUPS, wikilinkLookupsIn } from "./wikilink-lookup.js";
 import { StateLock, stateDbLockPath } from "./state-lock.js";
 
 export class StateDB implements IStateDB {
@@ -260,6 +260,16 @@ export class StateDB implements IStateDB {
 
   resolveWikilink(text: string): WikilinkEntry | null {
     for (const lookup of WIKILINK_LOOKUPS) {
+      const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
+        RawWikilinkRow | undefined;
+      if (row) return this.mapWikilinkRow(row);
+    }
+    return null;
+  }
+
+  resolveWikilinkIn(text: string, parentIds: readonly string[]): WikilinkEntry | null {
+    if (parentIds.length === 0) return null;
+    for (const lookup of wikilinkLookupsIn(parentIds)) {
       const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
         RawWikilinkRow | undefined;
       if (row) return this.mapWikilinkRow(row);
