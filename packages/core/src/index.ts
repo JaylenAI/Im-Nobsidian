@@ -133,6 +133,8 @@ export type {
   FileUploadResult,
   FileDownloadResult,
   DatabaseSyncResult,
+  FolderDatabaseReport,
+  InferredProperty,
   PlannedRow,
   RowProgress,
   GatedOperation,

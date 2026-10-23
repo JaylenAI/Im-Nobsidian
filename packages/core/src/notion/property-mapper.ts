@@ -21,6 +21,11 @@ const DATE_REGEX =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
 
+/** frontmatter 값이 날짜(시각)인가 — 날짜 속성에 보낼 수 있는 꼴. */
+export function isFrontmatterDate(value: unknown): boolean {
+  return DATE_REGEX.test(String(plainFrontmatterValue(value)));
+}
+
 /**
  * 기간(끝이 있는 날짜)의 끝을 적는 짝 키의 꼬리 — `마감` 의 끝은 `마감_end`(F-08).
  *

@@ -18,3 +18,8 @@ export type { FileUploadResult, FileDownloadResult } from "./file-handler.js";
 export type { DatabaseSyncResult, PlannedRow, RowProgress } from "./database-syncer.js";
 export type { GatedOperation } from "./operation-gate.js";
 export type { PathFilterConfig } from "./node-vault-fs.js";
+export type {
+  FolderDatabaseReport,
+  FolderDatabaseDraft,
+  InferredProperty,
+} from "./folder-database.js";
