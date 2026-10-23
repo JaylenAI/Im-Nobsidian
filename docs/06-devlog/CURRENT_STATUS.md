@@ -1,26 +1,39 @@
 # 현재 진행 상황
 
 > 마지막 업데이트: 2026-10-23
-> 버전: **v0.4.1 배포 끝** — v0.4.2(표기 왕복 · 릴리스 게이트) 개발 중. 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
+> 버전: **v0.4.1 배포 끝** — dev 에 v0.4.2 · v0.5.0 · v0.6.0 의 범위가 모두 머지됨(릴리스 대기). 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
 
-## 남은 단계 (2026-10-23 확정)
+## 남은 단계 (2026-10-23 확정 · 같은 날 갱신)
 
-| 버전   | 내용                                                                                      |
-| ------ | ----------------------------------------------------------------------------------------- |
-| v0.4.2 | `fix/roundtrip-notation` 표기 왕복 · `chore/release-gate` 태그=버전 검사 · CHANGELOG 보충 |
-| v0.5.0 | push 로 DB 만들기 — 스키마 · 행 · relation · 뷰(Views API, 2026-03)                       |
-| v0.6.0 | 본문 속 컨테이너(#74) · 인라인 DB ↔ Bases(#75)                                            |
-| v0.7.0 | 성능 — 첫 동기화는 3 req/s 한계 근처, 증분은 초 단위                                      |
-| v0.8.0 | 멀티 워크스페이스                                                                         |
-| v0.9.0 | 커뮤니티 등록 준비 — 가이드 · 사용자 문서 · 전량 E2E                                      |
+| 버전   | 내용                                                                                      | 상태     |
+| ------ | ----------------------------------------------------------------------------------------- | -------- |
+| v0.4.2 | `fix/roundtrip-notation` 표기 왕복 · `chore/release-gate` 태그=버전 검사 · CHANGELOG 보충 | dev 머지 |
+| v0.5.0 | push 로 DB 만들기 — 스키마 · 행 · relation · 뷰(Views API, 2026-03) · 꾸밈                | dev 머지 |
+| v0.6.0 | 컬럼 열 경계 표시(#74) · 볼트 폴더 → Notion DB(#75)                                       | dev 머지 |
+| v0.7.0 | 성능 — 첫 동기화는 3 req/s 한계 근처, 증분은 초 단위                                      | 다음     |
+| v0.8.0 | 멀티 워크스페이스                                                                         |          |
+| v0.9.0 | 커뮤니티 등록 준비 — 가이드 · 사용자 문서 · 전량 E2E                                      |          |
 
-### v0.5.0 — push 로 DB 만들기 (진행 중)
+릴리스는 사용자 승인 뒤에 한다. 바뀐 것 전체는 `CHANGELOG.md` 의 `[Unreleased]`.
+
+### v0.6.0 — 컬럼 · Bases (dev 머지)
+
+- `feature/column-guide` (#74): Notion 컬럼을 위아래로 펼친 글에 열마다 색 줄 · 이름표. 너비는 이제 NFM 이 보존한다(ADR-008 정정).
+- `feature/folder-to-database` (#75 · ADR-037): 볼트에서 만든 노트 폴더(+ `.base`)를 `prepare-db` · 폴더 메뉴로 준비하면
+  다음 push 가 DB 를 만든다. 인라인 DB ↔ `.base` 임베드 왕복은 ADR-036 으로 이미 된다.
+- `fix/keep-user-base-files`: 직접 만든 `.base` 를 pull 이 지우거나 덮어쓰지 않는다.
+- 남은 한계: 이미 페이지로 올라간 폴더는 DB 로 바꾸지 않는다(페이지를 data source 아래로 옮기는 길을 확인하지 못함).
+
+### v0.5.0 — push 로 DB 만들기 (dev 머지)
 
 ADR-036. 사이드카(`<DB>.notion.json`)를 스키마의 원본으로, 새 루트로 올린 DB 폴더를 Notion DB 로 만든다 — 스키마 →
-행 → relation · rollup · formula → 뷰. 사이드카가 가리키는 원래 DB 에는 쓰지 않는다.
+행 → relation · rollup · formula → 뷰 → 꾸밈. 사이드카가 가리키는 원래 DB 에는 쓰지 않는다.
 
-- `feature/db-schema-create` — 사이드카 v2(속성 설정 · 인라인 여부) · 스키마로 DB 만들기 · 새 DB 를 받은 DB 로 등록 ·
-  부모 본문의 `.base` 자리. 라이브: 탐침 DB 둘(26 속성) 생성 → 새 볼트 pull 1 · 다시 0.
+- `feature/db-schema-create` · `db-row-create` · `db-view-push` · `status-group-create` · `place-property` ·
+  `database-appearance` · `page-decorations` · `silent-notifications`
+- API changelog(2026-04~10) 대조로 고친 것: `query-row-limit`(10,000건) · `unsupported-view-type` · `api-changelog-gaps`
+  (수식 unsupported · 큰 페이지) · `sdk-browser-guard`(SDK 5.27+)
+- 기존 볼트에서 페이지 아이콘 · 커버를 받으려면 `pull --force` 한 번. 인라인 DB 에는 커버가 없다(API).
 
 ### `fix/roundtrip-notation` (v0.4.2 · dev 머지)
 
