@@ -987,6 +987,9 @@ function emptyValueOf(type: string): NotionPropertyValue | null {
   }
 }
 
+/** 자를 때 지키는 확장자의 최대 길이(점 포함) — 이보다 길면 확장자가 아니라 이름의 일부로 본다. */
+const EXTENSION_MAX = 10;
+
 /**
  * files 속성 파일 하나의 이름 — Notion 은 {@link FILE_NAME_MAX} 자를 넘으면 페이지 생성 · 갱신 요청 전체를 거부한다.
  * 긴 URL 은 마지막 경로 조각(파일 이름)으로, 그래도 길면 확장자를 남기고 줄인다.
@@ -1004,7 +1007,7 @@ export function fileName(name: string, url: string): string {
   }
   if (base.length <= FILE_NAME_MAX) return base;
   const dot = base.lastIndexOf(".");
-  const ext = dot > 0 && base.length - dot <= 10 ? base.slice(dot) : "";
+  const ext = dot > 0 && base.length - dot <= EXTENSION_MAX ? base.slice(dot) : "";
   // 글자 단위로 자른다 — 서로게이트 쌍(이모지 등)을 반으로 가르지 않는다.
   const chars = Array.from(base.slice(0, base.length - ext.length));
   let head = "";

@@ -1,4 +1,5 @@
 import { LogLevel, type Client } from "@notionhq/client";
+import { QUERY_RESULTS_MAX } from "../constants/notion-limits.js";
 import { Sema } from "async-sema";
 import type {
   BlockObjectResponse,
@@ -384,7 +385,10 @@ export class NotionClient {
     let cursor: string | undefined;
     do {
       const page = await this.withRateLimit(() =>
-        this.client.users.list({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
+        this.client.users.list({
+          page_size: this.defaultPageSize,
+          ...(cursor ? { start_cursor: cursor } : {}),
+        }),
       );
       for (const user of page.results) users.push({ id: user.id, name: user.name ?? null });
       cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
@@ -979,7 +983,7 @@ export class NotionClient {
       if (last === undefined || last === since) {
         // 같은 분에 만든 행이 한도보다 많다 — 시각만으로는 더 나눌 수 없다. 일부만 돌려주면 나머지를 «지운 행» 으로 읽는다.
         throw new Error(
-          `data source ${dataSourceId}: 같은 시각(${since ?? "?"})에 만든 행이 조회 한도(10,000건)보다 많아 모두 읽지 못했다`,
+          `data source ${dataSourceId}: 같은 시각(${since ?? "?"})에 만든 행이 조회 한도(${QUERY_RESULTS_MAX.toLocaleString("en-US")}건)보다 많아 모두 읽지 못했다`,
         );
       }
       since = last;

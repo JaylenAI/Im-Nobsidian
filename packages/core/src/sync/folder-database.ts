@@ -8,6 +8,7 @@
  * 스키마는 추정이다 — 사이드카는 사람이 읽는 JSON 이라 push 전에 고칠 수 있다. 무엇을 왜 그렇게 정했는지
  * 보고서로 돌려준다(ADR-037).
  */
+import { OPTION_NAME_MAX } from "../constants/notion-limits.js";
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import { isFrontmatterDate, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
@@ -76,8 +77,6 @@ const NON_PROPERTY_KEYS: ReadonlySet<string> = new Set([
  */
 const SELECT_MAX_OPTIONS = 25;
 const SELECT_MAX_LENGTH = 50;
-/** Notion 옵션 이름의 한계 — 쉼표를 받지 않고 100자까지다. */
-const OPTION_MAX_LENGTH = 100;
 
 /** Obsidian 속성 타입(`.obsidian/types.json`) → Notion 속성 타입. `text` 는 값을 보고 정한다. */
 const OBSIDIAN_TYPES: Readonly<Record<string, string | null>> = {
@@ -347,7 +346,7 @@ function listType(
 }
 
 function optionName(text: string): boolean {
-  return text.length > 0 && text.length <= OPTION_MAX_LENGTH && !text.includes(",");
+  return text.length > 0 && text.length <= OPTION_NAME_MAX && !text.includes(",");
 }
 
 /**
