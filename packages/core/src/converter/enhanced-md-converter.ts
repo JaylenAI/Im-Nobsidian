@@ -41,7 +41,7 @@ import {
   restoreBodyIndent,
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
-import { mapOutsideCodeFences } from "../utils/md-regions.js";
+import { mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
 import { markersToMentions, mentionsToMarkers } from "./mention.js";
 import { nfmTablesToPipeTables, pipeTablesToNfmTables } from "./table.js";
@@ -194,8 +194,25 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   result = restoreToggleHeadings(result);
   // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
   result = indentPlaceholdersToNextLine(result);
+  result = underscoreItalicsWithStar(result);
 
   return result;
+}
+
+/**
+ * 글 `*`(`\*`)가 든 기울임 `*…*` 를 `_…_` 로 — Notion 은 `*기울 \* 임*` 의 `\*` 에서 기울임을 닫아 `기울 \` 만
+ * 기울이고 ` 임*` 를 글로 남긴다(2026-10-23 탐침). `_기울 \* 임_` 은 `기울 * 임` 을 기울인다. 굵게는 문제없다.
+ *
+ * `_` 는 낱말 안에서 기울임을 열고 닫지 못한다 — 앞뒤가 글자 · 숫자인 기울임과 `_` 가 든 기울임은 그대로 둔다.
+ */
+const ITALIC_WITH_ESCAPED_STAR_RE =
+  /(?<![\\*\p{L}\p{N}])\*(?![\s*])((?:[^*_\n\\]|\\[^\n])*?\\\*(?:[^*_\n\\]|\\[^\n])*?)(?<![\s\\])\*(?![*\p{L}\p{N}])/gu;
+
+function underscoreItalicsWithStar(content: string): string {
+  if (!content.includes("\\*")) return content;
+  return mapOutsideCode(content, (segment) =>
+    segment.replace(ITALIC_WITH_ESCAPED_STAR_RE, (_match, inner: string) => `_${inner}_`),
+  );
 }
 
 // ─── Push 방향: 위키링크 → Notion markdown API 호환 표현 ───

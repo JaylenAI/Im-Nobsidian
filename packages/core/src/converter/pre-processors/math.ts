@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { mapOutsideCode } from "../../utils/md-regions.js";
+import { mathCloseAt } from "../literal-dollar.js";
 
 const BLOCK_MATH_REGEX = /\$\$([\s\S]+?)\$\$/g;
 /** 줄머리가 인용 표시(`>`)와 들여쓰기뿐인가 — 콜아웃 · 목록 안의 블록 수식은 줄마다 이것을 단다. */
@@ -24,10 +25,10 @@ const CONTAINER_LEAD_RE = /^(?:[ \t]*>)*[ \t]*/;
  * 글 `$$`)로, 글과 한 줄인 `$$ x $$` 는 안쪽 공백을 떼어 `$$x$$`(Notion 의 인라인 수식)로 보낸다
  * ({@link settleLineDollars}). 제 줄의 `$$` 는 블록 수식의 경계라 둔다.
  *
- * 인라인 수식(`$…$`)은 건드리지 않는다. 예전에는 안쪽 공백을 잘라 `$ x $` 가 수식이 되고
+ * 인라인 수식(`$…$`)의 안쪽은 건드리지 않는다. 예전에는 안쪽 공백을 잘라 `$ x $` 가 수식이 되고
  * `$5 and $10` 이 `$5 and$10` 으로 바뀌었다. Obsidian 과 Notion 은 여는 `$` 뒤 · 닫는 `$` 앞이
- * 공백이거나 닫는 `$` 뒤가 숫자면 수식으로 읽지 않는다(Obsidian 1.13.7 의 토크나이저 · Notion 실측) —
- * 노트 그대로 보내면 두 쪽이 같은 곳을 수식으로 본다.
+ * 공백이거나 닫는 `$` 뒤가 숫자면 수식으로 읽지 않는다(Obsidian 1.13.7 의 토크나이저 · Notion 실측).
+ * 다만 Notion 은 글자에 붙은 수식(`w$^9$가`)도 글로 읽는다 — 그런 수식만 `` $`식`$ `` 로 보낸다({@link quoteGluedMath}).
  */
 export class MathNormalizer implements Processor {
   readonly name = "MathNormalizer";
@@ -43,7 +44,7 @@ export class MathNormalizer implements Processor {
           standBlockMath(source, base + at, match, equation) ?? match,
       ),
     );
-    const content = settleDollars(stood, true);
+    const content = quoteGluedMath(settleDollars(stood, true));
 
     return {
       content,
@@ -143,4 +144,80 @@ function settleLineDollars(line: string, final: boolean): string {
   for (const [start, end, text] of edits.reverse())
     out = out.slice(0, start) + text + out.slice(end);
   return out;
+}
+
+/**
+ * Obsidian 은 수식으로 그리는데 Notion 은 글로 읽는 인라인 수식을 `` $`식`$ `` 로 — Notion 이 내보내는 모양이고,
+ * 글자에 붙어 있어도 수식으로 읽는다(2026-10-23 탐침: `w$^9$가` 는 글, `` w$`^9`$가 `` 는 수식).
+ *
+ * Notion 은 여는 `$` 앞이 글자 · 숫자이거나 닫는 `$` 뒤가 글자면 수식이 아니다({@link mathCloseAt}). Obsidian 은
+ * 여는 `$` 뒤 · 닫는 `$` 앞이 공백이 아니고 닫는 `$` 뒤가 숫자가 아니면 수식이다. 두 쪽이 모두 수식으로 읽는 것은
+ * 그대로 둔다 — 보내는 모양이 바뀌면 이미 올린 노트가 다르게 보인다.
+ *
+ * 여는 `$` 다음의 첫 `$` 가 닫지 못하면 그 `$` 는 손대지 않는다 — Obsidian 이 더 뒤의 `$` 와 짝지을 수도
+ * 있지만, 가르지 못하는 것은 예전처럼 보낸다. 블록 수식의 줄 · 백틱이 든 식도 그대로다.
+ */
+function quoteGluedMath(content: string): string {
+  let inBlock = false;
+  return mapOutsideCode(content, (segment) =>
+    segment
+      .split("\n")
+      .map((line) => {
+        if (OWN_LINE_DOLLARS_RE.test(line)) {
+          inBlock = !inBlock;
+          return line;
+        }
+        return inBlock || !line.includes("$") ? line : quoteLineGluedMath(line);
+      })
+      .join("\n"),
+  );
+}
+
+function quoteLineGluedMath(line: string): string {
+  let out = "";
+  let i = 0;
+  while (i < line.length) {
+    const ch = line[i]!;
+    if (ch === "\\") {
+      out += line.slice(i, i + 2);
+      i += 2;
+      continue;
+    }
+    if (ch !== "$") {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    if (line[i + 1] === "$") {
+      let run = i;
+      while (line[run] === "$") run += 1;
+      out += line.slice(i, run);
+      i = run;
+      continue;
+    }
+    const close = obsidianMathCloseAt(line, i);
+    if (close === null) {
+      out += ch;
+      i += 1;
+      continue;
+    }
+    const expression = line.slice(i + 1, close);
+    out +=
+      expression.includes("`") || mathCloseAt(line, i) === close
+        ? line.slice(i, close + 1)
+        : `$\`${expression}\`$`;
+    i = close + 1;
+  }
+  return out;
+}
+
+/** `open` 의 `$` 를 Obsidian 이 여는 인라인 수식으로 읽을 때 닫는 `$` 자리 — 여는 `$` 다음의 첫 `$` 만 본다. */
+function obsidianMathCloseAt(line: string, open: number): number | null {
+  const after = line[open + 1];
+  if (after === undefined || /\s/.test(after)) return null;
+  const close = line.indexOf("$", open + 1);
+  if (close === -1 || line[close + 1] === "$") return null;
+  const inner = line[close - 1]!;
+  if (/\s/.test(inner) || inner === "\\" || /\d/.test(line[close + 1] ?? "")) return null;
+  return close;
 }
