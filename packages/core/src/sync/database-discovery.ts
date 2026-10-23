@@ -368,6 +368,7 @@ export class DatabaseDiscovery {
               resolveDbFolder,
               paths,
               progress,
+              rescanRowChildren: forceRediscovery,
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해

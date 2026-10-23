@@ -106,6 +106,15 @@ export class RemoteDetector {
    *
    * DB 모드는 행만 받는다 — 행의 하위 페이지는 예전처럼 받지 않는다.
    */
+  /** {@link takeUndiscoveredChildren} 가 고를 자식이 남았나 — 요청 없이 본다. */
+  hasUndiscoveredChildren(): boolean {
+    if (isDatabaseMode(this.config)) return false;
+    for (const childId of this._bodyChildren.keys()) {
+      if (!this._queued.has(childId) && !this.stateDb.getByNotionId(childId)) return true;
+    }
+    return false;
+  }
+
   async takeUndiscoveredChildren(signal?: AbortLike): Promise<RemoteChange[]> {
     if (isDatabaseMode(this.config)) return [];
     const changes: RemoteChange[] = [];

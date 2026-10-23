@@ -163,6 +163,11 @@ export class DatabaseSyncer {
      * 아무것도 가라앉았다고 보지 않는다 — 수정 시각이 같은 행도 받아서 견준다.
      */
     private readonly observation: () => ObservationContext = () => NO_OBSERVATION,
+    /**
+     * 받은 행 본문(Notion 원문)을 알린다 — 감지가 행의 하위 페이지를 빠뜨렸을 때 그 본문의 자식 태그로
+     * 채운다({@link RemoteDetector.noteBodyChildren}).
+     */
+    private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
     this.propertyMapper = PropertyMapper.fromConfig(config);
@@ -184,6 +189,8 @@ export class DatabaseSyncer {
     readonly ledger?: DatabasePullLedger;
     /** 취소하면 다음 DB 를 조회하지 않는다 — 닿지 못한 DB 는 다음 pull 이 조회한다. */
     readonly signal?: AbortLike;
+    /** {@link pullDatabase} 의 같은 이름 옵션. */
+    readonly rescanRowChildren?: boolean;
   }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) return emptyDatabaseSyncResult();
@@ -210,6 +217,7 @@ export class DatabaseSyncer {
         const result = await this.pullDatabase(dbConfig, {
           paths: opts?.paths,
           progress: opts?.progress,
+          rescanRowChildren: opts?.rescanRowChildren,
         });
         created += result.created;
         updated += result.updated;
@@ -251,6 +259,12 @@ export class DatabaseSyncer {
       paths?: readonly string[];
       /** 받은 행 · 지운 행을 하나씩 알린다. 예전에는 pull 진행 표시에 행이 하나도 보이지 않았다. */
       progress?: RowProgress;
+      /**
+       * `--force` — 그대로라 받지 않는 행도 본문을 읽어 하위 페이지를 알린다({@link noteRowBody}). 감지가 빠뜨린
+       * 행의 하위 페이지는 행 본문으로만 보이는데, 이미 받은 행은 바뀌기 전까지 본문을 다시 읽지 않는다.
+       * 행 파일은 쓰지 않는다.
+       */
+      rescanRowChildren?: boolean;
     },
   ): Promise<DatabaseSyncResult> {
     const scope = opts?.paths;
@@ -293,11 +307,15 @@ export class DatabaseSyncer {
 
     // 받을 행을 먼저 가른다 — 진행 표시가 이 DB 에서 받을 행 수를 받기 전에 안다.
     const pending: { page: PageObjectResponse; action: Exclude<RowAction, "skip"> }[] = [];
+    const unchanged: PageObjectResponse[] = [];
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
         const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
         if (action !== "skip") pending.push({ page, action });
+        else if (record && (wholeDbInScope || inAnyPathScope(record.obsidianPath, scope))) {
+          unchanged.push(page);
+        }
       } catch (error) {
         failed.push(rowFailure(page, error));
       }
@@ -349,6 +367,8 @@ export class DatabaseSyncer {
       }
     }
 
+    if (opts?.rescanRowChildren) await this.noteUnchangedRowBodies(unchanged);
+
     const removal = await this.pullDeletedRows(dbConfig, pages, opts?.paths, opts?.progress);
     const deleted = removal.deleted;
     conflicts.push(...removal.conflicts);
@@ -357,6 +377,27 @@ export class DatabaseSyncer {
       `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${deleted} 삭제, ${restored} 복원, ${conflicts.length} 충돌`,
     );
     return { created, updated, deleted, restored, conflicts, failed, writtenPaths };
+  }
+
+  /**
+   * 받지 않는 행의 본문을 읽어 하위 페이지만 알린다(`--force`). 읽지 못한 행은 경고만 남긴다 — 그 행은 받을 것이
+   * 없었고, 하위 페이지는 다음 `--force` 가 다시 찾는다.
+   */
+  private async noteUnchangedRowBodies(pages: readonly PageObjectResponse[]): Promise<void> {
+    for (const page of pages) {
+      try {
+        const { markdown } = await withDeadline(
+          () => this.notionClient.getPageMarkdown(page.id),
+          this.config.advanced.itemTimeoutMs,
+          `row body ${page.id}`,
+        );
+        this.noteRowBody(page.id, markdown);
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 행의 하위 페이지를 확인하지 못함 (${page.id}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -999,6 +1040,7 @@ export class DatabaseSyncer {
     Object.assign(properties, await this.decorations.pulled(page, safeName, downloadMedia));
 
     const mdResult = await this.notionClient.getPageMarkdown(page.id);
+    this.noteRowBody(page.id, mdResult.markdown);
     const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);

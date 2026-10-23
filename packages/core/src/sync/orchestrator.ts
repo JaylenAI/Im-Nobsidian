@@ -185,6 +185,7 @@ export class SyncOrchestrator {
       pipeline,
       imageHandler,
       () => this.observation.context,
+      (pageId, rawMarkdown) => this.detector.noteBodyChildren(pageId, rawMarkdown),
     );
     this.discovery = new DatabaseDiscovery(
       config,
@@ -919,6 +920,8 @@ export class SyncOrchestrator {
             progress: rowProgress,
             ledger,
             signal: options?.signal,
+            // 행의 하위 페이지는 페이지 모드만 받는다(takeUndiscoveredChildren).
+            rescanRowChildren: options?.force === true && !isDatabaseMode(this.config),
           });
           counts.created += dbResult.created;
           counts.updated += dbResult.updated;
@@ -958,6 +961,7 @@ export class SyncOrchestrator {
       counts.restored += dbDiscovery.restored;
     };
 
+    let databasesPulled = false;
     if (workItems.length === 0) {
       // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
       // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
@@ -968,7 +972,11 @@ export class SyncOrchestrator {
       // 기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감된다(emptyResult 와 동일).
       // 기록이 생겼다면 그 행들의 본문 링크·frontmatter relation 을 finalize 가 해소한다(M2).
       await pullDatabases();
-      return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
+      databasesPulled = true;
+      // 받은 행 본문에 감지가 빠뜨린 하위 페이지가 있으면 아래 길로 받는다.
+      if (!this.detector.hasUndiscoveredChildren()) {
+        return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
+      }
     }
 
     this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "true");
@@ -1082,6 +1090,24 @@ export class SyncOrchestrator {
     });
     await pullBodyChildren(firstPass);
 
+    // 한 번 더 해 보고 실패하면 실패로 남긴다 — 재시도와, 재시도 뒤에 나온 자식에 쓴다.
+    const retryPass = async (change: RemoteChange): Promise<void> => {
+      try {
+        await withDeadline(
+          () => applyChange(change),
+          this.config.advanced.itemTimeoutMs,
+          `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
+        );
+        applied.add(change);
+        const record = this.stateDb.getByNotionId(change.pageId);
+        getLogger().info(`[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`);
+      } catch (error) {
+        const failure = toFailure(change, error);
+        failed.push(failure);
+        getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
+      }
+    };
+
     // 재시도 — 1차와 동일하게 워커 풀로 병렬 실행(기존엔 순차였다). 변경 객체를
     // 그대로 들고 있으므로 경로 문자열로 역매칭하던 취약함이 사라진다.
     if (retryQueue.length > 0) {
@@ -1091,22 +1117,6 @@ export class SyncOrchestrator {
       );
       await new Promise((r) => setTimeout(r, retryWaitMs));
 
-      const retryPass = async (change: RemoteChange): Promise<void> => {
-        try {
-          await withDeadline(
-            () => applyChange(change),
-            this.config.advanced.itemTimeoutMs,
-            `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
-          );
-          applied.add(change);
-          const record = this.stateDb.getByNotionId(change.pageId);
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`);
-        } catch (error) {
-          const failure = toFailure(change, error);
-          failed.push(failure);
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
-        }
-      };
       await runPool(retryQueue, retryPass, {
         concurrency: this.config.advanced.concurrency,
         signal: options?.signal,
@@ -1115,7 +1125,9 @@ export class SyncOrchestrator {
       await pullBodyChildren(retryPass);
     }
 
-    await pullDatabases();
+    if (!databasesPulled) await pullDatabases();
+    // DB 행의 하위 페이지 — 행 본문을 받은 뒤라야 보인다. 재시도는 끝났으므로 실패하면 실패로 남긴다.
+    await pullBodyChildren(retryPass);
     return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
   }
 
