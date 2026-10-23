@@ -141,4 +141,59 @@ describe("폴더노트 분류 — 컨테이너 중첩 자식 (본문분리 회�
     expect(existsSync(join(tmpDir, "Hub (1).md")), "충돌 접미사 분리").toBe(false);
     expect(existsSync(join(tmpDir, "Hub (1) (1).md"))).toBe(false);
   });
+
+  it("받은 본문의 자식 태그로 가른다 — 컬럼 속 자식 DB 만 있어도 폴더노트, 잎 페이지는 블록 · 페이지를 다시 읽지 않는다", async () => {
+    tmpDir = await mkdtemp(join(tmpdir(), "im-foldernote-"));
+    const vaultFs = new NodeVaultFS(tmpDir);
+    await vaultFs.ensureFolder(".im-nobsidian");
+    stateDb = StateDB.open(join(tmpDir, ".im-nobsidian", "sync.db"));
+
+    const client = new NotionClient({ token: "offline-test" });
+    vi.spyOn(client, "getBotUserId").mockResolvedValue(MOCK_BOT_USER_ID);
+    const plain = page(LEAF, "Plain", {
+      type: "page_id",
+      page_id: ROOT,
+    } as PageObjectResponse["parent"]);
+    // 발견은 HUB · Plain 만 — 자식 DB 는 페이지가 아니라 발견 집합에 오르지 않는다.
+    vi.spyOn(client, "getChildPagesRecursive").mockResolvedValue([HUB_PAGE, plain]);
+    const getPage = vi.spyOn(client, "getPage").mockImplementation(async (id: string) => {
+      if (id === HUB) return HUB_PAGE;
+      if (id === LEAF) return plain;
+      throw new Error(`unexpected getPage ${id}`);
+    });
+    const dbTag =
+      '<database url="https://www.notion.so/55555555555555555555555555555555" inline="true">표</database>';
+    vi.spyOn(client, "getPageMarkdown").mockImplementation(async (id: string) => {
+      if (id === HUB) {
+        return {
+          markdown: `허브 본문\n<columns>\n<column>\n${dbTag}\n</column>\n<column>\n옆\n</column>\n</columns>\n`,
+        } as never;
+      }
+      if (id === LEAF) return { markdown: "잎 본문\n" } as never;
+      throw new Error(`unexpected getPageMarkdown ${id}`);
+    });
+    const deep = vi.spyOn(client, "fetchAllChildrenDeep").mockResolvedValue([]);
+    vi.spyOn(client, "getChildDatabaseIds").mockResolvedValue([]);
+    vi.spyOn(client, "getDatabaseSyncability").mockRejectedValue(
+      Object.assign(new Error("object_not_found"), { code: "object_not_found", status: 404 }),
+    );
+
+    const config: Config = {
+      ...DEFAULT_CONFIG,
+      notion: { ...DEFAULT_CONFIG.notion, rootPageId: ROOT, token: "offline-test" },
+    };
+    await new SyncOrchestrator(config, stateDb, client, vaultFs).pull();
+
+    expect(stateDb.getByNotionId(HUB)).toMatchObject({
+      fileType: "folder-note",
+      obsidianPath: "Hub/Hub.md",
+    });
+    expect(stateDb.getByNotionId(LEAF)).toMatchObject({
+      fileType: "file",
+      obsidianPath: "Plain.md",
+    });
+    expect(deep).not.toHaveBeenCalled();
+    // 발견이 이미 받은 페이지 객체를 쓴다 — 만들 때 다시 읽지 않는다.
+    expect(getPage).not.toHaveBeenCalled();
+  });
 });

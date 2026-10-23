@@ -67,10 +67,11 @@ describe("하위 DB 블록 스캔은 처음 한 번만", () => {
 
   const scanned = () => notion.client.getChildDatabaseIds.mock.calls.length;
 
-  it("DB 가 하나도 없어도 처음 한 번만 훑는다", async () => {
+  it("DB 가 하나도 없어도 처음 한 번만 훑는다 — 본문을 받은 페이지는 훑지 않는다", async () => {
     at("10:05:00");
     expect(await orchestrator.pull()).toMatchObject({ created: 2, failed: [] });
-    expect(scanned()).toBe(3);
+    // 두 페이지는 이번 pull 이 본문을 받았다 — 본문의 `<database>` 태그가 자식 DB 를 모두 싣는다.
+    expect(scanned()).toBe(1);
 
     vi.clearAllMocks();
     at("10:10:00");

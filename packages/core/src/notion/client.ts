@@ -235,6 +235,12 @@ export interface NotionClientOptions {
   readonly fetch?: typeof globalThis.fetch;
 }
 
+/**
+ * 발견 단계가 읽은 DB 를 행 조회가 다시 쓰는 시한. 발견한 DB 는 같은 pull 에서 곧 받는다 — 이보다 오래된
+ * 것(받지 않고 지나간 DB)은 버리고 새로 읽는다.
+ */
+const CHECKED_DATABASE_REUSE_MS = 10 * 60 * 1000;
+
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
@@ -251,6 +257,11 @@ export class NotionClient {
   private botUserId: Promise<string> | null = null;
   /** {@link getUserNames} 가 물은 사용자 이름 — 읽지 못한 사용자는 null. */
   private readonly userNames = new Map<string, string | null>();
+  /**
+   * {@link getDatabaseSyncability} 가 읽은 DB — 바로 뒤 {@link getDatabaseMeta} 가 한 번 쓰고 버린다.
+   * 발견한 DB 는 곧장 행을 받으므로 같은 두 요청(DB · data source)을 되풀이하지 않는다.
+   */
+  private readonly checkedDatabases = new Map<string, { meta: DatabaseMeta; at: number }>();
 
   constructor(options: NotionClientOptions) {
     // 빠진 값은 설정 기본값 한 벌(DEFAULT_CONFIG)에서 읽는다 — `init` 처럼 토큰만으로 만드는 경로도 같은 값.
@@ -650,6 +661,19 @@ export class NotionClient {
    * SDK(`databases.retrieve`/`dataSources.retrieve`)는 동일 토큰으로 정상 동작한다.
    */
   async getDatabaseMeta(databaseId: string): Promise<DatabaseMeta> {
+    const key = normalizeNotionId(databaseId);
+    const checked = this.checkedDatabases.get(key);
+    if (checked) {
+      this.checkedDatabases.delete(key);
+      if (Date.now() - checked.at < CHECKED_DATABASE_REUSE_MS) return checked.meta;
+    }
+    return (await this.readDatabase(databaseId)).meta;
+  }
+
+  /** DB 와 그 data source 들을 읽는다 — `owners` 는 data source 마다 그 부모 DB(읽지 못했으면 undefined). */
+  private async readDatabase(
+    databaseId: string,
+  ): Promise<{ meta: DatabaseMeta; owners: Array<string | undefined> }> {
     const db = (await this.withRateLimit(() =>
       this.client.databases.retrieve({ database_id: databaseId }),
     )) as unknown as {
@@ -670,12 +694,17 @@ export class NotionClient {
     // 불가하면 database 객체의 properties 로 폴백(제목은 이미 확보).
     const dataSources = db.data_sources ?? [];
     const merged: Record<string, unknown> = {};
+    const owners: Array<string | undefined> = [];
     let anyAccessible = false;
     for (const ds of dataSources) {
       try {
         const dsObj = (await this.withRateLimit(() =>
           this.client.dataSources.retrieve({ data_source_id: ds.id }),
-        )) as unknown as { properties?: Record<string, unknown> };
+        )) as unknown as {
+          properties?: Record<string, unknown>;
+          parent?: { type?: string; database_id?: string };
+        };
+        owners.push(dsObj.parent?.database_id);
         if (dsObj.properties && Object.keys(dsObj.properties).length > 0) {
           anyAccessible = true;
           for (const [name, prop] of Object.entries(dsObj.properties)) {
@@ -684,10 +713,11 @@ export class NotionClient {
         }
       } catch {
         // 접근 불가 data source 건너뜀 — 나머지 소스로 계속.
+        owners.push(undefined);
       }
     }
 
-    return {
+    const meta: DatabaseMeta = {
       databaseId,
       title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
       dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
@@ -700,6 +730,7 @@ export class NotionClient {
         showTitle: db.show_data_source_title !== false,
       },
     };
+    return { meta, owners };
   }
 
   /** `from` 이 이 DB 를 받은 것이면 그것을, 아니면 새로 받는다. */
@@ -729,27 +760,15 @@ export class NotionClient {
   async getDatabaseSyncability(
     databaseId: string,
   ): Promise<{ title: string; queryable: boolean; linkedOriginalDbId?: string }> {
-    const db = (await this.withRateLimit(() =>
-      this.client.databases.retrieve({ database_id: databaseId }),
-    )) as unknown as {
-      title?: Array<{ plain_text: string }>;
-      data_sources?: Array<{ id: string }>;
-    };
-    const title = Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "";
-    const firstDsId = db.data_sources?.[0]?.id;
-    if (!firstDsId) return { title, queryable: false };
-
-    try {
-      const ds = (await this.withRateLimit(() =>
-        this.client.dataSources.retrieve({ data_source_id: firstDsId }),
-      )) as unknown as { parent?: { type?: string; database_id?: string } };
-      const ownerDbId = ds.parent?.database_id;
-      if (ownerDbId && normalizeNotionId(ownerDbId) !== normalizeNotionId(databaseId)) {
-        return { title, queryable: true, linkedOriginalDbId: ownerDbId };
-      }
-    } catch {
-      // 소유 판정 실패는 기존 동작(원본 취급) 유지 — 일시 오류로 컨테이너를 오강등하지 않는다.
+    const { meta, owners } = await this.readDatabase(databaseId);
+    const title = meta.title;
+    if (meta.dataSources.length === 0) return { title, queryable: false };
+    // 첫 소스의 소유를 읽지 못했으면 원본으로 본다 — 일시 오류로 컨테이너를 오강등하지 않는다.
+    const ownerDbId = owners[0];
+    if (ownerDbId && !notionIdsEqual(ownerDbId, databaseId)) {
+      return { title, queryable: true, linkedOriginalDbId: ownerDbId };
     }
+    this.checkedDatabases.set(normalizeNotionId(databaseId), { meta, at: Date.now() });
     return { title, queryable: true };
   }
 
@@ -1573,15 +1592,20 @@ export class NotionClient {
       database_id?: string;
     };
 
-    // block_id → 소유 페이지 id(없으면 null). 같은 블록 재해석을 막는 memo.
+    // block_id → 소유 페이지 id(없으면 null). 같은 블록 재해석을 막는 memo — 거쳐 간 블록을 모두 적는다.
+    // 예전에는 시작 블록만 적어, 한 컬럼 묶음의 다른 열에 든 형제 페이지가 같은 사슬을 다시 올랐다.
     const blockOwner = new Map<string, string | null>();
     const resolveBlockOwner = async (blockId: string): Promise<string | null> => {
-      let bid = blockId;
       const seen = new Set<string>();
+      const settle = (owner: string | null): string | null => {
+        for (const b of seen) blockOwner.set(b, owner);
+        return owner;
+      };
+      let bid = blockId;
       for (let i = 0; i < 20 && bid && !seen.has(bid); i++) {
-        seen.add(bid);
         const cached = blockOwner.get(bid);
-        if (cached !== undefined) return cached;
+        if (cached !== undefined) return settle(cached);
+        seen.add(bid);
         let bp: Parent;
         try {
           bp = ((await this.getBlock(bid)) as unknown as { parent: Parent }).parent;
@@ -1595,20 +1619,14 @@ export class NotionClient {
                 error instanceof Error ? error.message : String(error)
               }`,
           );
-          blockOwner.set(bid, null);
-          return null;
+          return settle(null);
         }
-        if (bp.type === "page_id" && bp.page_id) {
-          const owner = bp.page_id;
-          blockOwner.set(blockId, owner);
-          return owner;
-        }
+        if (bp.type === "page_id" && bp.page_id) return settle(bp.page_id);
         if (bp.type === "block_id" && bp.block_id) {
           bid = bp.block_id;
           continue;
         }
-        blockOwner.set(blockId, null);
-        return null; // data_source_id/database_id/workspace → 페이지 소유자 아님
+        return settle(null); // data_source_id/database_id/workspace → 페이지 소유자 아님
       }
       return null;
     };

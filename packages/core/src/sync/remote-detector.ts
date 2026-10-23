@@ -60,6 +60,10 @@ export class RemoteDetector {
   // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
   private readonly _childParentIds = new Set<string>();
 
+  // 전체 대조가 순회 · search 로 받은 페이지 객체(정규화 id → 객체). 새 페이지를 받을 때 다시 읽지 않는다 —
+  // 그 사이 바뀌었어도 수정 시각을 이 객체의 것으로 적으므로 다음 pull 이 다시 받는다.
+  private readonly _pages = new Map<string, PageObjectResponse>();
+
   // 받은 본문에 실린 자식 페이지(정규화 id → 그 본문의 페이지)와 이번 실행이 이미 받기로 한 페이지.
   // 감지가 빠뜨린 자식을 {@link takeUndiscoveredChildren} 가 둘의 차로 고른다.
   private readonly _bodyChildren = new Map<string, string>();
@@ -75,6 +79,11 @@ export class RemoteDetector {
   /** 이번 감지에서 자식 페이지를 가진 것으로 본 페이지인가 — 폴더노트 판정의 1차 근거. */
   hasChildPages(pageId: string): boolean {
     return this._childParentIds.has(normalizeNotionId(pageId));
+  }
+
+  /** 이번 감지가 이미 받은 페이지 객체 — 없으면 undefined. */
+  discoveredPage(pageId: string): PageObjectResponse | undefined {
+    return this._pages.get(normalizeNotionId(pageId));
   }
 
   /** 받은 페이지 본문(Notion 이 돌려준 원문)에 실린 자식 페이지를 적는다. */
@@ -107,6 +116,7 @@ export class RemoteDetector {
         const actualParent = await extractParentId(this.notionClient, page);
         if (!actualParent || !notionIdsEqual(actualParent, parentId)) continue;
         this._childParentIds.add(normalizeNotionId(parentId));
+        this._pages.set(normalizeNotionId(page.id), page);
         changes.push({
           pageId: page.id,
           type: "created",
@@ -179,6 +189,7 @@ export class RemoteDetector {
   async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
+    this._pages.clear();
     const lastPull = this.stateDb.getMeta(LAST_PULL_META_KEY);
     const syncedRecords = this.stateDb.getAll();
     const trackedPageIds = new Set(
@@ -253,8 +264,10 @@ export class RemoteDetector {
         const parentId = await extractParentId(this.notionClient, page);
         if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
       }
-      for (const page of underRoot)
+      for (const page of underRoot) {
         titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
+        this._pages.set(normalizeNotionId(page.id), page);
+      }
       remotePages = underRoot.map(remoteStampOf);
     }
 
@@ -365,6 +378,7 @@ export class RemoteDetector {
     const changes: RemoteChange[] = [];
     const databaseIds = new Set<string>();
     this._childParentIds.clear();
+    this._pages.clear();
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
     const searchSince = incrementalSearchSince(since);

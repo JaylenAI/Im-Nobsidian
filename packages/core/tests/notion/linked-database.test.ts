@@ -109,3 +109,63 @@ describe("resolveLinkedDatabase (F22)", () => {
     expect(resolved?.originalDbId).toBe(ORIGINAL);
   });
 });
+
+describe("발견 단계가 읽은 DB 를 행 조회가 다시 쓴다", () => {
+  const DB = "aa113b18-d382-83d7-988e-81fece224b75";
+  const OTHER = "bb113b18-d382-83d7-988e-81fece224b75";
+  let client: NotionClient;
+  let databases: ReturnType<typeof vi.fn>;
+  let dataSources: ReturnType<typeof vi.fn>;
+
+  function serve(owner: string): void {
+    databases.mockResolvedValue({
+      title: [{ plain_text: "표" }],
+      data_sources: [{ id: "ds-1", name: "표" }],
+    });
+    dataSources.mockResolvedValue({
+      parent: { type: "database_id", database_id: owner },
+      properties: { Name: { id: "title", type: "title" } },
+    });
+  }
+
+  beforeEach(() => {
+    vi.useRealTimers();
+    client = new NotionClient({ token: "offline-test", rateLimitIntervalMs: 0, maxRetries: 0 });
+    const internal = client.getInternalClient() as unknown as {
+      databases: { retrieve: unknown };
+      dataSources: { retrieve: unknown };
+    };
+    databases = vi.fn();
+    dataSources = vi.fn();
+    internal.databases.retrieve = databases;
+    internal.dataSources.retrieve = dataSources;
+  });
+
+  it("바로 뒤 한 번만 쓴다 — 그다음은 새로 읽는다", async () => {
+    serve(DB);
+    expect(await client.getDatabaseSyncability(DB)).toEqual({ title: "표", queryable: true });
+    const meta = await client.getDatabaseMeta(DB);
+    expect(meta.properties).toEqual({ Name: { id: "title", type: "title" } });
+    expect([databases.mock.calls.length, dataSources.mock.calls.length]).toEqual([1, 1]);
+
+    await client.getDatabaseMeta(DB);
+    expect([databases.mock.calls.length, dataSources.mock.calls.length]).toEqual([2, 2]);
+  });
+
+  it("오래된 것은 쓰지 않는다", async () => {
+    serve(DB);
+    vi.useFakeTimers({ toFake: ["Date"] });
+    await client.getDatabaseSyncability(DB);
+    vi.setSystemTime(Date.now() + 11 * 60 * 1000);
+    await client.getDatabaseMeta(DB);
+    vi.useRealTimers();
+    expect(databases.mock.calls.length).toBe(2);
+  });
+
+  it("연결된 보기 컨테이너는 남기지 않는다 — 원본을 받는다", async () => {
+    serve(OTHER);
+    expect(await client.getDatabaseSyncability(DB)).toMatchObject({ linkedOriginalDbId: OTHER });
+    await client.getDatabaseMeta(DB);
+    expect(databases.mock.calls.length).toBe(2);
+  });
+});

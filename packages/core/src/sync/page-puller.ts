@@ -158,15 +158,14 @@ export class PagePuller {
   }
 
   private async createPulledPage(pageId: string): Promise<string> {
-    const page = await this.notionClient.getPage(pageId);
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
 
     const parentPath = await this.resolveParentPath(page);
 
-    const hasChildPages = await this.pageHasChildContainers(pageId);
-
     const fetched = await this.fetchPageMarkdown(pageId);
+    const hasChildPages = this.hasChildContainers(pageId, fetched.children);
     const hasContent = fetched.content.trim().length > 0;
 
     let filePath: string;
@@ -650,27 +649,21 @@ export class PagePuller {
   }
 
   /**
-   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 신뢰성 있게 판정한다.
+   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 판정한다 — 요청 없이.
    *
    * 결함(폴더노트 본문분리)의 근본 원인은 얕은 판정이었다 — 최상위 블록 첫 페이지에서
    * child_page 만 검사하면 callout·column·toggle 안에 중첩된 자식 페이지나 child_database 를
    * 놓쳐 폴더노트가 file 로 오분류되고, 본문이 폴더 밖 최상위로 밀려 resolveUniqueFilePath
    * 충돌(' (1).md')로 쪼개졌다.
    *
-   * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
-   *      집합({@link RemoteDetector.hasChildPages})으로 O(1) 판정(추가 API 호출 0, 처리 순서
-   *      무관) — 전체 pull 경로.
-   * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
-   *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
+   * 1차: 발견 단계에서 전 페이지의 부모를 해소하며 만든 집합({@link RemoteDetector.hasChildPages}).
+   * 2차: 받은 본문의 자식 태그 — Markdown API 는 컨테이너 · 목록 안에 중첩된 자식 페이지(`<page>`)와
+   *      자식 DB(`<database>`, 링크드 보기 포함)를 모두 싣는다. 페이지 링크 블록은 `<page>` 가 아니다.
+   *      예전에는 집합에 없는 페이지(자식이 없는 모든 잎)마다 블록을 끝까지 다시 훑었다 — 실데이터
+   *      51 노트 받기에서 페이지 하나에 평균 8.6회(v0.7 성능, 2026-10-23).
    */
-  private async pageHasChildContainers(pageId: string): Promise<boolean> {
-    if (this.detector.hasChildPages(pageId)) return true;
-    try {
-      const deep = await this.notionClient.fetchAllChildrenDeep(pageId);
-      return deep.some((b) => b.type === "child_page" || b.type === "child_database");
-    } catch {
-      return false;
-    }
+  private hasChildContainers(pageId: string, children: readonly ChildTag[]): boolean {
+    return this.detector.hasChildPages(pageId) || children.length > 0;
   }
 
   /**
