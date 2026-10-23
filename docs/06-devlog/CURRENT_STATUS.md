@@ -14,7 +14,12 @@
 | v0.8.0 | 멀티 워크스페이스                                                                         |
 | v0.9.0 | 커뮤니티 등록 준비 — 가이드 · 사용자 문서 · 전량 E2E                                      |
 
-### `fix/roundtrip-notation` (진행 중)
+### v0.5.0 — push 로 DB 만들기 (진행 중)
+
+ADR-036. 사이드카(`<DB>.notion.json`)를 스키마의 원본으로, 새 루트로 올린 DB 폴더를 Notion DB 로 만든다 — 스키마 →
+행 → relation · rollup · formula → 뷰. 사이드카가 가리키는 원래 DB 에는 쓰지 않는다.
+
+### `fix/roundtrip-notation` (v0.4.2 · dev 머지)
 
 새 볼트로 받으면(fresh pull) 원본과 표기가 달랐던 네 가지와, 라이브에서 찾은 **데이터 손실** 하나.
 
