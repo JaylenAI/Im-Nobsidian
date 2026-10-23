@@ -8,6 +8,9 @@
 /** rich text 객체 하나의 `text.content` 최대 글자 수. */
 export const RICH_TEXT_CONTENT_MAX = 2000;
 
+/** files 속성 파일 하나의 `name` 최대 글자 수(검증 오류 문구 「name.length should be ≤ 100」 로 실측). */
+export const FILE_NAME_MAX = 100;
+
 /** rich text 배열 하나의 최대 원소 수. */
 export const RICH_TEXT_ARRAY_MAX = 100;
 

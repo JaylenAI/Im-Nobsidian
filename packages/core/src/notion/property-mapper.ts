@@ -1,4 +1,5 @@
 import { patchRichText, richTextChunks, type RichTextItem } from "./rich-text.js";
+import { FILE_NAME_MAX } from "../constants/notion-limits.js";
 import type { Config } from "../types/config.js";
 import type { RowPropertyChanges } from "../types/sync.js";
 import { plainFrontmatterValue, sameFrontmatterValue } from "../utils/frontmatter.js";
@@ -521,11 +522,15 @@ export class PropertyMapper {
               const obj = f as { name?: string; url: string };
               const url = String(obj.url ?? "");
               if (!url) return null;
-              return { type: "external", name: obj.name ?? "file", external: { url } };
+              return {
+                type: "external",
+                name: fileName(obj.name ?? "file", url),
+                external: { url },
+              };
             }
             const url = String(f);
             if (!url) return null;
-            return { type: "external", name: url, external: { url } };
+            return { type: "external", name: fileName(url, url), external: { url } };
           })
           .filter(Boolean);
         return { files: filesArr };
@@ -860,4 +865,32 @@ function emptyValueOf(type: string): NotionPropertyValue | null {
       // 수식 · 롤업 · 생성일 등 — 읽기 전용.
       return null;
   }
+}
+
+/**
+ * files 속성 파일 하나의 이름 — Notion 은 {@link FILE_NAME_MAX} 자를 넘으면 페이지 생성 · 갱신 요청 전체를 거부한다.
+ * 긴 URL 은 마지막 경로 조각(파일 이름)으로, 그래도 길면 확장자를 남기고 줄인다.
+ */
+export function fileName(name: string, url: string): string {
+  if (name.length <= FILE_NAME_MAX) return name;
+  let base = name;
+  if (name === url) {
+    try {
+      const last = new URL(url).pathname.split("/").filter(Boolean).pop();
+      if (last) base = decodeURIComponent(last);
+    } catch {
+      // URL 이 아니거나 조각을 풀 수 없으면 이름 그대로 줄인다.
+    }
+  }
+  if (base.length <= FILE_NAME_MAX) return base;
+  const dot = base.lastIndexOf(".");
+  const ext = dot > 0 && base.length - dot <= 10 ? base.slice(dot) : "";
+  // 글자 단위로 자른다 — 서로게이트 쌍(이모지 등)을 반으로 가르지 않는다.
+  const chars = Array.from(base.slice(0, base.length - ext.length));
+  let head = "";
+  for (const ch of chars) {
+    if (head.length + ch.length + 1 + ext.length > FILE_NAME_MAX) break;
+    head += ch;
+  }
+  return `${head}…${ext}`;
 }
