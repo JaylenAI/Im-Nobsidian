@@ -216,6 +216,29 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     });
   });
 
+  // pull 이 받은 첨부(`[[attachments/…]]`)는 보낼 수 없어 바꿔도 Notion 에 가지 않았다 — 올려서 보낸다.
+  it("파일 속성을 볼트 첨부로 바꾸면 그 첨부를 올려 보낸다 — 그대로면 올리지 않는다", async () => {
+    files.set(ROW_PATH, BASE.replace("진척: 0.42", "진척: 0.5"));
+    await build().push();
+    expect(notion.uploadFile).not.toHaveBeenCalled();
+
+    files.set(
+      ROW_PATH,
+      BASE.replace("첨부: '[[attachments/spec.pdf]]'", "첨부:\n  - '[[attachments/계획.pdf]]'"),
+    );
+    await build().push();
+
+    expect(vaultFs.readBinary).toHaveBeenCalledWith("attachments/계획.pdf");
+    expect(notion.updatePageProperties).toHaveBeenLastCalledWith(
+      ROW_ID,
+      expect.objectContaining({
+        첨부: {
+          files: [{ type: "file_upload", name: "계획.pdf", file_upload: { id: "file-upload-id" } }],
+        },
+      }),
+    );
+  });
+
   it("날짜는 따옴표 유무가 달라도 같은 값이고, 바꾸면 날짜 속성으로 간다", async () => {
     files.set(ROW_PATH, BASE.replace("마감: 2026-10-01", "마감: '2026-10-01'"));
     await build().push();

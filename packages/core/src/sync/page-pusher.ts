@@ -10,7 +10,7 @@ import {
 import { nfmToBlocks, type NfmBlock } from "../converter/nfm-to-blocks.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { NotionClient } from "../notion/client.js";
-import type { PropertyMapper } from "../notion/property-mapper.js";
+import type { PropertyMapper, UploadedFile } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult, DeferredCode } from "../types/convert.js";
@@ -303,6 +303,29 @@ export class PagePusher {
    * 없었다. 충돌이면 해결에서 로컬 유지(새 페이지로 다시 만들기)와 원격 유지(볼트에서 지우기) 가운데
    * 고른다 — 어느 쪽도 묻지 않고 하지 않는다.
    */
+  /**
+   * 파일 속성이 가리키는 볼트 첨부를 올린다 — 못 올린 첨부가 섞인 값은 매퍼가 보내지 않는다(남은 원격 파일을 지우지 않게).
+   */
+  private async uploadsFor(
+    mapper: PropertyMapper,
+    changed: Readonly<Record<string, unknown>>,
+    path: string,
+  ): Promise<Map<string, UploadedFile>> {
+    const uploads = new Map<string, UploadedFile>();
+    for (const target of mapper.localFileTargets(changed)) {
+      try {
+        uploads.set(target, await this.imageHandler.uploadNoteAttachment(target, path));
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 파일 속성의 첨부를 올리지 못해 그 속성은 보내지 않음 (${path}): ${target} — ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return uploads;
+  }
+
   private async livePage(record: SyncRecord): Promise<PageObjectResponse> {
     const presence = await remotePresence(this.notionClient, record.notionPageId!);
     if (presence.kind === "alive") return presence.page;
@@ -596,11 +619,11 @@ export class PagePusher {
     // 보낼 것을 먼저 다 만든다 — WAL 은 생성 요청 바로 앞에 적어야, 스키마를 읽지 못해 요청을
     // 보내지도 않은 실행이 «적용됐는지 모름» 기록을 남기지 않는다.
     const mapper = await this.rowSchemas.mapperFor(databaseId);
-    const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(null, current.data),
-      title,
-      { current: current.data },
-    );
+    const changes = diffRowProperties(null, current.data);
+    const { properties, skipped } = mapper.toNotionPropertyChanges(changes, title, {
+      current: current.data,
+      uploads: await this.uploadsFor(mapper, changes.changed, path),
+    });
     const unsentProperties = withoutDecorations(skipped);
     if (unsentProperties.length > 0) {
       getLogger().info(
@@ -842,14 +865,23 @@ export class PagePusher {
       : this.baseRowState(record);
 
     const title = noteTitle(current.data, path);
+    const changes = diffRowProperties(
+      against?.properties ?? null,
+      options.overwriteRemote ? mapper.writableValues(current.data) : current.data,
+    );
     const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(
-        against?.properties ?? null,
-        options.overwriteRemote ? mapper.writableValues(current.data) : current.data,
-      ),
+      changes,
       against?.title === title ? null : title,
       // 글 속성 · 제목은 방금 읽은 원격의 서식 위에 바뀐 글자만 고친다 — 로컬은 평문만 안다(F-08).
-      { current: current.data, remote: pagePropertiesOf(remote) },
+      {
+        current: current.data,
+        remote: pagePropertiesOf(remote),
+        // 지난 동기화 사본과 견주어 바뀐 첨부만 올린다. 사본이 없거나 원격을 덮을 때는 받은 첨부까지 바뀐 것으로
+        // 보여, 올리면 원격 파일이 같은 내용의 사본으로 바뀐다 — 그때는 예전처럼 보내지 않는다.
+        ...(against === null || options.overwriteRemote
+          ? {}
+          : { uploads: await this.uploadsFor(mapper, changes.changed, path) }),
+      },
     );
     const unsentProperties = withoutDecorations(skipped);
     if (unsentProperties.length > 0) {
