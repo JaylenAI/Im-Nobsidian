@@ -1,4 +1,10 @@
-import { isNotionValidationError, type NotionClient } from "../notion/client.js";
+import {
+  isNotionBadRequest,
+  isNotionObjectNotFound,
+  isNotionValidationError,
+  notionStatusOf,
+  type NotionClient,
+} from "../notion/client.js";
 import { nfmInlineToRichText } from "../converter/nfm-inline.js";
 import type { PageDecorations } from "./page-decorations.js";
 import type { IStateDB } from "../state/state-db-interface.js";
@@ -274,7 +280,7 @@ export class DatabaseCreator {
     try {
       return await request(plan.initial);
     } catch (error) {
-      if (statusOf(error) !== 409 || !/prefix/i.test(messageOf(error))) throw error;
+      if (notionStatusOf(error) !== 409 || !/prefix/i.test(messageOf(error))) throw error;
       const prefixed = Object.keys(plan.initial).filter(
         (name) => (plan.initial[name] as { unique_id?: { prefix?: unknown } }).unique_id?.prefix,
       );
@@ -386,7 +392,7 @@ export class DatabaseCreator {
         await send();
         return true;
       } catch (error) {
-        if (statusOf(error) !== 400) retry.add(item.source);
+        if (!isNotionBadRequest(error)) retry.add(item.source);
         getLogger().warn(
           `[Im-Nobsidian] DB 속성을 붙이지 못함 (${item.folder} · ${name}): ${messageOf(error)}`,
         );
@@ -462,7 +468,7 @@ export class DatabaseCreator {
         });
         return true;
       } catch (error) {
-        if (statusOf(error) !== 400) {
+        if (!isNotionBadRequest(error)) {
           retry.add(dependent.item.source);
           getLogger().warn(
             `[Im-Nobsidian] DB 속성을 붙이지 못함 — 다음 push 가 다시 붙인다 (${dependent.item.folder} · ` +
@@ -588,7 +594,7 @@ export class DatabaseCreator {
       try {
         await this.notionClient.deleteView(id);
       } catch (error) {
-        if (statusOf(error) !== 404) {
+        if (!isNotionObjectNotFound(error)) {
           getLogger().warn(
             `[Im-Nobsidian] 기본 보기를 지우지 못함 (${entry.folder}): ${messageOf(error)}`,
           );
@@ -608,7 +614,7 @@ export class DatabaseCreator {
       await this.notionClient.createView({ databaseId, dataSourceId, request });
       return "made";
     } catch (error) {
-      const refused = statusOf(error) === 400;
+      const refused = isNotionBadRequest(error);
       getLogger().warn(
         `[Im-Nobsidian] 보기를 만들지 못함 (${folder} · ${request.name})` +
           `${refused ? "" : " — 다음 push 가 다시 만든다"}: ${messageOf(error)}`,
@@ -728,11 +734,6 @@ export class DatabaseCreator {
     }
     return fallback;
   }
-}
-
-function statusOf(error: unknown): number | null {
-  const status = (error as { status?: unknown } | null)?.status;
-  return typeof status === "number" ? status : null;
 }
 
 function messageOf(error: unknown): string {

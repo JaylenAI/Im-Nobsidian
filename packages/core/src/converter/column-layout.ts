@@ -1,4 +1,4 @@
-import { COLUMN_SEP_SOURCE, MARKER_BRAND_RE } from "../constants/markers.js";
+import { COLUMN_LIST_END, COLUMN_LIST_START, COLUMN_SEP_SOURCE } from "../constants/markers.js";
 
 /**
  * Notion 컬럼이 볼트 노트의 어느 줄에 걸치나 (#74).
@@ -9,6 +9,11 @@ import { COLUMN_SEP_SOURCE, MARKER_BRAND_RE } from "../constants/markers.js";
  *
  * 컨테이너(콜아웃 · 토글) 안의 컬럼은 pull 이 마커를 지우고 펼친다 — 마커 줄은 맨 앞 들여쓰기만 받는다.
  */
+
+/** 컬럼 마커가 있을 수 있는가 — 없으면 줄을 나누어 읽지 않아도 된다. */
+export function hasColumnLayout(text: string): boolean {
+  return text.includes(COLUMN_LIST_START);
+}
 
 /** 컬럼 안의 줄 하나가 놓인 자리. */
 export interface ColumnPlace {
@@ -24,8 +29,9 @@ export interface ColumnPlace {
   readonly head: boolean;
 }
 
-const START_RE = new RegExp(`^[\\t ]*%%${MARKER_BRAND_RE}:column-list:start%%[\\t ]*$`);
-const END_RE = new RegExp(`^[\\t ]*%%${MARKER_BRAND_RE}:column-list:end%%[\\t ]*$`);
+// 마커 글자에 정규식 특수문자가 없다(`%` · `:` · `-`) — 그대로 넣는다.
+const START_RE = new RegExp(`^[\\t ]*${COLUMN_LIST_START}[\\t ]*$`);
+const END_RE = new RegExp(`^[\\t ]*${COLUMN_LIST_END}[\\t ]*$`);
 const SEP_RE = new RegExp(`^[\\t ]*${COLUMN_SEP_SOURCE}[\\t ]*$`);
 const FENCE_RE = /^[\t ]*(`{3,}|~{3,})/;
 

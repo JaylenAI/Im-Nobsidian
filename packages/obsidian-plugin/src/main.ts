@@ -17,7 +17,7 @@ import type {
   ResolutionChoice,
 } from "@im-nobsidian/core";
 import { DEFAULT_WATCH_DEBOUNCE_MS, StateDbUnavailableError } from "@im-nobsidian/core";
-import { TOKEN_SECRET_ID } from "./constants.js";
+import { NOTICE_PREFIX, TOKEN_SECRET_ID, withoutNoticePrefix } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
 import { decorateColumnSection } from "./design/columns.js";
 import { designLivePreview } from "./design/live-preview.js";
@@ -159,7 +159,9 @@ export default class ImNobsidianPlugin extends Plugin {
         onState: (patch) => this.onEngineState(engine, patch),
         onNotice: (message, durationMs) =>
           new Notice(
-            message.replace(/^Im-Nobsidian/, `Im-Nobsidian${engine.noticeTag}`),
+            message.startsWith(NOTICE_PREFIX)
+              ? `${NOTICE_PREFIX}${engine.noticeTag}${message.slice(NOTICE_PREFIX.length)}`
+              : message,
             durationMs,
           ),
         onStatusBar: (state) => this.onEnginePhase(engine, state),
@@ -330,7 +332,7 @@ export default class ImNobsidianPlugin extends Plugin {
       try {
         await engine.close();
       } catch (error) {
-        const message = `Im-Nobsidian${engine.noticeTag}: 상태 DB 를 닫지 못함 — ${errorText(error)}`;
+        const message = `${NOTICE_PREFIX}${engine.noticeTag}: 상태 DB 를 닫지 못함 — ${errorText(error)}`;
         getLogger().warn(message);
         new Notice(message);
       }
@@ -366,14 +368,14 @@ export default class ImNobsidianPlugin extends Plugin {
       secrets.setSecret(id, token);
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
-      new Notice(`Im-Nobsidian: Notion 토큰을 키체인으로 옮기지 못했습니다 — ${reason}`);
+      new Notice(`${NOTICE_PREFIX}: Notion 토큰을 키체인으로 옮기지 못했습니다 — ${reason}`);
       return;
     }
     this.settings.tokenSecret = id;
     delete this.settings.token;
     await this.saveSettings();
     new Notice(
-      `Im-Nobsidian: Notion 토큰을 Obsidian 키체인(이름 ${id})으로 옮겼습니다. ` +
+      `${NOTICE_PREFIX}: Notion 토큰을 Obsidian 키체인(이름 ${id})으로 옮겼습니다. ` +
         "볼트 설정 파일에는 이제 이름만 남습니다 — 다른 기기에서는 설정에서 토큰을 한 번 더 넣으세요.",
       0,
     );
@@ -426,7 +428,7 @@ export default class ImNobsidianPlugin extends Plugin {
    */
   connectionStatus(): { readonly ready: boolean; readonly message: string } {
     if (this.syncController) return { ready: true, message: "준비됨 — 동기화할 수 있습니다." };
-    return { ready: false, message: this.notReadyReason().replace(/^Im-Nobsidian:? /, "") };
+    return { ready: false, message: withoutNoticePrefix(this.notReadyReason()) };
   }
 
   /** 폴더 연결 하나의 상태 — 설정 화면이 연결마다 보인다. */
@@ -507,7 +509,7 @@ export default class ImNobsidianPlugin extends Plugin {
       this.onEnginePhase(this.primary, "ready");
     } catch (error) {
       this.initFailure = initFailureText(error);
-      new Notice(`Im-Nobsidian ${this.initFailure}`);
+      new Notice(`${NOTICE_PREFIX} ${this.initFailure}`);
       this.onEnginePhase(this.primary, "error");
       this.onEngineState(this.primary, { syncState: "error", errorMessage: this.initFailure });
     }
@@ -540,7 +542,7 @@ export default class ImNobsidianPlugin extends Plugin {
         this.onEnginePhase(engine, "ready");
       } catch (error) {
         engine.failure = initFailureText(error);
-        new Notice(`Im-Nobsidian${engine.noticeTag} ${engine.failure}`);
+        new Notice(`${NOTICE_PREFIX}${engine.noticeTag} ${engine.failure}`);
         this.onEnginePhase(engine, "error");
         this.onEngineState(engine, { syncState: "error", errorMessage: engine.failure });
       }
@@ -777,15 +779,15 @@ export default class ImNobsidianPlugin extends Plugin {
     }
     if (engine !== this.primary) {
       return engine.failure !== null
-        ? `Im-Nobsidian${engine.noticeTag} ${engine.failure}`
-        : "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.";
+        ? `${NOTICE_PREFIX}${engine.noticeTag} ${engine.failure}`
+        : `${NOTICE_PREFIX}: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.`;
     }
     const missing = this.missingSettings();
     if (missing.length > 0) {
-      return `Im-Nobsidian: 설정을 채워 주세요 — ${missing.join(" · ")}`;
+      return `${NOTICE_PREFIX}: 설정을 채워 주세요 — ${missing.join(" · ")}`;
     }
-    if (this.initFailure !== null) return `Im-Nobsidian ${this.initFailure}`;
-    return "Im-Nobsidian: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.";
+    if (this.initFailure !== null) return `${NOTICE_PREFIX} ${this.initFailure}`;
+    return `${NOTICE_PREFIX}: 아직 준비 중입니다. 잠시 뒤에 다시 해 주세요.`;
   }
 
   private cancelSync(): void {
@@ -794,7 +796,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
   private blockedByDirection(action: "push" | "pull"): string | null {
     const reason = directionBlock(this.settings.syncDirection, action);
-    return reason === null ? null : `Im-Nobsidian: ${reason}`;
+    return reason === null ? null : `${NOTICE_PREFIX}: ${reason}`;
   }
 
   /**
@@ -916,7 +918,7 @@ export default class ImNobsidianPlugin extends Plugin {
         lines.push(`충돌/대기: ${status.pendingOperations}건`);
       }
 
-      new Notice(`Im-Nobsidian${engine.noticeTag} 상태:\n${lines.join("\n")}`, 5000);
+      new Notice(`${NOTICE_PREFIX}${engine.noticeTag} 상태:\n${lines.join("\n")}`, 5000);
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
       new Notice(`상태 확인 실패${engine.noticeTag}: ${msg}`);
@@ -934,7 +936,7 @@ export default class ImNobsidianPlugin extends Plugin {
     const local = engine.toLocal(folder);
     if (!local) {
       new Notice(
-        `Im-Nobsidian: ${folder} 는 연결 폴더라 DB 로 올리지 않습니다 — 그 안의 노트 폴더를 고르세요.`,
+        `${NOTICE_PREFIX}: ${folder} 는 연결 폴더라 DB 로 올리지 않습니다 — 그 안의 노트 폴더를 고르세요.`,
       );
       return;
     }
@@ -976,7 +978,9 @@ export default class ImNobsidianPlugin extends Plugin {
     }
     const source = remoteDiffSource(change, engine.controller);
     if (!source) {
-      new Notice("Im-Nobsidian: 아직 받지 않은 새 페이지라 견줄 글이 없습니다 — 받은 뒤에 보세요.");
+      new Notice(
+        `${NOTICE_PREFIX}: 아직 받지 않은 새 페이지라 견줄 글이 없습니다 — 받은 뒤에 보세요.`,
+      );
       return;
     }
     new ChangeDiffModal(this.app, source).open();
@@ -1018,13 +1022,13 @@ export default class ImNobsidianPlugin extends Plugin {
     if (!this.statusBarEl) return;
 
     const labels: Record<string, string> = {
-      ready: "Im-Nobsidian: Ready",
-      syncing: "Im-Nobsidian: Syncing...",
-      error: "Im-Nobsidian: Error",
-      conflict: "Im-Nobsidian: Conflict",
+      ready: `${NOTICE_PREFIX}: Ready`,
+      syncing: `${NOTICE_PREFIX}: Syncing...`,
+      error: `${NOTICE_PREFIX}: Error`,
+      conflict: `${NOTICE_PREFIX}: Conflict`,
     };
 
-    this.statusBarEl.setText(labels[state] ?? "Im-Nobsidian");
+    this.statusBarEl.setText(labels[state] ?? NOTICE_PREFIX);
   }
 
   /** 연결마다의 보기 설정 — 읽지 못한 연결은 까닭을 알리고 뺀다. */
@@ -1036,7 +1040,7 @@ export default class ImNobsidianPlugin extends Plugin {
       if (!engine.viewProvider) continue;
       // 읽지 못한 보기 설정을 「설정이 없습니다(Pull 하세요)」 로 안내하지 않는다 — 까닭을 그대로 보인다.
       const configs = await engine.viewProvider.loadAllViewConfigs().catch((error: unknown) => {
-        new Notice(`Im-Nobsidian${engine.noticeTag}: ${errorText(error)}`);
+        new Notice(`${NOTICE_PREFIX}${engine.noticeTag}: ${errorText(error)}`);
         return null;
       });
       if (configs) out.push({ engine, databaseIds: Object.keys(configs) });
@@ -1052,7 +1056,7 @@ export default class ImNobsidianPlugin extends Plugin {
 
     const found = (await this.viewConfigsByEngine()).find((c) => c.databaseIds.length > 0);
     if (!found) {
-      new Notice("Im-Nobsidian: DB 뷰 설정이 없습니다. Pull을 먼저 실행해주세요.");
+      new Notice(`${NOTICE_PREFIX}: DB 뷰 설정이 없습니다. Pull을 먼저 실행해주세요.`);
       return;
     }
     const { engine } = found;

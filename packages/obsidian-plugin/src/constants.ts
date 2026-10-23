@@ -11,5 +11,17 @@
  */
 export const TOKEN_SECRET_ID = "im-nobsidian-notion-token";
 
+/**
+ * 알림 · 상태 표시줄 글의 머리말. 연결이 여럿이면 플러그인이 이 머리말 바로 뒤에 연결 이름표를 붙인다 —
+ * 글이 이것으로 시작해야 붙는다.
+ */
+export const NOTICE_PREFIX = "Im-Nobsidian";
+
+/** 머리말(과 뒤의 `:` · 빈칸)을 뗀 글 — 설정 화면처럼 이미 플러그인 안에서 보이는 자리에 쓴다. */
+export function withoutNoticePrefix(message: string): string {
+  if (!message.startsWith(NOTICE_PREFIX)) return message;
+  return message.slice(NOTICE_PREFIX.length).replace(/^:? /, "");
+}
+
 /** 자동 동기화 간격으로 고를 수 있는 값(분). 설정은 초로 적는다. */
 export const AUTO_SYNC_INTERVAL_MINUTES = [1, 5, 10, 15, 30, 60] as const;

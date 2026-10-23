@@ -1,7 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { PROPERTIES_TAG } from "../../constants/markers.js";
 import { stringifyFrontmatter } from "../../utils/frontmatter.js";
-import { isDecorationValue } from "../../notion/decoration-values.js";
+import { isDecorationKey, isDecorationValue } from "../../notion/decoration-values.js";
 
 export class PropertiesTableInjector implements Processor {
   readonly name = "PropertiesTableInjector";
@@ -25,7 +25,7 @@ export class PropertiesTableInjector implements Processor {
     // 없는 값(다른 플러그인이 쓰는 `icon` 등)은 예전처럼 속성 블록에 둔다 — 버리면 사라진다.
     const filteredProps: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(properties)) {
-      if ((key === "icon" || key === "cover") && isDecorationValue(key, value)) continue;
+      if (isDecorationKey(key) && isDecorationValue(key, value)) continue;
       filteredProps[key] = value;
     }
 

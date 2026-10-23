@@ -1,3 +1,4 @@
+import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
   extractChildTags,
@@ -477,7 +478,7 @@ export class PagePuller {
       await this.ensureDbSchema();
       const raw = (page as unknown as { properties: Record<string, unknown> }).properties;
       properties = this.propertyMapper.fromNotionProperties(raw);
-      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title", "cover", "icon"];
+      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title", ...DECORATION_KEYS];
     } else {
       properties = this.notionClient.extractProperties(page);
     }

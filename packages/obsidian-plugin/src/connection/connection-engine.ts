@@ -4,6 +4,7 @@
  * 연결마다 상태 DB(`<폴더>/.im-nobsidian/sync.db`) · 오케스트레이터 · 컨트롤러를 따로 둔다. 엔진은 연결 폴더를
  * 볼트처럼 본다 — 경로는 그 폴더 기준이고, 안쪽의 다른 연결 폴더는 올리지도 덮어쓰지도 않는다.
  */
+import { NOTICE_PREFIX } from "../constants.js";
 import { Notice, requestUrl, type App } from "obsidian";
 import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
@@ -188,7 +189,7 @@ export class ConnectionEngine {
       ? " 마지막으로 파일에 쓴 뒤의 동기화 기록은 남지 않았습니다 — 그 사이 올린 노트는 다음 push 가 페이지를 " +
         "새로 만들 수 있습니다."
       : "";
-    const message = `Im-Nobsidian${this.noticeTag}: ${error.message} — 이 창의 사본을 버리고 파일에서 다시 엽니다.${lost}`;
+    const message = `${NOTICE_PREFIX}${this.noticeTag}: ${error.message} — 이 창의 사본을 버리고 파일에서 다시 엽니다.${lost}`;
     getLogger().warn(message);
     // 잃은 기록이 있으면 사용자가 닫을 때까지 둔다
     new Notice(message, dropped ? 0 : undefined);
