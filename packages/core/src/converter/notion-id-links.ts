@@ -37,8 +37,11 @@ export interface NotionIdWikilinkResolution {
 /**
  * id 표기는 두 가지가 다 들어온다 — 변환기가 만드는 압축형(32 hex)과 상태 DB·Notion
  * API 의 하이픈형(36자). 한쪽만 받으면 다른 쪽 경로의 링크가 통째로 미해소로 남는다.
+ *
+ * 표 칸에서는 별칭 구분자가 `\|` 다(그룹 2) — 표 변환이 칸 안 파이프를 escape 한다. 받지 않으면 표 칸의 링크만
+ * 대상이 볼트에 있어도 `[[notion:<id>\|별칭]]` 으로 남았다(2026-10-24 실측).
  */
-const NOTION_ID_WIKILINK_RE = /\[\[notion:([a-f0-9]{32}|[a-f0-9-]{36})(?:\|([^[\]]+))?\]\]/g;
+const NOTION_ID_WIKILINK_RE = /\[\[notion:([a-f0-9]{32}|[a-f0-9-]{36})(?:(\\?\|)([^[\]]+))?\]\]/g;
 
 const compactId = (id: string): string => id.replace(/-/g, "");
 
@@ -49,7 +52,7 @@ export function resolveNotionIdWikilinks(
   let resolved = 0;
   const out = markdown.replace(
     NOTION_ID_WIKILINK_RE,
-    (match, id: string, rawAlias: string | undefined) => {
+    (match, id: string, separator: string | undefined, rawAlias: string | undefined) => {
       const path = lookup(id);
       if (!path) return match;
       resolved++;
@@ -61,7 +64,9 @@ export function resolveNotionIdWikilinks(
       // 별칭은 push 가 라벨 달린 페이지 링크로 실어 보낸 `[[대상|별칭]]` 의 별칭이다 —
       // 대상만 역조회로 채우고 별칭은 그대로 살려야 왕복이 닫힌다. 별칭이 대상 제목과
       // 같을 때 접는 규칙은 `formatWikilink` 가 갖는다(위키링크 출구는 하나뿐이다).
-      return formatWikilink(base, alias);
+      const link = formatWikilink(base, alias);
+      // 노트 이름에는 `|` 를 쓸 수 없어 첫 `|` 가 별칭 구분자다.
+      return separator === "\\|" ? link.replace("|", separator) : link;
     },
   );
   return { markdown: out, resolved };
@@ -94,7 +99,7 @@ export function degradeUnresolvedNotionIdWikilinks(
   let degraded = 0;
   const out = markdown.replace(
     NOTION_ID_WIKILINK_RE,
-    (_match, id: string, alias: string | undefined) => {
+    (_match, id: string, _separator: string | undefined, alias: string | undefined) => {
       degraded++;
       const compact = compactId(id);
       // 라벨 없는 mention(`<mention-page url=…/>`)은 Notion 이 제목을 안 준다 — 호출측이 읽어 둔
@@ -110,7 +115,7 @@ export function degradeUnresolvedNotionIdWikilinks(
 export function unlabeledNotionIds(markdown: string): string[] {
   const ids = new Set<string>();
   for (const m of markdown.matchAll(NOTION_ID_WIKILINK_RE)) {
-    if (m[2] === undefined) ids.add(compactId(m[1]!));
+    if (m[3] === undefined) ids.add(compactId(m[1]!));
   }
   return [...ids];
 }

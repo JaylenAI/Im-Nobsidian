@@ -18,6 +18,15 @@ import { encodeMarkerTarget } from "../marker-url.js";
  */
 const WIKILINK_REGEX = /(?<!!)\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g;
 
+/**
+ * 표 칸의 위키링크 `[[대상\|별칭]]` 에서 대상 끝의 `\` 를 뗀다 — Obsidian 은 표 칸에서 별칭 구분자를 `\|` 로 적는다
+ * (링크를 고르면 그렇게 넣는다). 노트 이름에는 `\` 를 쓸 수 없어 대상의 글자가 아니다. 떼지 않으면 대상이 `대상\` 이 되어
+ * 볼트에 있는 노트도 찾지 못했다.
+ */
+function withoutTableAliasEscape(target: string): string {
+  return target.endsWith("\\") ? target.slice(0, -1) : target;
+}
+
 export type WikilinkResolverFn = (text: string) => WikilinkEntry | null;
 
 export class WikilinkResolver implements Processor {
@@ -45,7 +54,8 @@ export class WikilinkResolver implements Processor {
     const resolved = mapOutsideCode(input.content, (segment, base) =>
       segment.replace(
         WIKILINK_REGEX,
-        (_match: string, target: string, display: string | undefined, offset: number) => {
+        (_match: string, written: string, display: string | undefined, offset: number) => {
+          const target = display === undefined ? written : withoutTableAliasEscape(written);
           const label = display ?? target;
 
           if (this.resolve) {

@@ -54,9 +54,9 @@ const NOTION_PAGE_URL_RE =
   /https?:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/(?:[^/\s()"<>]+\/)?(?:[^/\s()"<>]*-)?([0-9a-f]{32})(?![0-9a-f])/g;
 /**
  * 받을 때 아직 볼트에서 찾지 못한 페이지 링크 — 쓴 뒤 `[라벨](https://www.notion.so/<id>)` 로 바뀐다
- * (`degradeUnresolvedNotionIdWikilinks`). 그룹 1 = id, 2 = 라벨.
+ * (`degradeUnresolvedNotionIdWikilinks`). 그룹 1 = id, 2 = 라벨. 표 칸에서는 구분자가 `\|` 다.
  */
-const PENDING_NOTION_LINK_RE = /\[\[notion:([0-9a-f]{32})\|([^\][|]+)\]\]/g;
+const PENDING_NOTION_LINK_RE = /\[\[notion:([0-9a-f]{32})\\?\|([^\][|]+)\]\]/g;
 /** 글자와 주소가 같은 도메인 꼴 링크 — `[x.md](http://x.md)`. 그룹 1 = 글자. */
 const DOMAIN_AUTOLINK_RE = /\[([^\][()\s]+\.[^\][()\s]+)\]\(https?:\/\/\1\)/g;
 
