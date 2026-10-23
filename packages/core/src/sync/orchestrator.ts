@@ -332,6 +332,8 @@ export class SyncOrchestrator {
       .filter((move) => inAnyPathScope(move.to, options?.paths));
 
     if (filtered.length === 0 && folderMoves.length === 0) {
+      // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
+      if (!options?.dryRun) await this.completeDatabaseSchemas();
       return {
         created: 0,
         updated: 0,
@@ -620,8 +622,8 @@ export class SyncOrchestrator {
   }
 
   /**
-   * 만든 DB 에 relation · rollup · formula 를 붙이고, 행 스키마를 다시 읽게 한다. 실패는 다음 push 가 이어
-   * 붙인다 — 행은 그대로 올린다.
+   * 만든 DB 에 relation · rollup · formula 를 붙이고, 행 스키마를 다시 읽게 한 뒤 보기를 만든다. 실패는
+   * 다음 push 가 이어 붙인다 — 행은 그대로 올린다.
    */
   private async completeDatabaseSchemas(): Promise<void> {
     try {
@@ -634,6 +636,15 @@ export class SyncOrchestrator {
       );
     }
     this.rowSchemas.clear();
+    try {
+      await this.databaseCreator.completeViews();
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 보기를 만들지 못함 — 다음 push 가 이어 만든다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /** 볼트의 노트가 마지막으로 올린 내용 그대로인가 — 읽지 못하면(지움 · 옮김) 아니다. */

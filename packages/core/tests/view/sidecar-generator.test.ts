@@ -147,6 +147,37 @@ describe("SidecarGenerator", () => {
     expect(sorted.degraded.filter((d) => d.kind === "setting-dropped")).toHaveLength(0);
   });
 
+  it("보기 설정 원본을 속성 이름 칸 없이 적는다 — push 가 새 DB 에 같은 보기를 만든다", () => {
+    const s = build([
+      {
+        id: "v1",
+        name: "보드",
+        type: "board",
+        configuration: {
+          type: "board",
+          group_by: {
+            type: "status",
+            property_id: "[jiM",
+            property_name: "상태",
+            group_by: "group",
+            sort: { type: "manual" },
+          },
+        },
+        quickFilters: { abcd: { date: { is_not_empty: true } } },
+      },
+    ]);
+    expect(s.views[0]!.config["configuration"]).toEqual({
+      type: "board",
+      group_by: {
+        type: "status",
+        property_id: "[jiM",
+        group_by: "group",
+        sort: { type: "manual" },
+      },
+    });
+    expect(s.views[0]!.config["quickFilters"]).toEqual({ abcd: { date: { is_not_empty: true } } });
+  });
+
   it("속성은 이름 정렬 + select/status 옵션명 보존, title 도 포함", () => {
     const s = build([{ id: "v1", name: "표", type: "table" }]);
 

@@ -223,6 +223,10 @@ export class SidecarGenerator {
       noteDrop("viewRange");
     }
 
+    // push 가 새 DB 에 같은 보기를 만드는 원본(ADR-036). 속성 이름은 빼고 id 만 — 이름은 속성 목록이 말한다.
+    if (view.configuration) config["configuration"] = withoutPropertyNames(view.configuration);
+    if (view.quickFilters) config["quickFilters"] = view.quickFilters;
+
     if (view.properties && view.properties.length > 0) {
       config["properties"] = view.properties;
       if (view.properties.some((p) => p.width !== undefined)) noteDrop("columnWidths");
@@ -270,6 +274,17 @@ export class SidecarGenerator {
       });
     }
   }
+}
+
+/** `property_name` · `date_property_name` 처럼 속성 이름을 적은 칸을 뺀다 — 이름을 바꿔도 보기 설정은 그대로다. */
+function withoutPropertyNames(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(withoutPropertyNames);
+  if (!value || typeof value !== "object") return value;
+  const out: Record<string, unknown> = {};
+  for (const [key, item] of Object.entries(value)) {
+    if (!key.endsWith("property_name")) out[key] = withoutPropertyNames(item);
+  }
+  return out;
 }
 
 /**

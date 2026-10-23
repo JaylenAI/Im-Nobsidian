@@ -17,13 +17,24 @@ export interface SidecarSchema {
   readonly title: string;
   readonly isInline: boolean;
   readonly properties: readonly SidecarSchemaProperty[];
+  /** 받아 온 DB 의 보기 — 차례대로. 속성 id 는 받아 온 DB 의 것이다. */
+  readonly views: readonly SidecarSchemaView[];
 }
 
 export interface SidecarSchemaProperty {
   readonly name: string;
+  /** 받아 온 DB 의 속성 id(인코딩된 꼴) — 보기 설정이 이 id 로 속성을 가리킨다. */
+  readonly id?: string;
   readonly type: string;
   readonly options?: readonly string[];
   readonly definition?: Readonly<Record<string, unknown>>;
+}
+
+/** 사이드카의 보기 하나 — `config` 는 사이드카에 적힌 그대로(`filter` · `sorts` · `configuration` …). */
+export interface SidecarSchemaView {
+  readonly name: string;
+  readonly type: string;
+  readonly config: Readonly<Record<string, unknown>>;
 }
 
 /** Notion 이 status 를 만들 때 넣는 옵션 — 이것만 To-do · In progress · Complete 에 나뉘어 든다. */
@@ -94,6 +105,7 @@ export function parseSidecarSchema(text: string): SidecarSchema | null {
     .filter((p) => typeof p.name === "string" && typeof p.type === "string")
     .map((p): SidecarSchemaProperty => ({
       name: p.name as string,
+      ...(typeof p.id === "string" ? { id: p.id } : {}),
       type: p.type as string,
       ...(Array.isArray(p.options) ? { options: p.options as string[] } : {}),
       ...(p.definition && typeof p.definition === "object"
@@ -106,6 +118,16 @@ export function parseSidecarSchema(text: string): SidecarSchema | null {
     title: typeof s.databaseName === "string" ? s.databaseName : "",
     isInline: s.isInline === true,
     properties,
+    views: Array.isArray(s.views)
+      ? (s.views as Array<Record<string, unknown>>)
+          .filter((v) => typeof v.name === "string" && typeof v.notionType === "string")
+          .map((v) => ({
+            name: v.name as string,
+            type: v.notionType as string,
+            config:
+              v.config && typeof v.config === "object" ? (v.config as Record<string, unknown>) : {},
+          }))
+      : [],
   };
 }
 

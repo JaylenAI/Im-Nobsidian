@@ -20,6 +20,7 @@ import type {
   BasePropertySchema,
   BasePropertyOption,
   BaseStatusGroup,
+  ViewRequest,
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import type { BookmarkTarget } from "../types/convert.js";
@@ -1540,6 +1541,29 @@ export class NotionClient {
     return allViews;
   }
 
+  /** DB 에 보기를 만든다. 다시 보내면 같은 보기가 둘 생긴다 — 재시도하지 않는다. @returns 만든 보기 id */
+  async createView(params: {
+    databaseId: string;
+    dataSourceId: string;
+    request: ViewRequest;
+  }): Promise<string> {
+    const view = await this.withRateLimit(
+      () =>
+        this.client.views.create({
+          ...params.request,
+          database_id: params.databaseId,
+          data_source_id: params.dataSourceId,
+        } as never),
+      NOT_IDEMPOTENT,
+    );
+    return (view as { id: string }).id;
+  }
+
+  /** 보기를 지운다. DB 의 마지막 보기는 지우지 못한다(400). */
+  async deleteView(viewId: string): Promise<void> {
+    await this.withRateLimit(() => this.client.views.delete({ view_id: viewId }));
+  }
+
   async getView(viewId: string): Promise<ViewConfig | null> {
     const view = await this.withRateLimit(() => this.client.views.retrieve({ view_id: viewId }));
 
@@ -1910,6 +1934,12 @@ function parseViewResponse(v: DataSourceViewObjectResponse): ViewConfig {
       return { timestamp: s.timestamp, direction: s.direction };
     }),
     ...extractViewTypeConfig(v.configuration),
+    ...(v.configuration
+      ? { configuration: v.configuration as unknown as Record<string, unknown> }
+      : {}),
+    ...(v.quick_filters && Object.keys(v.quick_filters).length > 0
+      ? { quickFilters: v.quick_filters as Record<string, unknown> }
+      : {}),
   };
   return config;
 }
