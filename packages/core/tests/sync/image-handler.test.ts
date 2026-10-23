@@ -144,8 +144,30 @@ describe("ImageHandler.downloadAllImages — 받은 이미지 별칭", () => {
       "행",
     );
 
-    expect(signed.content).toBe(`앞 ![[attachments/행-${SHA12}.png|${caption}]] 뒤`);
+    expect(signed.content).toBe(`앞 ![[attachments/a-${SHA12}.png|${caption}]] 뒤`);
     expect(internal.content).toBe(signed.content);
+  });
+
+  // 새 볼트로 받으면 `pic.png` 가 `attachments/<노트>-<해시>.png` 가 됐다 — 볼트에서 그 파일을 알아볼 수 없다(2026-10-23 라이브).
+  it("받은 이미지 파일 이름은 올라간 이름을 따른다 — 서명 URL · 내부 참조 같다", async () => {
+    const signed = await handler.downloadAllImages(`![](${signedUrl("다이어그램 v2.png")})`, "행");
+    const internal = await handler.downloadAllImages(
+      `![](${internalUrl("다이어그램 v2.png")})`,
+      "행",
+    );
+
+    expect(signed.content).toBe(`![[attachments/다이어그램-v2-${SHA12}.png]]`);
+    expect(internal.content).toBe(signed.content);
+  });
+
+  it.each([
+    ["Notion 이 붙인 자리 이름", "image.png"],
+    ["Notion 이 붙인 자리 이름 — 대문자", "Untitled.png"],
+    ["다듬으면 남는 글자가 없는 이름", "@@.png"],
+  ])("%s 는 노트 제목으로 — %s", async (_name, uploaded) => {
+    const result = await handler.downloadAllImages(`![](${signedUrl(uploaded)})`, "행");
+
+    expect(result.content).toBe(`![[attachments/행-${SHA12}.png]]`);
   });
 });
 
@@ -162,7 +184,7 @@ describe("ImageHandler — 재시도 0 설정", () => {
     const result = await handler.downloadImage("https://example.com/a.png", "노트");
 
     expect(download).toHaveBeenCalledTimes(1);
-    expect(result.localPath).toMatch(/^attachments\/노트-[0-9a-f]{12}\.png$/);
+    expect(result.localPath).toMatch(/^attachments\/a-[0-9a-f]{12}\.png$/);
   });
 });
 

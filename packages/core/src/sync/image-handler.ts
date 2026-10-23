@@ -178,6 +178,9 @@ const MEDIA_TAG_NAME_RE = /^<(file|video|audio|pdf)\s/;
 /** 캡션 없는 미디어에 pull 변환이 붙이는 자리 이름(`[📎 file](…)`) — 사람이 적은 캡션이 아니다. */
 const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio"]);
 
+/** Notion 이 붙여 넣은 이미지에 주는 자리 이름 — 이것으로 지으면 받은 이미지가 모두 `image-<해시>` 가 된다. */
+const PLACEHOLDER_IMAGE_STEMS = new Set(["image", "untitled"]);
+
 /** 별칭 끝의 `300` · `300x200` 은 크기다 — Obsidian 이 임베드의 너비(×높이)로 쓴다. */
 const EMBED_SIZE_RE = /^\d+(?:x\d+)?$/;
 
@@ -405,6 +408,22 @@ function stripAlias(target: string): string {
 }
 
 /** 서명 URL 경로 끝의 업로드 파일명. 캡션이 우리가 적은 것인지 대조하는 데 쓴다. */
+/**
+ * 받은 이미지 파일 이름의 앞부분 — 올라간 파일 이름(`pic.png` → `pic`). 그 이름이 없거나 Notion 의 자리 이름이면
+ * 노트 제목이다. 뒤에 내용 해시를 붙이므로 같은 이름의 다른 이미지와 겹치지 않는다.
+ */
+function imageStemOf(uploadedName: string, pageTitle: string): string {
+  const stem = safeImageStem(uploadedName.replace(/\.[^.]*$/, ""));
+  return stem && !PLACEHOLDER_IMAGE_STEMS.has(stem.toLowerCase()) ? stem : safeImageStem(pageTitle);
+}
+
+function safeImageStem(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9가-힣\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, 50);
+}
+
 function uploadedFileNameFromUrl(url: string): string {
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
@@ -515,10 +534,15 @@ export class ImageHandler {
   }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
-    return this.persistImage(await this.fetchImage(url, pageTitle));
+    return this.persistImage(await this.fetchImage(url, pageTitle, uploadedFileNameFromUrl(url)));
   }
 
-  private async fetchImage(url: string, pageTitle: string): Promise<FetchedImage> {
+  /** @param uploadedName Notion 에 올라간 파일 이름 — 받은 파일의 이름이 된다({@link imageStemOf}). */
+  private async fetchImage(
+    url: string,
+    pageTitle: string,
+    uploadedName: string,
+  ): Promise<FetchedImage> {
     const maxRetries = this.maxRetries;
     let lastError: Error | null = null;
 
@@ -541,12 +565,7 @@ export class ImageHandler {
         const buffer = Buffer.from(await response.arrayBuffer());
         const fullHash = createHash("sha256").update(buffer).digest("hex");
         const hash = fullHash.slice(0, 12);
-        const safeName = pageTitle
-          .replace(/[^a-zA-Z0-9가-힣\s-]/g, "")
-          .replace(/\s+/g, "-")
-          .slice(0, 50);
-
-        const fileName = `${safeName}-${hash}${extension}`;
+        const fileName = `${imageStemOf(uploadedName, pageTitle)}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 
         return { originalUrl: url, localPath, hash, fullHash, buffer };
@@ -720,7 +739,7 @@ export class ImageHandler {
         try {
           return {
             span,
-            fetched: await this.fetchImage(span.url, pageTitle),
+            fetched: await this.fetchImage(span.url, pageTitle, this.uploadedNameOf(span.url)),
           };
         } finally {
           sema.release();
@@ -757,7 +776,7 @@ export class ImageHandler {
           continue;
         }
 
-        const fetched = await this.fetchImage(realUrl, pageTitle);
+        const fetched = await this.fetchImage(realUrl, pageTitle, parsed.fileName);
         if (isAppendedCopy(fetched)) {
           result = result.replace(span.full, "");
           continue;
