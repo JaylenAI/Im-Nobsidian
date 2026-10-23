@@ -701,13 +701,10 @@ export class PagePuller {
         pathParts.pop();
         return pathParts.join("/");
       }
-      const pathParts = parentRecord.obsidianPath.split("/");
-      pathParts.pop();
-      const parentDir = pathParts.join("/");
-      return (
-        parentDir ||
-        sanitizeFileName(this.notionClient.extractTitle(await this.notionClient.getPage(parentId)))
-      );
+      // 노트 하나(행 · 자식 없이 받은 페이지)의 자식은 그 노트 이름의 폴더에 둔다 — push 가 `X.md` 옆
+      // `X/` 를 X 의 하위로 읽는다(`folderContainer`). 예전에는 노트 옆에 두어, 행의 하위 페이지가
+      // DB 폴더에 행처럼 섞이고(실데이터 E2E 4 페이지) 다시 올리면 부모가 바뀌었다.
+      return parentRecord.obsidianPath.replace(/\.md$/, "");
     }
 
     try {
