@@ -38,6 +38,12 @@ const DEFAULT_ICON_COLOR = "gray";
 export const DECORATION_KEYS = ["icon", "cover"] as const;
 export type DecorationKey = (typeof DECORATION_KEYS)[number];
 
+/** 알림에 쓰는 꾸밈 이름 — frontmatter 키를 그대로 보이지 않는다. */
+export const DECORATION_LABELS: Readonly<Record<DecorationKey, string>> = {
+  icon: "아이콘",
+  cover: "커버",
+};
+
 /**
  * frontmatter 값이 Notion 에 무엇이 되나.
  *
