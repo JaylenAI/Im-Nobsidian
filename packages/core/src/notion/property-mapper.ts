@@ -86,6 +86,27 @@ export interface WikilinkResolver {
   resolvePageId(pageId: string): string | null;
 }
 
+/** 이름으로 적힌 사람의 사용자 id — 워크스페이스에 없거나 같은 이름이 여럿이면 null. */
+export type PeopleResolver = (name: string) => string | null;
+
+/**
+ * 워크스페이스 사용자 목록(`users.list`)으로 {@link PeopleResolver} 를 만든다.
+ *
+ * pull 은 사람 속성을 이름으로 적는다. 같은 이름이 둘이면 어느 쪽인지 알 수 없으므로 그 이름은 풀지 않는다.
+ * 손님(guest)은 목록에 없다 — API 가 돌려주지 않는다.
+ */
+export function peopleResolverOf(
+  users: ReadonlyArray<{ readonly id: string; readonly name?: string | null }>,
+): PeopleResolver {
+  const ids = new Map<string, string | null>();
+  for (const user of users) {
+    const name = user.name?.trim();
+    if (!name) continue;
+    ids.set(name, ids.has(name) ? null : user.id);
+  }
+  return (name) => ids.get(name.trim()) ?? null;
+}
+
 export interface PropertyMapperOptions {
   /**
    * 날짜시각을 적고 보낼 시간대(IANA 이름, 설정 `conversion.timeZone`). 없으면 이 컴퓨터의 시간대.
@@ -110,6 +131,7 @@ export interface PropertyChangeContext {
 export class PropertyMapper {
   private schema: Map<string, NotionPropertySchema> = new Map();
   private wikilinkResolver: WikilinkResolver | null = null;
+  private peopleResolver: PeopleResolver = () => null;
 
   constructor(private readonly options: PropertyMapperOptions = {}) {}
 
@@ -120,6 +142,15 @@ export class PropertyMapper {
 
   setWikilinkResolver(resolver: WikilinkResolver): void {
     this.wikilinkResolver = resolver;
+  }
+
+  setPeopleResolver(resolver: PeopleResolver): void {
+    this.peopleResolver = resolver;
+  }
+
+  /** 스키마에 사람 속성이 있는가 — 있을 때만 사용자 목록을 읽는다. */
+  hasPeopleProperty(): boolean {
+    return [...this.schema.values()].some((prop) => prop.type === "people");
   }
 
   loadSchema(properties: Record<string, DatabasePropertySchema>): void {
@@ -527,11 +558,12 @@ export class PropertyMapper {
       }
 
       case "people": {
-        // pull 은 사람을 이름으로 적는다. 이름으로는 사용자를 찾을 수 없으므로 ID 로만 된
-        // 목록일 때만 보낸다(관계와 같은 이유).
+        // pull 은 사람을 이름으로 적는다 — 이름은 사용자 목록으로 id 를 찾는다. 하나라도 못 찾으면
+        // 보내지 않는다: 목록이 통째로 바뀌므로 못 찾은 사람이 Notion 에서 지워진다(관계와 같은 이유).
         const users = (Array.isArray(value) ? value : [value]).map(String);
-        if (users.length === 0 || !users.every(isNotionId)) return null;
-        return { people: users.map((id) => ({ object: "user" as const, id })) };
+        const ids = users.map((user) => (isNotionId(user) ? user : this.peopleResolver(user)));
+        if (ids.length === 0 || ids.some((id) => id === null)) return null;
+        return { people: ids.map((id) => ({ object: "user" as const, id: id! })) };
       }
 
       case "files": {
