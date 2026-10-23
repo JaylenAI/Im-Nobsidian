@@ -52,6 +52,76 @@ export function sendLiteralBackslashes(markdown: string): string {
   });
 }
 
+/** escape 쌍(`\x`). */
+const ESCAPED_CHAR_RE = /\\[\s\S]/g;
+/** escape 쌍은 그대로 넘기고 맨 대괄호만 잡는다. */
+const BRACKET_OR_ESCAPE_RE = /\\[\s\S]|[[\]]/g;
+
+/**
+ * push — 링크 글자 안의 `[` · `]` 를 `\[` · `\]` 로.
+ *
+ * CommonMark 은 링크 글자에 짝 맞은 대괄호를 허용한다(`[[1주] - 제목](url)`). Notion 은 그 링크를 읽지 못하고 글로 둔 뒤
+ * 주소에만 자동 링크를 건다 — 받으면 `[[1주] - 제목]([url](url))` 가 됐다(2026-10-23 실데이터 E2E · 탐침). escape 한
+ * `[\[1주\] - 제목](url)` 은 링크로 읽는다. 받기는 `\[` · `\]` 를 푼다(`unescapeBrackets`) — 노트가 그대로 돌아온다.
+ *
+ * 건드리지 않는 것: 글자가 통째로 대괄호인 `[[이름]](…)`(Obsidian 위키링크 뒤의 괄호다) · 안에 링크 · 이미지가 든 글자
+ * (`[![배지](…)](…)`) · 각주(`[^1]`) · 코드.
+ */
+export function escapeLinkTextBrackets(markdown: string): string {
+  if (!markdown.includes("](")) return markdown;
+  return mapOutsideCode(markdown, (segment) =>
+    segment.split("\n").map(escapeLineLinkText).join("\n"),
+  );
+}
+
+function escapeLineLinkText(line: string): string {
+  if (!line.includes("](")) return line;
+  let out = "";
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === "\\") {
+      out += line.slice(i, i + 2);
+      i++;
+      continue;
+    }
+    if (ch === "[") {
+      const close = closingBracket(line, i);
+      if (close !== -1 && line[close + 1] === "(") {
+        const text = line.slice(i + 1, close);
+        if (hasBareBrackets(text) && !keepsBrackets(text)) {
+          out += `[${text.replace(BRACKET_OR_ESCAPE_RE, (m) => (m.length === 1 ? `\\${m}` : m))}]`;
+          i = close;
+          continue;
+        }
+      }
+    }
+    out += ch;
+  }
+  return out;
+}
+
+/** `open` 의 `[` 와 짝인 `]` 의 자리 — escape 된 글자는 세지 않는다. 없으면 -1. */
+function closingBracket(line: string, open: number): number {
+  let depth = 0;
+  for (let i = open; i < line.length; i++) {
+    const ch = line[i];
+    if (ch === "\\") i++;
+    else if (ch === "[") depth++;
+    else if (ch === "]" && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/** escape 되지 않은 `[` · `]` 가 있나. */
+function hasBareBrackets(text: string): boolean {
+  return /[[\]]/.test(text.replace(ESCAPED_CHAR_RE, ""));
+}
+
+function keepsBrackets(text: string): boolean {
+  if (text.includes("](") || text.includes("[^")) return true;
+  return text.startsWith("[") && closingBracket(text, 0) === text.length - 1;
+}
+
 /**
  * pull — Notion 이 글 `\` 로 돌려준 `\\` 중 push 가 `\\` 로 보낸 모양(뒤가 문장부호 · 줄 끝이 아닌 것)만 `\` 로.
  * `\\*` · `\\[` 는 둔다 — 풀면 뒤 글자가 escape 된다.
