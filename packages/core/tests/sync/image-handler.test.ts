@@ -160,6 +160,18 @@ describe("ImageHandler.downloadAllImages — 받은 이미지 별칭", () => {
     expect(internal.content).toBe(signed.content);
   });
 
+  // 받은 파일을 올리면 `이름-<해시>.png` 그대로 올라간다 — 다른 볼트로 다시 받으면 해시가 또 붙었다(2026-10-23 E2E).
+  it("이 볼트가 붙인 내용 해시로 끝나는 이름은 해시를 다시 붙이지 않는다 — 다른 해시는 이름이다", async () => {
+    const again = await handler.downloadAllImages(
+      `![](${signedUrl(`다이어그램-v2-${SHA12}.png`)})`,
+      "행",
+    );
+    const other = await handler.downloadAllImages(`![](${signedUrl("표-0123456789ab.png")})`, "행");
+
+    expect(again.content).toBe(`![[attachments/다이어그램-v2-${SHA12}.png]]`);
+    expect(other.content).toBe(`![[attachments/표-0123456789ab-${SHA12}.png]]`);
+  });
+
   it.each([
     ["Notion 이 붙인 자리 이름", "image.png"],
     ["Notion 이 붙인 자리 이름 — 대문자", "Untitled.png"],
