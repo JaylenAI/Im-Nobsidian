@@ -415,6 +415,14 @@ function stripAlias(target: string): string {
  * 받은 이미지 파일 이름의 앞부분 — 올라간 파일 이름(`pic.png` → `pic`). 그 이름이 없거나 Notion 의 자리 이름이면
  * 노트 제목이다. 뒤에 내용 해시를 붙이므로 같은 이름의 다른 이미지와 겹치지 않는다.
  */
+/** 받은 첨부 이름에 붙이는 내용 해시(sha256 16진)의 길이 — `이름-<해시>.확장자`. */
+const NAME_HASH_LENGTH = 12;
+
+/** 받은 첨부 이름에 붙이는 내용 해시 — 전체 sha256 의 앞부분. */
+function nameHashOf(fullHash: string): string {
+  return fullHash.slice(0, NAME_HASH_LENGTH);
+}
+
 /**
  * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
  *
@@ -423,7 +431,7 @@ function stripAlias(target: string): string {
  * 해시는 받은 내용의 것과 같을 때만 뗀다 — 사람이 지은 이름은 그대로다.
  */
 export function withoutOwnHash(name: string, hash: string): string {
-  if (!/^[0-9a-f]{12}$/.test(hash)) return name;
+  if (hash.length !== NAME_HASH_LENGTH || !/^[0-9a-f]+$/.test(hash)) return name;
   const stripped = name.replace(new RegExp(`-${hash}(\\.[^./]*)?$`), "");
   return stripped === "" ? name : stripped;
 }
@@ -580,7 +588,7 @@ export class ImageHandler {
 
         const buffer = Buffer.from(await response.arrayBuffer());
         const fullHash = createHash("sha256").update(buffer).digest("hex");
-        const hash = fullHash.slice(0, 12);
+        const hash = nameHashOf(fullHash);
         const fileName = `${imageStemOf(withoutOwnHash(uploadedName, hash), pageTitle)}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 
@@ -840,7 +848,7 @@ export class ImageHandler {
   async uploadNoteAttachment(target: string, notePath: string): Promise<UploadedFile> {
     const uploaded = await this.uploadLocalImage(target, folderOf(notePath));
     const base = uploaded.localPath.split("/").pop() ?? uploaded.localPath;
-    const name = withoutOwnHash(base, uploaded.fileHash.slice(0, 12));
+    const name = withoutOwnHash(base, nameHashOf(uploaded.fileHash));
     // 이미지는 확장자 없는 줄기에 해시를 붙여 받는다(`도식-<해시>.png`) — 뗀 이름에 확장자를 돌려준다.
     const extension = /\.[^./]+$/.exec(base)?.[0] ?? "";
     return {
@@ -1516,7 +1524,7 @@ export class ImageHandler {
 
         const buffer = Buffer.from(await response.arrayBuffer());
         const fileHash = createHash("sha256").update(buffer).digest("hex");
-        const hash = fileHash.slice(0, 12);
+        const hash = nameHashOf(fileHash);
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const name = withoutOwnHash(caption, hash);
