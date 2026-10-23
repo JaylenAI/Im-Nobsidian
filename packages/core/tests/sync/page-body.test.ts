@@ -307,3 +307,16 @@ describe("notionBodyToObsidian — 북마크 (F-09)", () => {
     expect(md).toContain("[🔖 https://example.com/](https://example.com/)%%im-nobsidian:unknown:");
   });
 });
+
+describe("너무 큰 페이지 — 레코드 수 한도(2026-10-02 changelog)", () => {
+  it("다시 읽지 않고 알아볼 수 있는 말로 던진다", async () => {
+    const tooLarge = Object.assign(validationError("Page is too large"), {
+      additional_data: { limit_kind: "page_record_count", limit: 20000 },
+    });
+    const client = clientWith(REMOTE, tooLarge);
+    await expect(replacePageBody(client, PAGE_ID, "새 본문")).rejects.toThrow(
+      "Notion 페이지가 너무 커서 본문을 바꾸지 못함(레코드 20000개 넘음)",
+    );
+    expect(client.getPageMarkdown).not.toHaveBeenCalled();
+  });
+});

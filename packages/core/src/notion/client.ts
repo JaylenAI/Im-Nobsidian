@@ -73,6 +73,19 @@ export function isNotionValidationError(error: unknown): boolean {
 }
 
 /**
+ * 페이지가 너무 커서(레코드 수 한도) Notion 이 본문 편집을 거절했으면 그 한도. 2026-10-02 changelog: 약 20,000
+ * 레코드를 넘는 페이지에서 읽히지 않은 블록을 고치려 하면 400 에 `additional_data.limit_kind:
+ * "page_record_count"` 를 싣는다. 아니면 null.
+ */
+export function pageRecordLimitOf(error: unknown): number | null {
+  if (!isNotionValidationError(error)) return null;
+  const data = (error as { additional_data?: { limit_kind?: unknown; limit?: unknown } })
+    .additional_data;
+  if (data?.limit_kind !== "page_record_count") return null;
+  return typeof data.limit === "number" ? data.limit : Number.NaN;
+}
+
+/**
  * API 가 읽지 못하는 보기 종류면 그 이름. 2026-10-23 실측: Notion 앱에서 만든 `page` 보기는 `views.retrieve` 가
  * 400 `Unsupported view type: page` 로 거절한다.
  */
