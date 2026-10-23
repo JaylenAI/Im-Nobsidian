@@ -9,6 +9,7 @@ import { input, confirm } from "@inquirer/prompts";
 import ora from "ora";
 import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
+import { outerConnectionTracking } from "../utils/vault.js";
 
 /** 루트 페이지에서 ID 를 못 찾았을 때 — 주소를 그대로 붙여 넣어도 된다고 말한다. */
 const ROOT_PAGE_UNREADABLE =
@@ -25,6 +26,16 @@ export const initCommand = new Command("init")
 
     console.log(`\n${header(chalk.cyan("  Im-Nobsidian Setup"))}`);
     console.log(`  ${separator()}`);
+
+    // 바깥 연결이 이미 이 폴더를 동기화하면 따로 연결하지 않는다(ADR-038) — 바깥 연결이 멈춘다.
+    const outer = outerConnectionTracking(cwd);
+    if (outer) {
+      console.error(
+        `이 폴더는 이미 ${outer.folder} 의 연결이 노트 ${outer.notes}개를 동기화하고 있어 따로 연결할 수 없습니다.`,
+      );
+      process.exitCode = 1;
+      return;
+    }
 
     if (options.nonInteractive) {
       if (!options.token || !options.rootPageId) {
