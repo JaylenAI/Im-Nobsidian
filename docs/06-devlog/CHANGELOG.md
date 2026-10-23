@@ -641,6 +641,70 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - 블록 타입: 25+ 양방향 지원
 - 속성 타입: 21 읽기, 15 쓰기
 
+## [0.1.4] - 2026-05-16
+
+### Added
+
+- **DatabaseSyncer** — 다중 Notion 데이터베이스 양방향 동기화. `databases` 설정으로 DB별 로컬 폴더/속성 매핑/필터 지정 가능
+- **Standalone 파일 동기화** — 비-md 파일 (이미지/PDF 등) 업로드/다운로드 지원
+- **pushUpdatePage 폴백 체인 개선** — 부분 업데이트 실패 시 replacePageMarkdown → blocks API 3단계 폴백
+- 테스트 434 → 486 (52개 추가)
+  - 부분 업데이트 검증 4개 (compute-patches)
+  - Enhanced MD 라운드트립 9개 (미디어/탭/색상/중첩토글/다중색상/테이블/수학식)
+  - 픽스처 기반 라운드트립 6개 (media-embed, color-formatting, notion-only, complex-table, frontmatter-all-types, mixed-callout-toggle)
+  - DatabaseSyncer 단위 테스트 17개
+  - Orchestrator 모킹 보강 16개
+- 라운드트립 픽스처 17 → 20개 (complex-table, frontmatter-all-types, mixed-callout-toggle)
+
+### Fixed
+
+- **이미지 Push File Upload API 버그** — `send()` 후 상태가 `uploaded`로 자동 전환되어 `complete()` 호출 시 에러 발생하던 문제 수정. send() 응답 상태 확인 후 `pending`일 때만 complete() 호출
+
+### Changed
+
+- `SyncOrchestrator` — DatabaseSyncer 위임으로 push/pull 시 DB 동기화 자동 실행
+- `Config` 타입 — `databases` 배열 추가 (DatabaseSyncConfig)
+- `NotionClient` — `queryAllDatabasePages()`, `getDataSourceId()` 추가
+
+## [0.1.3] - 2026-05-15
+
+### Added
+
+- **Partial page update (`update_content`)** — 변경이 적을 때(≤20 패치) search-and-replace 방식 부분 업데이트. 동시 편집 시 다른 섹션 보존
+- **Move page API** — 파일 이동 시 Notion 페이지를 delete+create 대신 위치 이동. 히스토리/코멘트 보존
+- **Conflict remote content** — 충돌 시 `remoteContent: ""` 대신 실제 Notion 페이지 내용 조회
+- **Media tag conversion** — `<audio>/<video>/<pdf>/<file>` Enhanced MD 태그 ↔ 이모지 링크 양방향 변환
+- **Tab block preservation** — `<tab>` 블록 ↔ `> [!tab]` 콜아웃 양방향 변환
+- **Color/underline preservation** — `<span color>/<span underline>` → 보존 마커로 라운드트립 유지 (기존: 색상 제거)
+- **Unknown block preservation** — `<unknown>` 블록 → 보존 마커 생성 (기존: 삭제). bookmark/embed/link preview 등 Notion 전용 블록 보존
+- **Read-only property skip** — Push 시 `created_time`, `formula`, `rollup`, `unique_id` 등 8종 읽기전용 속성 자동 스킵 (API 에러 방지)
+- **Timezone normalization** — `T00:00:00.000+09:00` 등 타임존 오프셋 포함 자정 시각도 `YYYY-MM-DD`로 정규화
+- **Empty array exclusion** — 빈 배열 속성(`tags: []`) 프론트매터에서 자동 제외
+- 테스트 409 → 434 (25개 추가: 미디어/색상/밑줄/unknown/tab/속성 스킵/타임존)
+- 라운드트립 픽스처 14 → 17개 (media-embed, color-formatting, notion-only-blocks)
+
+### Changed
+
+- `<unknown>` 블록 처리: 삭제 → 보존 마커 (`%%im-nobsidian:unknown:...%%`)
+- `<span color>` 처리: 색상 제거 → 보존 마커 (`%%im-nobsidian:color:...%%`)
+- Push 시 `moved` 상태 처리: `pushUpdate()` → `pushMove()` (Move API 우선, 실패 시 fallback)
+- `normalizeDate()`: 3개 패턴 → 통합 정규식 `MIDNIGHT_RE`
+
+## [0.1.2] - 2026-05-15
+
+### Added
+
+- **Relation Write** — 프론트매터 `[[wikilink]]` → Notion relation 속성 양방향 매핑
+- **Relation Pull 역변환** — Notion relation pageId → `[[PageName]]` wikilink 자동 변환
+- **People Write** — user ID 기반 Notion people 속성 쓰기
+- **Files Write** — 외부 URL 기반 Notion files 속성 쓰기
+- **Date range Write** — start + end 양방향 지원 (end 필드 추가)
+- **PDF 블록 Pull** — 커스텀 트랜스포머로 `[📄 caption](url)` 변환
+- **Embed 블록 Pull** — 커스텀 트랜스포머로 `[caption](url)` 변환
+- **ISO 날짜 정규화** — `T00:00:00.000Z` 제거하여 깔끔한 `YYYY-MM-DD` 프론트매터
+- **WikilinkResolver 연동** — orchestrator에서 propertyMapper에 stateDb 위키링크 해석기 연결
+- 테스트 377→409 (date range, relation 테스트 추가)
+
 ## [0.1.1] - 2026-05-13
 
 ### Fixed
