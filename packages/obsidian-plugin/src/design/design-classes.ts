@@ -21,8 +21,11 @@ export const DESIGN_CLASS = {
   columnHead: "im-nobsidian-column-head",
 } as const;
 
-/** 열 색을 고르는 속성 — 값은 열 번호를 4 로 나눈 나머지. 이름표는 {@link COLUMN_LABEL_ATTR}. */
+/** 열 색을 고르는 속성 — 값은 열 번호를 {@link COLUMN_COLOR_COUNT} 로 나눈 나머지. 이름표는 {@link COLUMN_LABEL_ATTR}. */
 export const COLUMN_INDEX_ATTR = "data-im-nobsidian-column";
+
+/** 열 색의 수 — `styles.css` 의 `[data-im-nobsidian-column="1|2|3"]` 규칙 셋 + 기본색. 규칙을 늘리면 같이 늘린다. */
+export const COLUMN_COLOR_COUNT = 4;
 export const COLUMN_LABEL_ATTR = "data-im-nobsidian-column-label";
 
 /** `red` → `im-nobsidian-color-red`, `red_bg` → `im-nobsidian-bg-red`. */

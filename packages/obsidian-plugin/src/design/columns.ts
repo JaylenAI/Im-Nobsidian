@@ -1,5 +1,15 @@
-import { columnLabel, readColumnLayout, type ColumnPlace } from "@im-nobsidian/core";
-import { COLUMN_INDEX_ATTR, COLUMN_LABEL_ATTR, DESIGN_CLASS } from "./design-classes.js";
+import {
+  columnLabel,
+  hasColumnLayout,
+  readColumnLayout,
+  type ColumnPlace,
+} from "@im-nobsidian/core";
+import {
+  COLUMN_COLOR_COUNT,
+  COLUMN_INDEX_ATTR,
+  COLUMN_LABEL_ATTR,
+  DESIGN_CLASS,
+} from "./design-classes.js";
 
 /**
  * 펼친 Notion 컬럼의 열 경계 (#74).
@@ -27,7 +37,7 @@ function layoutOf(text: string): { lines: readonly string[]; places: (ColumnPlac
 
 /** 컬럼 마커가 있을 수 있는가 — 없으면 줄을 나누지 않는다. */
 export function hasColumns(text: string): boolean {
-  return text.includes(":column-list:start%%");
+  return hasColumnLayout(text);
 }
 
 /** 줄에 붙일 속성 — 컬럼 밖이면 null. 이름표는 `labeled` 일 때만. */
@@ -36,7 +46,9 @@ export function columnAttributes(
   labeled: boolean,
 ): { className: string; attributes: Record<string, string> } | null {
   if (!place) return null;
-  const attributes: Record<string, string> = { [COLUMN_INDEX_ATTR]: String(place.index % 4) };
+  const attributes: Record<string, string> = {
+    [COLUMN_INDEX_ATTR]: String(place.index % COLUMN_COLOR_COUNT),
+  };
   if (labeled) attributes[COLUMN_LABEL_ATTR] = columnLabel(place);
   return {
     className: labeled ? `${DESIGN_CLASS.column} ${DESIGN_CLASS.columnHead}` : DESIGN_CLASS.column,
