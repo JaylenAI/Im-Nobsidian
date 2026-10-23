@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { UploadedFile } from "../notion/property-mapper.js";
 import { Sema } from "async-sema";
 import type { VaultFS } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
@@ -829,6 +830,23 @@ export class ImageHandler {
     const fileHash = createHash("sha256").update(buffer).digest("hex");
 
     return { localPath: resolvedPath, fileUploadId, fileHash, fileSize: buffer.length };
+  }
+
+  /**
+   * 노트가 가리키는 볼트 첨부 하나를 올린다 — 파일 속성 값으로 보낼 것.
+   *
+   * @returns 보일 이름은 받을 때 붙인 내용 해시를 뗀 것이다 — 다시 받으면 같은 이름 · 같은 경로가 된다.
+   */
+  async uploadNoteAttachment(target: string, notePath: string): Promise<UploadedFile> {
+    const uploaded = await this.uploadLocalImage(target, folderOf(notePath));
+    const base = uploaded.localPath.split("/").pop() ?? uploaded.localPath;
+    const name = withoutOwnHash(base, uploaded.fileHash.slice(0, 12));
+    // 이미지는 확장자 없는 줄기에 해시를 붙여 받는다(`도식-<해시>.png`) — 뗀 이름에 확장자를 돌려준다.
+    const extension = /\.[^./]+$/.exec(base)?.[0] ?? "";
+    return {
+      fileUploadId: uploaded.fileUploadId,
+      name: name !== base && !/\.[^./]+$/.test(name) ? `${name}${extension}` : name,
+    };
   }
 
   async uploadAndAppendImages(

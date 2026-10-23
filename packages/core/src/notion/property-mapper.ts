@@ -126,6 +126,18 @@ export interface PropertyChangeContext {
    * ({@link patchRichText}). 없으면 평문으로 보낸다.
    */
   readonly remote?: Readonly<Record<string, unknown>>;
+  /**
+   * 파일 속성의 볼트 첨부(`[[attachments/…]]` 의 경로)를 올린 것 — 있으면 그 첨부를 올린 파일로 보낸다
+   * ({@link PropertyMapper.localFileTargets}). 없는 첨부가 섞인 값은 보내지 않는다.
+   */
+  readonly uploads?: ReadonlyMap<string, UploadedFile>;
+}
+
+/** Notion 에 올린 볼트 파일 — 파일 속성 값으로 보낸다. */
+export interface UploadedFile {
+  readonly fileUploadId: string;
+  /** Notion 에 보일 이름 — 받을 때 붙인 내용 해시를 뗀 것. */
+  readonly name: string;
 }
 
 export class PropertyMapper {
@@ -253,7 +265,13 @@ export class PropertyMapper {
         ? null
         : schemaProp.type === "rich_text"
           ? richTextRequest(String(value), richTextRunsOf(context.remote, key))
-          : this.convertBySchema(schemaProp.type, value, zone, schemaProp.relationTargets);
+          : this.convertBySchema(
+              schemaProp.type,
+              value,
+              zone,
+              schemaProp.relationTargets,
+              context.uploads,
+            );
       if (converted) properties[key] = converted;
       else skipped.push(key);
     }
@@ -282,6 +300,25 @@ export class PropertyMapper {
     return [...this.schema.values()].some(
       (prop) => READ_ONLY_TYPES.has(prop.type) && prop.type !== "button",
     );
+  }
+
+  /**
+   * 바뀐 값 가운데 파일 속성이 가리키는 볼트 첨부의 경로 — 호출측이 올려 {@link PropertyChangeContext.uploads} 로 준다.
+   *
+   * pull 은 Notion 에 올라간 파일을 받아 `[[attachments/…]]` 로 적는다. 그 값을 새 행이나 바뀐 값으로 보낼 때
+   * 첨부를 다시 올리지 않으면 보낼 수가 없다 — 다른 페이지로 옮겨 올린 행의 파일 속성이 비었다(2026-10-23 E2E 9건).
+   */
+  localFileTargets(changed: Readonly<Record<string, unknown>>): string[] {
+    const targets = new Set<string>();
+    for (const [key, raw] of Object.entries(changed)) {
+      if (this.schema.get(key)?.type !== "files") continue;
+      const value = plainFrontmatterValue(raw);
+      for (const item of Array.isArray(value) ? value : [value]) {
+        const target = WIKILINK_REGEX.exec(String(item ?? "").trim())?.[1];
+        if (target) targets.add(target);
+      }
+    }
+    return [...targets];
   }
 
   /** relation 값(위키링크 · 페이지 id 목록)이 가리키는 페이지 가운데 알아본 것. */
@@ -482,6 +519,7 @@ export class PropertyMapper {
     value: unknown,
     zone: string,
     relationTargets?: readonly string[],
+    uploads?: ReadonlyMap<string, UploadedFile>,
   ): NotionPropertyValue | null {
     switch (type) {
       case "rich_text":
@@ -573,6 +611,11 @@ export class PropertyMapper {
         // (전송 시 통째 교체) 일부만 보내면 나머지 첨부가 삭제되고, 서명 URL 을 external
         // 로 되밀면 약 1시간 뒤 만료되는 깨진 파일로 Notion 원본이 오염된다(실측).
         // 미전송 시 Notion 이 기존 첨부를 그대로 보존하므로 이것이 무손실 경로다.
+        // 올린 볼트 첨부(uploads)는 그 파일로 보낸다 — 새 행 · 바뀐 값이라 지울 원격 파일이 없거나 바꾸려는 것이다.
+        const uploadOf = (u: string): UploadedFile | undefined => {
+          const target = WIKILINK_REGEX.exec(u.trim())?.[1];
+          return target ? uploads?.get(target) : undefined;
+        };
         const urls = fileList.map((f) => {
           if (typeof f === "object" && f !== null && "url" in f) {
             return String((f as { url?: unknown }).url ?? "");
@@ -580,7 +623,7 @@ export class PropertyMapper {
           return String(f);
         });
         const hasProtected = urls.some(
-          (u) => WIKILINK_REGEX.test(u.trim()) || isNotionHostedFileUrl(u),
+          (u) => (WIKILINK_REGEX.test(u.trim()) && !uploadOf(u)) || isNotionHostedFileUrl(u),
         );
         if (hasProtected) return null;
 
@@ -599,6 +642,14 @@ export class PropertyMapper {
             }
             const url = String(f);
             if (!url) return null;
+            const uploaded = uploadOf(url);
+            if (uploaded) {
+              return {
+                type: "file_upload",
+                name: fileName(uploaded.name, uploaded.name),
+                file_upload: { id: uploaded.fileUploadId },
+              };
+            }
             return { type: "external", name: fileName(url, url), external: { url } };
           })
           .filter(Boolean);

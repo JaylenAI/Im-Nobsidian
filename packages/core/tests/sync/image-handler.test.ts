@@ -313,6 +313,19 @@ describe("ImageHandler — 업로드", () => {
     expect(mockNotion.uploadFile).toHaveBeenCalledWith(expect.any(Blob), "photo.png", "image/png");
   });
 
+  it("파일 속성으로 보낼 첨부는 받을 때 붙인 해시를 뗀 이름으로 보인다", async () => {
+    const bytes = Buffer.from("pdf-bytes");
+    const h = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+    (mockFs.readBinary as ReturnType<typeof vi.fn>).mockResolvedValue(bytes);
+
+    const named = async (target: string) =>
+      (await handler.uploadNoteAttachment(target, "DB/행.md")).name;
+
+    expect(await named(`attachments/보고서.pdf-${h}.pdf`)).toBe("보고서.pdf");
+    expect(await named(`attachments/도식-${h}.png`)).toBe("도식.png");
+    expect(await named("attachments/표-0123456789ab.png")).toBe("표-0123456789ab.png");
+  });
+
   it("readBinary 실패 시 attachments 폴더에서 재시도", async () => {
     (mockFs.readBinary as ReturnType<typeof vi.fn>)
       .mockRejectedValueOnce(new Error("ENOENT"))
