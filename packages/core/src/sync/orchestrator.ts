@@ -36,7 +36,7 @@ import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
-import { ConnectionScopeError } from "./connection-folders.js";
+import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
 import { nextPullWatermark } from "./pull-watermark.js";
 import {
   DatabasePullLedger,
@@ -1039,7 +1039,12 @@ export class SyncOrchestrator {
           operation: op,
           ...(outcome.unchanged ? { unchanged: true } : {}),
         });
-      } catch {
+      } catch (error) {
+        // 다른 연결 폴더의 자리(ADR-038)는 다시 해도 같다 — 그 자리를 이름으로 알린다.
+        if (error instanceof ConnectionBoundaryError) {
+          failed.push({ ...toFailure(change, error), path: error.path });
+          return;
+        }
         retryQueue.push(change);
       }
     };

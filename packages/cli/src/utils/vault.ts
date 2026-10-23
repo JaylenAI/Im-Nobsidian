@@ -51,7 +51,12 @@ export function outerConnectionTracking(cwd: string): { folder: string; notes: n
       const scope = relative(dir, cwd).split("\\").join("/");
       const db = StateDB.open(manager.dbPath);
       try {
-        const notes = db.getAll().filter((r) => matchesPathScope(r.obsidianPath, scope)).length;
+        // 폴더 자신의 레코드(폴더 페이지)는 빼고 그 안의 것만 센다.
+        const notes = db
+          .getAll()
+          .filter(
+            (r) => r.obsidianPath !== scope && matchesPathScope(r.obsidianPath, scope),
+          ).length;
         return notes > 0 ? { folder: dir, notes } : null;
       } finally {
         db.close();

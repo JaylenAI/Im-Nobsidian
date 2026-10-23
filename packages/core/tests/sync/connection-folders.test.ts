@@ -164,6 +164,8 @@ describe("두 연결을 한 볼트에서 끝까지", () => {
 
     expect(vault.read("Work/a.md")).toBe("work 의 노트\n");
     expect(result.failed.map((f) => f.error).join("\n")).toMatch(/다른 연결 폴더\(Work\)/);
+    // 다시 해도 같은 실패라 재시도하지 않고, 내부 id 가 아니라 볼트 자리로 알린다.
+    expect(result.failed.map((f) => f.path)).toContain("Work");
   });
 
   it("이미 동기화하던 폴더를 따로 연결하면 바깥 연결은 아무것도 하지 않고 멈춘다", async () => {
