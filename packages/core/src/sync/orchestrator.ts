@@ -28,7 +28,11 @@ import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/com
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
-import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
+import {
+  PropertyMapper,
+  peopleResolverOf,
+  type WikilinkResolver,
+} from "../notion/property-mapper.js";
 import { getLogger } from "../utils/logger.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
@@ -210,6 +214,7 @@ export class SyncOrchestrator {
       (databaseId) => notionClient.getDatabaseSchema(databaseId),
       wikilinkResolver,
       () => PropertyMapper.fromConfig(config),
+      async () => peopleResolverOf(await notionClient.listUsers()),
     );
 
     this.drift = new RemoteDriftChecker(

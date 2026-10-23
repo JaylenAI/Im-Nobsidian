@@ -1,9 +1,11 @@
 import {
   PropertyMapper,
   type DatabasePropertySchema,
+  type PeopleResolver,
   type WikilinkResolver,
 } from "../notion/property-mapper.js";
 import { compactNotionId } from "../utils/id.js";
+import { getLogger } from "../utils/logger.js";
 
 type SchemaLoader = (databaseId: string) => Promise<Record<string, DatabasePropertySchema>>;
 
@@ -18,12 +20,15 @@ type SchemaLoader = (databaseId: string) => Promise<Record<string, DatabasePrope
  */
 export class RowSchemaCache {
   private readonly mappers = new Map<string, Promise<PropertyMapper>>();
+  private people: Promise<PeopleResolver> | null = null;
 
   constructor(
     private readonly loadSchema: SchemaLoader,
     private readonly wikilinkResolver: WikilinkResolver,
     /** 빈 매퍼를 만든다 — 설정의 변환 옵션(시간대)을 따르게 호출측이 정한다. */
     private readonly createMapper: () => PropertyMapper = () => new PropertyMapper(),
+    /** 사람 이름을 사용자 id 로 — 사람 속성이 있는 DB 를 처음 만날 때 한 번 읽는다. */
+    private readonly loadPeople?: () => Promise<PeopleResolver>,
   ) {}
 
   mapperFor(databaseId: string): Promise<PropertyMapper> {
@@ -31,10 +36,11 @@ export class RowSchemaCache {
     const cached = this.mappers.get(key);
     if (cached) return cached;
 
-    const created = this.loadSchema(databaseId).then((schema) => {
+    const created = this.loadSchema(databaseId).then(async (schema) => {
       const mapper = this.createMapper();
       mapper.setWikilinkResolver(this.wikilinkResolver);
       mapper.loadSchema(schema);
+      if (mapper.hasPeopleProperty()) mapper.setPeopleResolver(await this.peopleResolver());
       return mapper;
     });
     this.mappers.set(key, created);
@@ -46,5 +52,20 @@ export class RowSchemaCache {
 
   clear(): void {
     this.mappers.clear();
+    this.people = null;
+  }
+
+  /** 사용자 목록을 못 읽으면 이름은 풀지 않는다 — id 로 적힌 사람만 보낸다(예전 동작). */
+  private peopleResolver(): Promise<PeopleResolver> {
+    const load = this.loadPeople;
+    if (!load) return Promise.resolve(() => null);
+    return (this.people ??= load().catch((error: unknown) => {
+      getLogger().warn(
+        `[Im-Nobsidian] 사용자 목록을 읽지 못해 이름으로 적힌 사람 속성은 보내지 않습니다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return () => null;
+    }));
   }
 }

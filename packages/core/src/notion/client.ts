@@ -370,6 +370,20 @@ export class NotionClient {
     return names;
   }
 
+  /** 워크스페이스 사용자 전부(사람 · 봇) — 손님은 API 가 돌려주지 않는다. */
+  async listUsers(): Promise<Array<{ id: string; name?: string | null }>> {
+    const users: Array<{ id: string; name?: string | null }> = [];
+    let cursor: string | undefined;
+    do {
+      const page = await this.withRateLimit(() =>
+        this.client.users.list({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
+      );
+      for (const user of page.results) users.push({ id: user.id, name: user.name ?? null });
+      cursor = page.has_more ? (page.next_cursor ?? undefined) : undefined;
+    } while (cursor);
+    return users;
+  }
+
   // ─── Page CRUD ───
 
   async getPage(pageId: string): Promise<PageObjectResponse> {
