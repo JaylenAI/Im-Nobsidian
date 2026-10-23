@@ -124,10 +124,10 @@ describe("R10 — 볼트 밖 페이지 링크는 죽은 위키링크가 아니�
     expect(written).toBe(`앞 [License](https://www.notion.so/${UNTRACKED}) 뒤\n`);
   });
 
-  it("라벨 없는 미추적 링크는 id 를 라벨로 쓴다 — 그래도 클릭은 된다", async () => {
+  it("라벨 없는 미추적 링크는 그 페이지의 제목을 라벨로 쓴다 — 못 읽으면 id(out-of-scope-mention-title)", async () => {
     const { written } = await runPostPass(`[[notion:${UNTRACKED}]]\n`);
 
-    expect(written).toBe(`[${UNTRACKED}](https://www.notion.so/${UNTRACKED})\n`);
+    expect(written).toBe(`[Test Page](https://www.notion.so/${UNTRACKED})\n`);
   });
 
   it("격하는 해소 **뒤**에만 일어난다 — 볼트에 있는 대상은 위키링크로 남는다", async () => {
@@ -286,7 +286,11 @@ describe("R10 — 후처리는 공유 해소 + 공유 격하의 합성일 뿐이
     it(`합성 일치: ${input}`, async () => {
       const { written } = await runPostPass(`${input}\n`);
       const post = written ?? `${input}\n`;
-      const composed = degradeUnresolvedNotionIdWikilinks(runConversionPass(input)).markdown;
+      // 볼트 밖 페이지는 제목을 읽어 둔다 — 목 클라이언트는 어느 페이지나 「Test Page」 다.
+      const composed = degradeUnresolvedNotionIdWikilinks(
+        runConversionPass(input),
+        new Map([[UNTRACKED, "Test Page"]]),
+      ).markdown;
 
       expect(post).toBe(`${composed}\n`);
     });
