@@ -132,6 +132,7 @@
 | 4 뒤 | `fix/discovery-child-refs`                   | 실데이터 E2E — 큰 트리를 만든 직후 받기가 40 페이지를 실패 0 으로 빠뜨림                                                                                                                                                           | 완료           |
 | 4 뒤 | `fix/self-pull-churn`                        | 실데이터 E2E — 올린 직후 같은 볼트로 받으면 13 노트를 다시 씀                                                                                                                                                                      | 완료           |
 | 4 뒤 | `fix/roundtrip-escapes`                      | 실데이터 왕복 — 붙은 인라인 수식 · 글 `*` 든 기울임이 Notion 에서 글로                                                                                                                                                             | 완료           |
+| 4 뒤 | `fix/out-of-scope-mention`                   | 실데이터 E2E — 볼트 밖 페이지 멘션이 `[<id>](…)` 로                                                                                                                                                                                | 완료           |
 | 끝   | `docs/converter-adr` · `docs/release-v0.4.0` | Q4 ADR · 버전 · CHANGELOG                                                                                                                                                                                                          | 대기           |
 
 기준선(`5142bdf`, 2026-09-26~27): pull 847.3초 · 재pull 523.5초 · sync 509.9초 ·
