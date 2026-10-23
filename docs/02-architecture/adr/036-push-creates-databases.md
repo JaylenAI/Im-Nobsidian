@@ -67,8 +67,8 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
 
 - unique_id 값 · created/last_edited 시각 · 만든 사람은 Notion 이 새로 매긴다 — 다시 받으면 frontmatter 의 그 값이 바뀐다.
 - unique_id prefix 는 받아 온 DB 와 같은 워크스페이스면 겹쳐 접두어 없이 만든다(알림).
-- status 그룹 — 기본 세 옵션이 원래 있었으면 기본으로 만들어 제 그룹에 두고, 나머지 옵션은 To-do 에 둔다(원래 그룹과
-  다르면 알림). 옵션 이름도 바꿀 수 없다.
+- status 그룹 — 옵션마다 원래 그룹(`group`)으로 만든다(API 2026-06-22). 그룹 셋의 이름 · 차례와 기본 옵션
+  (`default_option`, 읽기 전용)은 Notion 이 정한다 — 그룹을 모르는 옵션은 To-do 에 두고 알린다.
 - 속성 순서 — data source 의 속성은 순서 없는 맵이다. 다시 받으면 frontmatter · `.base` 의 속성 순서가 바뀔 수 있다.
 - 루트 아래 DB 들의 폴더(`databases/`)는 pull 이 만든 자리다 — 페이지로 만들지 않고 그 안의 DB 를 루트 아래에 만든다.
 - people 값은 이름으로만 볼트에 있어 보내지 않는다(사용자 id 를 알 수 없다).
