@@ -21,6 +21,7 @@ import { computeHash } from "../utils/hash.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
+import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { DatabaseSyncer } from "./database-syncer.js";
@@ -167,20 +168,17 @@ export class PagePuller {
 
     const fetched = await this.fetchPageMarkdown(pageId);
     const hasChildPages = this.hasChildContainers(pageId, fetched.children);
-    const hasContent = fetched.content.trim().length > 0;
+    if (hasChildPages && !fetched.hasBody) {
+      return this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName);
+    }
 
     let filePath: string;
-    let fileType: "file" | "folder-note" | "folder-only";
+    let fileType: "file" | "folder-note";
 
-    if (hasChildPages && hasContent) {
+    if (hasChildPages) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
       filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
       fileType = "folder-note";
-      await this.vaultFs.ensureFolder(folderPath);
-    } else if (hasChildPages && !hasContent) {
-      const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
-      fileType = "folder-only";
       await this.vaultFs.ensureFolder(folderPath);
     } else {
       filePath = await this.resolveUniqueFilePath(parentPath, safeName, pageId);
@@ -233,6 +231,39 @@ export class PagePuller {
     });
 
     return filePath;
+  }
+
+  /**
+   * 자식 말고 본문이 없는 페이지는 폴더로만 받는다 — 노트를 쓰지 않고 폴더 경로를 추적한다(폴더 레코드).
+   *
+   * push 가 폴더 노트 없는 폴더로 만든 페이지가 그렇다. 그 볼트에서는 폴더 레코드라 노트가 없는데, 새 볼트로
+   * 받으면 자식 태그가 `[[자식]]` 줄로 바뀐 본문을 «본문» 으로 보고 `X/X.md` 를 썼다(실데이터 재왕복 19 폴더).
+   * 본문이 생기면 다음 pull 이 폴더 노트로 받는다({@link pullFolderRecord}).
+   */
+  private async createFolderOnly(
+    pageId: string,
+    page: PageObjectResponse,
+    fingerprint: string | null,
+    parentPath: string,
+    safeName: string,
+  ): Promise<string> {
+    const folderPath = stripMarkdownExtension(
+      await this.resolveUniqueFilePath(parentPath, safeName, pageId),
+    );
+    const resolvedParentId = await extractParentId(this.notionClient, page);
+    await this.vaultFs.ensureFolder(folderPath);
+    this.stateDb.upsert({
+      obsidianPath: folderPath,
+      notionPageId: pageId,
+      notionParentId: resolvedParentId,
+      contentHash: "",
+      ...this.observation.fieldsOf(page, fingerprint),
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: "folder-only",
+      status: "synced",
+    });
+    return folderPath;
   }
 
   async pullUpdate(change: RemoteChange): Promise<PullOutcome> {
@@ -542,6 +573,8 @@ export class PagePuller {
     compact: boolean;
     children: ChildTag[];
     fingerprint: string | null;
+    /** 자식 페이지 · 자식 DB 태그와 빈 블록 말고 본문이 있는가 — 받은 원문으로 본다({@link hasBodyBesidesChildren}). */
+    hasBody: boolean;
   }> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
@@ -557,6 +590,7 @@ export class PagePuller {
           compact: isCompactExport(result.markdown),
           children: extractChildTags(result.markdown),
           fingerprint: remoteBodyFingerprint(result.markdown),
+          hasBody: hasBodyBesidesChildren(result.markdown),
         };
       } catch (error) {
         // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
@@ -577,6 +611,7 @@ export class PagePuller {
       compact: isCompactExport(fallback.markdown),
       children: extractChildTags(fallback.markdown),
       fingerprint: null,
+      hasBody: hasBodyBesidesChildren(fallback.markdown),
     };
   }
 
