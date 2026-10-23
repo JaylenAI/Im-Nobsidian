@@ -45,8 +45,8 @@ import {
  * — 펜스 밖 빈 줄이 하나라도 있으면 저작형으로 보고 무동작 — 으로 폴백한다.
  * 저작형 문서의 hard-wrap 문단·마커 주변 간격을 재그룹핑으로 파손하지 않기 위함.
  *
- * 한계: Notion 문단 내부 soft break(shift+enter)로 생긴 다중 행은 문단 경계와
- * 구분 불가능해 별개 문단으로 분리된다.
+ * 문단 안의 줄바꿈(shift+enter)은 export 가 `<br>` 로 내보내 한 줄로 온다 — 문단 경계와 섞이지 않는다
+ * (2026-10-23 실측). 압축형 판정에서 공백만 든 줄은 빈 줄이 아니다 — 공백뿐인 문단이다.
  *
  * 탭 블록(`<tabs>` … `</tabs>`)은 변환기가 원시 NFM 그대로 내려보낸다. 안을 문단으로 보고 빈 줄을
  * 끼우고 탭을 칸으로 펴면 Obsidian 이 탭 안 글을 들여쓴 코드블록으로 그리고, 그 노트를 고쳐 push
@@ -432,11 +432,20 @@ function expandLead(line: string, lead: string): string {
  * 빈 줄로 계수되지 않음). 프론트매터는 export 에 존재하지 않으므로 고려하지 않는다.
  */
 export function isCompactExport(rawMarkdown: string): boolean {
-  return !hasBlankOutsideFences(rawMarkdown.split("\n"), 0);
+  // 공백만 든 줄은 빈 줄이 아니다 — 공백 하나뿐인 문단이다. 빈 줄로 세면 그 문단 하나 때문에 압축형을 저작형으로
+  // 보고 간격을 넣지 않았다(실데이터 13 노트의 블록이 빈 줄 없이 붙었다, 2026-10-23 E2E).
+  return !hasBlankOutsideFences(rawMarkdown.split("\n"), 0, (line) => line === "");
 }
 
+/** 볼트 글의 빈 줄 — 공백만 있어도 Markdown 은 빈 줄로 읽는다. */
+const isBlankLine = (line: string): boolean => line.trim() === "";
+
 /** 프론트매터 뒤~말미 빈 줄 앞 구간에서 펜스 밖 빈 줄 존재 여부(압축형 판정). */
-function hasBlankOutsideFences(lines: string[], start: number): boolean {
+function hasBlankOutsideFences(
+  lines: string[],
+  start: number,
+  isBlank: (line: string) => boolean = isBlankLine,
+): boolean {
   let end = lines.length - 1;
   while (end >= start && lines[end]!.trim() === "") end--;
 
@@ -457,7 +466,7 @@ function hasBlankOutsideFences(lines: string[], start: number): boolean {
       fence = "math";
       continue;
     }
-    if (raw.trim() === "") return true;
+    if (isBlank(raw)) return true;
   }
   return false;
 }
