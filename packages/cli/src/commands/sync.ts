@@ -1,11 +1,5 @@
 import { Command } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import chalk from "chalk";
 import {
   header,
@@ -21,6 +15,7 @@ import {
   remoteScanLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
+import { openVaultFs } from "../utils/vault.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
@@ -38,7 +33,7 @@ export const syncCommand = new Command("sync")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       log(`\n${header("  Bidirectional Sync")}`);

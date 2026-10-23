@@ -1,13 +1,8 @@
 import { Command } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import chalk from "chalk";
 import { header, separator, dimText } from "../utils/format.js";
+import { openVaultFs } from "../utils/vault.js";
 
 export const fetchCommand = new Command("fetch")
   .description("Notion 리모트 상태 스캔 (삭제 감지 포함)")
@@ -19,7 +14,7 @@ export const fetchCommand = new Command("fetch")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       console.log(dimText("  Scanning remote pages..."));

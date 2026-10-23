@@ -40,6 +40,8 @@ vi.mock("@im-nobsidian/core", () => ({
       return { pull, push, conflicts: pull.conflicts, duration: pull.duration + push.duration };
     },
   })),
+  findConnectionFolders: vi.fn().mockResolvedValue([]),
+  ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
   setLogger: (...args: unknown[]) => mockSetLogger(...args),
 }));

@@ -1,11 +1,5 @@
 import { Command, Option } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import chalk from "chalk";
 import {
   header,
@@ -22,6 +16,7 @@ import {
   remoteScanLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
+import { openVaultFs } from "../utils/vault.js";
 
 export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
@@ -49,7 +44,7 @@ export const pullCommand = new Command("pull")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       if (!json) {
