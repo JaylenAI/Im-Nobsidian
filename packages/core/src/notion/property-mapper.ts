@@ -11,7 +11,17 @@ type NotionPropertySchema = {
   id: string;
   type: string;
   name: string;
+  /** relation 이 가리키는 DB — DB id · data source id. 모르면 없다. */
+  relationTargets?: readonly string[];
 };
+
+/** DB 속성 스키마 한 칸 — {@link NotionClient.getDatabaseSchema} 가 내는 꼴. */
+export interface DatabasePropertySchema {
+  readonly id: string;
+  readonly type: string;
+  /** relation 이 가리키는 DB — DB id · data source id. */
+  readonly relationTargets?: readonly string[];
+}
 
 type NotionPropertyValue = Record<string, unknown>;
 
@@ -71,6 +81,8 @@ function asArray<T>(value: unknown): T[] {
 
 export interface WikilinkResolver {
   resolve(title: string): string | null;
+  /** 대상 DB(`parentIds`)의 행 가운데서만 — relation 값. 없으면 {@link resolve} 로 찾는다. */
+  resolveIn?(title: string, parentIds: readonly string[]): string | null;
   resolvePageId(pageId: string): string | null;
 }
 
@@ -110,10 +122,15 @@ export class PropertyMapper {
     this.wikilinkResolver = resolver;
   }
 
-  loadSchema(properties: Record<string, { id: string; type: string }>): void {
+  loadSchema(properties: Record<string, DatabasePropertySchema>): void {
     this.schema.clear();
     for (const [name, prop] of Object.entries(properties)) {
-      this.schema.set(name, { id: prop.id, type: prop.type, name });
+      this.schema.set(name, {
+        id: prop.id,
+        type: prop.type,
+        name,
+        ...(prop.relationTargets ? { relationTargets: prop.relationTargets } : {}),
+      });
     }
   }
 
@@ -144,7 +161,12 @@ export class PropertyMapper {
         const converted = this.rangeRequest(key, frontmatter, zone);
         if (converted) result[key] = converted;
       } else if (schemaProp) {
-        const converted = this.convertBySchema(schemaProp.type, value, zone);
+        const converted = this.convertBySchema(
+          schemaProp.type,
+          value,
+          zone,
+          schemaProp.relationTargets,
+        );
         if (converted) result[key] = converted;
       } else if (this.schema.size === 0) {
         const inferred = this.inferAndConvert(value, zone);
@@ -200,7 +222,7 @@ export class PropertyMapper {
         ? null
         : schemaProp.type === "rich_text"
           ? richTextRequest(String(value), richTextRunsOf(context.remote, key))
-          : this.convertBySchema(schemaProp.type, value, zone);
+          : this.convertBySchema(schemaProp.type, value, zone, schemaProp.relationTargets);
       if (converted) properties[key] = converted;
       else skipped.push(key);
     }
@@ -239,10 +261,20 @@ export class PropertyMapper {
     return items.map((item) => this.relationTargetOf(item)).filter((id): id is string => !!id);
   }
 
-  private relationTargetOf(item: unknown): string | null {
+  /**
+   * @param targets relation 이 가리키는 DB. 알면 그 DB 의 행으로만 푼다 — 다른 DB 의 페이지는 Notion 이 오류
+   *   없이 빼 버리므로, 못 찾은 것으로 두어 보내지 않고 알린다.
+   */
+  private relationTargetOf(item: unknown, targets?: readonly string[]): string | null {
     const str = String(item);
     const match = str.match(WIKILINK_REGEX);
-    if (match?.[1]) return this.wikilinkResolver?.resolve(match[1]) ?? null;
+    if (match?.[1]) {
+      const resolver = this.wikilinkResolver;
+      if (targets && targets.length > 0 && resolver?.resolveIn) {
+        return resolver.resolveIn(match[1], targets);
+      }
+      return resolver?.resolve(match[1]) ?? null;
+    }
     return isNotionId(str) ? str : null;
   }
 
@@ -414,7 +446,12 @@ export class PropertyMapper {
     return this.convertBySchema("date", isBlank(end) ? start : { start, end }, zone);
   }
 
-  private convertBySchema(type: string, value: unknown, zone: string): NotionPropertyValue | null {
+  private convertBySchema(
+    type: string,
+    value: unknown,
+    zone: string,
+    relationTargets?: readonly string[],
+  ): NotionPropertyValue | null {
     switch (type) {
       case "rich_text":
         return richTextValue(String(value));
@@ -482,7 +519,7 @@ export class PropertyMapper {
         const items = Array.isArray(value) ? value : [value];
         const ids: Array<{ id: string }> = [];
         for (const item of items) {
-          const pageId = this.relationTargetOf(item);
+          const pageId = this.relationTargetOf(item, relationTargets);
           if (!pageId) return null;
           ids.push({ id: pageId });
         }

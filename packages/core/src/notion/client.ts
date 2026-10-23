@@ -11,7 +11,11 @@ import type {
   DataSourceViewObjectResponse,
   ListDatabaseViewsResponse,
 } from "@notionhq/client/build/src/api-endpoints/views.js";
-import { PropertyMapper, type WikilinkResolver } from "./property-mapper.js";
+import {
+  PropertyMapper,
+  type DatabasePropertySchema,
+  type WikilinkResolver,
+} from "./property-mapper.js";
 import { SdkClient, type NotificationMode } from "./sdk-client.js";
 import type {
   ViewConfig,
@@ -816,14 +820,21 @@ export class NotionClient {
   async getDatabaseSchema(
     databaseId: string,
     from?: DatabaseMeta,
-  ): Promise<Record<string, { id: string; type: string }>> {
+  ): Promise<Record<string, DatabasePropertySchema>> {
     const properties = (await this.metaOf(databaseId, from)).properties as Record<
       string,
-      { id: string; type: string }
+      { id: string; type: string; relation?: { database_id?: string; data_source_id?: string } }
     >;
-    const schema: Record<string, { id: string; type: string }> = {};
+    const schema: Record<string, DatabasePropertySchema> = {};
     for (const [name, prop] of Object.entries(properties)) {
-      schema[name] = { id: prop.id, type: prop.type };
+      const targets = [prop.relation?.database_id, prop.relation?.data_source_id].filter(
+        (id): id is string => typeof id === "string" && id !== "",
+      );
+      schema[name] = {
+        id: prop.id,
+        type: prop.type,
+        ...(targets.length > 0 ? { relationTargets: targets } : {}),
+      };
     }
     return schema;
   }

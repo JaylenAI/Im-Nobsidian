@@ -1,7 +1,11 @@
-import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
+import {
+  PropertyMapper,
+  type DatabasePropertySchema,
+  type WikilinkResolver,
+} from "../notion/property-mapper.js";
 import { compactNotionId } from "../utils/id.js";
 
-type SchemaLoader = (databaseId: string) => Promise<Record<string, { id: string; type: string }>>;
+type SchemaLoader = (databaseId: string) => Promise<Record<string, DatabasePropertySchema>>;
 
 /**
  * DB 마다 스키마를 읽은 {@link PropertyMapper} 를 한 번만 만든다.

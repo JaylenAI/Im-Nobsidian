@@ -693,6 +693,50 @@ describe("PropertyMapper", () => {
     });
   });
 
+  describe("relation 은 대상 DB 의 행으로만 푼다", () => {
+    const ROW = "35a13b18d38280cf9057e37e6e473e43";
+    const OTHER = "35a13b18d38280cf9057e37e6e473e44";
+    const calls: Array<readonly string[]> = [];
+
+    beforeEach(() => {
+      calls.length = 0;
+      mapper.loadSchema({
+        rel: { id: "a", type: "relation", relationTargets: ["db-target", "ds-target"] },
+        loose: { id: "b", type: "relation" },
+      });
+      mapper.setWikilinkResolver({
+        // 제목만 보면 다른 DB 의 같은 이름 페이지가 먼저 나온다.
+        resolve: () => OTHER,
+        resolveIn: (title, parents) => {
+          calls.push(parents);
+          return title === "대상 행" ? ROW : null;
+        },
+        resolvePageId: () => null,
+      });
+    });
+
+    it("대상 DB 를 알면 그 DB 의 행만 본다", () => {
+      expect(mapper.toNotionProperties({ rel: "[[대상 행]]" }, "T").rel).toEqual({
+        relation: [{ id: ROW }],
+      });
+      expect(calls).toEqual([["db-target", "ds-target"]]);
+    });
+
+    it("대상 DB 에 없으면 보내지 않는다 — 다른 DB 의 페이지는 Notion 이 오류 없이 뺀다", () => {
+      expect(mapper.toNotionProperties({ rel: "[[다른 DB 의 행]]" }, "T").rel).toBeUndefined();
+      expect(
+        mapper.toNotionPropertyChanges({ changed: { rel: "[[다른 DB 의 행]]" }, cleared: [] }, null)
+          .skipped,
+      ).toEqual(["rel"]);
+    });
+
+    it("대상 DB 를 모르면 예전처럼 볼트 전체에서 찾는다", () => {
+      expect(mapper.toNotionProperties({ loose: "[[아무 노트]]" }, "T").loose).toEqual({
+        relation: [{ id: OTHER }],
+      });
+    });
+  });
+
   describe("toNotionPropertyChanges — 바뀐 속성만 (S-01)", () => {
     beforeEach(() => {
       mapper.loadSchema({
