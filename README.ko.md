@@ -295,6 +295,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "deleteSync": false, // true: 한쪽에서 지운 노트를 다른 쪽에서도 지움 (플러그인은 늘 켬)
     "fullReconcileInterval": 3600, // Notion 전체 대조 주기(초) — 0 이면 pull 마다
+    "notifications": "silent", // "silent": 동기화가 쓴 페이지는 알림을 보내지 않음(멘션 · 사람 속성) | "default"
   },
   "paths": {
     "include": ["**/*"], // 포함할 glob 패턴

@@ -298,6 +298,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "deleteSync": false, // true: deleting a note deletes it on the other side too (the plugin always does)
     "fullReconcileInterval": 3600, // seconds between full scans of Notion — 0 = every pull
+    "notifications": "silent", // "silent": pages the sync writes don't notify people (mentions, person properties) | "default"
   },
   "paths": {
     "include": ["**/*"], // glob patterns to include
