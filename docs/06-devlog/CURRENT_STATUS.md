@@ -1,6 +1,6 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-10-23
+> 마지막 업데이트: 2026-10-24
 > 버전: **v0.4.1 배포 끝** — dev 에 v0.4.2 ~ v0.8.0 의 범위가 모두 머지됨(릴리스 대기). v0.9 RC 전체 E2E 진행 중. 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
 
 ## 남은 단계 (2026-10-23 확정 · 같은 날 갱신)
@@ -32,6 +32,10 @@ v0.8 빌드 이전의 전체 E2E(실데이터 사본 → 탐침 아래 새 루�
   `fix/row-child-folder`(그 자리) · `fix/link-text-brackets`(9줄) · `fix/compact-export-whitespace`(빈 줄 210줄) ·
   `fix/placeholder-list-indent`(42 노트) · `fix/nested-container-depth`(목록 속 깊은 콜아웃 · 토글). 나머지 차이는 API
   한계 · Notion 표기 정리 — `journal/2026-10-23.md` 「RC 전체 E2E」
+- 실데이터 172 노트 재왕복 · 다시 받은 볼트 비교가 찾은 6건(10-24): `fix/request-blocked-no-retry` ·
+  `fix/empty-list-item-spacing` · `fix/fresh-pull-folder-only`(19) · `fix/unresolved-wikilink-text` ·
+  `fix/table-wikilink-alias` · `refactor/child-folder-extension`. 같은 Notion 을 새 빌드로 다시 받기 163/172 같음(나머지 9 는
+  100MB 넘는 동영상의 서명 주소) — `journal/2026-10-24.md`
 - 남은 것: 릴리스(승인 뒤)
 
 ### v0.8.0 — 연결 폴더 (dev 머지)
