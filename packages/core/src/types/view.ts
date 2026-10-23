@@ -119,7 +119,7 @@ export interface PageCover {
 }
 
 export interface PageIcon {
-  readonly type: "emoji" | "external" | "file" | "icon";
+  readonly type: "emoji" | "external" | "file" | "icon" | "custom_emoji";
   readonly value: string;
   readonly color?: string;
 }

@@ -32,6 +32,7 @@ import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 import { shapeAppendRequests, type BlockRequest } from "./block-tree.js";
 import { richTextChunks } from "./rich-text.js";
+import { iconValueOf } from "./decoration-values.js";
 import { propertyDefinitionOf } from "../view/property-definition.js";
 
 /**
@@ -468,6 +469,32 @@ export class NotionClient {
           properties: properties as never,
         }) as Promise<PageObjectResponse>,
     );
+  }
+
+  /**
+   * 페이지의 아이콘 · 커버만 바꾼다 — `null` 은 지운다. 값은 `notion/decoration-values.ts` 가 만든 객체다.
+   * 모르는 아이콘 이름 · 색이면 Notion 이 `validation_error` 로 거절하고 아무것도 바꾸지 않는다.
+   */
+  async updatePageDecorations(
+    pageId: string,
+    decorations: { readonly icon?: unknown; readonly cover?: unknown },
+  ): Promise<PageObjectResponse> {
+    return this.withRateLimit(
+      () =>
+        this.client.pages.update({
+          page_id: pageId,
+          ...decorations,
+        } as never) as Promise<PageObjectResponse>,
+    );
+  }
+
+  /** 워크스페이스 사용자 이모지의 id — 이름이 꼭 같은 것. 없으면 null. */
+  async findCustomEmojiId(name: string): Promise<string | null> {
+    const response = await this.withRateLimit(() => this.client.customEmojis.list({ name }));
+    const found = (response.results as Array<{ id: string; name: string }>).find(
+      (emoji) => emoji.name === name,
+    );
+    return found?.id ?? null;
   }
 
   // ─── Markdown API ───
@@ -1670,30 +1697,16 @@ export class NotionClient {
     return null;
   }
 
+  /** 페이지 아이콘 — `value` 는 frontmatter 에 적는 꼴이다(`notion/decoration-values.ts`). */
   extractIcon(page: PageObjectResponse): PageIcon | null {
-    const raw = page as unknown as {
-      icon?: {
-        type: string;
-        emoji?: string;
-        external?: { url: string };
-        file?: { url: string; expiry_time?: string };
-        icon?: { name: string; color?: string };
-      };
+    const raw = (page as unknown as { icon?: { type?: string; icon?: { color?: string } } }).icon;
+    const icon = iconValueOf(raw);
+    if (!raw || !icon) return null;
+    return {
+      type: raw.type as PageIcon["type"],
+      value: icon.value,
+      ...(raw.type === "icon" && raw.icon?.color ? { color: raw.icon.color } : {}),
     };
-    if (!raw.icon) return null;
-
-    switch (raw.icon.type) {
-      case "emoji":
-        return { type: "emoji", value: raw.icon.emoji! };
-      case "external":
-        return { type: "external", value: raw.icon.external!.url };
-      case "file":
-        return { type: "file", value: raw.icon.file!.url };
-      case "icon":
-        return { type: "icon", value: raw.icon.icon!.name, color: raw.icon.icon!.color };
-      default:
-        return null;
-    }
   }
 
   // ─── Property Extraction ───
