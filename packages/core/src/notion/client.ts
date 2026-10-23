@@ -72,6 +72,16 @@ export function isNotionValidationError(error: unknown): boolean {
 }
 
 /**
+ * API 가 읽지 못하는 보기 종류면 그 이름. 2026-10-23 실측: Notion 앱에서 만든 `page` 보기는 `views.retrieve` 가
+ * 400 `Unsupported view type: page` 로 거절한다.
+ */
+function unsupportedViewTypeOf(error: unknown): string | null {
+  if (!isNotionValidationError(error)) return null;
+  const match = /^Unsupported view type: (\S+)/.exec((error as { message?: string }).message ?? "");
+  return match ? match[1]! : null;
+}
+
+/**
  * markdown 이 `# H1` 으로 시작하는가(앞의 빈 줄은 건너뛴다).
  *
  * Notion 은 markdown 으로 페이지 · 행을 만들 때(`pages.create`) 맨 앞의 H1 을 버린다. 가운데 H1 ·
@@ -1619,9 +1629,18 @@ export class NotionClient {
 
       const viewRefs = (response as ListDatabaseViewsResponse).results;
       // 보기 하나를 읽지 못하면 통째로 실패한다 — 빠진 목록으로 `.base` · 사이드카를 다시 쓰면 그 보기가
-      // 볼트에서 사라진다. 부른 쪽이 받아 둔 보기를 쓴다.
+      // 볼트에서 사라진다. 부른 쪽이 받아 둔 보기를 쓴다. API 가 모르는 보기 종류만 건너뛴다 — 언제 물어도
+      // 읽지 못하므로 볼트에 있던 적이 없다.
       for (const ref of viewRefs) {
-        const detail = await this.getView(ref.id as string);
+        let detail: ViewConfig | null;
+        try {
+          detail = await this.getView(ref.id as string);
+        } catch (error) {
+          const type = unsupportedViewTypeOf(error);
+          if (type === null) throw error;
+          getLogger().warn(`[Im-Nobsidian] API 가 읽지 못하는 보기 종류(${type})라 건너뜀`);
+          continue;
+        }
         if (detail) allViews.push(detail);
       }
 
