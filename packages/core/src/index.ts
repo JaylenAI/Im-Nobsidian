@@ -72,6 +72,7 @@ export {
   SavedStateDbError,
   SAVED_STATE_TABLES_QUERY,
   WIKILINK_LOOKUPS,
+  wikilinkLookupsIn,
   StateLock,
   StateDbLockedError,
   stateDbLockPath,
