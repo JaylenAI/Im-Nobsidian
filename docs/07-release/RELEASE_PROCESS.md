@@ -40,10 +40,16 @@ GitHub Actions 자동: npm publish + GitHub Release
 
 ### 3. 버전 관리
 
+버전은 여섯 곳에 적는다 — `package.json` 넷(루트 · core · cli · obsidian-plugin)과 `manifest.json` 둘(루트 ·
+obsidian-plugin). `versions.json` 에 그 버전의 `minAppVersion` 을, `docs/07-release/RELEASE_NOTES_vX.Y.Z.md` 와
+CHANGELOG 의 `## [X.Y.Z]` 절을 함께 둔다. 목록의 정본은 `scripts/check-release-version.mjs` 다.
+
 ```bash
-pnpm changeset          # 변경사항 기록
-pnpm version-packages   # 버전 업 + CHANGELOG 생성
+node scripts/check-release-version.mjs vX.Y.Z   # 태그를 달기 전에 — 하나라도 다르면 실패
 ```
+
+CI 는 push 마다 태그 없이(레포 안의 일치만), Release 워크플로는 태그와 함께 부른다. 실패하면 npm · GitHub
+릴리스 어느 것도 나가지 않는다.
 
 ### 4. 브랜치 관리
 
@@ -65,6 +71,6 @@ git push origin main --tags
 ### 6. 배포 확인
 
 - [ ] `npm info @im-nobsidian/core` 버전 확인
-- [ ] `npm info nobsi` 버전 확인
+- [ ] `npm info im-nobsidian` 버전 확인
 - [ ] `npx nobsi --version` 동작
 - [ ] GitHub Releases 페이지에 릴리스 노트 존재
