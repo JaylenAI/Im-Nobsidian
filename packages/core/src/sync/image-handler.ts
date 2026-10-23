@@ -423,6 +423,9 @@ function nameHashOf(fullHash: string): string {
   return fullHash.slice(0, NAME_HASH_LENGTH);
 }
 
+/** 이미지 파일 이름에서 제목 몫의 최대 글자 수 — 뒤에 내용 해시와 확장자가 붙어도 파일 이름 한도 안에 든다. */
+const IMAGE_STEM_MAX = 50;
+
 /**
  * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
  *
@@ -445,7 +448,7 @@ function safeImageStem(name: string): string {
   return name
     .replace(/[^a-zA-Z0-9가-힣\s-]/g, "")
     .replace(/\s+/g, "-")
-    .slice(0, 50);
+    .slice(0, IMAGE_STEM_MAX);
 }
 
 function uploadedFileNameFromUrl(url: string): string {

@@ -48,10 +48,6 @@ export interface RemoteDetection {
  * 감지하며 모은 «자식을 가진 페이지» 는 pull 이 폴더노트를 가를 때 읽는다({@link hasChildPages}).
  */
 export class RemoteDetector {
-  // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
-  // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
-  // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
-  // 이 예산 안에서 순회가 끝나 폴백 없이 빠르게 완료된다. (단위: ms)
   /**
    * 직접 순회가 쓸 요청 수 — 넘으면 search 로 넘어간다. 예전의 시간 예산(90초 × 초당 3건)과 같은 크기다.
    * 시간으로 재면 다른 작업과 속도 한도를 나눠 429 가 날 때 작은 서브트리도 워크스페이스 전체 search 로
