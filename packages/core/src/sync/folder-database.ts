@@ -19,13 +19,16 @@ import {
 } from "../utils/frontmatter.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import type { BasesViewType } from "../view/base-file-generator.js";
+import { BASE_SUFFIX, OBSIDIAN_CONFIG_DIR, SIDECAR_SUFFIX } from "../constants/paths.js";
+import { DEFAULT_TITLE_PROPERTY } from "../types/config.js";
 import {
+  SIDECAR_GENERATOR,
+  SIDECAR_SCHEMA_VERSION,
   SidecarGenerator,
   type NotionSidecar,
   type SidecarProperty,
   type SidecarView,
 } from "../view/sidecar-generator.js";
-import { DEFAULT_TITLE_PROPERTY } from "./database-schema.js";
 import type { VaultFS } from "./vault-fs.js";
 
 /** 폴더의 노트 하나 — 볼트 경로와 읽은 frontmatter. */
@@ -148,8 +151,8 @@ export function draftFolderDatabase(input: {
   const views = input.base === undefined ? [] : viewsOf(input.base, properties, skipped);
   return {
     sidecar: {
-      generator: "im-nobsidian",
-      schemaVersion: 2,
+      generator: SIDECAR_GENERATOR,
+      schemaVersion: SIDECAR_SCHEMA_VERSION,
       databaseId: input.databaseId,
       databaseName: input.title,
       isInline: false,
@@ -188,7 +191,7 @@ export async function prepareFolderDatabase(
   const direct = (await vaultFs.listNonMarkdownFiles())
     .map((f) => f.path)
     .filter((p) => isDirectDbRowPath(trimmed, p));
-  const sidecar = direct.find((p) => p.endsWith(".notion.json"));
+  const sidecar = direct.find((p) => p.endsWith(SIDECAR_SUFFIX));
   if (sidecar) throw new Error(`이미 DB 사이드카가 있다: ${sidecar}`);
 
   const synced = notePaths.filter((p) => stateDb.getByPath(p)?.notionPageId);
@@ -212,11 +215,11 @@ export async function prepareFolderDatabase(
   }
 
   // `.base` 가 하나면 그 이름이 DB 제목이다 — 부모 노트의 `![[이름.base]]` 가 사이드카로 새 DB 를 찾는다.
-  const bases = direct.filter((p) => p.endsWith(".base")).sort();
+  const bases = direct.filter((p) => p.endsWith(BASE_SUFFIX)).sort();
   const basePath = bases.length === 1 ? bases[0] : undefined;
   const folderName = trimmed.slice(trimmed.lastIndexOf("/") + 1);
   const title = basePath
-    ? basePath.slice(basePath.lastIndexOf("/") + 1).replace(/\.base$/, "")
+    ? basePath.slice(basePath.lastIndexOf("/") + 1, -BASE_SUFFIX.length)
     : folderName;
   const base = basePath ? await vaultFs.readFile(basePath).catch(() => undefined) : undefined;
 
@@ -225,7 +228,7 @@ export async function prepareFolderDatabase(
     databaseId: options.databaseId,
     notes,
     ...(base === undefined ? {} : { base }),
-    declaredTypes: await readDeclaredTypes(vaultFs, options.configDir ?? ".obsidian"),
+    declaredTypes: await readDeclaredTypes(vaultFs, options.configDir ?? OBSIDIAN_CONFIG_DIR),
   });
   const extra =
     bases.length > 1
@@ -237,7 +240,7 @@ export async function prepareFolderDatabase(
         ]
       : [];
 
-  const sidecarPath = `${trimmed}/${sanitizeFileName(title)}.notion.json`;
+  const sidecarPath = `${trimmed}/${sanitizeFileName(title)}${SIDECAR_SUFFIX}`;
   await vaultFs.writeFile(sidecarPath, new SidecarGenerator().serialize(draft.sidecar));
   return {
     ...draft,

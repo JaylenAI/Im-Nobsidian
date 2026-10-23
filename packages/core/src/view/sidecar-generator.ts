@@ -24,9 +24,15 @@ import { resolvePropertyName } from "./property-resolver.js";
  * 매 pull 마다 재생성되므로 **결정적**이어야 한다(타임스탬프·실행시각 금지, 키 정렬).
  * 동일 DB 상태 → 동일 바이트 → drift 0 / churn 0.
  */
+/** 이 도구가 쓴 사이드카의 표지 — 읽는 쪽은 이 값으로 사용자가 만든 JSON 과 가린다. */
+export const SIDECAR_GENERATOR = "im-nobsidian";
+
+/** 지금 쓰는 사이드카 형식 판. 판이 적히지 않은 옛 파일은 1 로 읽는다. */
+export const SIDECAR_SCHEMA_VERSION = 2;
+
 export interface NotionSidecar {
-  readonly generator: "im-nobsidian";
-  readonly schemaVersion: 2;
+  readonly generator: typeof SIDECAR_GENERATOR;
+  readonly schemaVersion: typeof SIDECAR_SCHEMA_VERSION;
   readonly databaseId: string;
   readonly databaseName: string;
   /** 페이지 본문 안에 놓인 인라인 DB 인가 — 다시 만들 때 같게. */
@@ -121,8 +127,8 @@ export class SidecarGenerator {
     );
 
     return {
-      generator: "im-nobsidian",
-      schemaVersion: 2,
+      generator: SIDECAR_GENERATOR,
+      schemaVersion: SIDECAR_SCHEMA_VERSION,
       databaseId: options.databaseId,
       databaseName: options.databaseName,
       isInline: options.isInline === true,

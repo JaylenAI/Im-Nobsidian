@@ -2,6 +2,7 @@ import { isNotionValidationError, type NotionClient } from "../notion/client.js"
 import { nfmInlineToRichText } from "../converter/nfm-inline.js";
 import type { PageDecorations } from "./page-decorations.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import { SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { LocalChange } from "../types/sync.js";
 import type { ViewRequest } from "../types/view.js";
@@ -37,6 +38,11 @@ import {
   serializePendingDatabases,
 } from "./remote-scan.js";
 import type { VaultFS } from "./vault-fs.js";
+
+/** 사이드카 파일인가 — 확장자 대소문자는 가리지 않는다. */
+function isSidecarPath(path: string): boolean {
+  return path.toLowerCase().endsWith(SIDECAR_SUFFIX);
+}
 
 /**
  * push 가 만든 DB — 사이드카의 DB(받아 온 곳, 하이픈 없는 id) → 만든 DB. 상태 메타에 둔다.
@@ -81,8 +87,6 @@ function saveCreatedDatabases(
 ): void {
   stateDb.setMeta(CREATED_DBS_META_KEY, JSON.stringify(Object.fromEntries(created)));
 }
-
-const SIDECAR_RE = /\.notion\.json$/i;
 
 /**
  * 새 루트로 올린 DB 폴더를 Notion DB 로 만든다(ADR-036).
@@ -147,7 +151,7 @@ export class DatabaseCreator {
     const known = this.knownDatabaseIds();
     const created = loadCreatedDatabases(this.stateDb);
     for (const file of await this.vaultFs.listNonMarkdownFiles()) {
-      if (!SIDECAR_RE.test(file.path)) continue;
+      if (!isSidecarPath(file.path)) continue;
       const folder = parentFolderOf(file.path);
       if (found.has(folder)) continue;
       if (!candidates.has(folder) && !(includeEmpty && !folderContainer(folder, lookup))) continue;
@@ -293,7 +297,7 @@ export class DatabaseCreator {
     const decorated = this.decorations
       ? await this.decorations.requests(
           { icon, cover },
-          `${target.folder}/.notion.json`,
+          `${target.folder}/${SIDECAR_SUFFIX}`,
           target.schema.isInline ? ["icon"] : ["icon", "cover"],
         )
       : {};
@@ -717,7 +721,7 @@ export class DatabaseCreator {
   private async sidecarIn(folder: string, source: string): Promise<SidecarSchema | null> {
     let fallback: SidecarSchema | null = null;
     for (const file of await this.vaultFs.listNonMarkdownFiles()) {
-      if (!SIDECAR_RE.test(file.path) || parentFolderOf(file.path) !== folder) continue;
+      if (!isSidecarPath(file.path) || parentFolderOf(file.path) !== folder) continue;
       const schema = await this.readSidecar(file.path);
       if (schema?.databaseId === source) return schema;
       fallback ??= schema;

@@ -7,6 +7,7 @@ import {
   matchesPathScope,
   ScopedVaultFS,
   findConnectionFolders,
+  OBSIDIAN_CONFIG_DIR,
   type PathFilterConfig,
   type VaultFS,
 } from "@im-nobsidian/core";
@@ -32,10 +33,10 @@ export async function openVaultFs(cwd: string, paths: PathFilterConfig): Promise
  */
 export function obsidianConfigDir(cwd: string): string {
   for (let dir = cwd; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, ".obsidian"))) {
-      return relative(cwd, join(dir, ".obsidian")).split("\\").join("/");
+    if (existsSync(join(dir, OBSIDIAN_CONFIG_DIR))) {
+      return relative(cwd, join(dir, OBSIDIAN_CONFIG_DIR)).split("\\").join("/");
     }
-    if (dirname(dir) === dir) return ".obsidian";
+    if (dirname(dir) === dir) return OBSIDIAN_CONFIG_DIR;
   }
 }
 

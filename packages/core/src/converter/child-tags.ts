@@ -1,4 +1,5 @@
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
+import { BASE_SUFFIX } from "../constants/paths.js";
 import { compactNotionId } from "../utils/id.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import { codeLineMask } from "../utils/md-regions.js";
@@ -128,7 +129,10 @@ const DB_PLACEHOLDER_LINE_RE = new RegExp(
   `^\\*\\*[^\\n]*?\\*\\*\\s*\\*\\(Notion DB\\)\\*\\s*%%\\s*${MARKER_BRAND_RE}:child-database:id=([a-f0-9]{32})${MARKER_PAYLOAD_CHAR}*?%%$`,
 );
 
-const BASE_PATH_RE = /\.base$/i;
+/** `.base` 파일 경로인가 — 확장자 대소문자는 가리지 않는다. */
+function isBasePath(path: string): boolean {
+  return path.toLowerCase().endsWith(BASE_SUFFIX);
+}
 
 /** 제목 비교용 — pull 이 링크 · 별칭을 만들 때 걷어 내는 글자(`**` · `|[]` · 줄바꿈)를 같게 걷는다. */
 function titleKey(title: string): string {
@@ -313,12 +317,12 @@ function takeBaseEmbed(
   databaseIdsOfBase: ChildTagRestoreOptions["databaseIdsOfBase"],
 ): ChildTag | undefined {
   const [path = "", alias = ""] = decodeMarkerTarget(encodedTarget).split("|");
-  if (!BASE_PATH_RE.test(path)) return undefined;
+  if (!isBasePath(path)) return undefined;
   for (const id of databaseIdsOfBase?.(path) ?? []) {
     const child = pending.takeId(compactNotionId(id));
     if (child) return child;
   }
-  const stem = path.slice(path.lastIndexOf("/") + 1).replace(BASE_PATH_RE, "");
+  const stem = path.slice(path.lastIndexOf("/") + 1, -BASE_SUFFIX.length);
   return pending.takeTitle("database", alias, stem);
 }
 
@@ -329,7 +333,7 @@ export function baseEmbedPaths(markdown: string): string[] {
     const placeholder = LOCAL_FILE_LINE_RE.exec(line);
     if (!placeholder) continue;
     const path = decodeMarkerTarget(placeholder[2]!).split("|")[0]!;
-    if (BASE_PATH_RE.test(path)) paths.add(path);
+    if (isBasePath(path)) paths.add(path);
   }
   return [...paths];
 }
