@@ -2,6 +2,7 @@ import {
   receiveLiteralBackslashes,
   receiveLoneBackticks,
   sendLiteralBackslashes,
+  escapeLinkTextBrackets,
 } from "./literal-escapes.js";
 import {
   MARKER_BRAND_RE,
@@ -203,6 +204,7 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
   result = indentPlaceholdersToNextLine(result);
   result = underscoreItalicsWithStar(result);
+  result = escapeLinkTextBrackets(result);
   // 글 `\` 는 맨 끝 — 위 변환이 만든 escape 쌍을 escape 로 알아보게.
   result = sendLiteralBackslashes(result);
 
