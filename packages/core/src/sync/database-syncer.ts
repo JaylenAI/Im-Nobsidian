@@ -39,7 +39,8 @@ import {
 } from "../utils/frontmatter.js";
 import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
-import { SidecarGenerator } from "../view/sidecar-generator.js";
+import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-generator.js";
+import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles } from "./db-base-files.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
@@ -129,6 +130,11 @@ function emptyDatabaseSyncResult(): DatabaseSyncResult {
 export class DatabaseSyncer {
   private readonly propertyMapper: PropertyMapper;
   private decorationsCache?: PageDecorations;
+  /**
+   * 받은 DB 마다 사이드카에 적을 꾸밈 — 한 pull 이 같은 DB 의 사이드카를 여러 번 다시 만든다(임베드 재작성).
+   * 올린 파일 아이콘 · 커버를 그때마다 내려받지 않는다.
+   */
+  private readonly appearances = new WeakMap<DatabaseMeta, Promise<SidecarAppearance>>();
   private readonly baseFileGenerator = new BaseFileGenerator();
   private readonly sidecarGenerator = new SidecarGenerator();
 
@@ -773,11 +779,41 @@ export class DatabaseSyncer {
         schemaFull,
         resolvedViews,
         meta.isInline,
+        await this.appearanceOf(meta, safeName),
       );
       await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
+  }
+
+  /**
+   * DB 의 아이콘 · 커버 · 설명 · 제목 표시 — push 가 DB 를 다시 만들 때 쓴다(ADR-036). 아이콘 · 커버는 페이지와
+   * 같은 꼴로 적고 올린 파일은 볼트로 내려받는다 — 서명 주소를 적으면 pull 마다 사이드카가 바뀐다.
+   */
+  private appearanceOf(meta: DatabaseMeta, safeName: string): Promise<SidecarAppearance> {
+    let found = this.appearances.get(meta);
+    if (!found) {
+      found = this.readAppearance(meta, safeName);
+      this.appearances.set(meta, found);
+    }
+    return found;
+  }
+
+  private async readAppearance(meta: DatabaseMeta, safeName: string): Promise<SidecarAppearance> {
+    const a = meta.appearance;
+    if (!a) return {};
+    const decorated = await this.decorations.pulled(
+      { icon: a.icon, cover: a.cover } as unknown as PageObjectResponse,
+      `${safeName}-db`,
+      true,
+    );
+    const description = richTextToNfm(a.description as Parameters<typeof richTextToNfm>[0]);
+    return {
+      ...decorated,
+      ...(description ? { description } : {}),
+      ...(a.showTitle ? {} : { showTitle: false as const }),
+    };
   }
 
   /**
@@ -814,6 +850,7 @@ export class DatabaseSyncer {
     schemaFull: Record<string, BasePropertySchema>,
     resolvedViews: DatabaseViewsConfig,
     isInline: boolean,
+    appearance: SidecarAppearance,
   ): Promise<void> {
     try {
       const sidecar = this.sidecarGenerator.build({
@@ -822,6 +859,7 @@ export class DatabaseSyncer {
         schema: schemaFull,
         viewsConfig: resolvedViews,
         isInline,
+        appearance,
       });
       const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
       const serialized = this.sidecarGenerator.serialize(sidecar);

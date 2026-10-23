@@ -80,21 +80,8 @@ export class PageDecorations {
     current: Readonly<Record<string, unknown>>,
     against: DecorationBaseline,
   ): Promise<PageObjectResponse | null> {
-    const body: Record<string, unknown> = {};
-    for (const key of DECORATION_KEYS) {
-      if (!this.changed(key, current[key], against)) continue;
-      const source = key === "icon" ? iconSource(current[key]) : coverSource(current[key]);
-      const request = await this.requestOf(source, path);
-      if (request === undefined) {
-        if (source.kind === "invalid") {
-          getLogger().warn(
-            `[Im-Nobsidian] ${key} 를 보내지 않음 — ${source.reason} (${path}): ${String(current[key])}`,
-          );
-        }
-        continue;
-      }
-      body[key] = request;
-    }
+    const changed = DECORATION_KEYS.filter((key) => this.changed(key, current[key], against));
+    const body = await this.requests(current, path, changed);
     if (Object.keys(body).length === 0) return null;
     try {
       return await this.notionClient.updatePageDecorations(pageId, body);
@@ -107,6 +94,34 @@ export class PageDecorations {
       );
       return null;
     }
+  }
+
+  /**
+   * `keys` 의 값을 보낼 요청으로 — `{ icon?, cover? }`, 비운 값은 null. 보낼 수 없는 값은 알리고 뺀다.
+   * 볼트 파일은 여기서 올린다.
+   *
+   * @param path 알림에 적을 곳 · 볼트 파일을 먼저 찾을 노트
+   */
+  async requests(
+    values: Readonly<Record<string, unknown>>,
+    path: string,
+    keys: readonly DecorationKey[] = DECORATION_KEYS,
+  ): Promise<Record<string, unknown>> {
+    const body: Record<string, unknown> = {};
+    for (const key of keys) {
+      const source = key === "icon" ? iconSource(values[key]) : coverSource(values[key]);
+      const request = await this.requestOf(source, path);
+      if (request === undefined) {
+        if (source.kind === "invalid") {
+          getLogger().warn(
+            `[Im-Nobsidian] ${key} 를 보내지 않음 — ${source.reason} (${path}): ${String(values[key])}`,
+          );
+        }
+        continue;
+      }
+      body[key] = request;
+    }
+    return body;
   }
 
   private changed(key: DecorationKey, value: unknown, against: DecorationBaseline): boolean {

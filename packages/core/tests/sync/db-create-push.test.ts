@@ -241,8 +241,15 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
           이름: { title: {} },
           진척: { number: { format: "percent" } },
         },
+        appearance: {},
       },
-      { parentPageId: parent, title: "사람", isInline: true, properties: { 이름: { title: {} } } },
+      {
+        parentPageId: parent,
+        title: "사람",
+        isInline: true,
+        properties: { 이름: { title: {} } },
+        appearance: {},
+      },
     ]);
     // 행은 만든 DB 에 — 폴더 페이지는 하나도 만들지 않는다.
     expect(notion.createPage).not.toHaveBeenCalled();
@@ -341,6 +348,72 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
     expect(result.createdDatabases).toBe(0);
     const rowCall = notion.createPageWithMarkdown.mock.calls.find((c) => c[0].title === "행 1")!;
     expect(rowCall[0].parentId).toBe(SOURCE_TASKS);
+  });
+
+  it("DB 의 아이콘 · 커버 · 설명 · 제목 숨김을 만들 때 함께 보낸다", async () => {
+    files.set(
+      "P/과제/과제.notion.json",
+      JSON.stringify({
+        ...JSON.parse(TASKS_SIDECAR),
+        isInline: false,
+        appearance: {
+          icon: "checklist:blue",
+          cover: "https://img.example/c.jpg",
+          description: "할 일 **모음**",
+          showTitle: false,
+        },
+      }),
+    );
+    expect((await build().push()).failed).toEqual([]);
+    const tasks = notion.createDatabase.mock.calls.find((c) => c[0].title === "과제")![0];
+    expect(tasks.appearance).toEqual({
+      icon: { type: "icon", icon: { name: "checklist", color: "blue" } },
+      cover: { type: "external", external: { url: "https://img.example/c.jpg" } },
+      description: [
+        expect.objectContaining({ text: { content: "할 일 " } }),
+        expect.objectContaining({
+          text: { content: "모음" },
+          annotations: expect.objectContaining({ bold: true }),
+        }),
+      ],
+      show_data_source_title: false,
+    });
+  });
+
+  it("인라인 DB 에는 커버를 보내지 않는다 — Notion 이 요청 전체를 거절한다", async () => {
+    files.set(
+      "P/과제/과제.notion.json",
+      JSON.stringify({
+        ...JSON.parse(TASKS_SIDECAR),
+        appearance: { icon: "🗂️", cover: "https://img.example/c.jpg" },
+      }),
+    );
+    expect((await build().push()).failed).toEqual([]);
+    const tasks = notion.createDatabase.mock.calls.find((c) => c[0].title === "과제")![0];
+    expect(tasks.appearance).toEqual({ icon: { type: "emoji", emoji: "🗂️" } });
+  });
+
+  it("꾸밈을 Notion 이 거절하면 꾸밈 없이 만든다", async () => {
+    files.set(
+      "P/과제/과제.notion.json",
+      JSON.stringify({ ...JSON.parse(TASKS_SIDECAR), appearance: { icon: "no-such-icon" } }),
+    );
+    const create = notion.createDatabase.getMockImplementation()!;
+    notion.createDatabase.mockImplementation(async (params: { appearance?: object }) => {
+      if (params.appearance && Object.keys(params.appearance).length > 0) {
+        throw Object.assign(new Error("Invalid icon name"), {
+          code: "validation_error",
+          status: 400,
+        });
+      }
+      return create(params);
+    });
+    const result = await build().push();
+    expect(result.failed).toEqual([]);
+    expect(result.createdDatabases).toBe(2);
+    expect(warn.mock.calls.flat().join("\n")).toContain(
+      "아이콘 · 커버 · 설명을 Notion 이 거절해 빼고 만듦",
+    );
   });
 
   it("sync.createDatabases 를 끄면 예전처럼 폴더 페이지로 올린다", async () => {

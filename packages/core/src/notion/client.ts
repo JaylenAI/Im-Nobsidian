@@ -188,6 +188,17 @@ export interface DatabaseMeta {
   readonly properties: Readonly<Record<string, unknown>>;
   /** 페이지 본문 안에 놓인 인라인 DB 인가. */
   readonly isInline: boolean;
+  /** DB 의 아이콘 · 커버 · 설명 · 제목 표시 — 받은 그대로. */
+  readonly appearance?: DatabaseAppearance;
+}
+
+/** DB 자체의 꾸밈 — 행이 아니라 DB 의 것이다. 값은 Notion 이 준 그대로(`icon` · `cover` 는 페이지와 같은 꼴). */
+export interface DatabaseAppearance {
+  readonly icon: unknown;
+  readonly cover: unknown;
+  readonly description: readonly unknown[];
+  /** 보기 위에 DB 제목을 보이나(2026-10-20 changelog). */
+  readonly showTitle: boolean;
 }
 
 /** 페이지가 DB 행이면 그 DB 의 id. */
@@ -391,15 +402,23 @@ export class NotionClient {
     title: string;
     isInline: boolean;
     properties: Record<string, unknown>;
+    /** 아이콘 · 커버 · 설명 · 제목 표시 — 요청 꼴 그대로(`databases.create` 의 같은 이름 칸). */
+    appearance?: Readonly<Record<string, unknown>>;
   }): Promise<{ databaseId: string; dataSourceId: string }> {
     const db = (await this.withRateLimit(
       () =>
-        this.client.databases.create({
-          parent: { type: "page_id", page_id: params.parentPageId },
-          title: [{ type: "text", text: { content: params.title } }],
-          is_inline: params.isInline,
-          initial_data_source: { properties: params.properties },
-        } as never),
+        // SDK(5.28 까지)의 `databases.create` 는 `show_data_source_title` 을 몰라 걸러 낸다 — 그대로 보낸다.
+        this.client.request({
+          path: "databases",
+          method: "post",
+          body: {
+            parent: { type: "page_id", page_id: params.parentPageId },
+            title: [{ type: "text", text: { content: params.title } }],
+            is_inline: params.isInline,
+            initial_data_source: { properties: params.properties },
+            ...params.appearance,
+          },
+        }),
       NOT_IDEMPOTENT,
     )) as unknown as { id: string; data_sources?: Array<{ id: string }> };
     const dataSourceId = db.data_sources?.[0]?.id ?? (await this.primaryDataSourceId(db.id));
@@ -638,6 +657,10 @@ export class NotionClient {
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
       is_inline?: boolean;
+      icon?: unknown;
+      cover?: unknown;
+      description?: unknown[];
+      show_data_source_title?: boolean;
     };
 
     // 신 모델(2025-09-03): 한 database 가 2개 이상의 data source 를 가질 수 있고, 각 data
@@ -670,6 +693,12 @@ export class NotionClient {
       dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
       isInline: db.is_inline === true,
+      appearance: {
+        icon: db.icon ?? null,
+        cover: db.cover ?? null,
+        description: Array.isArray(db.description) ? db.description : [],
+        showTitle: db.show_data_source_title !== false,
+      },
     };
   }
 

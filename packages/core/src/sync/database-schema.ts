@@ -19,6 +19,13 @@ export interface SidecarSchema {
   readonly properties: readonly SidecarSchemaProperty[];
   /** 받아 온 DB 의 보기 — 차례대로. 속성 id 는 받아 온 DB 의 것이다. */
   readonly views: readonly SidecarSchemaView[];
+  /** DB 의 아이콘 · 커버 · 설명 · 제목 표시 — 사이드카에 적힌 것만. */
+  readonly appearance: {
+    readonly icon?: string;
+    readonly cover?: string;
+    readonly description?: string;
+    readonly showTitle: boolean;
+  };
 }
 
 export interface SidecarSchemaProperty {
@@ -118,6 +125,7 @@ export function parseSidecarSchema(text: string): SidecarSchema | null {
     databaseId: compactNotionId(s.databaseId),
     title: typeof s.databaseName === "string" ? s.databaseName : "",
     isInline: s.isInline === true,
+    appearance: appearanceOf(s.appearance),
     properties,
     views: Array.isArray(s.views)
       ? (s.views as Array<Record<string, unknown>>)
@@ -129,6 +137,17 @@ export function parseSidecarSchema(text: string): SidecarSchema | null {
               v.config && typeof v.config === "object" ? (v.config as Record<string, unknown>) : {},
           }))
       : [],
+  };
+}
+
+function appearanceOf(raw: unknown): SidecarSchema["appearance"] {
+  const a = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
+  const text = (key: string) => (typeof a[key] === "string" && a[key] ? { [key]: a[key] } : {});
+  return {
+    ...text("icon"),
+    ...text("cover"),
+    ...text("description"),
+    showTitle: a.showTitle !== false,
   };
 }
 
