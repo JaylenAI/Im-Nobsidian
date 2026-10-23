@@ -218,6 +218,36 @@ export class PropertyMapper {
     return { properties, skipped };
   }
 
+  /** Notion 이 값을 정하는 속성(수식 · 롤업 · ID · 생성일 …)이 스키마에 있는가 — 버튼은 값이 없다. */
+  hasComputedProperties(): boolean {
+    return [...this.schema.values()].some(
+      (prop) => READ_ONLY_TYPES.has(prop.type) && prop.type !== "button",
+    );
+  }
+
+  /** relation 값(위키링크 · 페이지 id 목록)이 가리키는 페이지 가운데 알아본 것. */
+  relationTargets(value: unknown): string[] {
+    const plain = plainFrontmatterValue(value);
+    if (plain === null || plain === undefined || plain === "") return [];
+    const items = Array.isArray(plain) ? plain : [plain];
+    return items.map((item) => this.relationTargetOf(item)).filter((id): id is string => !!id);
+  }
+
+  private relationTargetOf(item: unknown): string | null {
+    const str = String(item);
+    const match = str.match(WIKILINK_REGEX);
+    if (match?.[1]) return this.wikilinkResolver?.resolve(match[1]) ?? null;
+    return isNotionId(str) ? str : null;
+  }
+
+  /**
+   * 이 속성들 가운데 relation. 보내지 못한 relation 은 대상 노트가 아직 Notion 에 없었을 수 있다 —
+   * 호출측이 기준에서 빼 두고 다시 보낸다.
+   */
+  relationKeys(keys: readonly string[]): string[] {
+    return keys.filter((key) => this.schema.get(key)?.type === "relation");
+  }
+
   /**
    * 값을 보낼 수 있는 속성만, pull 이 적는 모양으로 — 원격 값과 로컬 값을 견줄 때 쓴다.
    *
@@ -443,14 +473,7 @@ export class PropertyMapper {
         const items = Array.isArray(value) ? value : [value];
         const ids: Array<{ id: string }> = [];
         for (const item of items) {
-          const str = String(item);
-          const match = str.match(WIKILINK_REGEX);
-          const pageId =
-            match?.[1] && this.wikilinkResolver
-              ? this.wikilinkResolver.resolve(match[1])
-              : isNotionId(str)
-                ? str
-                : null;
+          const pageId = this.relationTargetOf(item);
           if (!pageId) return null;
           ids.push({ id: pageId });
         }

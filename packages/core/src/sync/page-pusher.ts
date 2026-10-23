@@ -54,7 +54,7 @@ import {
   type RemoteDriftChecker,
 } from "./remote-drift.js";
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
-import { diffRowProperties } from "./row-properties.js";
+import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
 import type { RunObservation } from "./run-observation.js";
 import type { VaultFS } from "./vault-fs.js";
@@ -117,6 +117,33 @@ export class PagePusher {
     private readonly placement: FolderPlacement,
     private readonly recovery: InterruptedSyncRecovery,
   ) {}
+
+  /** 이번 실행에서 relation 을 보내지 못한 행 — 대상 노트가 아직 Notion 에 없었다. */
+  private readonly unsentRelations = new Set<string>();
+
+  /**
+   * 우리 쓰기의 결과로 Notion 이 고친 페이지 — 다음 pull 이 내용으로 확인하게 본 기록에서 편집자 · 본 때를
+   * 지운다. 같은 토큰(봇)의 같은 분 안 쓰기라 그대로 두면 pull 은 «우리가 쓴 그대로» 로 보고 받지 않는다
+   * (ADR-017). relation 을 보내면 가리킨 행의 반대쪽 relation 이, 행을 만들면 그 행의 수식 · ID 가 바뀐다.
+   */
+  private markRemoteUnverified(pageIds: readonly string[]): void {
+    for (const pageId of new Set(pageIds)) {
+      const target = this.stateDb.getByNotionId(pageId);
+      if (!target?.notionLastEdited) continue;
+      this.stateDb.setRemoteObservation(target.id, {
+        lastEdited: target.notionLastEdited,
+        lastEditedBy: null,
+        seenAt: null,
+      });
+    }
+  }
+
+  /** relation 을 보내지 못한 행을 꺼낸다(목록은 비운다). */
+  takeUnsentRelations(): string[] {
+    const paths = [...this.unsentRelations].sort();
+    this.unsentRelations.clear();
+    return paths;
+  }
 
   async pushCreate(path: string): Promise<void> {
     // 멱등성/원자성: 이전 시도가 페이지 생성까지는 성공해 notionPageId 가 이미
@@ -635,20 +662,29 @@ export class PagePusher {
     });
 
     const settled = await this.finishCreatedPage(mapping.id, created, conversionResult, path);
+    this.markRemoteUnverified(
+      mapper
+        .relationKeys(Object.keys(properties))
+        .flatMap((key) => mapper.relationTargets(current.data[key])),
+    );
 
-    const fileStat = await this.vaultFs.getFileStat(path);
+    // 보내지 못한 relation 은 사본에서 빼 둔다 — 파일과 사본이 달라 다음 push 가 다시 고른다.
+    const unsent = mapper.relationKeys(skipped);
+    const snapshot = unsent.length > 0 ? withUnsentProperties(content, unsent, null) : content;
+    if (unsent.length > 0) this.unsentRelations.add(path);
+    const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: path,
         notionPageId: page.id,
         notionParentId: databaseId,
-        contentHash: computeHash(content),
+        contentHash: computeHash(snapshot),
         ...this.observation.fieldsOf(settled.page, settled.bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType,
         status: "synced",
-        baseSnapshot: Buffer.from(content, "utf-8"),
+        baseSnapshot: Buffer.from(snapshot, "utf-8"),
         localMtime: fileStat?.mtime ?? null,
         localFileSize: fileStat?.size ?? null,
       });
@@ -660,6 +696,9 @@ export class PagePusher {
       });
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
+    // 수식 · 롤업 · ID · 생성일은 Notion 이 정한다 — 로컬 노트에는 없다. 우리가 만든 그대로라 보고 받지
+    // 않으면 새 볼트로 받은 것과 영영 다르므로, 다음 pull 이 한 번 받아 적게 한다.
+    if (mapper.hasComputedProperties()) this.markRemoteUnverified([page.id]);
 
     this.stateDb.markPendingCompleted(walOpId);
   }
@@ -836,6 +875,15 @@ export class PagePusher {
     let written: RemotePageStamp | null = null;
     if (Object.keys(properties).length > 0) {
       written = await this.notionClient.updatePageProperties(pageId, properties);
+      // 새로 가리킨 행과 더는 가리키지 않는 행 둘 다 반대쪽 relation 이 바뀐다.
+      this.markRemoteUnverified(
+        mapper
+          .relationKeys(Object.keys(properties))
+          .flatMap((key) => [
+            ...mapper.relationTargets(current.data[key]),
+            ...mapper.relationTargets(against?.properties[key]),
+          ]),
+      );
     } else if (bodyChanged && settles) {
       written = await this.notionClient.getPage(pageId);
     }
@@ -846,10 +894,19 @@ export class PagePusher {
       );
     }
 
-    const hash = computeHash(content);
-    const fileStat = await this.vaultFs.getFileStat(path);
+    // 보내지 못한 relation 은 Notion 에 남은 값으로 사본에 적는다(pushCreateRow 와 같은 이유). 파일의
+    // 시각 · 크기도 적지 않는다 — 적으면 빠른 변경 감지가 이 노트를 그대로라고 본다.
+    const unsent = mapper.relationKeys(skipped);
+    const snapshot =
+      unsent.length > 0
+        ? withUnsentProperties(content, unsent, against?.properties ?? null)
+        : content;
+    if (unsent.length > 0) this.unsentRelations.add(path);
+    else this.unsentRelations.delete(path);
+    const hash = computeHash(snapshot);
+    const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
-      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
+      this.stateDb.updateHash(record.id, hash, Buffer.from(snapshot, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
         this.observation.record(record.id, written, bodyFingerprint);

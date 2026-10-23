@@ -399,6 +399,93 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
     expect(warned).not.toContain("Done(");
   });
 
+  describe("relation 값 — 뒤에 만든 행을 가리켜도 잃지 않는다", () => {
+    const titles = new Map<string, string>();
+    beforeEach(() => {
+      titles.clear();
+      stateDb.upsertWikilink.mockImplementation((e: { title: string; notionPageId: string }) =>
+        titles.set(e.title, e.notionPageId),
+      );
+      stateDb.resolveWikilink.mockImplementation((t: string) =>
+        titles.has(t) ? { notionPageId: titles.get(t), obsidianPath: `${t}.md` } : null,
+      );
+      stateDb.updateHash.mockImplementation((id: string, hash: string, snapshot: Buffer) => {
+        const rec = [...records.values()].find((r) => r.id === id)!;
+        Object.assign(rec, { contentHash: hash, baseSnapshot: snapshot });
+      });
+      notion.getDatabaseSchema.mockResolvedValue({
+        이름: { id: "title", type: "title" },
+        담당: { id: "p3", type: "relation" },
+        마감: { id: "p6", type: "date" },
+      });
+      notion.updatePageProperties = vi.fn(async (id: string) => ({
+        id,
+        last_edited_time: CREATED_AT,
+        last_edited_by: { object: "user", id: "bot" },
+        properties: {},
+      }));
+      let nextRow = 0;
+      notion.createPageWithMarkdown.mockImplementation(async () => ({
+        id: `row-${++nextRow}`,
+        last_edited_time: CREATED_AT,
+        last_edited_by: { object: "user", id: "bot" },
+        properties: {},
+      }));
+    });
+
+    it("행을 모두 만든 뒤 relation 을 다시 보낸다", async () => {
+      files.set(
+        "P/과제/행 1.md",
+        '---\n이름: 행 1\n담당:\n  - "[[김]]"\n마감: 2026-10-23\n---\n행 본문\n',
+      );
+      const result = await build().push();
+
+      expect(result.failed).toEqual([]);
+      // relation 만 다시 보낸다 — 사본을 고치다 날짜 모양이 바뀌어 날짜까지 보내던 것(라이브)
+      expect(notion.updatePageProperties.mock.calls).toEqual([
+        [pageIdOf("P/과제/행 1.md"), { 담당: { relation: [{ id: pageIdOf("P/사람/김.md") }] } }],
+      ]);
+      const row = records.get("P/과제/행 1.md")!;
+      expect(String(row.baseSnapshot)).toContain("[[김]]");
+      // 김의 반대쪽 relation 은 Notion 이 고쳤다 — 다음 pull 이 내용으로 확인한다.
+      expect(records.get("P/사람/김.md")).toMatchObject({
+        notionLastEditedBy: null,
+        notionSeenAt: null,
+      });
+      expect((await build().push({ dryRun: true })).updated).toBe(0);
+    });
+
+    it("수식 · ID 가 있는 DB 의 새 행은 다음 pull 이 받아 적게 한다", async () => {
+      notion.getDatabaseSchema.mockResolvedValue({
+        이름: { id: "title", type: "title" },
+        번호: { id: "u", type: "unique_id" },
+      });
+      await build().push();
+
+      expect(records.get("P/과제/행 1.md")).toMatchObject({
+        notionLastEditedBy: null,
+        notionSeenAt: null,
+      });
+    });
+
+    it("계산 속성이 없는 DB 의 새 행은 우리가 만든 그대로로 둔다", async () => {
+      await build().push();
+
+      expect(records.get("P/과제/행 1.md")).toMatchObject({ notionLastEditedBy: "bot" });
+    });
+
+    it("가리키는 노트가 없으면 사본에서 빼 두고 알린다 — 다음 push 가 다시 고른다", async () => {
+      files.set("P/과제/행 1.md", '---\n이름: 행 1\n담당:\n  - "[[없는 노트]]"\n---\n행 본문\n');
+      await build().push();
+
+      expect(notion.updatePageProperties).not.toHaveBeenCalled();
+      const row = records.get("P/과제/행 1.md")!;
+      expect(String(row.baseSnapshot)).not.toContain("담당");
+      expect(warn.mock.calls.flat().join("\n")).toContain("보내지 못한 행 1개");
+      expect((await build().push({ dryRun: true })).updated).toBe(1);
+    });
+  });
+
   it("행이 없는 DB 도 만든다 — 사이드카만 있는 폴더", async () => {
     files.delete("P/사람/김.md");
     const result = await build().push();
