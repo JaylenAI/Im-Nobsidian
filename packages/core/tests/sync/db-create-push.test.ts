@@ -52,6 +52,11 @@ const TASKS_SIDECAR = sidecar(SOURCE_TASKS, "과제", [
         { name: "할 일", color: "gray" },
         { name: "끝", color: "green" },
       ],
+      groups: [
+        { name: "To-do", options: ["할 일"] },
+        { name: "In progress", options: [] },
+        { name: "Complete", options: ["끝"] },
+      ],
     },
   },
   {
@@ -268,8 +273,8 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
           상태: {
             status: {
               options: [
-                { name: "할 일", color: "gray" },
-                { name: "끝", color: "green" },
+                { name: "할 일", color: "gray", group: "To-do" },
+                { name: "끝", color: "green", group: "Complete" },
               ],
             },
           },
@@ -384,7 +389,7 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
     expect(rowCall[0].parentId).toBe("db-lost");
   });
 
-  it("status 가 Notion 기본 옵션을 쓰면 기본으로 만들어 그룹을 살리고, 나머지는 더한 뒤 알린다", async () => {
+  it("status 옵션을 원래 그룹에 둔다 — 기본 옵션 · 더한 옵션 모두 한 번에", async () => {
     files.set(
       "P/과제/과제.notion.json",
       sidecar(SOURCE_TASKS, "과제", [
@@ -409,26 +414,49 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
         },
       ]),
     );
-    const defaults = [
-      { id: "o1", name: "Not started", color: "default" },
-      { id: "o2", name: "In progress", color: "blue" },
-      { id: "o3", name: "Done", color: "green" },
-    ];
-    notion.updateDataSourceProperties.mockImplementationOnce(async () => ({
-      상태: { status: { options: defaults } },
-    }));
     await build().push();
 
-    expect(notion.updateDataSourceProperties.mock.calls.slice(0, 2)).toEqual([
-      ["ds-new-1", { 상태: { status: {} } }],
-      [
-        "ds-new-1",
-        { 상태: { status: { options: [...defaults, { name: "보류", color: "red" }] } } },
-      ],
+    expect(notion.updateDataSourceProperties.mock.calls[0]).toEqual([
+      "ds-new-1",
+      {
+        상태: {
+          status: {
+            options: [
+              { name: "Not started", color: "default", group: "To-do" },
+              { name: "In progress", color: "blue", group: "In progress" },
+              { name: "Done", color: "green", group: "Complete" },
+              { name: "보류", color: "red", group: "In progress" },
+            ],
+          },
+        },
+      },
     ]);
-    const warned = warn.mock.calls.flat().join("\n");
-    expect(warned).toContain("보류(In progress)");
-    expect(warned).not.toContain("Done(");
+    expect(warn.mock.calls.flat().join("\n")).not.toContain("그룹");
+  });
+
+  it("그룹을 모르는 status 옵션(사이드카 v1 · 모르는 그룹)은 Notion 이 정하게 두고 알린다", async () => {
+    files.set(
+      "P/과제/과제.notion.json",
+      sidecar(SOURCE_TASKS, "과제", [
+        { name: "이름", id: "title", type: "title" },
+        {
+          name: "상태",
+          id: "s",
+          type: "status",
+          definition: {
+            options: [{ name: "가" }, { name: "나" }],
+            groups: [{ name: "보관", options: ["나"] }],
+          },
+        },
+      ]),
+    );
+    await build().push();
+
+    expect(notion.updateDataSourceProperties.mock.calls[0]).toEqual([
+      "ds-new-1",
+      { 상태: { status: { options: [{ name: "가" }, { name: "나" }] } } },
+    ]);
+    expect(warn.mock.calls.flat().join("\n")).toContain("나(보관)");
   });
 
   describe("relation 값 — 뒤에 만든 행을 가리켜도 잃지 않는다", () => {

@@ -3,8 +3,8 @@
  * 만드는 차례와 상태는 `database-creator.ts` 가 맡는다.
  *
  * 차례가 있는 까닭(2026-10-23 실측):
- * - status 는 DB 를 만든 뒤 data source 갱신으로 더한다. 그룹은 API 가 정하지 못한다 — 새 옵션은 늘 To-do 에
- *   들고, 기본 세 옵션({@link NOTION_DEFAULT_STATUS})만 제 그룹에 든다. 옵션 이름도 바꿀 수 없다.
+ * - status 는 DB 를 만든 뒤 data source 갱신으로 더한다. 옵션마다 `group` 으로 그룹을 정한다(API 2026-06-22 ·
+ *   실측: 새 속성 · 기본 옵션에 더하기 · 옮기기 모두 된다). 그룹 셋의 이름 · 차례는 바꿀 수 없다.
  * - relation 은 대상 DB 가 있어야 하고, rollup 은 그 relation 이, formula 는 식이 가리키는 속성이 있어야 한다.
  */
 import { compactNotionId } from "../utils/id.js";
@@ -37,8 +37,8 @@ export interface SidecarSchemaView {
   readonly config: Readonly<Record<string, unknown>>;
 }
 
-/** Notion 이 status 를 만들 때 넣는 옵션 — 이것만 To-do · In progress · Complete 에 나뉘어 든다. */
-export const NOTION_DEFAULT_STATUS: readonly string[] = ["Not started", "In progress", "Done"];
+/** status 의 그룹 — Notion 이 정해 두고 이름을 바꾸지 못하게 한다. 옵션의 `group` 은 이 가운데 하나다. */
+export const NOTION_STATUS_GROUPS: readonly string[] = ["To-do", "In progress", "Complete"];
 
 /** DB 를 만든 뒤 더할 status. */
 export interface PlannedStatus {

@@ -6,7 +6,7 @@ import type { ViewRequest } from "../types/view.js";
 import { compactNotionId } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import {
-  NOTION_DEFAULT_STATUS,
+  NOTION_STATUS_GROUPS,
   parseSidecarSchema,
   planDatabaseSchema,
   relationRequest,
@@ -264,49 +264,33 @@ export class DatabaseCreator {
   }
 
   /**
-   * status 를 더한다. 그룹은 API 가 정하지 못한다 — 기본 세 옵션이 원래 있었으면 기본으로 만들어 제 그룹에 두고
-   * 나머지를 더한다(To-do 에 든다). 원래 그룹과 달라지는 옵션은 알린다.
+   * status 를 더한다 — 옵션마다 원래 그룹을 `group` 으로 실어 한 번에. 그룹을 모르는 옵션(사이드카 v1 · Notion 에
+   * 없는 그룹 이름)은 Notion 이 정하게 두고(To-do) 알린다.
    */
   private async addStatus(
     dataSourceId: string,
     status: PlannedStatus,
     folder: string,
   ): Promise<void> {
-    const names = status.options.map((o) => o.name);
-    const keepsDefaults = NOTION_DEFAULT_STATUS.every((n) => names.includes(n));
-    let placed: ReadonlyMap<string, string>;
-    if (keepsDefaults) {
-      const after = await this.notionClient.updateDataSourceProperties(dataSourceId, {
-        [status.name]: { status: {} },
-      });
-      const existing = optionsWithIds(after[status.name]);
-      const extras = status.options.filter((o) => !NOTION_DEFAULT_STATUS.includes(o.name));
-      placed = new Map([
-        ["Not started", "To-do"],
-        ["In progress", "In progress"],
-        ["Done", "Complete"],
-        ...extras.map((o) => [o.name, "To-do"] as const),
-      ]);
-      if (extras.length > 0) {
-        await this.notionClient.updateDataSourceProperties(dataSourceId, {
-          [status.name]: { status: { options: [...existing, ...extras] } },
-        });
-      }
-    } else {
-      await this.notionClient.updateDataSourceProperties(dataSourceId, {
-        [status.name]: { status: { options: status.options } },
-      });
-      placed = new Map(names.map((n) => [n, "To-do"]));
+    const groupOf = new Map<string, string>();
+    for (const group of status.groups ?? []) {
+      for (const option of group.options) groupOf.set(option, group.name);
     }
-    const moved = (status.groups ?? []).flatMap((g) =>
-      g.options
-        .filter((o) => placed.has(o) && placed.get(o) !== g.name)
-        .map((o) => `${o}(${g.name})`),
-    );
-    if (moved.length > 0) {
+    const unknown: string[] = [];
+    const options = status.options.map((option) => {
+      const group = groupOf.get(option.name);
+      if (group === undefined) return option;
+      if (NOTION_STATUS_GROUPS.includes(group)) return { ...option, group };
+      unknown.push(`${option.name}(${group})`);
+      return option;
+    });
+    await this.notionClient.updateDataSourceProperties(dataSourceId, {
+      [status.name]: { status: { options } },
+    });
+    if (unknown.length > 0) {
       getLogger().warn(
-        `[Im-Nobsidian] status 그룹은 Notion API 가 정하지 못해 To-do 에 둠 (${folder} · ${status.name}): ` +
-          `${moved.join(", ")} — Notion 에서 옮기세요`,
+        `[Im-Nobsidian] status 그룹을 Notion 에서 찾지 못해 To-do 에 둠 (${folder} · ${status.name}): ` +
+          `${unknown.join(", ")} — Notion 에서 옮기세요`,
       );
     }
   }
@@ -627,18 +611,6 @@ export class DatabaseCreator {
     }
     return fallback;
   }
-}
-
-/** 받은 status 속성의 옵션 — 다시 보낼 때 id 로 그대로 둔다. */
-function optionsWithIds(prop: Record<string, unknown> | undefined): unknown[] {
-  const options = (
-    prop?.status as { options?: Array<{ id: string; name: string; color?: string }> }
-  )?.options;
-  return (options ?? []).map((o) => ({
-    id: o.id,
-    name: o.name,
-    ...(o.color ? { color: o.color } : {}),
-  }));
 }
 
 function statusOf(error: unknown): number | null {
