@@ -4,13 +4,13 @@ import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
-  NodeVaultFS,
   formatUnifiedDiff,
   lineDiff,
   matchesPathScope,
 } from "@im-nobsidian/core";
 import type { ChangeDiff } from "@im-nobsidian/core";
 import { printUnifiedDiff } from "../utils/diff-output.js";
+import { openVaultFs } from "../utils/vault.js";
 
 // 기본 비교 대상은 **마지막 동기화 스냅샷**이다(로컬에서 무엇을 고쳤는지). Notion 현재
 // 본문과의 비교는 API 호출이 필요하므로 `--remote` 로 명시할 때만 한다 — 예전 설명은
@@ -30,7 +30,7 @@ export const diffCommand = new Command("diff")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const status = await orchestrator.statusLocal();

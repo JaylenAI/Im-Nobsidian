@@ -1,11 +1,5 @@
 import { Command } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import {
   header,
   operationIcon,
@@ -19,6 +13,7 @@ import {
   failedCountText,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pushJson } from "../utils/json-output.js";
+import { openVaultFs } from "../utils/vault.js";
 
 export const pushCommand = new Command("push")
   .description("로컬 변경사항을 Notion에 반영")
@@ -35,7 +30,7 @@ export const pushCommand = new Command("push")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       if (!json) {

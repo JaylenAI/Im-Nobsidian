@@ -18,6 +18,8 @@ vi.mock("@im-nobsidian/core", async (importOriginal) => ({
     { fromConfig: vi.fn().mockReturnValue({}) },
   ),
   SyncOrchestrator: vi.fn().mockImplementation(() => ({ prepareFolderDatabase: mockPrepare })),
+  findConnectionFolders: vi.fn().mockResolvedValue([]),
+  ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));
 
@@ -75,7 +77,8 @@ describe("prepare-db command", () => {
 
     await run("Books");
 
-    expect(mockPrepare).toHaveBeenCalledWith("Books");
+    // Obsidian 설정 폴더는 위로 올라가 찾는다 — 연결 폴더가 볼트 안쪽이어도 속성 타입을 읽는다(ADR-038).
+    expect(mockPrepare).toHaveBeenCalledWith("Books", expect.stringMatching(/\.obsidian$/));
     expect(lines).toEqual([
       "  ✓ Books/Books.notion.json — 행 3개",
       "    별점: number (값 3개가 모두 수)",

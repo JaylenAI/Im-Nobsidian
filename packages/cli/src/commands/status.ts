@@ -4,7 +4,6 @@ import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
-  NodeVaultFS,
   isRemoteDeletion,
 } from "@im-nobsidian/core";
 import chalk from "chalk";
@@ -17,6 +16,7 @@ import {
   lastFullScanText,
   remoteDeletionHint,
 } from "../utils/format.js";
+import { nestedConnections, openVaultFs } from "../utils/vault.js";
 
 export const statusCommand = new Command("status")
   .description("동기화 상태 확인 (--full: 원격 변경 포함)")
@@ -29,7 +29,7 @@ export const statusCommand = new Command("status")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const status = opts.full ? await orchestrator.status() : await orchestrator.statusLocal();
@@ -48,6 +48,12 @@ export const statusCommand = new Command("status")
       }
       // Notion 에서 지운 노트는 전체 대조 때 볼트에 반영된다 — 그때를 함께 보인다.
       console.log(`  ${dimText("Full scan:")}  ${lastFullScanText(status.lastFullScanAt)}`);
+      // 안쪽 연결 폴더(ADR-038)는 여기서 보지 않는다 — 그 폴더에서 따로 본다.
+      for (const folder of await nestedConnections(cwd)) {
+        console.log(
+          `  ${dimText("Connection:")} ${folder}/ ${dimText(`(separate — cd ${folder} && nobsi status)`)}`,
+        );
+      }
 
       // Tracked files summary
       const allRecords = stateDb.getAll();
