@@ -752,24 +752,95 @@ export class NotionClient {
   /** 특정 data source 1개를 직접 쿼리한다(저수준). 다중 data source 순회의 빌딩블록. */
   private async queryDataSource(
     dataSourceId: string,
-    options?: { startCursor?: string; pageSize?: number; filter?: unknown },
-  ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null }> {
+    options?: { startCursor?: string; pageSize?: number; filter?: unknown; sorts?: unknown },
+  ): Promise<{ results: PageObjectResponse[]; nextCursor: string | null; incomplete: boolean }> {
     const response = await this.withRateLimit(() =>
       this.client.dataSources.query({
         data_source_id: dataSourceId,
         start_cursor: options?.startCursor,
         page_size: options?.pageSize ?? this.defaultPageSize,
         filter: options?.filter as never,
+        sorts: options?.sorts as never,
       }),
     );
     // DB 안에 둔 DB 는 결과에 `object: "data_source"` 로 섞여 온다 — 행이 아니므로 뺀다.
     // 페이지로 받으면 `object_not_found` 로 pull 마다 실패로 남았다(2026-10-22 실데이터 E2E).
+    const status = (response as { request_status?: { type?: string } }).request_status;
     return {
       results: response.results.filter(
         (result) => result.object !== "data_source",
       ) as PageObjectResponse[],
       nextCursor: response.next_cursor,
+      incomplete: status?.type === "incomplete",
     };
+  }
+
+  /**
+   * data source 하나의 행을 모두 읽는다. 조회 하나는 결과 10,000건에서 멈추고 `request_status.incomplete` 를
+   * 단다(API 2026-04-20) — 그러면 만든 시각 차례로 처음부터 다시 읽되, 한도에 걸릴 때마다 마지막 행의 만든 시각부터
+   * 새 조회를 연다(SDK `iterateAllDataSourceRows` 와 같은 방법 — 그 도우미는 속도 제한을 거치지 않는다).
+   * 한도 밑이면 예전처럼 정렬 없이 한 번 읽는다 — 행 차례(같은 제목의 파일 이름)가 그대로다.
+   */
+  private async queryAllRowsOf(
+    dataSourceId: string,
+    filter?: unknown,
+  ): Promise<PageObjectResponse[]> {
+    const rows: PageObjectResponse[] = [];
+    let cursor: string | undefined;
+    do {
+      const response = await this.queryDataSource(dataSourceId, {
+        startCursor: cursor,
+        pageSize: this.defaultPageSize,
+        filter,
+      });
+      if (response.incomplete) return this.queryRowsByCreatedTime(dataSourceId, filter);
+      rows.push(...response.results);
+      cursor = response.nextCursor ?? undefined;
+    } while (cursor);
+    return rows;
+  }
+
+  private async queryRowsByCreatedTime(
+    dataSourceId: string,
+    filter: unknown,
+  ): Promise<PageObjectResponse[]> {
+    const rows: PageObjectResponse[] = [];
+    const seen = new Set<string>();
+    let since: string | undefined;
+    for (;;) {
+      const window = since
+        ? { timestamp: "created_time", created_time: { on_or_after: since } }
+        : undefined;
+      const windowed = window && filter ? { and: [filter, window] } : (window ?? filter);
+      let cursor: string | undefined;
+      let incomplete = false;
+      let last: string | undefined;
+      do {
+        const response = await this.queryDataSource(dataSourceId, {
+          startCursor: cursor,
+          pageSize: this.defaultPageSize,
+          filter: windowed,
+          sorts: [{ timestamp: "created_time", direction: "ascending" }],
+        });
+        for (const row of response.results) {
+          last = row.created_time;
+          const key = normalizeNotionId(row.id);
+          if (seen.has(key)) continue;
+          seen.add(key);
+          rows.push(row);
+        }
+        incomplete = response.incomplete;
+        cursor = response.nextCursor ?? undefined;
+      } while (cursor);
+      if (!incomplete) return rows;
+      if (last === undefined || last === since) {
+        // 같은 분에 만든 행이 한도보다 많다 — 시각만으로는 더 나눌 수 없다. 일부만 돌려주면 나머지를 «지운 행» 으로 읽는다.
+        throw new Error(
+          `data source ${dataSourceId}: 같은 시각(${since ?? "?"})에 만든 행이 조회 한도(10,000건)보다 많아 모두 읽지 못했다`,
+        );
+      }
+      since = last;
+    }
   }
 
   /**
@@ -812,21 +883,12 @@ export class NotionClient {
     const all: PageObjectResponse[] = [];
     const seen = new Set<string>();
     for (const meta of metas) {
-      let cursor: string | undefined;
-      do {
-        const response = await this.queryDataSource(meta.id, {
-          startCursor: cursor,
-          pageSize: this.defaultPageSize,
-          filter,
-        });
-        for (const page of response.results) {
-          const key = normalizeNotionId(page.id);
-          if (seen.has(key)) continue;
-          seen.add(key);
-          all.push(page);
-        }
-        cursor = response.nextCursor ?? undefined;
-      } while (cursor);
+      for (const page of await this.queryAllRowsOf(meta.id, filter)) {
+        const key = normalizeNotionId(page.id);
+        if (seen.has(key)) continue;
+        seen.add(key);
+        all.push(page);
+      }
     }
 
     return all;
