@@ -1,4 +1,6 @@
-import type { NotionClient } from "../notion/client.js";
+import { isNotionValidationError, type NotionClient } from "../notion/client.js";
+import { nfmInlineToRichText } from "../converter/nfm-inline.js";
+import type { PageDecorations } from "./page-decorations.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { LocalChange } from "../types/sync.js";
@@ -102,6 +104,8 @@ export class DatabaseCreator {
     private readonly stateDb: IStateDB,
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
+    /** DB 의 아이콘 · 커버를 보낼 요청으로 — 없으면 보내지 않는다. */
+    private readonly decorations?: PageDecorations,
   ) {}
 
   get enabled(): boolean {
@@ -238,13 +242,31 @@ export class DatabaseCreator {
     target: NewDatabaseFolder,
     plan: DatabaseSchemaPlan,
   ): Promise<{ databaseId: string; dataSourceId: string }> {
-    const request = (properties: Record<string, unknown>) =>
-      this.notionClient.createDatabase({
-        parentPageId,
-        title,
-        isInline: target.schema.isInline,
-        properties,
-      });
+    let appearance = await this.appearanceRequest(target);
+    const request = async (properties: Record<string, unknown>) => {
+      try {
+        return await this.notionClient.createDatabase({
+          parentPageId,
+          title,
+          isInline: target.schema.isInline,
+          properties,
+          appearance,
+        });
+      } catch (error) {
+        // 거절은 적용되지 않은 것이다 — 꾸밈 탓일 수 있으니 꾸밈 없이 한 번 더. DB 가 없는 것보다 낫다.
+        if (!isNotionValidationError(error) || Object.keys(appearance).length === 0) throw error;
+        getLogger().warn(
+          `[Im-Nobsidian] DB 의 아이콘 · 커버 · 설명을 Notion 이 거절해 빼고 만듦 (${target.folder}): ${messageOf(error)}`,
+        );
+        appearance = {};
+        return await this.notionClient.createDatabase({
+          parentPageId,
+          title,
+          isInline: target.schema.isInline,
+          properties,
+        });
+      }
+    };
     try {
       return await request(plan.initial);
     } catch (error) {
@@ -261,6 +283,26 @@ export class DatabaseCreator {
       for (const name of prefixed) properties[name] = { unique_id: { prefix: null } };
       return await request(properties);
     }
+  }
+
+  /** 사이드카에 적힌 DB 의 아이콘 · 커버 · 설명 · 제목 표시를 `databases.create` 의 칸으로. */
+  private async appearanceRequest(target: NewDatabaseFolder): Promise<Record<string, unknown>> {
+    const { icon, cover, description, showTitle } = target.schema.appearance;
+    // 인라인 DB 는 커버를 가질 수 없다 — 보내면 요청 전체가 거절된다(2026-10-23 실측: 400 "Cover images are not
+    // supported for inline databases").
+    const decorated = this.decorations
+      ? await this.decorations.requests(
+          { icon, cover },
+          `${target.folder}/.notion.json`,
+          target.schema.isInline ? ["icon"] : ["icon", "cover"],
+        )
+      : {};
+    // 비운 값(null)은 만들 때 뜻이 없다 — 보내지 않는다.
+    const body: Record<string, unknown> = {};
+    for (const [key, value] of Object.entries(decorated)) if (value !== null) body[key] = value;
+    if (description) body.description = nfmInlineToRichText(description);
+    if (!showTitle) body.show_data_source_title = false;
+    return body;
   }
 
   /**

@@ -219,3 +219,37 @@ describe("SidecarGenerator", () => {
     expect(s.views.map((v) => v.name)).toEqual(["B", "A"]);
   });
 });
+
+describe("DB 의 꾸밈", () => {
+  const base = {
+    databaseId: "db-1",
+    databaseName: "할 일",
+    schema: SCHEMA,
+    viewsConfig: { databaseId: "db-1", databaseName: "할 일", lastSynced: "", views: [] },
+  };
+
+  it("있는 것만 적는다", () => {
+    const s = gen.build({ ...base, appearance: { icon: "🗂️", showTitle: false } });
+    expect(s.appearance).toEqual({ icon: "🗂️", showTitle: false });
+  });
+
+  it("꾸밈이 없으면 키가 없다 — 예전 사이드카와 같은 바이트", () => {
+    const plain = gen.serialize(gen.build(base));
+    expect(gen.serialize(gen.build({ ...base, appearance: {} }))).toBe(plain);
+    expect(plain).not.toContain("appearance");
+  });
+
+  it("다시 읽으면 같은 값 — 없으면 제목은 보인다", async () => {
+    const { parseSidecarSchema } = await import("../../src/sync/database-schema.js");
+    const s = gen.build({
+      ...base,
+      appearance: { icon: "pizza:red", cover: "[[attachments/c.png]]", description: "설명" },
+    });
+    expect(parseSidecarSchema(gen.serialize(s))!.appearance).toEqual({
+      icon: "pizza:red",
+      cover: "[[attachments/c.png]]",
+      description: "설명",
+      showTitle: true,
+    });
+  });
+});

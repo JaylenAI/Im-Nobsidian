@@ -70,6 +70,7 @@ import { rerenderTargets } from "./rerender-targets.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { DatabaseCreator } from "./database-creator.js";
+import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
@@ -222,7 +223,13 @@ export class SyncOrchestrator {
       this.drift,
       this.recovery,
     );
-    this.databaseCreator = new DatabaseCreator(config, stateDb, notionClient, vaultFs);
+    this.databaseCreator = new DatabaseCreator(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      new PageDecorations(notionClient, imageHandler),
+    );
     this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
     this.puller = new PagePuller(

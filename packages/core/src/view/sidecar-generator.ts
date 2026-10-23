@@ -37,6 +37,20 @@ export interface NotionSidecar {
   readonly views: SidecarView[];
   /** 정직한 손실 리포트 — 무엇이 `.base` 에서 누락/degrade 됐는가. */
   readonly degraded: DegradeNote[];
+  /** DB 자체의 꾸밈 — 있는 것만. 없으면 키가 없다(꾸밈 없는 DB 의 사이드카는 예전과 같은 바이트). */
+  readonly appearance?: SidecarAppearance;
+}
+
+/**
+ * DB 의 아이콘 · 커버 · 설명 · 제목 표시. `icon` · `cover` 는 페이지 frontmatter 와 같은 꼴
+ * (`notion/decoration-values.ts`), `description` 은 NFM 한 줄.
+ */
+export interface SidecarAppearance {
+  readonly icon?: string;
+  readonly cover?: string;
+  readonly description?: string;
+  /** 보기 위에 DB 제목을 숨겼으면 false. 보이면(기본) 없다. */
+  readonly showTitle?: false;
 }
 
 export interface SidecarProperty {
@@ -91,6 +105,7 @@ export class SidecarGenerator {
     schema: Record<string, BasePropertySchema>;
     viewsConfig: DatabaseViewsConfig;
     isInline?: boolean;
+    appearance?: SidecarAppearance;
   }): NotionSidecar {
     const degraded: DegradeNote[] = [];
 
@@ -114,6 +129,9 @@ export class SidecarGenerator {
       properties,
       views,
       degraded,
+      ...(options.appearance && Object.keys(options.appearance).length > 0
+        ? { appearance: options.appearance }
+        : {}),
     };
   }
 
