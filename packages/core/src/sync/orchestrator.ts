@@ -36,6 +36,7 @@ import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
+import { ConnectionScopeError } from "./connection-folders.js";
 import { nextPullWatermark } from "./pull-watermark.js";
 import {
   DatabasePullLedger,
@@ -294,8 +295,23 @@ export class SyncOrchestrator {
     return this.gate.run("push", () => this.executePush(options));
   }
 
+  /**
+   * 다른 연결 폴더 안의 노트를 추적하고 있으면 아무것도 하지 않고 멈춘다(ADR-038) — 그 노트들은 이 연결의
+   * 목록에 없으므로, 그대로 돌리면 「볼트에서 지움」 으로 보고 Notion 페이지를 지우거나 되살리려 한다.
+   */
+  private assertConnectionScope(): void {
+    const vaultFs = this.vaultFs;
+    if (!vaultFs.ownsPath) return;
+    const foreign = this.stateDb
+      .getAll()
+      .map((record) => record.obsidianPath)
+      .filter((path) => !vaultFs.ownsPath!(path));
+    if (foreign.length > 0) throw new ConnectionScopeError(foreign);
+  }
+
   private async executePush(options?: PushOptions): Promise<PushResult> {
     const startTime = Date.now();
+    this.assertConnectionScope();
 
     if (this.config.sync.direction === "pull") {
       return {
@@ -673,6 +689,7 @@ export class SyncOrchestrator {
 
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
+    this.assertConnectionScope();
     this.puller.beginPull();
     this.rowSchemas.clear();
     const emptyResult: PullResult = {
@@ -1126,6 +1143,7 @@ export class SyncOrchestrator {
 
   private async executeStatus(signal?: AbortLike): Promise<StatusResult> {
     throwIfAborted(signal);
+    this.assertConnectionScope();
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
@@ -1164,6 +1182,7 @@ export class SyncOrchestrator {
    * (옮긴 노트 · 폴더 포함). 상태 DB 는 바꾸지 않는다.
    */
   async statusLocal(): Promise<StatusResult> {
+    this.assertConnectionScope();
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);

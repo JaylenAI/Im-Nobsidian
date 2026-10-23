@@ -26,6 +26,10 @@ export interface VaultFS {
   listMarkdownFileStats(): Promise<FileStatInfo[]>;
   listNonMarkdownFiles(): Promise<NonMdFileInfo[]>;
   getFileStat(path: string): Promise<FileStatInfo | null>;
+  /**
+   * 이 볼트(연결)가 맡은 경로인가 — 볼트 안의 다른 연결 폴더(ADR-038)는 false. 없으면 전부 맡는다.
+   */
+  ownsPath?(path: string): boolean;
 }
 
 /**

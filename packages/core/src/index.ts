@@ -282,6 +282,17 @@ export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 
+// 볼트 하나에 연결 여럿(ADR-038)
+export {
+  ScopedVaultFS,
+  ConnectionBoundaryError,
+  ConnectionScopeError,
+  connectionFolderOf,
+  configDirFrom,
+  normalizeVaultPath,
+} from "./sync/connection-folders.js";
+export { findConnectionFolders } from "./sync/node-connection-folders.js";
+
 // Factory
 export { createDefaultPipeline } from "./converter/pipeline-factory.js";
 
