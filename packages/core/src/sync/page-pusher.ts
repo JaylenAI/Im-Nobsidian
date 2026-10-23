@@ -20,6 +20,7 @@ import { computeHash } from "../utils/hash.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
 import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
@@ -1078,10 +1079,12 @@ export class PagePusher {
     }
     if (typeof databaseId !== "string") return [];
     const own = compactNotionId(databaseId);
+    // 새 루트로 올리며 만든 DB(ADR-036) — 사이드카는 받아 온 곳의 DB 를 적고 있다.
+    const made = loadCreatedDatabases(this.stateDb).get(own)?.databaseId;
     const linked = [...loadLinkedDbMap(this.stateDb)]
       .filter(([, original]) => original === own)
       .map(([container]) => container);
-    return [own, ...linked];
+    return [own, ...(made ? [compactNotionId(made)] : []), ...linked];
   }
 
   /**

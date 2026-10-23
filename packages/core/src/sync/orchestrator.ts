@@ -69,6 +69,7 @@ import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { rerenderTargets } from "./rerender-targets.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
+import { DatabaseCreator } from "./database-creator.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
@@ -93,6 +94,7 @@ export class SyncOrchestrator {
   // 볼트 폴더의 Notion 자리 — 새 노트 · 옮긴 노트의 부모, 폴더 페이지 마련, 둘 자리가 없는 것의
   // 거절(S-04 · S-11 · S-15).
   private readonly placement: FolderPlacement;
+  private readonly databaseCreator: DatabaseCreator;
 
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
@@ -220,6 +222,8 @@ export class SyncOrchestrator {
       this.drift,
       this.recovery,
     );
+    this.databaseCreator = new DatabaseCreator(config, stateDb, notionClient, vaultFs);
+    this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
     this.puller = new PagePuller(
       config,
@@ -304,6 +308,7 @@ export class SyncOrchestrator {
     }
     this.rowSchemas.clear();
     this.placement.resetUnpreparedFolders();
+    this.databaseCreator.reset();
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -372,7 +377,13 @@ export class SyncOrchestrator {
       items.forEach((item, index) => options?.onProgress?.(index + 1, items.length, item));
       const count = (operation: ProgressItem["operation"]): number =>
         items.filter((item) => item.operation === operation).length;
+      const newDatabases = await this.databaseCreator.newDatabaseFolders(
+        applicable,
+        view.lookup,
+        !options?.paths,
+      );
       return {
+        createdDatabases: newDatabases.size,
         created: count("create"),
         updated: count("update"),
         deleted: count("delete"),
@@ -442,7 +453,12 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.placement.prepareFolders(applicable, firstAttempt);
+    const pushedEarly = await this.placement.prepareFolders(
+      applicable,
+      firstAttempt,
+      !options?.paths,
+    );
+    await this.completeDatabaseSchemas();
     await runPool(
       applicable.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
@@ -478,11 +494,32 @@ export class SyncOrchestrator {
       // 첫 차례에 새 행 · 폴더 노트가 생기면 그 아래 폴더가 그제서야 자리를 얻는다 — 재시도 전에
       // 폴더를 다시 본다. 자리를 얻지 못한 폴더의 노트는 그 이유와 함께 실패로 남는다.
       const retriedEarly = await this.placement.prepareFolders(retryQueue, retry);
+      await this.completeDatabaseSchemas();
       await runPool(
         retryQueue.filter((c) => !retriedEarly.has(c.path)),
         retry,
         { concurrency: this.config.advanced.concurrency, signal: options?.signal },
       );
+    }
+
+    // 만든 DB 는 부모 페이지의 끝에 붙는다 — 부모 본문을 다시 보내 `.base` 임베드 자리에 세운다(ADR-036).
+    // 이번 push 가 만든 부모는 덮어쓴다 — DB 를 만들며 수정 시각이 올라 원격 편집과 가를 수 없지만, 방금
+    // 이 노트가 쓴 페이지다. 예전부터 있던 부모는 평소처럼 원격을 견주고, 못 보내면 DB 가 끝에 남는다.
+    for (const path of this.databaseCreator.parentNotesOfCreated()) {
+      if (options?.signal?.aborted) break;
+      try {
+        await withDeadline(
+          () => this.pusher.pushUpdate(path, { overwriteRemote: pushedBodies.has(path) }),
+          this.config.advanced.itemTimeoutMs,
+          `push ${path}`,
+        );
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 만든 DB 를 부모 본문의 자리로 옮기지 못함 — 페이지 끝에 있다 (${path}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
     }
 
     // 뒤에 만든 페이지로 가는 위키링크를 멘션으로 — 모두 올린 뒤 한 번 더 본다(N8).
@@ -540,6 +577,7 @@ export class SyncOrchestrator {
     this.stateDb.clearCompletedOperations();
 
     return {
+      createdDatabases: this.databaseCreator.createdCount,
       created: counts.created,
       updated: counts.updated,
       deleted: counts.deleted,
@@ -547,6 +585,23 @@ export class SyncOrchestrator {
       failed,
       duration: Date.now() - startTime,
     };
+  }
+
+  /**
+   * 만든 DB 에 relation · rollup · formula 를 붙이고, 행 스키마를 다시 읽게 한다. 실패는 다음 push 가 이어
+   * 붙인다 — 행은 그대로 올린다.
+   */
+  private async completeDatabaseSchemas(): Promise<void> {
+    try {
+      await this.databaseCreator.completeSchemas();
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 속성을 붙이지 못함 — 다음 push 가 다시 붙인다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    this.rowSchemas.clear();
   }
 
   /** 볼트의 노트가 마지막으로 올린 내용 그대로인가 — 읽지 못하면(지움 · 옮김) 아니다. */

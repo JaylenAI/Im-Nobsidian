@@ -16,6 +16,7 @@ import type { VaultFS } from "./vault-fs.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import {
   DISCOVERED_DBS_META_KEY,
+  ROOT_DATABASES_FOLDER,
   INACCESSIBLE_DBS_META_KEY,
   LINKED_DBS_META_KEY,
   loadInaccessibleDbIds,
@@ -567,7 +568,7 @@ export class DatabaseDiscovery {
       safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
     }
     if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
-    if (!parentFolder) parentFolder = "databases";
+    if (!parentFolder) parentFolder = ROOT_DATABASES_FOLDER;
     return {
       kind: "ok",
       config: {

@@ -14,10 +14,10 @@ import { resolvePropertyName } from "./property-resolver.js";
  *   · 표현되는 뷰도 Notion **필터식·커버 크기/비율·컬럼 width/wrap·빈그룹 숨김** 등은
  *     Bases 문법에 대응이 없어 손실된다.
  *
- * Notion API 는 뷰 생성/수정을 지원하지 않으므로(뷰는 pull-authoritative) 이 메타데이터는
- * push 로 Notion 에 되돌릴 수 없다. 따라서 "무손실"의 의미는 **로컬에 완전·정직하게
- * 보존하고, 무엇이 degrade 됐는지 명시 리포트**하는 것이다. 사이드카는 이를 `.base` 와
- * 같은 폴더에 co-locate 해 사람이 발견 가능하고 도구가 재사용 가능하게 만든다.
+ * 사이드카는 DB 스키마의 원본이기도 하다(ADR-036, v2) — 새 루트로 올린 DB 폴더를 push 가 이것으로
+ * Notion DB 로 다시 만든다. 그래서 속성마다 다시 만드는 데 드는 설정(`definition`)과 인라인 여부를 적는다.
+ * v1(옵션 이름만)도 읽는다(`sync/database-schema.ts`). `.base` 와 같은 폴더에 두어 사람이 발견할 수 있고
+ * 도구가 다시 쓸 수 있다.
  *
  * ## 멱등성
  *
@@ -26,9 +26,11 @@ import { resolvePropertyName } from "./property-resolver.js";
  */
 export interface NotionSidecar {
   readonly generator: "im-nobsidian";
-  readonly schemaVersion: 1;
+  readonly schemaVersion: 2;
   readonly databaseId: string;
   readonly databaseName: string;
+  /** 페이지 본문 안에 놓인 인라인 DB 인가 — 다시 만들 때 같게. */
+  readonly isInline: boolean;
   /** 속성 스키마 — 이름 정렬. `.base` displayName 만으로는 잃는 타입/옵션을 보존. */
   readonly properties: SidecarProperty[];
   /** 모든 뷰(표현/미표현 공통) — Notion 순서 유지. */
@@ -43,6 +45,8 @@ export interface SidecarProperty {
   readonly type: string;
   /** select/multi_select/status 옵션명(있으면). */
   readonly options?: string[];
+  /** 다시 만드는 데 드는 타입별 설정(`view/property-definition.ts`). 타입 이름만으로 되면 없다. */
+  readonly definition?: Readonly<Record<string, unknown>>;
 }
 
 export interface SidecarView {
@@ -86,6 +90,7 @@ export class SidecarGenerator {
     databaseName: string;
     schema: Record<string, BasePropertySchema>;
     viewsConfig: DatabaseViewsConfig;
+    isInline?: boolean;
   }): NotionSidecar {
     const degraded: DegradeNote[] = [];
 
@@ -102,9 +107,10 @@ export class SidecarGenerator {
 
     return {
       generator: "im-nobsidian",
-      schemaVersion: 1,
+      schemaVersion: 2,
       databaseId: options.databaseId,
       databaseName: options.databaseName,
+      isInline: options.isInline === true,
       properties,
       views,
       degraded,
@@ -128,6 +134,7 @@ export class SidecarGenerator {
           id: prop.id,
           type: prop.type,
           ...(options && options.length > 0 ? { options } : {}),
+          ...(prop.definition ? { definition: prop.definition } : {}),
         };
       })
       .sort((a, b) => a.name.localeCompare(b.name));

@@ -6,6 +6,12 @@
  */
 import type { IStateDB } from "../state/state-db-interface.js";
 
+/**
+ * 부모 페이지를 볼트에 두지 않는 DB(루트 바로 아래 · 부모를 모르는 DB)를 받는 폴더. 이 폴더는 Notion 에서 페이지가
+ * 아니다 — push 는 이 폴더를 페이지로 만들지 않고 그 안의 DB 를 루트 아래에 만든다(ADR-036).
+ */
+export const ROOT_DATABASES_FOLDER = "databases";
+
 /** 자동 발견된 DB 1개의 동기화 설정 — 상태 메타 `discovered_dbs` 에 목록으로 둔다. */
 export interface DiscoveredDbConfig {
   databaseId: string;
