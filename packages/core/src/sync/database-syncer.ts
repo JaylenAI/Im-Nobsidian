@@ -56,6 +56,7 @@ import {
   type ObservationContext,
   type RemoteVerdict,
 } from "./remote-observation.js";
+import { PageDecorations, decorationsUnchanged } from "./page-decorations.js";
 
 export interface DatabaseSyncResult {
   created: number;
@@ -127,6 +128,7 @@ function emptyDatabaseSyncResult(): DatabaseSyncResult {
 
 export class DatabaseSyncer {
   private readonly propertyMapper: PropertyMapper;
+  private decorationsCache?: PageDecorations;
   private readonly baseFileGenerator = new BaseFileGenerator();
   private readonly sidecarGenerator = new SidecarGenerator();
 
@@ -135,6 +137,10 @@ export class DatabaseSyncer {
    * 않은 DB 의 것도 남아 있다({@link DbBaseFiles}).
    */
   readonly baseFileInfo: DbBaseFiles;
+
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
 
   constructor(
     private readonly config: Config,
@@ -929,24 +935,9 @@ export class DatabaseSyncer {
       await this.localizeFileProperties(rawProperties, properties, safeName);
     }
 
-    const cover = this.notionClient.extractCover(page);
-    const icon = this.notionClient.extractIcon(page);
-
-    if (cover) {
-      // notion-hosted 커버는 서명 URL(약 1시간 만료)이라 frontmatter 에 남기면 깨진
-      // 링크 + 풀마다 서명이 바뀌어 churn 이 된다(실측: LIFE/WORK). files 속성과 같은
-      // 로컬라이즈 경로(P3-A)로 첨부에 내려받고, 외부 URL(unsplash 등)은 원형 유지한다.
-      // (기존 구현은 downloadAllImages 결과를 `![cover](..)` 형태로 재매치했지만 성공
-      // 시 결과가 `![[..]]` 위키링크라 항상 미스매치 → 서명 URL 폴백이 되는 버그였다)
-      const local = downloadMedia
-        ? await this.imageHandler.localizeNotionFileUrl(cover.url, `${safeName}-cover`)
-        : null;
-      properties.cover = local ? `[[${local}]]` : cover.url;
-    }
-
-    if (icon) {
-      properties.icon = icon.value;
-    }
+    // 아이콘 · 커버 — Notion 에 올린 파일은 files 속성과 같이 첨부로 내려받는다(P3-A). 서명 URL(약 1시간
+    // 만료)을 적으면 깨진 링크가 되고 받을 때마다 주소가 바뀌어 churn 이 된다(실측: LIFE/WORK).
+    Object.assign(properties, await this.decorations.pulled(page, safeName, downloadMedia));
 
     const mdResult = await this.notionClient.getPageMarkdown(page.id);
     const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
@@ -995,22 +986,20 @@ export class DatabaseSyncer {
   }
 
   /**
-   * 행의 본문 밖이 지난 동기화 사본 그대로인가(N-05) — 제목과 보낼 수 있는 속성, 그리고
-   * {@link renderRow} 로 받는 행이면 아이콘 · 커버. push 는 원격을 덮어써도 되는지, pull 은 받을
+   * 행의 본문 밖이 지난 동기화 사본 그대로인가(N-05) — 제목과 보낼 수 있는 속성, 아이콘 · 커버.
+   * push 는 원격을 덮어써도 되는지, pull 은 받을
    * 것이 있는지를 이 규칙으로 가른다. 읽기 전용 속성(수식 · 롤업 · 수정 시각)은 보지 않는다 —
    * 로컬에서 고칠 수 없고 push 가 보내지 않는다.
    *
    * @param mapper 그 행의 DB 스키마를 읽은 매퍼.
    * @param base 지난 동기화 시점의 frontmatter.
    * @param path 지난 동기화 시점의 경로 — 파일 이름을 따르던 제목을 가른다.
-   * @param decorated 아이콘 · 커버도 견주나 — {@link renderRow} 로 받는 행만 그것을 노트에 적는다.
    */
   rowOutsideBodyUnchanged(
     mapper: PropertyMapper,
     page: PageObjectResponse,
     base: Readonly<Record<string, unknown>>,
     path: string,
-    decorated: boolean,
   ): boolean {
     const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
     const { changed, cleared } = diffRowProperties(
@@ -1021,30 +1010,7 @@ export class DatabaseSyncer {
       this.notionClient.extractTitle(page) === noteTitle(base, path) &&
       Object.keys(changed).length === 0 &&
       cleared.length === 0 &&
-      (!decorated || this.decorationsUnchanged(page, base))
-    );
-  }
-
-  /**
-   * 원격 행의 아이콘 · 커버가 `frontmatter` 에 적힌 그대로인가 — {@link renderRow} 가 적는 모양으로
-   * 견준다(N-05). Notion 에 올린 파일은 읽을 때마다 주소가 바뀌고(서명) 커버는 볼트로 내려받아
-   * 적으므로, 있는지만 견준다.
-   */
-  private decorationsUnchanged(
-    page: PageObjectResponse,
-    frontmatter: Readonly<Record<string, unknown>>,
-  ): boolean {
-    const icon = this.notionClient.extractIcon(page);
-    const cover = this.notionClient.extractCover(page);
-    return (
-      sameDecoration(
-        icon === null ? null : { uploaded: icon.type === "file", value: icon.value },
-        frontmatter.icon,
-      ) &&
-      sameDecoration(
-        cover === null ? null : { uploaded: cover.type === "file", value: cover.url },
-        frontmatter.cover,
-      )
+      decorationsUnchanged(this.notionClient, page, base)
     );
   }
 
@@ -1128,13 +1094,7 @@ export class DatabaseSyncer {
         localExists &&
         base !== null &&
         bodyFingerprint === existingRecord.notionBodyFingerprint &&
-        this.rowOutsideBodyUnchanged(
-          this.propertyMapper,
-          page,
-          base,
-          existingRecord.obsidianPath,
-          true,
-        );
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, existingRecord.obsidianPath);
 
       const resolution = resolvePullConflict({
         record: existingRecord,
@@ -1248,17 +1208,4 @@ export class DatabaseSyncer {
 /** 원격 행의 속성(`page.properties`). */
 function rowProperties(page: PageObjectResponse): Record<string, unknown> {
   return (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
-}
-
-/**
- * 원격 아이콘 · 커버 하나가 frontmatter 에 적힌 값과 같은가. Notion 에 올린 파일(`uploaded`)은
- * 있는지만 본다. `remote` 는 원격에 없으면 null.
- */
-function sameDecoration(
-  remote: { readonly uploaded: boolean; readonly value: string } | null,
-  written: unknown,
-): boolean {
-  const present = written !== undefined && written !== null && written !== "";
-  if (remote === null) return !present;
-  return remote.uploaded ? present : written === remote.value;
 }

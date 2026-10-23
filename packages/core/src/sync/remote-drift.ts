@@ -12,6 +12,7 @@ import { rowDatabaseOf } from "./parent-mode.js";
 import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
 import type { RunObservation } from "./run-observation.js";
+import { decorationsUnchanged } from "./page-decorations.js";
 
 /**
  * 지난번에 본 뒤로 원격에서 바뀐 것(N-05).
@@ -169,8 +170,8 @@ export class RemoteDriftChecker {
 
   /**
    * 원격의 본문 밖이 지난 동기화 사본 그대로인가 — pull 이 받아 노트에 적는 것 중 본문이 아닌 것.
-   * 페이지는 제목뿐이고, 행은 제목과 보낼 수 있는 속성, 그리고 행 렌더러로 받는 행이면 아이콘 ·
-   * 커버다. 지난 사본을 읽지 못하면 아니다.
+   * 페이지는 제목, 행은 제목과 보낼 수 있는 속성 — 둘 다 아이콘 · 커버까지. 지난 사본을 읽지 못하면
+   * 아니다.
    */
   private async outsideBodyUnchanged(
     record: SyncRecord,
@@ -180,14 +181,16 @@ export class RemoteDriftChecker {
     if (base === null) return false;
     const databaseId = rowDatabaseOf(this.config, record);
     if (databaseId === null) {
-      return titleUnchangedSince(base, record.obsidianPath, this.notionClient.extractTitle(remote));
+      return (
+        titleUnchangedSince(base, record.obsidianPath, this.notionClient.extractTitle(remote)) &&
+        decorationsUnchanged(this.notionClient, remote, base)
+      );
     }
     return this.databaseSyncer.rowOutsideBodyUnchanged(
       await this.rowSchemas.mapperFor(databaseId),
       remote,
       base,
       record.obsidianPath,
-      record.fileType === "db-row",
     );
   }
 }
