@@ -131,8 +131,13 @@ export function respace(content: string, sourceCompact?: boolean): string {
   return `${head.join("\n")}\n\n${body}${tail}`;
 }
 
-/** 블록을 묶고 블록 사이에 빈 줄 하나를 둔다. 문단 · 인용의 자식 묶음은 한 단계 떼어 다시 부른다. */
-function spaceBlocks(lines: readonly string[]): string {
+/**
+ * 블록을 묶고 블록 사이에 빈 줄 하나를 둔다. 문단 · 인용의 자식 묶음은 한 단계 떼어 다시 부른다.
+ *
+ * @param keepIndent 콜아웃 본문 — 들여쓴 줄은 앞 블록에 그대로 붙이고 탭을 펴지 않는다. 콜아웃 안 목록의 탭은
+ *   push 가 항목의 자식 깊이로 읽는 구조다(M3).
+ */
+function spaceBlocks(lines: readonly string[], keepIndent = false): string {
   const blocks: Block[] = [];
   // 열린 펜스 — 코드면 여는 펜스, 수식이면 "math". 코드 안의 ```bash · 짧은 펜스 줄에서 닫으면
   // 그 뒤 코드를 문단으로 보고 빈 줄을 끼운다(S-25). 닫는 줄은 Obsidian 이 읽는 대로 가린다.
@@ -156,7 +161,7 @@ function spaceBlocks(lines: readonly string[]): string {
     const raw = lines[i]!;
 
     if (fence !== null) {
-      appendToLast(expandLead(raw, fenceLead));
+      appendToLast(keepIndent ? raw : expandLead(raw, fenceLead));
       const closed = fence === "math" ? MATH_FENCE_RE.test(raw) : closesCodeFence(raw, fence);
       if (closed) {
         fence = null;
@@ -171,6 +176,14 @@ function spaceBlocks(lines: readonly string[]): string {
     }
     const atBoundary = boundary;
     boundary = false;
+
+    if (keepIndent && /^[ \t]/.test(raw) && blocks.length > 0 && !atBoundary) {
+      const opening = openCodeFence(raw);
+      if (opening) fence = opening;
+      else if (MATH_FENCE_RE.test(raw)) fence = "math";
+      appendToLast(raw);
+      continue;
+    }
 
     if (CHILD_LINE_RE.test(raw) && takesChildren(last())) {
       const end = childrenEnd(lines, i);
@@ -270,7 +283,36 @@ function spaceBlocks(lines: readonly string[]): string {
     push("other", line);
   }
 
-  return blocks.map((b) => b.lines.join("\n")).join("\n\n");
+  return blocks
+    .map((b) => (b.kind === "quote" ? spaceCalloutBody(b.lines) : b.lines).join("\n"))
+    .join("\n\n");
+}
+
+/** 줄머리 — 들여쓰기와 인용 표시 하나. */
+const QUOTE_LEAD_RE = /^[ \t]*>/;
+
+/**
+ * 콜아웃 본문의 블록 사이에도 빈 줄(`>`)을 둔다 — Notion 은 콜아웃 안의 줄도 저마다 블록이다. 본문을 인용 한 겹
+ * 떼어 같은 규칙으로 간격을 맞추고 다시 씌운다. 안의 콜아웃은 다시 부른 {@link spaceBlocks} 가 맞춘다.
+ *
+ * 예전에는 콜아웃을 인용 묶음 하나로만 보고 안을 붙여 두어, 새로 받은 볼트에서 문단 사이 `>` 줄이 사라졌다 —
+ * 두 문단이 한 문단의 두 줄이 된다(2026-10-23 라이브).
+ *
+ * 머리줄(`> [!type] 제목`)과 첫 본문 줄 사이는 띄우지 않는다. 같은 줄머리로 시작하지 않는 줄(게으른 이어짐)이
+ * 있으면 손대지 않는다 — 떼고 씌우면 그 줄이 콜아웃 안으로 들어간다.
+ */
+function spaceCalloutBody(lines: readonly string[]): readonly string[] {
+  const head = lines[0]!;
+  if (!CALLOUT_START_RE.test(head) || lines.length < 3) return lines;
+  const lead = QUOTE_LEAD_RE.exec(head)![0];
+  const inner: string[] = [];
+  for (const line of lines.slice(1)) {
+    if (!line.startsWith(lead)) return lines;
+    const rest = line.slice(lead.length);
+    inner.push(rest.startsWith(" ") ? rest.slice(1) : rest);
+  }
+  const spaced = spaceBlocks(inner, true).split("\n");
+  return [head, ...spaced.map((l) => (l === "" ? lead : `${lead} ${l}`))];
 }
 
 /**

@@ -152,13 +152,17 @@ export function scanMarkdownLinks(markdown: string): MarkdownLinkSpan[] {
 
 /** 라벨을 `![[경로|별칭]]` 별칭으로 안전하게 쓸 수 있는 평문으로 변환한다. */
 export function toWikilinkAlias(label: string): string {
-  return label
-    .replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1")
-    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, t: string, d?: string) => d ?? t)
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\]\]/g, ")")
-    .replace(/\|/g, "-")
-    .trim();
+  return (
+    label
+      .replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1")
+      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, t: string, d?: string) => d ?? t)
+      .replace(/[\r\n]+/g, " ")
+      // 캡션은 서식 없는 글이라 Notion 이 `*` 등을 `\*` 로 준다 — 별칭은 Obsidian 이 글자 그대로 쓴다(2026-10-23 실측).
+      .replace(/\\([!-/:-@[-`{-~])/g, "$1")
+      .replace(/\]\]/g, ")")
+      .replace(/\|/g, "-")
+      .trim()
+  );
 }
 
 const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;

@@ -1,4 +1,9 @@
 import {
+  receiveLiteralBackslashes,
+  receiveLoneBackticks,
+  sendLiteralBackslashes,
+} from "./literal-escapes.js";
+import {
   MARKER_BRAND_RE,
   compactMarker,
   TOGGLE_START,
@@ -121,6 +126,8 @@ export function notionEnhancedToObsidian(
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
+  result = receiveLiteralBackslashes(result);
+  result = receiveLoneBackticks(result);
   // 북마크의 이름은 escape 를 푼 뒤에 넣는다 — 캡션의 대괄호 escape 가 함께 풀리지 않게(F-09).
   result = linkBookmarks(result, options?.bookmarks);
   result = ensureCalloutContinuity(result);
@@ -196,6 +203,8 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
   result = indentPlaceholdersToNextLine(result);
   result = underscoreItalicsWithStar(result);
+  // 글 `\` 는 맨 끝 — 위 변환이 만든 escape 쌍을 escape 로 알아보게.
+  result = sendLiteralBackslashes(result);
 
   return result;
 }
