@@ -470,11 +470,27 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
       withFormulas([
         ["완료 수", 'prop("담당").filter(current.prop("상태") == "끝").length()'],
         ["비율", 'prop("완료 수") / 2'],
+        ["합", 'sum(prop("담당 값"))'],
       ]);
-      notion.updateDataSourceProperties.mockImplementation(async (ds: string) => {
-        if (ds === "ds-new-1") throw rejected();
-        return {};
+      // 관계 페이지의 값을 그대로 보이는 rollup — 그것을 계산하는 식도 API 로는 못 만든다.
+      const tasks = JSON.parse(files.get("P/과제/과제.notion.json")!);
+      tasks.properties.push(JSON.parse(TASKS_SIDECAR).properties[3], {
+        name: "담당 값",
+        id: "r9",
+        type: "rollup",
+        definition: {
+          relation_property_name: "담당",
+          rollup_property_name: "이름",
+          function: "show_original",
+        },
       });
+      files.set("P/과제/과제.notion.json", JSON.stringify(tasks));
+      notion.updateDataSourceProperties.mockImplementation(
+        async (ds: string, props: Record<string, { formula?: unknown }>) => {
+          if (ds === "ds-new-1" && Object.values(props).some((p) => p.formula)) throw rejected();
+          return {};
+        },
+      );
 
       await build().push();
 
@@ -484,10 +500,16 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
           'prop("담당").filter(current.prop("상태") == "끝").length()',
       );
       expect(warned).toContain("가리키는 속성(완료 수)을 만들지 못해서다");
-      // 붙는 것이 없으면 한 차례로 멈춘다 — 한 번에 한 번 · 하나씩 한 번.
-      expect(
-        notion.updateDataSourceProperties.mock.calls.filter((c: [string]) => c[0] === "ds-new-1"),
-      ).toHaveLength(3);
+      expect(warned).toContain(
+        "Notion API 는 관계로 이어진 페이지의 속성을 쓰는 수식을 만들지 못한다. Notion 에서 직접 넣으세요: " +
+          'sum(prop("담당 값"))',
+      );
+      // 붙는 것이 없으면 한 차례로 멈춘다 — 한 번에 한 번 · 셋을 하나씩 한 번.
+      const formulaCalls = notion.updateDataSourceProperties.mock.calls.filter(
+        (c: [string, Record<string, { formula?: unknown }>]) =>
+          Object.values(c[1]).some((p) => p.formula),
+      );
+      expect(formulaCalls).toHaveLength(4);
     });
   });
 

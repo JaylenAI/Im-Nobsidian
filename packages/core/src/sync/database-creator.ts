@@ -506,7 +506,15 @@ export class DatabaseCreator {
       const error = failures.get(dependent);
       getLogger().warn(
         `[Im-Nobsidian] DB 속성을 붙이지 못함 (${dependent.item.folder} · ${dependent.name}): ` +
-          `${messageOf(error)}${dependentHint(dependent, (name) => left.has(`${dependent.item.source}\u0000${name}`), messageOf(error))}`,
+          `${messageOf(error)}${dependentHint(
+            dependent,
+            {
+              stillMissing: (name) => left.has(`${dependent.item.source}\u0000${name}`),
+              listsRelated: (name) =>
+                dependent.item.plan.rollups.get(name)?.function === "show_original",
+            },
+            messageOf(error),
+          )}`,
       );
     }
   }
@@ -731,24 +739,34 @@ function messageOf(error: unknown): string {
  * 붙이지 못한 rollup · formula 의 까닭 — Notion 의 거절 문구만으로는 무엇을 해야 할지 모른다.
  *
  * - 가리키는 속성을 먼저 만들지 못했으면 그것을 적는다(뒤따라 실패한 것)
- * - 관계로 이어진 페이지의 속성(`current.prop(…)`)을 쓰는 식은 API 로 만들지 못한다 — 이름으로도 내부 참조
- *   꼴로도 Type error(2026-10-23 실측). Notion 에서 직접 넣도록 식을 함께 적는다
+ * - 관계로 이어진 페이지의 속성 값을 계산하는 식은 API 로 만들지 못한다 — API 의 수식 검사는 그 값의 타입을 모른다
+ *   (2026-10-23 실측). `current.prop(…)` 는 이름으로도 내부 참조 꼴로도, 원래 값을 그대로 보이는 rollup
+ *   (`show_original`)은 `prop(…)` · `.length()` 만 되고 `sum(…)` 같은 계산이 Type error. Notion 에서 직접 넣도록 식을 함께 적는다
  * - 롤업을 다시 롤업하는 rollup 은 API 가 거절한다
  */
 export function dependentHint(
   dependent: { readonly name: string; readonly body: Record<string, unknown> },
-  stillMissing: (name: string) => boolean,
+  schema: {
+    /** 이번에 끝내 붙이지 못한 속성인가. */
+    readonly stillMissing: (name: string) => boolean;
+    /** 관계로 이어진 페이지의 값을 그대로 보이는 rollup 인가. */
+    readonly listsRelated: (name: string) => boolean;
+  },
   message: string,
 ): string {
   const expression = (dependent.body.formula as { expression?: unknown } | undefined)?.expression;
   if (typeof expression === "string") {
-    const blocked = [...expression.matchAll(/(?<!current\.)prop\("([^"]+)"\)/g)]
+    const referenced = [...expression.matchAll(/(?<!current\.)prop\("([^"]+)"\)/g)]
       .map((m) => m[1]!)
-      .filter((name) => name !== dependent.name && stillMissing(name));
+      .filter((name) => name !== dependent.name);
+    const blocked = referenced.filter(schema.stillMissing);
     if (blocked.length > 0) {
       return ` — 가리키는 속성(${[...new Set(blocked)].join(", ")})을 만들지 못해서다`;
     }
-    if (/current\.(prop\(|\{\{notion:block_property:)/.test(expression)) {
+    if (
+      /current\.(prop\(|\{\{notion:block_property:)/.test(expression) ||
+      referenced.some(schema.listsRelated)
+    ) {
       return (
         " — Notion API 는 관계로 이어진 페이지의 속성을 쓰는 수식을 만들지 못한다. Notion 에서 직접 넣으세요: " +
         expression
