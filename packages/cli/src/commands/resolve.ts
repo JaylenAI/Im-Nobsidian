@@ -5,13 +5,13 @@ import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
-  NodeVaultFS,
   applicableChoices,
   isRemoteDeletion,
 } from "@im-nobsidian/core";
 import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { printUnifiedDiff } from "../utils/diff-output.js";
 import { describeFailure } from "../utils/state-db-failure.js";
+import { openVaultFs } from "../utils/vault.js";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
@@ -74,7 +74,7 @@ export const resolveCommand = new Command("resolve")
       const config = await configManager.load();
       stateDb = StateDB.open(configManager.dbPath);
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       // 충돌 목록은 **충돌로 표시된 페이지만** 읽어 온다. 예전엔 목록을 얻겠다고 전체 pull 을

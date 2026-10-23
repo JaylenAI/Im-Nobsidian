@@ -34,6 +34,8 @@ vi.mock("@im-nobsidian/core", async (importOriginal) => ({
     localChangeDiff: mockLocalDiff,
     renderRemoteSnapshot: mockRemoteSnapshot,
   })),
+  findConnectionFolders: vi.fn().mockResolvedValue([]),
+  ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({ readFile: mockReadFile })),
 }));
 

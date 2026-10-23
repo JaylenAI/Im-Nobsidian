@@ -1,12 +1,7 @@
 import { Command } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import { icons, failedItem } from "../utils/format.js";
+import { openVaultFs } from "../utils/vault.js";
 
 // 변경 목록(status)에서 고른 노트를 지난 동기화 때의 글로 되돌린다 — Git 의 `restore` 와 같다.
 // 플러그인 변경 패널의 ↺ 와 같은 동작(orchestrator.discardLocalChange)이고 Notion 은 건드리지 않는다.
@@ -22,7 +17,7 @@ export const discardCommand = new Command("discard")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       let failed = 0;

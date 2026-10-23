@@ -1,11 +1,5 @@
 import { Command } from "commander";
-import {
-  ConfigManager,
-  StateDB,
-  NotionClient,
-  SyncOrchestrator,
-  NodeVaultFS,
-} from "@im-nobsidian/core";
+import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import type {
   CompletenessReport,
   PageCompletenessReport,
@@ -13,6 +7,7 @@ import type {
 } from "@im-nobsidian/core";
 import chalk from "chalk";
 import { header, separator, icons, dimText } from "../utils/format.js";
+import { openVaultFs } from "../utils/vault.js";
 
 /** 화면에 늘어놓을 id 최대 개수 — 나머지는 건수로 접는다. */
 const SAMPLE_LIMIT = 10;
@@ -125,7 +120,7 @@ export const verifyCommand = new Command("verify")
 
     try {
       const client = NotionClient.fromConfig(config);
-      const vaultFs = new NodeVaultFS(cwd, config.paths);
+      const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
       const report = await orchestrator.verifyCompleteness();

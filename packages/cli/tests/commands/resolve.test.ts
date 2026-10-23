@@ -52,6 +52,8 @@ vi.mock("@im-nobsidian/core", async (importOriginal) => ({
     resolveConflict: mockResolveConflict,
     generateConflictDiff: mockGenerateDiff,
   })),
+  findConnectionFolders: vi.fn().mockResolvedValue([]),
+  ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
 }));
 
