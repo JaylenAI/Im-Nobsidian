@@ -419,8 +419,21 @@ describe("NotionClient - extractIcon", () => {
       icon: { name: "pizza", color: "blue" },
     };
 
+    // 색까지 적는다 — 이름만 적으면 push 가 회색으로 만든다(2026-10-23 실측).
     const icon = client.extractIcon(page);
-    expect(icon).toEqual({ type: "icon", value: "pizza", color: "blue" });
+    expect(icon).toEqual({ type: "icon", value: "pizza:blue", color: "blue" });
+  });
+
+  it("회색 native 아이콘은 이름만 · 사용자 이모지는 :이름:", () => {
+    const gray = createMockPage({});
+    (gray as any).icon = { type: "icon", icon: { name: "home", color: "gray" } };
+    expect(client.extractIcon(gray)?.value).toBe("home");
+    const custom = createMockPage({});
+    (custom as any).icon = {
+      type: "custom_emoji",
+      custom_emoji: { id: "e1", name: "bufo", url: "https://x.example/b.png" },
+    };
+    expect(client.extractIcon(custom)).toEqual({ type: "custom_emoji", value: ":bufo:" });
   });
 
   it("아이콘 없으면 null 반환", () => {

@@ -26,6 +26,7 @@ import type { DatabaseSyncer } from "./database-syncer.js";
 import { folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
+import { PageDecorations } from "./page-decorations.js";
 import { moveOrigin } from "./local-moves.js";
 import { extractAliases, extractTitle, followsFileName } from "./note-title.js";
 import { extractParentId } from "./notion-parent.js";
@@ -61,6 +62,11 @@ export class PagePuller {
     string,
     { readonly previous: Promise<void>; readonly release: () => void }
   >();
+
+  private decorationsCache?: PageDecorations;
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
 
   constructor(
     private readonly config: Config,
@@ -472,7 +478,7 @@ export class PagePuller {
       await this.ensureDbSchema();
       const raw = (page as unknown as { properties: Record<string, unknown> }).properties;
       properties = this.propertyMapper.fromNotionProperties(raw);
-      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title"];
+      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title", "cover", "icon"];
     } else {
       properties = this.notionClient.extractProperties(page);
     }
@@ -482,6 +488,11 @@ export class PagePuller {
     if (isDatabaseMode(this.config) || !input.titleFollowsName) {
       properties.title = title;
     }
+    // 아이콘 · 커버 — 예전에는 행 렌더러로 받는 행에만 적었다(행 렌더러와 같은 차례로).
+    Object.assign(
+      properties,
+      await this.decorations.pulled(page, sanitizeFileName(title), input.downloadMedia),
+    );
 
     let markdown = await this.imageHandler.restoreUploadedMedia(
       input.fetched.content,

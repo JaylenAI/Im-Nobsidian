@@ -69,9 +69,16 @@ export class PropertiesTableRestorer implements Processor {
       return { content: input.content, metadata: input.metadata };
     }
 
+    // 아이콘 · 커버는 페이지의 것이 이긴다 — 블록의 키 뒤에 둔다(행 노트와 같은 차례).
+    const { icon, cover, ...received } = (input.metadata.properties ?? {}) as Record<
+      string,
+      unknown
+    >;
     const properties: Record<string, unknown> = {
-      ...(input.metadata.properties as Record<string, unknown> | undefined),
+      ...received,
       ...parsed,
+      ...(cover !== undefined ? { cover } : {}),
+      ...(icon !== undefined ? { icon } : {}),
     };
 
     const content = input.content.replace(YAML_PROPERTIES_REGEX, "").trimStart();

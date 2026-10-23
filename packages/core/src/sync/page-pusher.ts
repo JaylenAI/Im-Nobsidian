@@ -25,6 +25,7 @@ import { loadLinkedDbMap } from "./discovered-databases.js";
 import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
+import { PageDecorations } from "./page-decorations.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
@@ -104,6 +105,11 @@ function pagePropertiesOf(page: PageObjectResponse): Record<string, unknown> {
  * 여기로 올린다({@link pushUpdate} · {@link pushCreate}).
  */
 export class PagePusher {
+  private decorationsCache?: PageDecorations;
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -231,6 +237,7 @@ export class PagePusher {
       title,
       conversionResult.content,
       conversionResult.properties,
+      { path, frontmatter: conversionResult.properties },
     );
     const { page } = created;
 
@@ -371,6 +378,18 @@ export class PagePusher {
     // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
     const newTitle = this.changedPageTitle(record, content, path);
     const propsToUpdate = newTitle === null ? undefined : titleProperty(newTitle);
+    const decorated = await this.decorations.push(
+      record.notionPageId,
+      path,
+      conversionResult.properties,
+      options?.overwriteRemote === true
+        ? { remote }
+        : {
+            base: snapshotFrontmatter(record.baseSnapshot),
+            remote,
+            remoteSettled: remote.last_edited_time === record.notionLastEdited,
+          },
+    );
 
     // notionLastEdited 는 반드시 Notion 서버가 돌려준 값으로 저장한다. 로컬 시각
     // (new Date())을 쓰면 서버 시각과 클록 스큐·네트워크 지연만큼 어긋나 다음 pull 이
@@ -380,6 +399,8 @@ export class PagePusher {
     let written: RemotePageStamp | null = null;
     if (propsToUpdate && Object.keys(propsToUpdate).length > 0) {
       written = await this.notionClient.updatePageProperties(record.notionPageId, propsToUpdate);
+    } else if (decorated) {
+      written = decorated;
     } else if (settles) {
       written = await this.notionClient.getPage(record.notionPageId);
     }
@@ -580,10 +601,11 @@ export class PagePusher {
       title,
       { current: current.data },
     );
-    if (skipped.length > 0) {
+    const unsentProperties = withoutDecorations(skipped);
+    if (unsentProperties.length > 0) {
       getLogger().info(
-        `[Im-Nobsidian] 새 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `변환 불가): ${path} — ${skipped.join(", ")}`,
+        `[Im-Nobsidian] 새 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `변환 불가): ${path} — ${unsentProperties.join(", ")}`,
       );
     }
     const selectedPath = this.pipeline.selectPath(content);
@@ -642,6 +664,7 @@ export class PagePusher {
       title,
       conversionResult.content,
       properties,
+      { path, frontmatter: current.data },
     );
     const { page } = created;
 
@@ -828,10 +851,11 @@ export class PagePusher {
       // 글 속성 · 제목은 방금 읽은 원격의 서식 위에 바뀐 글자만 고친다 — 로컬은 평문만 안다(F-08).
       { current: current.data, remote: pagePropertiesOf(remote) },
     );
-    if (skipped.length > 0) {
+    const unsentProperties = withoutDecorations(skipped);
+    if (unsentProperties.length > 0) {
       getLogger().info(
-        `[Im-Nobsidian] 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `비울 수 없는 속성 · 변환 불가): ${path} — ${skipped.join(", ")}`,
+        `[Im-Nobsidian] 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `비울 수 없는 속성 · 변환 불가): ${path} — ${unsentProperties.join(", ")}`,
       );
     }
 
@@ -870,6 +894,19 @@ export class PagePusher {
       }
     }
 
+    const decorated = await this.decorations.push(
+      pageId,
+      path,
+      current.data,
+      options.overwriteRemote
+        ? { remote }
+        : {
+            base: against?.properties ?? null,
+            remote,
+            remoteSettled: remote.last_edited_time === record.notionLastEdited,
+          },
+    );
+
     // notionLastEdited 는 서버가 돌려준 값으로 적는다(pushUpdate 와 같은 이유 — I5).
     // 보낸 것이 없으면(스키마에 없는 키만 바뀜) 원격은 그대로이므로 옛 값을 둔다.
     let written: RemotePageStamp | null = null;
@@ -884,6 +921,8 @@ export class PagePusher {
             ...mapper.relationTargets(against?.properties[key]),
           ]),
       );
+    } else if (decorated) {
+      written = decorated;
     } else if (bodyChanged && settles) {
       written = await this.notionClient.getPage(pageId);
     }
@@ -1014,8 +1053,12 @@ export class PagePusher {
     parentType: "page" | "database",
     title: string,
     markdownContent: string,
-    properties?: Record<string, unknown>,
+    properties: Record<string, unknown> | undefined,
+    note: { readonly path: string; readonly frontmatter: Readonly<Record<string, unknown>> },
   ): Promise<CreatedPage> {
+    // 아이콘 · 커버는 만든 뒤 따로 보낸다 — 모르는 아이콘 이름이면 Notion 이 요청 전체를 거절한다.
+    const decorate = async (page: PageObjectResponse): Promise<PageObjectResponse> =>
+      (await this.decorations.push(page.id, note.path, note.frontmatter, {})) ?? page;
     if (this.config.conversion.preferMarkdownApi !== false) {
       // 새 페이지에는 아무 블록도 없다 — 자리 태그는 모두 Notion 이 거절한다(N6).
       const deferred = deferSyncedReferences(obsidianToNotionEnhanced(markdownContent));
@@ -1024,23 +1067,27 @@ export class PagePusher {
         new Set(),
         unknownTagFallbacks(markdownContent),
       ).nfm;
-      const page = await this.notionClient.createPageWithMarkdown({
-        parentId,
-        parentType,
-        title,
-        markdown,
-        properties,
-      });
+      const page = await decorate(
+        await this.notionClient.createPageWithMarkdown({
+          parentId,
+          parentType,
+          title,
+          markdown,
+          properties,
+        }),
+      );
       return { page, markdown, syncedRefs: deferred.refs, syncedRefText: deferred.removed };
     }
 
     const { blocks } = blockModeBody(markdownContent);
-    const page = await this.notionClient.createPage({
-      parentId,
-      parentType,
-      title,
-      properties,
-    });
+    const page = await decorate(
+      await this.notionClient.createPage({
+        parentId,
+        parentType,
+        title,
+        properties,
+      }),
+    );
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(page.id, blocks);
     }
@@ -1257,4 +1304,9 @@ export class PagePusher {
 function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock[] } {
   const nfm = obsidianToNotionEnhanced(markdownContent);
   return { nfm, blocks: nfmToBlocks(nfm, { bookmarks: vaultBookmarks(markdownContent) }) };
+}
+
+/** 보내지 않은 행 속성 가운데 아이콘 · 커버는 뺀다 — 속성이 아니라 페이지의 아이콘 · 커버로 따로 보낸다. */
+function withoutDecorations(skipped: readonly string[]): string[] {
+  return skipped.filter((key) => key !== "icon" && key !== "cover");
 }

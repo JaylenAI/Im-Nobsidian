@@ -159,6 +159,8 @@ export function createMockNotionClient() {
     updateCodeBlockText: vi.fn().mockResolvedValue(undefined),
     getCodeBlockTexts: vi.fn().mockResolvedValue([]),
     updatePageProperties: vi.fn().mockResolvedValue(undefined),
+    updatePageDecorations: vi.fn().mockResolvedValue(null),
+    findCustomEmojiId: vi.fn().mockResolvedValue(null),
     archivePage: vi.fn().mockResolvedValue(undefined),
     getPageMarkdown: vi
       .fn()
