@@ -33,6 +33,7 @@ import {
 } from "@im-nobsidian/core";
 import { TOKEN_SECRET_ID } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
+import { decorateColumnSection } from "./design/columns.js";
 import { designLivePreview } from "./design/live-preview.js";
 import { SqlJsStateDB } from "./state/sqljs-state-db.js";
 import { announceStateDbClose, previousStateDbClosed } from "./state/state-db-handoff.js";
@@ -616,6 +617,7 @@ export default class ImNobsidianPlugin extends Plugin {
       if (!info) return;
       const lines = info.text.split("\n").slice(info.lineStart, info.lineEnd + 1);
       decorateRendered(el, lines, options);
+      decorateColumnSection(el, info.text, info.lineStart, info.lineEnd);
     });
     this.registerEditorExtension(designLivePreview(options));
   }
