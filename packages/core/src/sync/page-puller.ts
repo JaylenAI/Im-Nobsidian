@@ -524,6 +524,7 @@ export class PagePuller {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
+        this.detector.noteBodyChildren(pageId, result.markdown);
         return {
           content: this.resolveNotionIdWikilinks(
             await notionBodyToObsidian(this.notionClient, result.markdown, pageId),
@@ -546,6 +547,7 @@ export class PagePuller {
     // 지문은 Markdown API 의 본문끼리만 견준다.
     const fallback = await pageBlocksToObsidian(this.notionClient, pageId);
     this.discovery.collectInlineDbRefs(pageId, fallback.markdown);
+    this.detector.noteBodyChildren(pageId, fallback.markdown);
     return {
       content: this.resolveNotionIdWikilinks(fallback.content),
       compact: isCompactExport(fallback.markdown),
