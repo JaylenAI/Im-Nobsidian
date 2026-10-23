@@ -7,7 +7,9 @@
  * 삭제 대상으로 고를지를 **부수효과 없이 결정**한다(테스트·재사용 용이).
  */
 
+import { BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import { BASE_FILE_HEADER } from "../view/base-file-generator.js";
+import { SIDECAR_GENERATOR } from "../view/sidecar-generator.js";
 
 /** 볼트 파일 참조의 최소 형태(경로만 필요). */
 export interface VaultFileRef {
@@ -15,7 +17,7 @@ export interface VaultFileRef {
 }
 
 /** DB 폴더 직속에서 정리 대상이 되는 산출물 확장자. */
-const ARTIFACT_SUFFIXES = [".base", ".notion.json"] as const;
+const ARTIFACT_SUFFIXES = [BASE_SUFFIX, SIDECAR_SUFFIX] as const;
 
 /**
  * 동기화 도구 자신이 만드는 내부 산출물(`.base` 뷰 / `.notion.json` 사이드카) 여부.
@@ -32,10 +34,10 @@ export function isDbArtifactPath(path: string): boolean {
  * 덮어썼다.
  */
 export function isGeneratedDbArtifact(path: string, content: string): boolean {
-  if (path.endsWith(".base")) return content.startsWith(BASE_FILE_HEADER);
-  if (!path.endsWith(".notion.json")) return false;
+  if (path.endsWith(BASE_SUFFIX)) return content.startsWith(BASE_FILE_HEADER);
+  if (!path.endsWith(SIDECAR_SUFFIX)) return false;
   try {
-    return (JSON.parse(content) as { generator?: unknown }).generator === "im-nobsidian";
+    return (JSON.parse(content) as { generator?: unknown }).generator === SIDECAR_GENERATOR;
   } catch {
     return false;
   }

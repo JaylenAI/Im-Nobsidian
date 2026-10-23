@@ -45,7 +45,7 @@ import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifa
 import { DbBaseFiles } from "./db-base-files.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
-import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
+import { INTERNAL_DIR, DB_VIEWS_PATH, BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import { notionBodyToObsidian } from "./page-body.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import {
@@ -769,7 +769,7 @@ export class DatabaseSyncer {
       });
 
       const safeName = sanitizeFileName(dbName);
-      const basePath = `${dbConfig.localFolder}/${safeName}.base`;
+      const basePath = `${dbConfig.localFolder}/${safeName}${BASE_SUFFIX}`;
       if (await this.isUserFile(basePath)) {
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
@@ -842,8 +842,8 @@ export class DatabaseSyncer {
   private async cleanupStaleDbArtifacts(localFolder: string, safeName: string): Promise<void> {
     try {
       const keep = new Set([
-        `${localFolder}/${safeName}.base`,
-        `${localFolder}/${safeName}.notion.json`,
+        `${localFolder}/${safeName}${BASE_SUFFIX}`,
+        `${localFolder}/${safeName}${SIDECAR_SUFFIX}`,
       ]);
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
@@ -880,7 +880,7 @@ export class DatabaseSyncer {
         isInline,
         appearance,
       });
-      const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
+      const sidecarPath = `${dbConfig.localFolder}/${safeName}${SIDECAR_SUFFIX}`;
       const serialized = this.sidecarGenerator.serialize(sidecar);
       // 같은 DB 가 한 번의 pull 에서 임베드 재작성 때마다 재생성된다(실측 최대 67회).
       // 결정적 직렬화라 동일 바이트면 쓰기·degrade 로그 모두 생략 — 로그 노이즈와
@@ -895,7 +895,7 @@ export class DatabaseSyncer {
         const dropped = sidecar.degraded.length - unrep;
         getLogger().info(
           `[DB Sync] '${dbName}' degrade ${sidecar.degraded.length}건` +
-            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}.notion.json 보존`,
+            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}${SIDECAR_SUFFIX} 보존`,
         );
       }
     } catch (error) {

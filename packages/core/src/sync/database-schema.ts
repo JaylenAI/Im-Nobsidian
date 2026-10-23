@@ -7,7 +7,9 @@
  *   실측: 새 속성 · 기본 옵션에 더하기 · 옮기기 모두 된다). 그룹 셋의 이름 · 차례는 바꿀 수 없다.
  * - relation 은 대상 DB 가 있어야 하고, rollup 은 그 relation 이, formula 는 식이 가리키는 속성이 있어야 한다.
  */
+import { DEFAULT_TITLE_PROPERTY } from "../types/config.js";
 import { compactNotionId } from "../utils/id.js";
+import { SIDECAR_GENERATOR } from "../view/sidecar-generator.js";
 
 /** 사이드카에서 읽은 DB 하나. v1(옵션 이름만)과 v2(설정까지)를 같은 모양으로 읽는다. */
 export interface SidecarSchema {
@@ -43,9 +45,6 @@ export interface SidecarSchemaView {
   readonly type: string;
   readonly config: Readonly<Record<string, unknown>>;
 }
-
-/** 제목 속성의 이름을 모를 때 — Notion 이 새 DB 에 붙이는 이름과 같다. */
-export const DEFAULT_TITLE_PROPERTY = "Name";
 
 /** status 의 그룹 — Notion 이 정해 두고 이름을 바꾸지 못하게 한다. 옵션의 `group` 은 이 가운데 하나다. */
 export const NOTION_STATUS_GROUPS: readonly string[] = ["To-do", "In progress", "Complete"];
@@ -110,7 +109,7 @@ export function parseSidecarSchema(text: string): SidecarSchema | null {
   }
   if (!raw || typeof raw !== "object") return null;
   const s = raw as Record<string, unknown>;
-  if (s.generator !== "im-nobsidian" || typeof s.databaseId !== "string") return null;
+  if (s.generator !== SIDECAR_GENERATOR || typeof s.databaseId !== "string") return null;
   if (!Array.isArray(s.properties)) return null;
   const properties = (s.properties as Array<Record<string, unknown>>)
     .filter((p) => typeof p.name === "string" && typeof p.type === "string")

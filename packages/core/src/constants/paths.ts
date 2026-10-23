@@ -32,6 +32,15 @@ export const STATE_DB_PATH = `${INTERNAL_DIR}/${STATE_DB_FILE}`;
 /** 파일 감시에서 제외할 내부 디렉터리 glob. */
 export const INTERNAL_DIR_GLOB = `**/${INTERNAL_DIR}/**`;
 
+/** DB 사이드카 파일 확장자 — `<DB 이름>.notion.json`. */
+export const SIDECAR_SUFFIX = ".notion.json";
+
+/** Obsidian Bases 파일 확장자 — `<DB 이름>.base`. */
+export const BASE_SUFFIX = ".base";
+
+/** Obsidian 설정 폴더 기본 이름(볼트 맨 위). 사용자가 바꿀 수 있어 플러그인은 `vault.configDir` 를 쓴다. */
+export const OBSIDIAN_CONFIG_DIR = ".obsidian";
+
 /**
  * 주어진 vault 상대 경로(POSIX)가 내부 메타데이터 디렉터리에 속하는지 판별한다.
  */

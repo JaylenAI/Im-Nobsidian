@@ -308,6 +308,7 @@ export {
   DB_VIEWS_PATH,
   STATE_DB_PATH,
   INTERNAL_DIR_GLOB,
+  OBSIDIAN_CONFIG_DIR,
   isInternalPath,
 } from "./constants/paths.js";
 

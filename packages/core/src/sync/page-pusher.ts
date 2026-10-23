@@ -12,6 +12,7 @@ import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { NotionClient } from "../notion/client.js";
 import type { PropertyMapper, UploadedFile } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import { BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult, DeferredCode } from "../types/convert.js";
 import type { FailedOperation, FileType, LocalChange, SyncRecord } from "../types/sync.js";
@@ -1204,7 +1205,8 @@ export class PagePusher {
    * 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
    */
   private async databaseIdsOfBase(basePath: string): Promise<string[]> {
-    const sidecarPath = basePath.replace(/\.base$/i, ".notion.json");
+    // 부르는 쪽(child-tags)이 `.base` 로 끝나는 경로만 넘긴다.
+    const sidecarPath = basePath.slice(0, -BASE_SUFFIX.length) + SIDECAR_SUFFIX;
     let databaseId: unknown;
     try {
       databaseId = (
