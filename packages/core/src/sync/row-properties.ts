@@ -1,5 +1,10 @@
 import type { RowPropertyChanges } from "../types/sync.js";
-import { isEmptyFrontmatterValue, plainFrontmatterValue } from "../utils/frontmatter.js";
+import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
+import {
+  isEmptyFrontmatterValue,
+  plainFrontmatterValue,
+  replaceFrontmatterLines,
+} from "../utils/frontmatter.js";
 
 /**
  * S-01 — DB 행의 속성은 «지난 동기화 뒤 로컬에서 바뀐 것» 만 보낸다.
@@ -59,4 +64,28 @@ function sameValue(a: unknown, b: unknown): boolean {
     return true;
   }
   return false;
+}
+
+/**
+ * 보내지 못한 속성을 Notion 에 남은 값으로 되돌린 사본 — 지난 동기화 사본(baseSnapshot)으로 적는다.
+ *
+ * 사본은 «Notion 과 맞춘 상태» 다. 보내지 못한 값까지 사본에 적으면 다음 push 가 바뀐 것이 없다고 보고
+ * 영영 보내지 않는다 — 새 볼트로 받으면 그 값이 없다. 예: 같은 push 에서 뒤에 만들 행을 가리키는 relation.
+ *
+ * 그 키의 줄만 고친다 — frontmatter 를 다시 쓰면 다른 값의 모양이 바뀌어(`2026-10-23` →
+ * `2026-10-23T00:00:00.000Z`) 다음 push 가 그 값을 바뀐 것으로 보낸다(2026-10-23 라이브).
+ *
+ * @param before 그 속성들의 Notion 쪽 값(지난 사본 · 원격). 없으면(새 행) 키를 뺀다.
+ */
+export function withUnsentProperties(
+  content: string,
+  keys: readonly string[],
+  before: Readonly<Record<string, unknown>> | null,
+): string {
+  const kept: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (before && Object.hasOwn(before, key)) kept[key] = plainFrontmatterValue(before[key]);
+  }
+  const lines = mergeRowFrontmatter(content, kept, new Set(keys));
+  return (lines && replaceFrontmatterLines(content, lines)) ?? content;
 }

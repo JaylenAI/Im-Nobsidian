@@ -522,6 +522,38 @@ export class SyncOrchestrator {
       }
     }
 
+    // 뒤에 만든 행 · 페이지를 가리키던 relation — 모두 올린 뒤 한 번 더 보낸다. 사본에서 빼 두었으므로
+    // 이번에 못 보내도 다음 push 가 다시 고른다(가리키는 노트가 Notion 에 생길 때까지).
+    if (!options?.signal?.aborted) {
+      await runPool(
+        this.pusher.takeUnsentRelations(),
+        async (path) => {
+          try {
+            await withDeadline(
+              () => this.pusher.pushUpdate(path),
+              this.config.advanced.itemTimeoutMs,
+              `push ${path}`,
+            );
+          } catch (error) {
+            getLogger().warn(
+              `[Im-Nobsidian] relation 을 다시 보내지 못함 — 다음 push 가 다시 보낸다 (${path}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
+      const unresolved = this.pusher.takeUnsentRelations();
+      if (unresolved.length > 0) {
+        getLogger().warn(
+          `[Im-Nobsidian] relation 이 가리키는 노트가 Notion 에 없어 보내지 못한 행 ${unresolved.length}개 — ` +
+            `그 노트를 올리면 다음 push 가 보낸다: ${unresolved.slice(0, 5).join(", ")}` +
+            (unresolved.length > 5 ? " …" : ""),
+        );
+      }
+    }
+
     // 뒤에 만든 페이지로 가는 위키링크를 멘션으로 — 모두 올린 뒤 한 번 더 본다(N8).
     if (!options?.signal?.aborted) {
       const relink = async (path: string): Promise<void> => {
