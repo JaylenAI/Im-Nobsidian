@@ -461,6 +461,9 @@ export class PropertyMapper {
       case "phone_number":
         return { phone_number: String(value) };
 
+      case "place":
+        return placeRequest(value);
+
       case "status": {
         // select 와 동일 — 빈 상태 이름은 Notion 이 거부한다.
         const name = String(value);
@@ -524,7 +527,7 @@ export class PropertyMapper {
       }
 
       default:
-        // 읽기 전용 · 제목(따로 보낸다) · 모르는 타입(장소 등)은 보내지 않는다. 글로 바꿔
+        // 읽기 전용 · 제목(따로 보낸다) · 모르는 타입은 보내지 않는다. 글로 바꿔
         // 보내면 타입이 맞지 않아 요청 전체가 거부된다.
         return null;
     }
@@ -651,6 +654,8 @@ export class PropertyMapper {
         const v = prop.verification as { state: string } | undefined;
         return v?.state ?? null;
       }
+      case "place":
+        return placeValue(prop.place);
       default:
         return null;
     }
@@ -683,6 +688,41 @@ function rangeEndKeyOf(
   if (!DATE_VALUED_TYPES.has(type)) return null;
   const endKey = name + RANGE_END_SUFFIX;
   return endKey in properties ? null : endKey;
+}
+
+/** 장소 값에서 frontmatter 에 적는 키 — 좌표와, 값이 있으면 이름 · 주소 · 장소 id. */
+const PLACE_KEYS = ["lat", "lon", "name", "address", "aws_place_id", "google_place_id"] as const;
+
+/** 장소 속성 값 — 빈 칸(null)은 뺀다. 좌표가 없으면 null. */
+function placeValue(place: unknown): Record<string, unknown> | null {
+  if (!place || typeof place !== "object") return null;
+  const raw = place as Record<string, unknown>;
+  if (typeof raw.lat !== "number" || typeof raw.lon !== "number") return null;
+  const out: Record<string, unknown> = {};
+  for (const key of PLACE_KEYS) {
+    if (raw[key] !== null && raw[key] !== undefined) out[key] = raw[key];
+  }
+  return out;
+}
+
+/**
+ * 장소를 보낼 값 — Notion 은 좌표가 없거나 범위를 벗어나면 요청 전체를 거부하고, 이름 · 주소로 좌표를 찾지
+ * 않는다. 그런 값은 null(보내지 않는다).
+ */
+function placeRequest(value: unknown): NotionPropertyValue | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const lat = Number(raw.lat);
+  const lon = Number(raw.lon);
+  if (isBlank(raw.lat) || isBlank(raw.lon) || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const place: Record<string, unknown> = { lat, lon };
+  for (const key of PLACE_KEYS.slice(2)) {
+    if (typeof raw[key] === "string" && raw[key]) place[key] = raw[key];
+  }
+  return { place } as NotionPropertyValue;
 }
 
 /**
@@ -802,6 +842,8 @@ function emptyValueOf(type: string): NotionPropertyValue | null {
       return { relation: [] };
     case "people":
       return { people: [] };
+    case "place":
+      return { place: null };
     default:
       // files — 올라간 첨부를 지운다(볼트에는 그 파일이 없다) · status — 빈 값이 없다 ·
       // 수식 · 롤업 · 생성일 등 — 읽기 전용.

@@ -83,6 +83,7 @@ const PLAIN_TYPES = new Set([
   "url",
   "email",
   "phone_number",
+  "place",
   "created_time",
   "last_edited_time",
   "created_by",

@@ -69,6 +69,7 @@ const RETRIEVED: Record<string, Record<string, unknown>> = {
   번호: { id: "%3Fdti", type: "unique_id", unique_id: { prefix: "TK" } },
   날짜: { id: "d", type: "date", date: {} },
   단추: { id: "b", type: "button", button: {} },
+  장소: { id: "pl", type: "place", place: {} },
 };
 
 function sidecarText(isInline = false): string {
@@ -175,6 +176,7 @@ describe("DB 를 만드는 차례", () => {
       },
       번호: { unique_id: { prefix: "TK" } },
       날짜: { date: {} },
+      장소: { place: {} },
     });
   });
 
