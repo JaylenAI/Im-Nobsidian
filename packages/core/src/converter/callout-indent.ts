@@ -103,7 +103,7 @@ export function clampCalloutIndent(content: string): string {
  * 부모 항목의 content indent 기준으로 판정하므로 탭이어도 코드가 되지 않는다(실측 1,721건
  * 전부 정상 렌더). 여기서 눌러 버리면 멀쩡한 중첩 리스트가 평평해진다.
  */
-const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])\s)/;
+const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])(?:\s|$))/;
 
 /** 본문 줄 하나의 선행 탭을 클램프 폭으로 누른다({@link BODY_INDENT_RE} 주석 참조). */
 export function clampBodyIndent(line: string): string {
