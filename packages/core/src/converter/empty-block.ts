@@ -25,7 +25,8 @@ import {
 
 const EMPTY_BLOCK_LINE_RE = new RegExp(`^(${CONTAINER_PREFIX_SOURCE})<empty-block\\/>[\\t ]*$`);
 const BREAK_LINE_RE = new RegExp(`^(${CONTAINER_PREFIX_SOURCE})<br\\s*\\/?>[\\t ]*$`);
-const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
+/** 목록 항목 — 표 다음이 줄 끝이어도 된다(Notion 은 빈 글머리표를 `-` 한 글자로 내보낸다). */
+const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])(?:\s|$)/;
 
 /** 줄을 코드 밖에서만 바꾼다 — 판정은 컨테이너 접두를 뗀 몸통으로 한다. 한 줄이 여러 줄이 될 수 있다. */
 function mapProseLines(

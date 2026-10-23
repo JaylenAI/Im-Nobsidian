@@ -73,7 +73,11 @@ export class BlockSpacer implements Processor {
 
 type BlockKind = "list" | "quote" | "table" | "footnote" | "fence" | "math" | "other";
 
-const LIST_ITEM_RE = /^[ \t]*(?:[-*+]|\d+[.)])\s/;
+/**
+ * 목록 항목 줄. 표 다음이 줄 끝이어도 항목이다 — Notion 은 빈 글머리표를 `-` 한 글자로 내보낸다(2026-10-23 실측).
+ * 공백을 요구하면 빈 항목이 문단으로 보여 그 자식과의 사이에 빈 줄이 들어가고, 자식이 항목 밖 문단이 됐다.
+ */
+const LIST_ITEM_RE = /^[ \t]*(?:[-*+]|\d+[.)])(?:\s|$)/;
 const QUOTE_RE = /^[ \t]*>/;
 const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;
