@@ -91,6 +91,8 @@ export interface BasePropertySchema {
   readonly type: string;
   readonly options?: BasePropertyOption[];
   readonly groups?: BaseStatusGroup[];
+  /** 이 속성을 다시 만드는 데 드는 타입별 설정(`view/property-definition.ts`) — 사이드카가 적는다. */
+  readonly definition?: Readonly<Record<string, unknown>>;
 }
 
 export interface PageCover {

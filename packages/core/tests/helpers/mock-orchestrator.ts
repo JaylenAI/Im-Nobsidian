@@ -132,7 +132,7 @@ export const MOCK_REMOTE_EDITED = "2026-01-01T00:00:00.000Z";
  * 시험이 따로 흉내 내므로 여기에는 어느 DB 를 받았는지만 싣는다.
  */
 export function mockDatabaseMeta(databaseId: string) {
-  return { databaseId, title: "", dataSources: [], properties: {} };
+  return { databaseId, title: "", dataSources: [], properties: {}, isInline: false };
 }
 
 export function createMockNotionClient() {

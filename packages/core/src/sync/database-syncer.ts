@@ -4,7 +4,7 @@ import type { DatabaseMeta, NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { Conflict, FailedOperation, ProgressItem, SyncRecord } from "../types/sync.js";
-import type { DatabaseViewsConfig } from "../types/view.js";
+import type { BasePropertySchema, DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
@@ -756,7 +756,14 @@ export class DatabaseSyncer {
       this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
-      await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
+      await this.generateSidecar(
+        dbConfig,
+        dbName,
+        safeName,
+        schemaFull,
+        resolvedViews,
+        meta.isInline,
+      );
       await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
@@ -794,8 +801,9 @@ export class DatabaseSyncer {
     dbConfig: DatabaseSyncConfig,
     dbName: string,
     safeName: string,
-    schemaFull: Record<string, { id: string; type: string; options?: Array<{ name: string }> }>,
+    schemaFull: Record<string, BasePropertySchema>,
     resolvedViews: DatabaseViewsConfig,
+    isInline: boolean,
   ): Promise<void> {
     try {
       const sidecar = this.sidecarGenerator.build({
@@ -803,6 +811,7 @@ export class DatabaseSyncer {
         databaseName: dbName,
         schema: schemaFull,
         viewsConfig: resolvedViews,
+        isInline,
       });
       const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
       const serialized = this.sidecarGenerator.serialize(sidecar);

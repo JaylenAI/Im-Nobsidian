@@ -31,6 +31,7 @@ import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { completeTruncatedMarkdown } from "./markdown-completion.js";
 import { shapeAppendRequests, type BlockRequest } from "./block-tree.js";
 import { richTextChunks } from "./rich-text.js";
+import { propertyDefinitionOf } from "../view/property-definition.js";
 
 /**
  * Notion SDK 의 404(`object_not_found`) 판별 — 링크드 DB·미공유 데이터 소스·삭제된
@@ -159,6 +160,8 @@ export interface DatabaseMeta {
    * source 가 없으면 DB 객체의 속성.
    */
   readonly properties: Readonly<Record<string, unknown>>;
+  /** 페이지 본문 안에 놓인 인라인 DB 인가. */
+  readonly isInline: boolean;
 }
 
 /** 페이지가 DB 행이면 그 DB 의 id. */
@@ -342,6 +345,69 @@ export class NotionClient {
     );
   }
 
+  /**
+   * 페이지 아래에 DB 를 만든다(ADR-036). 같은 요청이 두 번 적용되면 DB 가 둘이 된다 — 다시 보내지 않는다.
+   * 부른 쪽이 만들기 전에 자리를 적어 두고, 응답을 잃으면 다음 push 가 부모에서 찾는다.
+   *
+   * @returns 만든 DB 와 그 data source(DB 를 만들면 하나 생긴다)
+   */
+  async createDatabase(params: {
+    parentPageId: string;
+    title: string;
+    isInline: boolean;
+    properties: Record<string, unknown>;
+  }): Promise<{ databaseId: string; dataSourceId: string }> {
+    const db = (await this.withRateLimit(
+      () =>
+        this.client.databases.create({
+          parent: { type: "page_id", page_id: params.parentPageId },
+          title: [{ type: "text", text: { content: params.title } }],
+          is_inline: params.isInline,
+          initial_data_source: { properties: params.properties },
+        } as never),
+      NOT_IDEMPOTENT,
+    )) as unknown as { id: string; data_sources?: Array<{ id: string }> };
+    const dataSourceId = db.data_sources?.[0]?.id ?? (await this.primaryDataSourceId(db.id));
+    if (!dataSourceId) throw new Error(`만든 DB(${db.id})의 data source 를 알 수 없음`);
+    return { databaseId: db.id, dataSourceId };
+  }
+
+  /** DB 의 첫 data source — 행 · 스키마가 사는 곳. 없으면 null. */
+  async primaryDataSourceId(databaseId: string): Promise<string | null> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as { data_sources?: Array<{ id: string }> };
+    return db.data_sources?.[0]?.id ?? null;
+  }
+
+  /**
+   * data source 에 속성을 더하거나 바꾼다. 같은 이름이면 그 속성을 바꾼다 — 다시 보내도 결과가 같다.
+   *
+   * @returns 바꾼 뒤의 속성 전체(이름 → 정의)
+   */
+  async updateDataSourceProperties(
+    dataSourceId: string,
+    properties: Record<string, unknown>,
+  ): Promise<Record<string, Record<string, unknown>>> {
+    const ds = (await this.withRateLimit(() =>
+      this.client.dataSources.update({
+        data_source_id: dataSourceId,
+        properties,
+      } as never),
+    )) as unknown as { properties?: Record<string, Record<string, unknown>> };
+    return ds.properties ?? {};
+  }
+
+  /** data source 의 속성(이름 → 정의). */
+  async getDataSourceProperties(
+    dataSourceId: string,
+  ): Promise<Record<string, Record<string, unknown>>> {
+    const ds = (await this.withRateLimit(() =>
+      this.client.dataSources.retrieve({ data_source_id: dataSourceId }),
+    )) as unknown as { properties?: Record<string, Record<string, unknown>> };
+    return ds.properties ?? {};
+  }
+
   async createPageWithMarkdown(params: {
     parentId: string;
     parentType: "page" | "database";
@@ -510,6 +576,7 @@ export class NotionClient {
       title?: Array<{ plain_text: string }>;
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
+      is_inline?: boolean;
     };
 
     // 신 모델(2025-09-03): 한 database 가 2개 이상의 data source 를 가질 수 있고, 각 data
@@ -541,6 +608,7 @@ export class NotionClient {
       title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
       dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
+      isInline: db.is_inline === true,
     };
   }
 
@@ -674,6 +742,7 @@ export class NotionClient {
         id: prop.id as string,
         type: prop.type as string,
         ...extractPropertyChoices(prop),
+        ...definitionField(prop),
       };
     }
     return schema;
@@ -1695,6 +1764,13 @@ function extractPropertyChoices(prop: Record<string, unknown>): {
     }));
   }
   return result;
+}
+
+function definitionField(prop: Record<string, unknown>): {
+  definition?: Readonly<Record<string, unknown>>;
+} {
+  const definition = propertyDefinitionOf(prop);
+  return definition ? { definition } : {};
 }
 
 function statusOf(error: unknown): number | null {
