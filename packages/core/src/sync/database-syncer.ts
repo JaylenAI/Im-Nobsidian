@@ -1,3 +1,4 @@
+import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { DatabaseMeta, NotionClient } from "../notion/client.js";
@@ -1037,7 +1038,7 @@ export class DatabaseSyncer {
         notionExportCompact: exportCompact,
         localContent: await readLocalNote(this.vaultFs, options?.localPath ?? filePath),
         // 이 렌더러가 적는 키 — 속성과 제목 · 커버 · 아이콘. 나머지는 로컬 키다(F-08).
-        notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", "cover", "icon"],
+        notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", ...DECORATION_KEYS],
       },
     );
     return { content, title, properties, bodyFingerprint };
