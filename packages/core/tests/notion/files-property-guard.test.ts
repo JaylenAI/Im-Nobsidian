@@ -65,3 +65,31 @@ describe("PropertyMapper — files push 가드", () => {
     expect(result.표지).toBeUndefined();
   });
 });
+
+describe("files 속성 파일 이름 — Notion 한도 100자", () => {
+  const mapper = new PropertyMapper();
+  mapper.loadSchema({ 첨부: { id: "x", type: "files" } });
+  const names = (value: unknown) =>
+    (
+      mapper.toNotionProperties({ 첨부: value }, "T").첨부 as { files: { name: string }[] }
+    ).files.map((f) => f.name);
+
+  it("짧은 URL 은 예전처럼 URL 이 이름이다", () => {
+    expect(names("https://example.com/a.png")).toEqual(["https://example.com/a.png"]);
+  });
+
+  it("100자를 넘는 URL 은 파일 이름으로 — 실측 120 · 165자 URL 이 페이지 생성을 통째로 막았다", () => {
+    const url = `https://cdn.example.com/${"x".repeat(80)}/%ED%91%9C%EC%A7%80.jpg?token=${"t".repeat(40)}`;
+    expect(url.length).toBeGreaterThan(100);
+    expect(names(url)).toEqual(["표지.jpg"]);
+  });
+
+  it("파일 이름도 길면 확장자를 남기고 줄인다 — 이모지를 반으로 가르지 않는다", () => {
+    const url = `https://e.com/${"😀".repeat(70)}.png`;
+    const [name] = names(url);
+    expect(name!.length).toBeLessThanOrEqual(100);
+    expect(name!.endsWith("….png")).toBe(true);
+    expect(name).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(names([{ name: "n".repeat(150), url: "https://e.com/a" }])[0]!.length).toBe(100);
+  });
+});
