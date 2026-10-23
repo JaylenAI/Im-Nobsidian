@@ -101,6 +101,12 @@ const LINE_RE = /^([ \t]*(?:>[ \t]*)*)(.*?)[ \t\r]*$/;
 /** push 가 해석된 `[[자식]]` 을 바꿔 놓는 멘션 — `<mention-page url="…"/>`. */
 const MENTION_LINE_RE =
   /^<mention-(?:page|database)\b[^>]*?\burl="([^"]*)"[^>]*?(?:\/>|>[^<]*<\/mention-(?:page|database)>)$/;
+/**
+ * push 가 별칭 달린 `[[자식|제목]]` 을 바꿔 놓는 Notion 페이지 링크 — 파일 이름이 될 수 없는 제목의 자식은
+ * 받기가 이렇게 쓴다(`convertPageLinks`). 그룹 1 = id.
+ */
+const NOTION_LINK_LINE_RE =
+  /^\[[^[\]]*\]\(https?:\/\/(?:www\.|app\.)?notion\.(?:so|com)\/(?:p\/)?(?:[^/\s()]*-)?([a-f0-9]{32})\)$/;
 /** 해석되지 않은 채 나가는 `[[대상]]` · `[[대상|별칭]]`. */
 const WIKILINK_LINE_RE = /^\[\[([^[\]|]+)(?:\|[^[\]]*)?\]\]$/;
 /**
@@ -282,6 +288,9 @@ class PendingChildren {
 function takeLineChild(content: string, pending: PendingChildren): ChildTag | undefined {
   const mention = MENTION_LINE_RE.exec(content);
   if (mention) return pending.takeId(ID32_RE.exec(mention[1]!)?.[0]);
+
+  const link = NOTION_LINK_LINE_RE.exec(content);
+  if (link) return pending.takeId(link[1]);
 
   const dbPlaceholder = DB_PLACEHOLDER_LINE_RE.exec(content);
   if (dbPlaceholder) return pending.takeId(dbPlaceholder[1]);
