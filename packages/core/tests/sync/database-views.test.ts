@@ -118,6 +118,24 @@ describe("보기 요청 — 속성 id 를 새 DB 의 것으로", () => {
     ]);
   });
 
+  it("받아 온 값 중 만들 때 거절되는 것을 같은 뜻으로 — 고정 열 없음 · 본문 첫 이미지 표지", () => {
+    const { requests } = planViews(
+      schemaWith([
+        view("표", "table", { configuration: { type: "table", frozen_column_index: -1 } }),
+        view("고정", "table", { configuration: { type: "table", frozen_column_index: 1 } }),
+        view("갤러리", "gallery", {
+          configuration: { type: "gallery", cover: { type: "page_content_first" } },
+        }),
+      ]),
+      TARGET,
+    );
+    expect(requests.map((r) => r.configuration)).toEqual([
+      { type: "table" },
+      { type: "table", frozen_column_index: 1 },
+      { type: "gallery", cover: { type: "page_content" } },
+    ]);
+  });
+
   it("빠른 필터는 키가 속성 id 다", () => {
     const { requests } = planViews(
       schemaWith([

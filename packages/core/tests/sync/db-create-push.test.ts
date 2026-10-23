@@ -416,6 +416,103 @@ describe("ADR-036 push 가 DB 를 만든다", () => {
     );
   });
 
+  describe("rollup · formula — 서로 기대는 것은 붙을 때까지 다시", () => {
+    const withFormulas = (formulas: Array<[string, string]>) =>
+      files.set(
+        "P/과제/과제.notion.json",
+        sidecar(SOURCE_TASKS, "과제", [
+          { name: "이름", id: "title", type: "title" },
+          { name: "진척", id: "p1", type: "number" },
+          ...formulas.map(([name, expression], i) => ({
+            name,
+            id: `f${i}`,
+            type: "formula",
+            definition: { expression },
+          })),
+        ]),
+      );
+    const rejected = () =>
+      Object.assign(new Error("Type error with formula"), {
+        code: "validation_error",
+        status: 400,
+      });
+    const attached = () =>
+      notion.updateDataSourceProperties.mock.calls.flatMap((c: [string, object]) =>
+        Object.keys(c[1]).length === 1 ? Object.keys(c[1]) : [],
+      );
+
+    it("뒤에 적힌 수식을 가리키는 수식도 붙는다", async () => {
+      withFormulas([
+        ["비율", 'prop("두 배") / 2'],
+        ["두 배", 'prop("진척") * 2'],
+      ]);
+      const made = new Set<string>();
+      notion.updateDataSourceProperties.mockImplementation(
+        async (_ds: string, props: Record<string, { formula?: { expression: string } }>) => {
+          const names = Object.keys(props);
+          if (names.includes("맡은 과제")) return {}; // 사람 DB 의 relation
+          if (names.length > 1) throw rejected();
+          const expression = props[names[0]!]?.formula?.expression ?? "";
+          if (expression.includes('prop("두 배")') && !made.has("두 배")) throw rejected();
+          made.add(names[0]!);
+          return {};
+        },
+      );
+
+      await build().push();
+
+      expect(made).toEqual(new Set(["비율", "두 배"]));
+      expect(attached().filter((n: string) => n === "비율")).toHaveLength(2);
+      expect(warn.mock.calls.flat().join("\n")).not.toContain("DB 속성을 붙이지 못함");
+    });
+
+    it("끝내 못 붙인 수식은 까닭을 알린다 — 관계로 이어진 페이지의 속성 · 앞의 수식", async () => {
+      withFormulas([
+        ["완료 수", 'prop("담당").filter(current.prop("상태") == "끝").length()'],
+        ["비율", 'prop("완료 수") / 2'],
+        ["합", 'sum(prop("담당 값"))'],
+      ]);
+      // 관계 페이지의 값을 그대로 보이는 rollup — 그것을 계산하는 식도 API 로는 못 만든다.
+      const tasks = JSON.parse(files.get("P/과제/과제.notion.json")!);
+      tasks.properties.push(JSON.parse(TASKS_SIDECAR).properties[3], {
+        name: "담당 값",
+        id: "r9",
+        type: "rollup",
+        definition: {
+          relation_property_name: "담당",
+          rollup_property_name: "이름",
+          function: "show_original",
+        },
+      });
+      files.set("P/과제/과제.notion.json", JSON.stringify(tasks));
+      notion.updateDataSourceProperties.mockImplementation(
+        async (ds: string, props: Record<string, { formula?: unknown }>) => {
+          if (ds === "ds-new-1" && Object.values(props).some((p) => p.formula)) throw rejected();
+          return {};
+        },
+      );
+
+      await build().push();
+
+      const warned = warn.mock.calls.flat().join("\n");
+      expect(warned).toContain(
+        "Notion API 는 관계로 이어진 페이지의 속성을 쓰는 수식을 만들지 못한다. Notion 에서 직접 넣으세요: " +
+          'prop("담당").filter(current.prop("상태") == "끝").length()',
+      );
+      expect(warned).toContain("가리키는 속성(완료 수)을 만들지 못해서다");
+      expect(warned).toContain(
+        "Notion API 는 관계로 이어진 페이지의 속성을 쓰는 수식을 만들지 못한다. Notion 에서 직접 넣으세요: " +
+          'sum(prop("담당 값"))',
+      );
+      // 붙는 것이 없으면 한 차례로 멈춘다 — 한 번에 한 번 · 셋을 하나씩 한 번.
+      const formulaCalls = notion.updateDataSourceProperties.mock.calls.filter(
+        (c: [string, Record<string, { formula?: unknown }>]) =>
+          Object.values(c[1]).some((p) => p.formula),
+      );
+      expect(formulaCalls).toHaveLength(4);
+    });
+  });
+
   it("sync.createDatabases 를 끄면 예전처럼 폴더 페이지로 올린다", async () => {
     await build(config({ createDatabases: false })).push();
 

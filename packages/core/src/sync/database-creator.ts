@@ -418,27 +418,7 @@ export class DatabaseCreator {
         });
       }
     }
-    for (const item of work) {
-      for (const [name, rollup] of item.plan.rollups) {
-        await attempt(item, name, () =>
-          this.notionClient.updateDataSourceProperties(item.dataSourceId, { [name]: { rollup } }),
-        );
-      }
-    }
-    for (const item of work) {
-      const formulas = Object.entries(item.plan.formulas);
-      if (formulas.length === 0) continue;
-      // 한 번에 보내고, 거절되면 하나씩 — 식 하나가 틀려도 나머지는 붙는다.
-      try {
-        await this.notionClient.updateDataSourceProperties(item.dataSourceId, item.plan.formulas);
-      } catch {
-        for (const [name, formula] of formulas) {
-          await attempt(item, name, () =>
-            this.notionClient.updateDataSourceProperties(item.dataSourceId, { [name]: formula }),
-          );
-        }
-      }
-    }
+    await this.attachDependents(work, retry);
 
     const latest = loadCreatedDatabases(this.stateDb);
     for (const item of work) {
@@ -446,6 +426,97 @@ export class DatabaseCreator {
       if (entry && !retry.has(item.source)) latest.set(item.source, { ...entry, schemaDone: true });
     }
     saveCreatedDatabases(this.stateDb, latest);
+  }
+
+  /**
+   * rollup · formula 를 붙인다. 둘은 서로 · 다른 DB 의 것에 기댄다 — rollup 은 대상 DB 의 formula 를, formula 는 같은
+   * DB 의 다른 formula · rollup 을 가리킨다. 한 차례에 붙지 않은 것은 붙는 것이 더 없을 때까지 다시 시도한다(전체
+   * E2E 에서 한 번에 시도하면 수식 41개 중 8개가 순서 때문에만 거절됐다).
+   *
+   * 첫 차례는 rollup 하나씩 · formula 는 DB 마다 한 번에. 400 이 아닌 실패는 다음 push 가 다시 붙인다.
+   */
+  private async attachDependents(
+    work: ReadonlyArray<{
+      source: string;
+      dataSourceId: string;
+      folder: string;
+      plan: DatabaseSchemaPlan;
+    }>,
+    retry: Set<string>,
+  ): Promise<void> {
+    type Dependent = {
+      readonly item: (typeof work)[number];
+      readonly name: string;
+      readonly body: Record<string, unknown>;
+    };
+    const failures = new Map<Dependent, unknown>();
+    let pending: Dependent[] = [];
+    const send = async (dependent: Dependent): Promise<boolean> => {
+      try {
+        await this.notionClient.updateDataSourceProperties(dependent.item.dataSourceId, {
+          [dependent.name]: dependent.body,
+        });
+        return true;
+      } catch (error) {
+        if (statusOf(error) !== 400) {
+          retry.add(dependent.item.source);
+          getLogger().warn(
+            `[Im-Nobsidian] DB 속성을 붙이지 못함 — 다음 push 가 다시 붙인다 (${dependent.item.folder} · ` +
+              `${dependent.name}): ${messageOf(error)}`,
+          );
+          return true; // 이번 push 에서는 더 시도하지 않는다
+        }
+        failures.set(dependent, error);
+        return false;
+      }
+    };
+
+    for (const item of work) {
+      for (const [name, rollup] of item.plan.rollups) {
+        const dependent = { item, name, body: { rollup } };
+        if (!(await send(dependent))) pending.push(dependent);
+      }
+    }
+    for (const item of work) {
+      const formulas = Object.entries(item.plan.formulas);
+      if (formulas.length === 0) continue;
+      try {
+        await this.notionClient.updateDataSourceProperties(item.dataSourceId, item.plan.formulas);
+      } catch {
+        // 식 하나가 틀려도 나머지는 붙는다 — 하나씩 다시.
+        for (const [name, formula] of formulas) {
+          pending.push({ item, name, body: formula as Record<string, unknown> });
+        }
+      }
+    }
+
+    let progressed = true;
+    while (progressed && pending.length > 0) {
+      progressed = false;
+      const next: Dependent[] = [];
+      for (const dependent of pending) {
+        if (await send(dependent)) progressed = true;
+        else next.push(dependent);
+      }
+      pending = next;
+    }
+
+    const left = new Set(pending.map((d) => `${d.item.source}\u0000${d.name}`));
+    for (const dependent of pending) {
+      const error = failures.get(dependent);
+      getLogger().warn(
+        `[Im-Nobsidian] DB 속성을 붙이지 못함 (${dependent.item.folder} · ${dependent.name}): ` +
+          `${messageOf(error)}${dependentHint(
+            dependent,
+            {
+              stillMissing: (name) => left.has(`${dependent.item.source}\u0000${name}`),
+              listsRelated: (name) =>
+                dependent.item.plan.rollups.get(name)?.function === "show_original",
+            },
+            messageOf(error),
+          )}`,
+      );
+    }
   }
 
   /**
@@ -662,4 +733,49 @@ function statusOf(error: unknown): number | null {
 
 function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 붙이지 못한 rollup · formula 의 까닭 — Notion 의 거절 문구만으로는 무엇을 해야 할지 모른다.
+ *
+ * - 가리키는 속성을 먼저 만들지 못했으면 그것을 적는다(뒤따라 실패한 것)
+ * - 관계로 이어진 페이지의 속성 값을 계산하는 식은 API 로 만들지 못한다 — API 의 수식 검사는 그 값의 타입을 모른다
+ *   (2026-10-23 실측). `current.prop(…)` 는 이름으로도 내부 참조 꼴로도, 원래 값을 그대로 보이는 rollup
+ *   (`show_original`)은 `prop(…)` · `.length()` 만 되고 `sum(…)` 같은 계산이 Type error. Notion 에서 직접 넣도록 식을 함께 적는다
+ * - 롤업을 다시 롤업하는 rollup 은 API 가 거절한다
+ */
+export function dependentHint(
+  dependent: { readonly name: string; readonly body: Record<string, unknown> },
+  schema: {
+    /** 이번에 끝내 붙이지 못한 속성인가. */
+    readonly stillMissing: (name: string) => boolean;
+    /** 관계로 이어진 페이지의 값을 그대로 보이는 rollup 인가. */
+    readonly listsRelated: (name: string) => boolean;
+  },
+  message: string,
+): string {
+  const expression = (dependent.body.formula as { expression?: unknown } | undefined)?.expression;
+  if (typeof expression === "string") {
+    const referenced = [...expression.matchAll(/(?<!current\.)prop\("([^"]+)"\)/g)]
+      .map((m) => m[1]!)
+      .filter((name) => name !== dependent.name);
+    const blocked = referenced.filter(schema.stillMissing);
+    if (blocked.length > 0) {
+      return ` — 가리키는 속성(${[...new Set(blocked)].join(", ")})을 만들지 못해서다`;
+    }
+    if (
+      /current\.(prop\(|\{\{notion:block_property:)/.test(expression) ||
+      referenced.some(schema.listsRelated)
+    ) {
+      return (
+        " — Notion API 는 관계로 이어진 페이지의 속성을 쓰는 수식을 만들지 못한다. Notion 에서 직접 넣으세요: " +
+        expression
+      );
+    }
+    return "";
+  }
+  if (/rollup with rollup/i.test(message)) {
+    return " — Notion API 는 롤업 속성을 다시 롤업하는 rollup 을 만들지 못한다. Notion 에서 직접 만드세요";
+  }
+  return "";
 }
