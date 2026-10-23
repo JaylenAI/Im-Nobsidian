@@ -1,7 +1,7 @@
 # 현재 진행 상황
 
 > 마지막 업데이트: 2026-10-23
-> 버전: **v0.4.1 배포 끝** — dev 에 v0.4.2 · v0.5.0 · v0.6.0 의 범위가 모두 머지됨(릴리스 대기). 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
+> 버전: **v0.4.1 배포 끝** — dev 에 v0.4.2 ~ v0.8.0 의 범위가 모두 머지됨(릴리스 대기). v0.9 RC 전체 E2E 진행 중. 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
 
 ## 남은 단계 (2026-10-23 확정 · 같은 날 갱신)
 
@@ -10,11 +10,37 @@
 | v0.4.2 | `fix/roundtrip-notation` 표기 왕복 · `chore/release-gate` 태그=버전 검사 · CHANGELOG 보충 | dev 머지 |
 | v0.5.0 | push 로 DB 만들기 — 스키마 · 행 · relation · 뷰(Views API, 2026-03) · 꾸밈                | dev 머지 |
 | v0.6.0 | 컬럼 열 경계 표시(#74) · 볼트 폴더 → Notion DB(#75)                                       | dev 머지 |
-| v0.7.0 | 성능 — 첫 동기화는 3 req/s 한계 근처, 증분은 초 단위                                      | 다음     |
-| v0.8.0 | 멀티 워크스페이스                                                                         |          |
-| v0.9.0 | 커뮤니티 등록 준비 — 가이드 · 사용자 문서 · 전량 E2E                                      |          |
+| v0.7.0 | 성능 — 첫 pull 요청 −42% · 전체 대조 예산을 요청 수로                                     | dev 머지 |
+| v0.8.0 | 볼트 하나에 Notion 연결 여럿 — 연결 폴더(ADR-038) · CLI · 플러그인                        | dev 머지 |
+| v0.9.0 | 커뮤니티 등록 준비 — 전체 E2E 결함 수정 · 사용자 문서 · RC 전체 E2E                       | 진행     |
 
 릴리스는 사용자 승인 뒤에 한다. 바뀐 것 전체는 `CHANGELOG.md` 의 `[Unreleased]`.
+
+### v0.9.0 — 전체 워크스페이스 E2E 결함 (진행)
+
+v0.8 빌드 이전의 전체 E2E(실데이터 사본 → 탐침 아래 새 루트 · DB 164개 · 행 1,221개 → 빈 볼트로 다시 받기)에서 찾은 것을
+표본으로 재현해 고쳤다. 자세한 실측은 `journal/2026-10-23.md`.
+
+- `fix/files-property-name-length` · `fix/relation-target-resolve`(relation 91/1,510 어긋남) · `fix/db-formula-order`
+  (수식 · 롤업 순서 · 보기 실패 28 → 0) · `fix/attachment-hash-suffix`(첨부 이름 41개) · `fix/people-by-name`(사람 10) ·
+  `fix/files-property-upload`(파일 9)
+- 확인만 한 것: 아이콘 318 · 커버 9 누락은 행 꾸밈 push 이전 빌드 탓(지금 빌드로 20/20) · 본문 차이는 공백 · 목록 모양
+  같은 표기뿐 · 값 13건은 같은 제목 행의 이름 꼬리(id) 자리바꿈
+- API 한계로 남는 것: 관계 페이지 값을 계산하는 수식 · 롤업의 롤업 · 버튼 속성 만들기 · 사용자 이모지 · 손님 사람 값 ·
+  같은 토큰 같은 분 안의 편집(ADR-017)
+- 남은 것: 현재 빌드 RC 전체 E2E(`__e2e_v090__`) 결과 기록 · 릴리스(승인 뒤)
+
+### v0.8.0 — 연결 폴더 (dev 머지)
+
+ADR-038. `feature/workspace-core`(ScopedVaultFS · init 거절 · ConnectionScopeError · CLI 볼트 열기 한 곳) ·
+`feature/workspace-plugin`(연결마다 ConnectionEngine · 이벤트를 경로로 · 연결 고르개 · 설정의 폴더 연결). 확인하지
+못한 것: 실제로 다른 워크스페이스 토큰 둘 · 모바일.
+
+### v0.7.0 — 성능 (dev 머지)
+
+`perf/pull-request-count`(같은 하위 트리 614 → 354 요청) · `perf/discovery-request-budget`(변경 0 전체 대조 307 요청 · 319초 →
+232 · 144초). 속도 한도는 2026-09-09 부터 고정 60초 창(Business · Enterprise 분당 600, 그 밖 180) — 기본 간격 350ms 는
+일반 플랜에 맞다.
 
 ### v0.6.0 — 컬럼 · Bases (dev 머지)
 
