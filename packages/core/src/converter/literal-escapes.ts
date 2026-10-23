@@ -255,3 +255,42 @@ function mapOutsideRanges(
   }
   return out + fn(line.slice(pos));
 }
+
+/**
+ * 글로 남는 위키링크(대상이 볼트에 없는 `[[…]]`) 안에서 Notion 이 서식으로 읽는 글자.
+ *
+ * Notion 은 `[[…]]` 를 글로 받으면서 그 안의 `_a_` · `*a*` · `` `a` `` · `~~a~~` · `$a$` 를 서식 · 수식으로 읽는다
+ * (2026-10-24 실측). 돌려줄 때 기울임은 `*a*` 로 주어, `[[가 _a_]]` 가 `[[가 *a*]]` 로 돌아와 링크 대상이 바뀌었다
+ * (실데이터 재왕복 1 노트). escape 해 보내면 글자 그대로 남는다.
+ */
+const WIKILINK_FORMAT_CHAR_RE = /(?<!\\)([*_~`$])/g;
+
+/** push — 글로 남는 위키링크의 대상 · 별칭을 Notion 이 글자 그대로 두게. 이미 escape 된 글자는 둔다. */
+export function sendWikilinkText(text: string): string {
+  return text.replace(WIKILINK_FORMAT_CHAR_RE, "\\$1");
+}
+
+/**
+ * 위키링크 안에서 풀 escape — push 가 escape 해 보낸 글자와 Notion 이 글자로 돌려줄 때 escape 하는 `<` `>`.
+ * `\|` 는 두지 않는다 — 표 칸 속 위키링크의 별칭 구분자다(Obsidian 표기). `\\` 는 글 백슬래시 규칙이 받는다.
+ */
+const WIKILINK_ESCAPED_RE = /\\([*_~`$<>])/g;
+
+/**
+ * 글로 받은 위키링크 — 이미지 임베드는 뺀다. 대괄호 escape 를 푼 뒤의 모양이다. `[[notion:<id>|…]]` 은 Notion 링크를
+ * 바꾼 것이라 뺀다 — 그 별칭은 링크 글자(markdown)라 escape 가 뜻을 갖는다.
+ */
+const PLAIN_WIKILINK_RE = /(?<!!)\[\[(?!notion:)([^[\]\n]+)\]\]/g;
+
+/**
+ * pull — 위키링크 안의 escape 를 푼다. Notion 은 글 `*` · `` ` `` · `$` · `\` 를 escape 해 돌려주는데, Obsidian 은
+ * 위키링크 안의 escape 를 풀지 않아 `\*` 가 대상 이름에 남는다. 코드 펜스 안은 둔다.
+ */
+export function receiveWikilinkText(markdown: string): string {
+  if (!markdown.includes("[[")) return markdown;
+  return mapOutsideCodeFences(markdown, (segment) =>
+    segment.replace(PLAIN_WIKILINK_RE, (match, inner: string) =>
+      inner.includes("\\") ? `[[${inner.replace(WIKILINK_ESCAPED_RE, "$1")}]]` : match,
+    ),
+  );
+}

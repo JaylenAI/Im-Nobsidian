@@ -2,6 +2,8 @@ import {
   receiveLiteralBackslashes,
   receiveLoneBackticks,
   sendLiteralBackslashes,
+  sendWikilinkText,
+  receiveWikilinkText,
   escapeLinkTextBrackets,
 } from "./literal-escapes.js";
 import {
@@ -129,6 +131,7 @@ export function notionEnhancedToObsidian(
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
+  result = receiveWikilinkText(result);
   result = receiveLiteralBackslashes(result);
   result = receiveLoneBackticks(result);
   // 북마크의 이름은 escape 를 푼 뒤에 넣는다 — 캡션의 대괄호 escape 가 함께 풀리지 않게(F-09).
@@ -255,7 +258,7 @@ function convertMentionPageIdToUrl(content: string): string {
 // unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
 function restoreWikilinkPreserveLinks(content: string): string {
   return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
-    return formatWikilink(decodeMarkerTarget(enc), label);
+    return formatWikilink(sendWikilinkText(decodeMarkerTarget(enc)), sendWikilinkText(label));
   });
 }
 
