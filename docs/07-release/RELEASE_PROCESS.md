@@ -40,8 +40,8 @@ GitHub Actions 자동: npm publish + GitHub Release
 
 ### 3. 버전 관리
 
-버전은 여섯 곳에 적는다 — `package.json` 넷(루트 · core · cli · obsidian-plugin)과 `manifest.json` 둘(루트 ·
-obsidian-plugin). `versions.json` 에 그 버전의 `minAppVersion` 을, `docs/07-release/RELEASE_NOTES_vX.Y.Z.md` 와
+버전은 다섯 곳에 적는다 — `package.json` 넷(루트 · core · cli · obsidian-plugin)과 루트 `manifest.json`(플러그인 폴더의
+것은 빌드가 옮긴 사본). `versions.json` 에 그 버전의 `minAppVersion` 을, `docs/07-release/RELEASE_NOTES_vX.Y.Z.md` 와
 CHANGELOG 의 `## [X.Y.Z]` 절을 함께 둔다. 목록의 정본은 `scripts/check-release-version.mjs` 다.
 
 ```bash

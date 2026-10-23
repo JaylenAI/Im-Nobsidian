@@ -10,14 +10,16 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** 버전을 적는 자리 — 버전을 올릴 때 이 파일들을 함께 고친다(RELEASE_PROCESS.md). */
+/**
+ * 버전을 적는 자리 — 버전을 올릴 때 이 파일들을 함께 고친다(RELEASE_PROCESS.md).
+ * `packages/obsidian-plugin/manifest.json` 은 빌드가 루트의 것을 옮긴 사본이라 레포에 없다(.gitignore).
+ */
 export const VERSION_FILES = [
   "package.json",
   "packages/core/package.json",
   "packages/cli/package.json",
   "packages/obsidian-plugin/package.json",
   "manifest.json",
-  "packages/obsidian-plugin/manifest.json",
 ];
 
 export const RELEASE_NOTES_DIR = "docs/07-release";

@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -68,5 +69,16 @@ describe("릴리스 게이트 — 태그와 레포의 버전", () => {
     expect(checkReleaseVersion(repo("0.4.2"), "0.4.2").errors).toEqual([
       "태그 0.4.2 는 vX.Y.Z 모양이 아니다",
     ]);
+  });
+
+  // 빌드 산출물(플러그인 폴더의 manifest 사본)을 목록에 넣으면 로컬은 통과하고 CI(깨끗한 체크아웃)만 깨진다.
+  it("버전을 적는 자리는 모두 레포가 추적하는 파일이다", () => {
+    const tracked = execFileSync("git", ["ls-files", ...VERSION_FILES], {
+      cwd: join(import.meta.dirname, "../../.."),
+      encoding: "utf8",
+    })
+      .trim()
+      .split("\n");
+    expect(tracked.sort()).toEqual([...VERSION_FILES].sort());
   });
 });
