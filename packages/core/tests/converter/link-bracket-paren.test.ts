@@ -149,7 +149,10 @@ describe("D-ESCBRACKET — Notion 이 붙여 보내는 대괄호 escape 를 되�
     // (정규식 패턴을 본문에 적어 둔 노트에서 발산 실측).
     const notion = "패턴 ((.\\*?)\\\\[\\\\s\\*\\\\](.\\*))";
 
-    expect(backToObsidian(notion)).toBe(notion);
+    // `\\s` 의 `\\` 는 글 `\` 다 — 뒤가 문장부호가 아니라 맨 `\` 로 쓴다(그리는 것은 같다, literal-escapes).
+    const pulled = "패턴 ((.\\*?)\\\\[\\s\\*\\\\](.\\*))";
+    expect(backToObsidian(notion)).toBe(pulled);
+    expect(backToObsidian(pulled)).toBe(pulled);
   });
 
   it("한 번 푼 결과를 다시 넣어도 더 줄지 않는다(멱등)", () => {
