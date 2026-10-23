@@ -14,7 +14,11 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       autoSync: boolean;
       autoSyncInterval: number;
       timeZone: string;
+      connections?: { folder: string; tokenSecret: string; rootPageId: string }[];
     };
+    knownConnectionFolders: string[];
+    trackedNotesUnder: ReturnType<typeof vi.fn>;
+    folderConnectionStatus: ReturnType<typeof vi.fn>;
     saveSettings: ReturnType<typeof vi.fn>;
     initOrchestrator: ReturnType<typeof vi.fn>;
     startAutoSync: ReturnType<typeof vi.fn>;
@@ -37,8 +41,14 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       startAutoSync: vi.fn(),
       stopAutoSync: vi.fn(),
       connectionStatus: vi.fn(() => ({ ready: true, message: "준비됨 — 동기화할 수 있습니다." })),
+      knownConnectionFolders: [""],
+      // 볼트 연결이 「개인」 폴더의 노트 3개를 동기화하고 있다
+      trackedNotesUnder: vi.fn((folder: string) => (folder === "개인" ? 3 : 0)),
+      folderConnectionStatus: vi.fn(() => ({ ready: false, message: "아직 연결하지 않았습니다." })),
     };
-    settingTab = new ImNobsidianSettingTab({} as never, plugin as never);
+    const folders = ["Work", "Work/Team", "개인", ".trash", "Work/.hidden"];
+    const app = { vault: { getAllFolders: () => folders.map((path) => ({ path })) } };
+    settingTab = new ImNobsidianSettingTab(app as never, plugin as never);
   });
 
   /** 설정 창을 그리고 줄을 이름으로 찾는다. */
@@ -187,5 +197,72 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     // 다시 연결로 이미 걸었으니 닫을 때 또 연결하지 않는다
     settingTab.hide();
     expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
+  describe("폴더 연결 (ADR-038)", () => {
+    it("폴더는 고르개다 — 점 폴더 · 볼트 연결이 이미 동기화하는 폴더 · 다른 연결의 폴더는 고를 수 없다", async () => {
+      plugin.settings.connections = [{ folder: "Work/Team", tokenSecret: "", rootPageId: "" }];
+      const { control } = display();
+
+      await control("폴더 연결 추가").click();
+      expect(plugin.settings.connections[1]).toEqual({
+        folder: "Work",
+        tokenSecret: "",
+        rootPageId: "",
+      });
+      const { control: again } = display();
+      expect(again("폴더 연결 2").options.map(([v]) => v)).toEqual(["Work"]);
+      expect(again("폴더 연결 1").options.map(([v]) => v)).toEqual(["Work/Team"]);
+      // 닫을 때 한 번 다시 연결한다
+      expect(plugin.initOrchestrator).not.toHaveBeenCalled();
+      settingTab.hide();
+      expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+    });
+
+    it("토큰 · 루트 페이지를 연결마다 따로 적고, 주소는 ID 로 읽는다", async () => {
+      plugin.settings.connections = [{ folder: "Work", tokenSecret: "", rootPageId: "" }];
+      const { control } = display();
+      expect(control("폴더 연결 1 — Notion 토큰").kind).toBe("secret");
+
+      await control("폴더 연결 1 — Notion 토큰").change("work-token");
+      await control("폴더 연결 1 — 루트 페이지 ID").change(
+        " https://www.notion.so/team/회의-35a13b18d38280cf9057e37e6e473e41 ",
+      );
+
+      expect(plugin.settings.connections[0]).toEqual({
+        folder: "Work",
+        tokenSecret: "work-token",
+        rootPageId: "35a13b18-d382-80cf-9057-e37e6e473e41",
+      });
+      // 볼트 연결의 설정은 그대로다
+      expect(plugin.settings.tokenSecret).toBe("im-nobsidian-notion-token");
+    });
+
+    it("볼트 연결이 노트를 동기화하던 폴더를 (밖에서) 적어 두었으면 따로 연결하지 않는다고 알린다", () => {
+      plugin.settings.connections = [{ folder: "개인", tokenSecret: "t", rootPageId: "r" }];
+      const { row } = display();
+      expect(row("폴더 연결 1").desc).toContain(
+        "이 폴더를 맡은 연결이 노트 3개를 이미 동기화하고 있어 따로 연결하지 않습니다",
+      );
+      expect(row("폴더 연결 1").descEl.classes.has("mod-warning")).toBe(true);
+    });
+
+    it("지우기는 그 연결만 설정에서 뺀다", async () => {
+      plugin.settings.connections = [
+        { folder: "Work", tokenSecret: "a", rootPageId: "" },
+        { folder: "Work/Team", tokenSecret: "b", rootPageId: "" },
+      ];
+      const { row } = display();
+      await row("폴더 연결 1").controls[1]!.click();
+      expect(plugin.settings.connections.map((c) => c.folder)).toEqual(["Work/Team"]);
+    });
+
+    it("CLI 로 만든 연결 폴더는 플러그인이 비켜 간다고 알린다", () => {
+      plugin.knownConnectionFolders = ["", "Archive"];
+      const { row } = display();
+      expect(row("CLI 로 만든 연결").desc).toContain(
+        "Archive — 플러그인은 동기화하지 않고 비켜 갑니다",
+      );
+    });
   });
 });

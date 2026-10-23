@@ -36,6 +36,9 @@ vi.mock("../src/discard-confirm-modal.js", () => ({
 }));
 vi.mock("../src/views/ViewContainer.svelte", () => ({ default: {} }));
 
+/** 만든 오케스트레이터마다 받은 것(설정 · 상태 DB · 클라이언트 · 볼트) — 연결마다 무엇을 넘겼는지 본다. */
+const orchestratorArgs = vi.hoisted(() => [] as unknown[][]);
+
 vi.mock("../src/state/sqljs-state-db.js", () => ({
   SqlJsStateDB: {
     open: vi.fn().mockResolvedValue({
@@ -65,6 +68,12 @@ vi.mock("@im-nobsidian/core", async () => ({
       stateDbWalPath: core.stateDbWalPath,
       notionIdFromInput: core.notionIdFromInput,
       isMarkdownPath: core.isMarkdownPath,
+      // 볼트 안 연결 폴더(ADR-038) — 찾기 · 경로 나누기는 진짜를 쓴다
+      findConnectionFolders: core.findConnectionFolders,
+      connectionFolderOf: core.connectionFolderOf,
+      configDirFrom: core.configDirFrom,
+      normalizeVaultPath: core.normalizeVaultPath,
+      ScopedVaultFS: core.ScopedVaultFS,
       // 플러그인 기본 설정은 core 의 기본값을 읽는다 — 손으로 적은 사본이면 둘이 갈라져도 모른다
       DEFAULT_CONFIG: core.DEFAULT_CONFIG,
       DEFAULT_WATCH_DEBOUNCE_MS: core.DEFAULT_WATCH_DEBOUNCE_MS,
@@ -76,7 +85,9 @@ vi.mock("@im-nobsidian/core", async () => ({
     }
   },
   SyncOrchestrator: class {
-    constructor() {}
+    constructor(...args: unknown[]) {
+      orchestratorArgs.push(args);
+    }
     push = vi
       .fn()
       .mockResolvedValue({ created: 0, updated: 0, deleted: 0, failed: [], duration: 0 });
@@ -125,6 +136,8 @@ import {
   stateDbLockPath,
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
+import { ConnectionEngine } from "../src/connection/connection-engine.js";
+import { ScopedVaultFS } from "@im-nobsidian/core";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 
@@ -1023,5 +1036,212 @@ describe("ImNobsidianPlugin", () => {
   it("default export 존재", async () => {
     const mod = await import("../src/main.js");
     expect(mod.default).toBeDefined();
+  });
+
+  describe("볼트 안 폴더 연결 (ADR-038)", () => {
+    const WORK_ROOT = "fedcba9876543210fedcba9876543210";
+
+    type Internals = {
+      app: { secretStorage: unknown; vault: Record<string, unknown> };
+      primary: ConnectionEngine;
+      extras: ConnectionEngine[];
+      connectionFolders: string[];
+      activeFolder: string;
+      closeExtras: () => Promise<void>;
+    };
+
+    it("폴더 연결마다 엔진을 따로 연다 — 그 폴더의 상태 DB · 토큰 · 볼트, 맨 위 연결은 그 폴더를 비켜 간다", async () => {
+      const fromConfig = vi.spyOn(NotionClient, "fromConfig");
+      fromConfig.mockClear();
+      const { plugin, internals, vaultPath } = pluginWithStateFile(() =>
+        Promise.resolve(new ArrayBuffer(0)),
+      );
+      const own = internals as unknown as Internals;
+      own.app.secretStorage = keychain({ notion: "ntn_test", work: "ntn_work" });
+      plugin.settings.connections = [
+        { folder: "Work/", tokenSecret: "work", rootPageId: WORK_ROOT },
+      ];
+      onTestFinished(() => own.closeExtras());
+      orchestratorArgs.splice(0);
+
+      await plugin.initOrchestrator();
+
+      expect(fromConfig.mock.calls.map(([config]) => config.notion.token)).toEqual([
+        "ntn_test",
+        "ntn_work",
+      ]);
+      const [rootFs, workFs] = orchestratorArgs.map((args) => args[3] as ScopedVaultFS);
+      expect(rootFs).toBeInstanceOf(ScopedVaultFS);
+      expect(rootFs!.ownsPath("Work/회의.md")).toBe(false);
+      expect(rootFs!.ownsPath("Workshop/a.md")).toBe(true);
+      expect(workFs!.ownsPath("회의.md")).toBe(true);
+      expect(workFs!.ownsPath("../개인.md")).toBe(false);
+      // 그 폴더의 상태 DB 를 잠그고 연다
+      expect(existsSync(join(vaultPath, "Work", ".state", "sync.db.lock"))).toBe(true);
+      expect(plugin.folderConnectionStatus("Work")).toEqual({
+        ready: true,
+        message: "준비됨 — 동기화할 수 있습니다.",
+      });
+      expect(plugin.knownConnectionFolders).toEqual(["", "Work"]);
+    });
+
+    it("한 폴더 연결이 열리지 않아도 다른 연결은 연다 — 그 연결의 까닭을 연결 이름과 함께 알린다", async () => {
+      const { plugin, internals } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      const own = internals as unknown as Internals;
+      plugin.settings.connections = [
+        { folder: "Work", tokenSecret: "work", rootPageId: WORK_ROOT },
+        { folder: "Team", tokenSecret: "", rootPageId: "" },
+      ];
+      onTestFinished(() => own.closeExtras());
+      Notice.shown.splice(0);
+
+      await plugin.initOrchestrator();
+
+      expect(plugin.connectionStatus().ready).toBe(true);
+      expect(plugin.folderConnectionStatus("Work").message).toBe(
+        "초기화 실패: 이 기기의 키체인에 Notion 토큰(이름 work)이 없습니다 — 설정에서 토큰을 넣으세요",
+      );
+      expect(plugin.folderConnectionStatus("Team").message).toBe(
+        "설정을 채워 주세요 — Notion 토큰 · 루트 페이지 ID",
+      );
+      expect(Notice.shown).toEqual([
+        "Im-Nobsidian [Work] 초기화 실패: 이 기기의 키체인에 Notion 토큰(이름 work)이 없습니다 — 설정에서 토큰을 넣으세요",
+      ]);
+    });
+
+    /** 맨 위 연결과 Work 연결 — 컨트롤러는 부른 것을 적는 가짜다. */
+    function twoConnections() {
+      const plugin = new ImNobsidianPlugin({} as never, {} as never);
+      const own = plugin as unknown as Internals & Record<string, unknown>;
+      const controller = () => ({
+        push: vi.fn(async () => {}),
+        pull: vi.fn(async () => {}),
+        sync: vi.fn(async () => {}),
+        recordDelete: vi.fn(),
+        onVaultRename: vi.fn(() => true),
+        prepareDatabase: vi.fn(async () => {}),
+        refreshStatus: vi.fn(async () => {}),
+      });
+      const root = controller();
+      const work = controller();
+      own.primary.controller = root as never;
+      const engine = new ConnectionEngine("Work", {} as never);
+      engine.controller = work as never;
+      own.extras = [engine];
+      own.connectionFolders = ["", "Work"];
+      return { plugin, own, root, work, engine };
+    }
+
+    it("명령은 연결마다 차례로 돌고, 변경 패널에서 고른 경로는 패널이 보이는 연결에만 간다", async () => {
+      const { own, root, work } = twoConnections();
+      const run = own as unknown as {
+        executePush: (paths?: string[]) => Promise<void>;
+        executePull: (options?: { paths?: string[] }) => Promise<void>;
+      };
+
+      await run.executePush();
+      await run.executePull();
+      own.activeFolder = "Work";
+      await run.executePush(["회의.md"]);
+      await run.executePull({ paths: ["회의.md"] });
+
+      expect(root.push.mock.calls).toEqual([[undefined]]);
+      expect(work.push.mock.calls).toEqual([[undefined], [["회의.md"]]]);
+      expect(root.pull.mock.calls).toHaveLength(1);
+      expect(work.pull.mock.calls.map(([paths]) => paths)).toEqual([undefined, ["회의.md"]]);
+    });
+
+    it("볼트 이벤트는 그 경로를 맡은 연결로, 그 연결 기준 경로로 간다 — 연결을 건너 옮기면 지운 것 · 새것", () => {
+      const { own, root, work, engine } = twoConnections();
+      const handlers = new Map<string, (file: { path: string }, oldPath?: string) => void>();
+      own.app = {
+        vault: { on: (name: string, handler: never) => void handlers.set(name, handler) },
+      } as never;
+      own.scheduleVaultSync = () => {};
+      own.scheduleSidebarRefresh = () => {};
+      (own as unknown as { registerVaultEvents: () => void }).registerVaultEvents();
+      const queue = own.vaultSyncQueue as Set<ConnectionEngine>;
+
+      handlers.get("modify")!({ path: "Work/회의.md" });
+      expect([...queue]).toEqual([engine]);
+      handlers.get("delete")!({ path: "Work/지운.md" });
+      handlers.get("rename")!({ path: "Work/새.md" }, "Work/옛.md");
+      handlers.get("rename")!({ path: "Work/옮긴.md" }, "옮긴.md");
+
+      expect(work.recordDelete.mock.calls).toEqual([["지운.md"]]);
+      expect(work.onVaultRename.mock.calls).toEqual([["옛.md", "새.md", false]]);
+      // 맨 위 연결에서 Work 로 옮겼다 — 맨 위 연결에는 지운 것, Work 에는 새 노트다
+      expect(root.recordDelete.mock.calls).toEqual([["옮긴.md"]]);
+      expect(root.onVaultRename).not.toHaveBeenCalled();
+      expect(queue.has(own.primary)).toBe(true);
+    });
+
+    it("DB 로 올릴 준비는 그 폴더를 맡은 연결이 그 연결 기준 경로로 한다 — 연결 폴더 자체는 올리지 않는다", async () => {
+      const { own, work } = twoConnections();
+      (own.app as unknown) = { vault: { configDir: ".obsidian" } };
+      const prepare = (own as unknown as { prepareDatabase: (f: string) => Promise<void> })
+        .prepareDatabase;
+      Notice.shown.splice(0);
+
+      await prepare.call(own, "Work/프로젝트");
+      await prepare.call(own, "Work");
+
+      expect(work.prepareDatabase.mock.calls).toEqual([["프로젝트", "../.obsidian"]]);
+      expect(Notice.shown).toEqual([
+        "Im-Nobsidian: Work 는 연결 폴더라 DB 로 올리지 않습니다 — 그 안의 노트 폴더를 고르세요.",
+      ]);
+    });
+
+    it("이미 동기화하던 폴더인지는 그 폴더를 지금 맡은 연결의 기록으로 센다 — 안쪽 폴더도 그 연결 기준", () => {
+      const { own, engine } = twoConnections();
+      const records = (paths: string[]) => ({
+        getAll: () => paths.map((obsidianPath) => ({ obsidianPath })),
+      });
+      own.primary.stateDb = records(["개인/a.md", "개인/b.md", "Workshop/c.md"]) as never;
+      engine.stateDb = records(["Team/회의.md", "Team"]) as never;
+      const plugin = own as unknown as { trackedNotesUnder: (folder: string) => number | null };
+
+      expect(plugin.trackedNotesUnder("개인")).toBe(2);
+      expect(plugin.trackedNotesUnder("Work")).toBe(0);
+      expect(plugin.trackedNotesUnder("Work/Team")).toBe(1);
+      engine.stateDb = null;
+      expect(plugin.trackedNotesUnder("Work/Team")).toBeNull();
+    });
+
+    it("변경 패널은 고른 연결의 상태만 보이고, 상태바는 연결을 모아 가장 급한 것을 보인다", async () => {
+      const { own, engine } = twoConnections();
+      const patches: Record<string, unknown>[] = [];
+      own.app = {
+        workspace: {
+          getLeavesOfType: () => [{ view: { updateState: (p: never) => patches.push(p) } }],
+        },
+      } as never;
+      const shown: string[] = [];
+      own.statusBarEl = { setText: (text: string) => shown.push(text) };
+      const hooks = own as unknown as {
+        onEngineState: (engine: ConnectionEngine, patch: object) => void;
+        onEnginePhase: (engine: ConnectionEngine, phase: string) => void;
+        selectConnection: (folder: string) => Promise<void>;
+      };
+
+      hooks.onEngineState(engine, { localChanges: [{ path: "회의.md" }] });
+      expect(patches).toEqual([]);
+      hooks.onEnginePhase(own.primary, "ready");
+      hooks.onEnginePhase(engine, "error");
+      expect(shown.at(-1)).toBe("Im-Nobsidian: Error");
+
+      await hooks.selectConnection("Work");
+      expect(patches.at(-1)).toMatchObject({
+        localChanges: [{ path: "회의.md" }],
+        remoteChanges: [],
+        activeConnection: "Work",
+        connections: [
+          { folder: "", label: "볼트" },
+          { folder: "Work", label: "Work" },
+        ],
+      });
+      hooks.onEngineState(own.primary, { localChanges: [] });
+      expect(patches).toHaveLength(1);
+    });
   });
 });

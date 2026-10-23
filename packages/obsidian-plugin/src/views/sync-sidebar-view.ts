@@ -2,7 +2,7 @@ import { ItemView, type WorkspaceLeaf } from "obsidian";
 import { mount, unmount } from "svelte";
 import SyncDashboard from "./SyncDashboard.svelte";
 import type { LocalChange, RemoteChange } from "@im-nobsidian/core";
-import type { SyncDashboardState, SyncStatePatch } from "../sync/sync-controller.js";
+import { EMPTY_DASHBOARD_STATE, type SyncDashboardState } from "../sync/sync-controller.js";
 
 export const SYNC_SIDEBAR_TYPE = "im-notion-sync-sidebar";
 
@@ -21,29 +21,32 @@ interface SyncActions {
   /** 변경 하나의 줄 비교 창을 연다 — 보기만 한다. */
   onShowLocalDiff: (change: LocalChange) => void;
   onShowRemoteDiff: (change: RemoteChange) => void;
+  /** 패널이 보일 연결을 바꾼다 — 볼트 안 폴더 연결(ADR-038). */
+  onSelectConnection: (folder: string) => Promise<void>;
 }
 
-// 동기화 상태 형태는 SyncController(SSOT)에서 가져온다. 사이드바는 상태를 표시·전달만 한다.
-type SyncState = SyncDashboardState;
+/** 패널이 고르게 하는 연결 하나. */
+export interface ConnectionOption {
+  readonly folder: string;
+  readonly label: string;
+}
+
+/**
+ * 패널이 그리는 상태 — 동기화 상태 형태는 SyncController(SSOT)에서 가져오고, 연결 목록을 더한다. 사이드바는 상태를
+ * 표시·전달만 한다. 연결이 하나면 목록이 비어 고르개를 그리지 않는다.
+ */
+export interface SidebarState extends SyncDashboardState {
+  connections: readonly ConnectionOption[];
+  activeConnection: string;
+}
+export type SidebarPatch = Partial<SidebarState>;
+type SyncState = SidebarState;
 
 export class SyncSidebarView extends ItemView {
   private component: ReturnType<typeof mount> | null = null;
   private actions: SyncActions | null = null;
   private stateUpdater: ((state: SyncState) => void) | null = null;
-  private state: SyncState = {
-    lastSyncAt: null,
-    lastFullScanAt: null,
-    localChanges: [],
-    folderMoves: [],
-    remoteChanges: [],
-    conflictRecords: [],
-    syncState: "ready",
-    operationType: null,
-    progress: null,
-    errorMessage: null,
-    completionSummary: null,
-    blocked: { push: null, pull: null },
-  };
+  private state: SyncState = { ...EMPTY_DASHBOARD_STATE, connections: [], activeConnection: "" };
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -65,7 +68,12 @@ export class SyncSidebarView extends ItemView {
     this.actions = actions;
   }
 
-  updateState(partial: SyncStatePatch): void {
+  /** 처음 그릴 상태 — 패널을 연 뒤에 만들었으면 그 전에 연결들이 보낸 상태로 시작한다. 그리지는 않는다. */
+  seedState(partial: SidebarPatch): void {
+    this.state = { ...this.state, ...partial };
+  }
+
+  updateState(partial: SidebarPatch): void {
     this.state = { ...this.state, ...partial };
     if (this.stateUpdater) {
       this.stateUpdater({ ...this.state });
@@ -99,6 +107,7 @@ export class SyncSidebarView extends ItemView {
         onShowLocalDiff: (change: LocalChange) => this.actions!.onShowLocalDiff(change),
         onShowRemoteDiff: (change: RemoteChange) => this.actions!.onShowRemoteDiff(change),
         onResolveConflict: () => this.actions!.onResolveConflict(),
+        onSelectConnection: (folder: string) => void this.actions!.onSelectConnection(folder),
       },
     });
   }

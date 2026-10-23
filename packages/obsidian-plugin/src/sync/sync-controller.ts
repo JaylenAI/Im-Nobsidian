@@ -55,6 +55,22 @@ export interface SyncDashboardState {
 
 export type SyncStatePatch = Partial<SyncDashboardState>;
 
+/** 아무것도 모를 때의 패널 — 처음 열 때와 연결을 바꿀 때 이것에서 시작한다. */
+export const EMPTY_DASHBOARD_STATE: SyncDashboardState = {
+  lastSyncAt: null,
+  lastFullScanAt: null,
+  localChanges: [],
+  folderMoves: [],
+  remoteChanges: [],
+  conflictRecords: [],
+  syncState: "ready",
+  operationType: null,
+  progress: null,
+  errorMessage: null,
+  completionSummary: null,
+  blocked: { push: null, pull: null },
+};
+
 /** 패널이 지금 보이는 단계 · 진행 · 오류 — 도는 작업이나 끝난 작업이 정한다. */
 type ShownPhase = Pick<
   SyncDashboardState,

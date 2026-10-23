@@ -14,6 +14,8 @@ export class DatabaseItemView extends ItemView {
   private editor: EntryEditor | null = null;
   private databaseId: string = "";
   private folderPath: string = "";
+  /** 보기의 경로(연결 폴더 기준) → 볼트 경로. 볼트 맨 위 연결이면 그대로다. */
+  private toVault: (path: string) => string = (path) => path;
 
   constructor(leaf: WorkspaceLeaf) {
     super(leaf);
@@ -36,11 +38,13 @@ export class DatabaseItemView extends ItemView {
     databaseId: string;
     folderPath: string;
     editor?: EntryEditor;
+    toVault?: (path: string) => string;
   }) {
     this.provider = params.provider;
     this.editor = params.editor ?? null;
     this.databaseId = params.databaseId;
     this.folderPath = params.folderPath;
+    this.toVault = params.toVault ?? ((path) => path);
     await this.loadData();
   }
 
@@ -88,7 +92,7 @@ export class DatabaseItemView extends ItemView {
   }
 
   private async openEntry(entry: DBEntry) {
-    const file = this.app.vault.getAbstractFileByPath(entry.path);
+    const file = this.app.vault.getAbstractFileByPath(this.toVault(entry.path));
     if (file instanceof TFile) {
       await this.app.workspace.getLeaf(false).openFile(file);
     }
@@ -120,7 +124,7 @@ export class DatabaseItemView extends ItemView {
       new Notice(`생성: ${path}`);
       await this.loadData(this.viewData?.viewConfig.id);
 
-      const file = this.app.vault.getAbstractFileByPath(path);
+      const file = this.app.vault.getAbstractFileByPath(this.toVault(path));
       if (file instanceof TFile) {
         await this.app.workspace.getLeaf(false).openFile(file);
       }

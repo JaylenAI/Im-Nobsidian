@@ -3,7 +3,7 @@ import { PluginSettingTab, SecretComponent, Setting } from "obsidian";
 import { DEFAULT_WATCH_DEBOUNCE_MS, notionIdFromInput, systemTimeZone } from "@im-nobsidian/core";
 import { AUTO_SYNC_INTERVAL_MINUTES } from "./constants.js";
 import type ImNobsidianPlugin from "./main.js";
-import type { ImNobsidianSettings } from "./main.js";
+import type { FolderConnectionSettings, ImNobsidianSettings } from "./main.js";
 
 type Direction = ImNobsidianSettings["syncDirection"];
 
@@ -85,6 +85,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
     );
 
     this.connectionRow(containerEl);
+    this.folderConnections(containerEl);
 
     new Setting(containerEl).setName("동기화").setHeading();
 
@@ -193,4 +194,149 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
 
   /** 연결 상태 줄을 다시 그린다 — 연결 설정을 바꾸면 「닫으면 걸립니다」 로 바뀐다. */
   private refreshConnection: () => void = () => {};
+
+  /**
+   * 볼트 안 폴더 연결(ADR-038) — 폴더마다 다른 Notion 워크스페이스(토큰 · 루트 페이지)로 동기화한다. 폴더는
+   * 볼트의 폴더에서 고른다. 다른 연결이 이미 노트를 동기화하는 폴더는 고를 수 없다 — 따로 연결하면 그 연결이
+   * 그 노트들을 지운 것으로 본다.
+   */
+  private folderConnections(containerEl: HTMLElement): void {
+    const { settings } = this.plugin;
+    const connections = (settings.connections ??= []);
+
+    new Setting(containerEl)
+      .setName("폴더 연결")
+      .setDesc(
+        "볼트 안 폴더 하나를 다른 Notion 워크스페이스와 따로 동기화합니다 — 회사 · 개인 워크스페이스를 한 볼트에 " +
+          "둘 때. 그 폴더는 볼트 연결이 비켜 갑니다. 연결 사이의 위키링크는 Notion 링크가 되지 않습니다.",
+      )
+      .setHeading();
+
+    connections.forEach((connection, index) =>
+      this.folderConnection(containerEl, connection, index),
+    );
+
+    const configured = new Set(connections.map((c) => c.folder));
+    const cliOnly = this.plugin.knownConnectionFolders.filter(
+      (f) => f !== "" && !configured.has(f),
+    );
+    if (cliOnly.length > 0) {
+      new Setting(containerEl)
+        .setName("CLI 로 만든 연결")
+        .setDesc(
+          `${cliOnly.join(", ")} — 플러그인은 동기화하지 않고 비켜 갑니다. 여기에 같은 폴더를 추가하면 플러그인도 ` +
+            "그 연결(같은 상태 DB)로 동기화합니다.",
+        );
+    }
+
+    const choices = this.folderChoices(null);
+    const add = new Setting(containerEl)
+      .setName("폴더 연결 추가")
+      .setDesc(
+        choices.length > 0
+          ? "추가한 뒤 그 폴더의 Notion 토큰과 루트 페이지를 넣으세요."
+          : "고를 수 있는 폴더가 없습니다 — 아직 동기화하지 않은 폴더를 먼저 만드세요.",
+      );
+    add.addButton((button) =>
+      button
+        .setButtonText("추가")
+        .setDisabled(choices.length === 0)
+        .onClick(async () => {
+          connections.push({ folder: choices[0]!, tokenSecret: "", rootPageId: "" });
+          await this.changeConnection();
+          this.display();
+        }),
+    );
+  }
+
+  /** 폴더 연결 하나 — 폴더 · 토큰 · 루트 페이지 · 상태 · 지우기. */
+  private folderConnection(
+    containerEl: HTMLElement,
+    connection: FolderConnectionSettings,
+    index: number,
+  ): void {
+    const connections = this.plugin.settings.connections!;
+    const tracked = this.plugin.trackedNotesUnder(connection.folder);
+    const folderRow = new Setting(containerEl).setName(`폴더 연결 ${index + 1}`);
+    const status = () => {
+      if (tracked !== null && tracked > 0) {
+        return (
+          `이 폴더를 맡은 연결이 노트 ${tracked}개를 이미 동기화하고 있어 따로 연결하지 않습니다 — 다른 폴더를 ` +
+          "고르세요."
+        );
+      }
+      if (this.connectionChanged) return "바꾼 설정은 이 창을 닫거나 다시 연결하면 걸립니다.";
+      return this.plugin.folderConnectionStatus(connection.folder).message;
+    };
+    const ready = () => this.plugin.folderConnectionStatus(connection.folder).ready;
+    folderRow.setDesc(status());
+    folderRow.descEl.toggleClass("mod-warning", !this.connectionChanged && !ready());
+    folderRow.addDropdown((dropdown) => {
+      for (const folder of this.folderChoices(connection.folder))
+        dropdown.addOption(folder, folder);
+      dropdown.setValue(connection.folder).onChange(async (value) => {
+        connection.folder = value;
+        await this.changeConnection();
+        this.display();
+      });
+    });
+    folderRow.addButton((button) =>
+      button
+        .setButtonText("지우기")
+        .setWarning()
+        .onClick(async () => {
+          connections.splice(index, 1);
+          await this.changeConnection();
+          this.display();
+        }),
+    );
+
+    new Setting(containerEl)
+      .setName(`폴더 연결 ${index + 1} — Notion 토큰`)
+      .setDesc("이 폴더를 동기화할 워크스페이스의 통합 토큰 — 키체인에 둡니다.")
+      .addComponent((el) =>
+        new SecretComponent(this.app, el)
+          .setValue(connection.tokenSecret)
+          .onChange(async (value) => {
+            connection.tokenSecret = value;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName(`폴더 연결 ${index + 1} — 루트 페이지 ID`)
+      .setDesc("이 폴더의 노트를 둘 Notion 페이지 — 주소를 붙여 넣어도 됩니다.")
+      .addText((text) =>
+        text
+          .setPlaceholder("https://www.notion.so/… 또는 페이지 ID")
+          .setValue(connection.rootPageId)
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            connection.rootPageId = notionIdFromInput(trimmed) ?? trimmed;
+            await this.changeConnection();
+          }),
+      );
+  }
+
+  /**
+   * 폴더 연결이 고를 수 있는 폴더 — 볼트의 폴더 중 점 폴더 · 다른 폴더 연결 · 다른 연결이 노트를 동기화하는
+   * 폴더를 뺀 것. `current` 는 지금 고른 값이라 빼지 않는다(밖에서 고쳐 넣은 값도 보인다).
+   */
+  private folderChoices(current: string | null): string[] {
+    const taken = new Set(
+      (this.plugin.settings.connections ?? []).map((c) => c.folder).filter((f) => f !== current),
+    );
+    const folders = this.app.vault
+      .getAllFolders(false)
+      .map((folder) => folder.path)
+      .filter(
+        (path) =>
+          path === current ||
+          (!path.split("/").some((part) => part.startsWith(".")) &&
+            !taken.has(path) &&
+            !this.plugin.trackedNotesUnder(path)),
+      )
+      .sort((a, b) => a.localeCompare(b));
+    return current !== null && !folders.includes(current) ? [current, ...folders] : folders;
+  }
 }
