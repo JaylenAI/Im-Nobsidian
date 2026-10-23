@@ -2032,7 +2032,19 @@ function isAmbiguousFailure(error: unknown): boolean {
   return status === 500 || status === 502 || status === 503 || status === 504;
 }
 
+/**
+ * Notion 이 이 연결의 API 접근을 막았다 — 429 이지만 쉬어도 풀리지 않는다. request-limits 문서(2026-09-24
+ * changelog): `rate_limit_reason: "public_api_request_blocked"` 는 다시 보내지 말고 지원팀에 문의한다.
+ * 다시 보내면 요청마다 대기를 다 채운 뒤에야 실패해 멈춘 것처럼 보인다.
+ */
+export function isRequestBlocked(error: unknown): boolean {
+  if (notionStatusOf(error) !== 429) return false;
+  const data = (error as { additional_data?: { rate_limit_reason?: unknown } }).additional_data;
+  return data?.rate_limit_reason === "public_api_request_blocked";
+}
+
 function isRetryable(error: unknown, idempotent: boolean): boolean {
+  if (isRequestBlocked(error)) return false;
   return isExplicitRejection(error) || (idempotent && isAmbiguousFailure(error));
 }
 
