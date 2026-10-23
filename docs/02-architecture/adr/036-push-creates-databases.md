@@ -20,7 +20,8 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
 | 무엇                                                  | 결과                                                                                                                                                                                                                                                           |
 | ----------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `databases.create` + `initial_data_source.properties` | 18 타입 모두 만듦 — title · rich_text · number(format) · select · multi_select(옵션 색) · date · people · files · checkbox · url · email · phone_number · formula · unique_id(prefix 2자 이상) · created_time · last_edited_time · created_by · last_edited_by |
-| `dataSources.update` 로 status 추가                   | 됨. 옵션을 주면 그 옵션(첫 옵션이 기본값), 안 주면 Not started · In progress · Done                                                                                                                                                                            |
+| `dataSources.update` 로 status 추가                   | 됨. 옵션을 주면 그 옵션(첫 옵션이 기본값), 안 주면 Not started · In progress · Done. **그룹은 정하지 못한다** — 준 옵션은 모두 To-do 에 들고 `groups` 를 보내도 무시된다. 기본 세 옵션만 제 그룹에 든다                                                        |
+| unique_id prefix                                      | **워크스페이스에서 하나뿐** — 같은 워크스페이스의 DB 가 이미 쓰면 409 `conflict_error` "Unique ID prefix is already in use."                                                                                                                                   |
 | relation 추가                                         | dual · single 둘 다. dual 은 대상 DB 에 맞짝 속성이 생긴다                                                                                                                                                                                                     |
 | rollup 추가                                           | 됨(relation · 대상 속성 이름 · 함수)                                                                                                                                                                                                                           |
 | 행 만들기                                             | `parent.data_source_id` · 스키마에 없는 select 옵션은 Notion 이 더한다                                                                                                                                                                                         |
@@ -62,6 +63,11 @@ DB 는 받기만 했다. pull 은 DB 하나를 볼트에 셋으로 쓴다.
 ## 트레이드오프 — Notion 이 받지 않아 같지 않은 것
 
 - unique_id 값 · created/last_edited 시각 · 만든 사람은 Notion 이 새로 매긴다 — 다시 받으면 frontmatter 의 그 값이 바뀐다.
+- unique_id prefix 는 받아 온 DB 와 같은 워크스페이스면 겹쳐 접두어 없이 만든다(알림).
+- status 그룹 — 기본 세 옵션이 원래 있었으면 기본으로 만들어 제 그룹에 두고, 나머지 옵션은 To-do 에 둔다(원래 그룹과
+  다르면 알림). 옵션 이름도 바꿀 수 없다.
+- 속성 순서 — data source 의 속성은 순서 없는 맵이다. 다시 받으면 frontmatter · `.base` 의 속성 순서가 바뀔 수 있다.
+- 루트 아래 DB 들의 폴더(`databases/`)는 pull 이 만든 자리다 — 페이지로 만들지 않고 그 안의 DB 를 루트 아래에 만든다.
 - people 값은 이름으로만 볼트에 있어 보내지 않는다(사용자 id 를 알 수 없다).
 - form · chart · map · dashboard 뷰, button · verification 속성은 만들 수 없다.
 - 볼트 밖 DB 를 가리키던 relation · 그 relation 을 쓰는 rollup 은 만들지 않는다.
