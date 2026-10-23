@@ -113,3 +113,29 @@ body
     expect(second.content).toBe(first.content);
   });
 });
+
+describe("resolveFrontmatterRelations — 고친 키 말고는 글자 그대로", () => {
+  it("따옴표 없는 날짜 · 날짜시각 줄을 바꾸지 않는다 (2026-10-23 라이브)", () => {
+    const note = [
+      "---",
+      "날짜: 2026-10-23",
+      "마감: 2026-10-01T09:30",
+      "관계:",
+      "  - 1c013b18-d382-8377-9e12-81ab4578b0b9",
+      "title: 가",
+      "---",
+      "",
+      "본문",
+      "",
+    ].join("\n");
+    const { content, count } = resolveFrontmatterRelations(
+      note,
+      idMap([["1c013b18-d382-8377-9e12-81ab4578b0b9", "철수"]]),
+    );
+
+    expect(count).toBe(1);
+    expect(content).toBe(
+      note.replace("  - 1c013b18-d382-8377-9e12-81ab4578b0b9", "  - '[[철수]]'"),
+    );
+  });
+});

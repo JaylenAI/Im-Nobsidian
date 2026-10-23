@@ -1,4 +1,9 @@
-import { splitFrontmatter, stringifyFrontmatter } from "../utils/frontmatter.js";
+import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
+import {
+  replaceFrontmatterLines,
+  splitFrontmatter,
+  stringifyFrontmatter,
+} from "../utils/frontmatter.js";
 import { isNotionId } from "../utils/id.js";
 
 /**
@@ -14,8 +19,9 @@ import { isNotionId } from "../utils/id.js";
  * - 맵에 없는 UUID(미수집 타 DB 대상)는 무손실로 그대로 둔다.
  * - relation 은 스칼라·배열·중첩배열(rollup→relation) 모두 가능하므로 값을 재귀 순회한다.
  * - 해소된 항목이 0 이면 `content` 를 재직렬화하지 않고 원본을 그대로 반환해 churn 을 막는다.
- * - 직렬화는 sealed serializer(stringifyFrontmatter)만 거친다 — 변환 시점과 동일 직렬화기라
- *   미변경 키는 byte-identical 로 round-trip 되어 fixpoint 가 안정적이다.
+ * - 해소한 키의 줄만 바꾼다. frontmatter 를 통째로 다시 쓰면 따옴표 없는 날짜(`2026-10-23`)가 YAML 의
+ *   날짜로 읽혔다가 `2026-10-23T00:00:00.000Z` 로 적혔다 — 새 볼트로 받은 행의 날짜가 원본과 달랐다
+ *   (2026-10-23 라이브). 키 단위로 나눠 읽을 수 없는 frontmatter 만 통째로 다시 쓴다.
  */
 export function resolveFrontmatterRelations(
   content: string,
@@ -53,10 +59,15 @@ export function resolveFrontmatterRelations(
 
   // 읽은 값을 고치지 않고 새 객체에 담는다 — 해소가 0 건이면 원본을 그대로 돌려준다.
   const resolved: Record<string, unknown> = {};
+  const changed: Record<string, unknown> = {};
   for (const key of Object.keys(data)) {
+    const before = count;
     resolved[key] = resolveValue(data[key]);
+    if (count !== before) changed[key] = resolved[key];
   }
 
   if (count === 0) return { content, count: 0 };
-  return { content: stringifyFrontmatter(parsed.content, resolved), count };
+  const lines = mergeRowFrontmatter(content, changed, new Set(Object.keys(changed)));
+  const edited = lines && replaceFrontmatterLines(content, lines);
+  return { content: edited ?? stringifyFrontmatter(parsed.content, resolved), count };
 }
