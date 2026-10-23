@@ -130,6 +130,35 @@ describe("PageDecorations", () => {
       expect(warn.mock.calls[0]![0]).toContain("LiHome");
     });
 
+    it("둘을 함께 보내다 거절되면 하나씩 다시 보낸다 — 없는 아이콘 이름 때문에 커버를 잃지 않는다", async () => {
+      notion.updatePageDecorations.mockImplementation(async (_id: string, body: object) => {
+        if ("icon" in body) {
+          throw Object.assign(new Error('Invalid icon name "없는이름".'), {
+            code: "validation_error",
+          });
+        }
+        return page({ last_edited_time: "t2" });
+      });
+
+      const written = await decorations.push(
+        "p1",
+        "노트.md",
+        { icon: "없는이름", cover: "https://example.com/c.png" },
+        {},
+      );
+
+      expect(written).toMatchObject({ last_edited_time: "t2" });
+      expect(notion.updatePageDecorations.mock.calls.map(([, body]) => Object.keys(body))).toEqual([
+        ["icon", "cover"],
+        ["icon"],
+        ["cover"],
+      ]);
+      expect(warn.mock.calls.map(([line]) => String(line).split(" — ")[0])).toEqual([
+        "[Im-Nobsidian] Notion 이 거절한 꾸밈(아이콘 · 커버)",
+        "[Im-Nobsidian] Notion 이 거절한 꾸밈(아이콘)",
+      ]);
+    });
+
     it("그 밖의 실패는 올린다", async () => {
       notion.updatePageDecorations.mockRejectedValue(new Error("network"));
       await expect(decorations.push("p1", "노트.md", { icon: "🥑" }, {})).rejects.toThrow(

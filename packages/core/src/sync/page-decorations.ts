@@ -1,6 +1,7 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
   DECORATION_KEYS,
+  DECORATION_LABELS,
   coverSource,
   iconSource,
   isDecorationValue,
@@ -82,17 +83,35 @@ export class PageDecorations {
   ): Promise<PageObjectResponse | null> {
     const changed = DECORATION_KEYS.filter((key) => this.changed(key, current[key], against));
     const body = await this.requests(current, path, changed);
-    if (Object.keys(body).length === 0) return null;
+    const keys = Object.keys(body);
+    if (keys.length === 0) return null;
+    const written = await this.send(pageId, path, body);
+    if (written !== undefined || keys.length === 1) return written ?? null;
+    // 하나가 거절되면 요청 전체가 거절된다 — Notion 은 없는 아이콘 이름 · 사용자 이모지를 검증 오류로 돌려준다
+    // (2026-09-23 · 09-25 API). 아이콘 하나 때문에 커버까지 잃지 않게 하나씩 다시 보낸다.
+    let last: PageObjectResponse | null = null;
+    for (const key of keys) {
+      last = (await this.send(pageId, path, { [key]: body[key] })) ?? last;
+    }
+    return last;
+  }
+
+  /** 꾸밈 요청 하나 — Notion 이 거절하면 알리고 undefined. 그 밖의 실패는 올린다. */
+  private async send(
+    pageId: string,
+    path: string,
+    body: Record<string, unknown>,
+  ): Promise<PageObjectResponse | undefined> {
     try {
       return await this.notionClient.updatePageDecorations(pageId, body);
     } catch (error) {
       if (!isNotionValidationError(error)) throw error;
       getLogger().warn(
-        `[Im-Nobsidian] 아이콘 · 커버를 Notion 이 거절함 (${path}): ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        `[Im-Nobsidian] Notion 이 거절한 꾸밈(${Object.keys(body)
+          .map((key) => DECORATION_LABELS[key as DecorationKey])
+          .join(" · ")}) — ${path}: ${error instanceof Error ? error.message : String(error)}`,
       );
-      return null;
+      return undefined;
     }
   }
 
