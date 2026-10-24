@@ -309,7 +309,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 }
 ```
 
-You can also create `.im-nobsidian-ignore` (same syntax as `.gitignore`) to exclude files from sync.
+The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin does not apply `paths.include`, `paths.exclude` or the ignore file yet. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
 
 ## Database Mode
 
