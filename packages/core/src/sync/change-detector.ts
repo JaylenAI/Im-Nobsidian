@@ -59,7 +59,14 @@ function hasRemotePage(record: SyncRecord | null): record is SyncRecord {
 }
 
 export class ChangeDetector {
-  constructor(private readonly stateDb: IStateDB) {}
+  /**
+   * @param excludes 설정이 동기화에서 뺀 경로(이슈 #8) — 목록에 없어도 지운 것이 아니다. 예전에는 뺀 폴더의
+   *   추적 노트를 「삭제」 로 보고, deleteSync 면 Notion 페이지를 지울 수 있었다.
+   */
+  constructor(
+    private readonly stateDb: IStateDB,
+    private readonly excludes: (path: string) => boolean = () => false,
+  ) {}
 
   async detectLocalChangesFast(
     stats: FileStatInfo[],
@@ -167,7 +174,8 @@ export class ChangeDetector {
         hasRemotePage(record) &&
         !existing.has(record.obsidianPath) &&
         // 폴더 페이지는 파일이 아니다 — 폴더가 사라진 것은 파일 목록으로 알 수 없다.
-        !isFolderRecord(record),
+        !isFolderRecord(record) &&
+        !this.excludes(record.obsidianPath),
     );
     const pairs = pairLocalMoves(
       missing.map((record) => ({

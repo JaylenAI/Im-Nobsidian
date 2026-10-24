@@ -114,6 +114,11 @@ export class ScopedVaultFS implements VaultFS {
     );
   }
 
+  excludesPath(path: string, kind?: "file" | "folder"): boolean {
+    const joined = normalizeVaultPath(this.folder === "" ? path : `${this.folder}/${path}`);
+    return joined !== null && (this.base.excludesPath?.(joined, kind) ?? false);
+  }
+
   /** 이 연결의 경로 → 볼트 경로. */
   private toBase(path: string, write: boolean): string {
     const joined = normalizeVaultPath(this.folder === "" ? path : `${this.folder}/${path}`);

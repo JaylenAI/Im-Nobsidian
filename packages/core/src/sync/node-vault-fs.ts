@@ -1,10 +1,11 @@
 import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
-import { join, relative, dirname } from "node:path";
+import { join, relative, dirname, sep } from "node:path";
 import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 import { IGNORE_FILE } from "../constants/paths.js";
 import { isMarkdownPath } from "../utils/markdown-path.js";
+import { PathFilter, toVaultPath } from "../utils/path-filter.js";
 
 export interface PathFilterConfig {
   readonly include?: string[];
@@ -12,17 +13,19 @@ export interface PathFilterConfig {
 }
 
 export class NodeVaultFS implements VaultFS {
-  private readonly includePatterns: string[];
-  private readonly excludePatterns: string[];
+  private readonly filter: PathFilter;
 
   constructor(
     private readonly rootPath: string,
     pathConfig?: PathFilterConfig,
   ) {
-    this.includePatterns = pathConfig?.include ?? [];
     const configExclude = pathConfig?.exclude ?? [];
     const ignorePatterns = this.loadImNobsidianIgnore();
-    this.excludePatterns = [...configExclude, ...ignorePatterns];
+    this.filter = new PathFilter(pathConfig?.include ?? [], [...configExclude, ...ignorePatterns]);
+  }
+
+  excludesPath(path: string, kind: "file" | "folder" = "file"): boolean {
+    return kind === "folder" ? this.filter.excludesFolder(path) : this.filter.excludesFile(path);
   }
 
   private loadImNobsidianIgnore(): string[] {
@@ -115,34 +118,9 @@ export class NodeVaultFS implements VaultFS {
     return files;
   }
 
-  private matchesPattern(relativePath: string, pattern: string): boolean {
-    if (pattern === "**/*" || pattern === "**") return true;
-
-    if (pattern.endsWith("/**")) {
-      const dir = pattern.slice(0, -3);
-      return relativePath.startsWith(dir + "/") || relativePath === dir;
-    } else if (pattern.startsWith("*.")) {
-      const ext = pattern.slice(1);
-      return relativePath.endsWith(ext);
-    } else if (pattern.includes("*")) {
-      const regexStr = pattern
-        .replace(/\./g, "\\.")
-        .replace(/\*\*/g, "{{GLOBSTAR}}")
-        .replace(/\*/g, "[^/]*")
-        .replace(/\{\{GLOBSTAR\}\}/g, ".*");
-      return new RegExp("^" + regexStr + "$").test(relativePath);
-    } else {
-      return relativePath === pattern || relativePath.startsWith(pattern + "/");
-    }
-  }
-
-  private isExcluded(relativePath: string): boolean {
-    if (this.includePatterns.length > 0) {
-      const included = this.includePatterns.some((p) => this.matchesPattern(relativePath, p));
-      if (!included) return true;
-    }
-
-    return this.excludePatterns.some((p) => this.matchesPattern(relativePath, p));
+  /** 볼트 경로 — Windows 의 `relative()` 는 `\` 로 잇는다. 상태 DB · 패턴 · Notion 경로는 모두 `/` 다. */
+  private vaultPath(fullPath: string): string {
+    return toVaultPath(relative(this.rootPath, fullPath), sep);
   }
 
   private async walkDirNonMd(dir: string, result: NonMdFileInfo[]): Promise<void> {
@@ -153,16 +131,19 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.name.startsWith(".")) continue;
 
-      const relativePath = relative(this.rootPath, fullPath);
-
-      if (this.isExcluded(relativePath)) continue;
+      const relativePath = this.vaultPath(fullPath);
 
       if (entry.isDirectory()) {
+        if (this.filter.excludesFolder(relativePath)) continue;
         await this.walkDirNonMd(fullPath, result);
         // .base 도 포함해 반환한다 — 여기서 빼면 DB rename 고아 .base 정리
         // (cleanupStaleDbArtifacts)가 영원히 못 본다. 첨부 업로드 제외는
         // 소비자(FileHandler.listUploadableFiles)가 책임진다.
-      } else if (entry.isFile() && !isMarkdownPath(entry.name)) {
+      } else if (
+        entry.isFile() &&
+        !isMarkdownPath(entry.name) &&
+        !this.filter.excludesFile(relativePath)
+      ) {
         const fileStat = await stat(fullPath);
         result.push({
           path: relativePath,
@@ -181,13 +162,16 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.name.startsWith(".")) continue;
 
-      const relativePath = relative(this.rootPath, fullPath);
-
-      if (this.isExcluded(relativePath)) continue;
+      const relativePath = this.vaultPath(fullPath);
 
       if (entry.isDirectory()) {
+        if (this.filter.excludesFolder(relativePath)) continue;
         await this.walkDirStats(fullPath, result);
-      } else if (entry.isFile() && isMarkdownPath(entry.name)) {
+      } else if (
+        entry.isFile() &&
+        isMarkdownPath(entry.name) &&
+        !this.filter.excludesFile(relativePath)
+      ) {
         const fileStat = await stat(fullPath);
         result.push({
           path: relativePath,
@@ -206,13 +190,16 @@ export class NodeVaultFS implements VaultFS {
 
       if (entry.name.startsWith(".")) continue;
 
-      const relativePath = relative(this.rootPath, fullPath);
-
-      if (this.isExcluded(relativePath)) continue;
+      const relativePath = this.vaultPath(fullPath);
 
       if (entry.isDirectory()) {
+        if (this.filter.excludesFolder(relativePath)) continue;
         await this.walkDir(fullPath, result);
-      } else if (entry.isFile() && isMarkdownPath(entry.name)) {
+      } else if (
+        entry.isFile() &&
+        isMarkdownPath(entry.name) &&
+        !this.filter.excludesFile(relativePath)
+      ) {
         const content = await readFile(fullPath, "utf-8");
         const fileStat = await stat(fullPath);
 
