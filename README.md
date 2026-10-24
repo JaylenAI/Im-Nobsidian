@@ -359,7 +359,7 @@ root page. Commands run every ready connection in turn, and the changes panel le
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.9.0 (release assets / BRAT)                                                                              |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.9.1 (release assets / BRAT)                                                                              |
 
 ### Using as a Library
 
@@ -482,11 +482,14 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install
 pnpm build
-pnpm test          # 1662 tests
+pnpm test
 pnpm lint
 pnpm typecheck
+```
 
-# Register the nobsi command globally from local build
+To run the `nobsi` command from your local build:
+
+```bash
 cd packages/cli && npm link && cd ../..
 nobsi --version
 ```
@@ -518,6 +521,20 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install && pnpm build && pnpm test
 ```
+
+## Privacy and Network Use
+
+- **Account:** you need a Notion account and an internal integration token that you create
+  yourself ([Getting Started](#1-create-a-notion-integration)). The plugin keeps the token in
+  Obsidian's keychain; the CLI keeps it in `.im-nobsidian/config.json`.
+- **Network:** the plugin and the CLI talk only to the Notion API (`api.notion.com`) and download
+  attachments from Notion's own file hosts. Nothing is sent anywhere else. Requests run only when
+  you ask for them (sync, status, refreshing the changes panel) or on the auto-sync
+  interval you turn on.
+- **Files:** the plugin reads and writes inside your vault only. It writes the sync state to
+  `.im-nobsidian/` in the vault with Node's file system API, so it is desktop-only.
+- **No telemetry, no ads, no payments.** The plugin is free and fully open source
+  ([MIT](LICENSE)).
 
 ## Security
 

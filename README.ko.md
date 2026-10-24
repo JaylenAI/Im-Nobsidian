@@ -331,13 +331,30 @@ due: 2026-06-30 # → Date 속성
 }
 ```
 
+## 볼트 하나에 Notion 워크스페이스 여럿
+
+연결마다 볼트의 폴더 하나를 맡고, 그 폴더의 `.im-nobsidian/` 에 설정과 상태를 따로 둡니다
+([ADR-038](docs/02-architecture/adr/038-connection-folders.md)). 볼트 최상위도 연결 하나입니다 — 예전부터 쓰던 그 연결입니다.
+
+```bash
+cd ~/Vault/Work && nobsi init   # 두 번째 연결: Work/ 는 다른 워크스페이스와 동기화
+nobsi sync                       # 그 폴더에서 실행. 최상위 연결은 Work/ 를 건너뜀
+```
+
+플러그인에서는 **설정 → 폴더 연결 추가** 에서 폴더 · 키체인 토큰 이름 · 루트 페이지를 정합니다. 명령은 준비된 연결을
+차례로 돌리고, 변경 패널에서 연결을 고를 수 있습니다.
+
+- 바깥 연결이 이미 동기화하던 폴더는 따로 연결하지 않습니다 — 바깥 연결이 그 노트를 지운 것으로 읽습니다.
+  `init` 이 거절하고, 동기화는 그런 폴더를 찾으면 멈춥니다.
+- 연결 사이의 위키링크는 Notion 에서 글로 남습니다 — 페이지가 다른 워크스페이스를 가리킬 수 없습니다.
+
 ## 패키지
 
 | 패키지                                              | 설명                                 | npm                                                                                                         |
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.9.0 (릴리스 자산 / BRAT)                                                                                 |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.9.1 (릴리스 자산 / BRAT)                                                                                 |
 
 ### 라이브러리로 사용하기
 
@@ -478,6 +495,16 @@ git clone https://github.com/JaylenAI/Im-Nobsidian.git
 cd Im-Nobsidian
 pnpm install && pnpm build && pnpm test
 ```
+
+## 개인정보 · 네트워크 사용
+
+- **계정:** Notion 계정과 직접 만든 내부 통합 토큰이 필요합니다([시작하기](#시작하기)). 플러그인은 토큰을 Obsidian
+  키체인에, CLI 는 `.im-nobsidian/config.json` 에 둡니다.
+- **네트워크:** 플러그인과 CLI 는 Notion API(`api.notion.com`)와 Notion 의 파일 호스트(첨부 내려받기)에만
+  접속합니다. 다른 곳으로는 아무것도 보내지 않습니다. 요청은 사용자가 부를 때(동기화 · 상태 확인 · 변경 패널 새로고침)와 켜 둔 자동 동기화 주기에만 갑니다.
+- **파일:** 플러그인은 볼트 안만 읽고 씁니다. 동기화 상태를 볼트의 `.im-nobsidian/` 에 Node 파일 시스템 API 로
+  쓰므로 데스크톱 전용입니다.
+- **텔레메트리 · 광고 · 결제 없음.** 무료이며 전부 오픈소스([MIT](LICENSE))입니다.
 
 ## 보안
 
