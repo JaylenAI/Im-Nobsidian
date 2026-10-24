@@ -28,6 +28,14 @@ export async function openVaultFs(cwd: string, paths: PathFilterConfig): Promise
 }
 
 /**
+ * 명령줄에 받은 볼트 경로 → 볼트 경로(`/`). Windows 에서는 `00 Me\a.md` 처럼 `\` 로 쳐도 같은 노트다(이슈 #8) —
+ * 예전에는 `-p "00 Me\"` 가 어느 노트에도 맞지 않아 「변경 없음」 이었다. 다른 OS 에서 `\` 는 이름의 글자다.
+ */
+export function vaultArgPath(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === "win32" ? path.replace(/\\/g, "/") : path;
+}
+
+/**
  * Obsidian 설정 폴더까지의 상대 경로 — 연결 폴더가 볼트 안쪽이면 위로 올라가 찾는다. 못 찾으면 `.obsidian`
  * (없으면 속성 타입을 값으로 정한다).
  */

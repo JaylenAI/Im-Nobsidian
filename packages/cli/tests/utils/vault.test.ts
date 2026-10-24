@@ -9,6 +9,7 @@ import {
   obsidianConfigDir,
   openVaultFs,
   outerConnectionTracking,
+  vaultArgPath,
 } from "../../src/utils/vault.js";
 
 describe("openVaultFs · obsidianConfigDir", () => {
@@ -58,5 +59,17 @@ describe("openVaultFs · obsidianConfigDir", () => {
     db.close();
     expect(outerConnectionTracking(join(vault, "Notes"))).toEqual({ folder: vault, notes: 1 });
     expect(outerConnectionTracking(join(vault, "Work"))).toBeNull();
+  });
+});
+
+describe("vaultArgPath (이슈 #8)", () => {
+  it("Windows 에서 \\ 로 친 경로를 볼트 경로로", () => {
+    expect(vaultArgPath("00 Me\\Daily\\a.md", "win32")).toBe("00 Me/Daily/a.md");
+    expect(vaultArgPath("00 Me\\", "win32")).toBe("00 Me/");
+  });
+
+  it("다른 OS 에서 \\ 는 이름의 글자다", () => {
+    expect(vaultArgPath("a\\b.md", "linux")).toBe("a\\b.md");
+    expect(vaultArgPath("a\\b.md", "darwin")).toBe("a\\b.md");
   });
 });

@@ -10,7 +10,7 @@ import {
 } from "@im-nobsidian/core";
 import type { ChangeDiff } from "@im-nobsidian/core";
 import { printUnifiedDiff } from "../utils/diff-output.js";
-import { openVaultFs } from "../utils/vault.js";
+import { openVaultFs, vaultArgPath } from "../utils/vault.js";
 
 // 기본 비교 대상은 **마지막 동기화 스냅샷**이다(로컬에서 무엇을 고쳤는지). Notion 현재
 // 본문과의 비교는 API 호출이 필요하므로 `--remote` 로 명시할 때만 한다 — 예전 설명은
@@ -36,7 +36,7 @@ export const diffCommand = new Command("diff")
       const status = await orchestrator.statusLocal();
 
       const changes = targetPath
-        ? status.localChanges.filter((c) => matchesPathScope(c.path, targetPath))
+        ? status.localChanges.filter((c) => matchesPathScope(c.path, vaultArgPath(targetPath)))
         : status.localChanges;
 
       if (changes.length === 0) {
