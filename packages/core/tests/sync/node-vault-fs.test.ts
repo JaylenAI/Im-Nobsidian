@@ -193,12 +193,56 @@ describe("NodeVaultFS", () => {
       expect(files[0]!.path).toBe("note.md");
     });
 
-    it("읽지 못한 .im-nobsidian-ignore 는 빈 목록이 아니라 오류 — 제외한 파일이 올라가지 않게", async () => {
-      const ignore = join(tempDir, ".im-nobsidian-ignore");
-      await writeFile(ignore, "drafts/**\n");
-      await chmod(ignore, 0o200);
+    // Windows 는 chmod 로 읽기를 막지 못한다.
+    it.skipIf(process.platform === "win32")(
+      "읽지 못한 .im-nobsidian-ignore 는 빈 목록이 아니라 오류 — 제외한 파일이 올라가지 않게",
+      async () => {
+        const ignore = join(tempDir, ".im-nobsidian-ignore");
+        await writeFile(ignore, "drafts/**\n");
+        await chmod(ignore, 0o200);
 
-      expect(() => new NodeVaultFS(tempDir)).toThrow("EACCES");
+        expect(() => new NodeVaultFS(tempDir)).toThrow("EACCES");
+      },
+    );
+  });
+
+  describe("경로 모양 · 패턴 (이슈 #8)", () => {
+    it("하위 폴더의 경로를 / 로 잇는다 — 어느 OS 에서나", async () => {
+      await mkdir(join(tempDir, "00 Me", "Daily"), { recursive: true });
+      await writeFile(join(tempDir, "00 Me", "Daily", "a.md"), "a");
+      await writeFile(join(tempDir, "00 Me", "img.png"), "png");
+
+      expect((await vaultFs.listMarkdownFiles()).map((f) => f.path)).toEqual(["00 Me/Daily/a.md"]);
+      expect((await vaultFs.listMarkdownFileStats()).map((f) => f.path)).toEqual([
+        "00 Me/Daily/a.md",
+      ]);
+      expect((await vaultFs.listNonMarkdownFiles()).map((f) => f.path)).toEqual(["00 Me/img.png"]);
+    });
+
+    it("포함 패턴 폴더/**/*.md 가 폴더 안을 걷는다 — 예전에는 폴더를 빼 새 노트를 못 찾았다", async () => {
+      await mkdir(join(tempDir, "00 Me", "Daily"), { recursive: true });
+      await mkdir(join(tempDir, "02 Other"), { recursive: true });
+      await writeFile(join(tempDir, "00 Me", "a.md"), "a");
+      await writeFile(join(tempDir, "00 Me", "Daily", "b.md"), "b");
+      await writeFile(join(tempDir, "02 Other", "c.md"), "c");
+
+      const filtered = new NodeVaultFS(tempDir, { include: ["00 Me/**/*.md"] });
+      const paths = (await filtered.listMarkdownFileStats()).map((f) => f.path).sort();
+
+      expect(paths).toEqual(["00 Me/Daily/b.md", "00 Me/a.md"]);
+    });
+
+    it("excludesPath — 설정 · 무시 파일이 뺀 경로", async () => {
+      await writeFile(join(tempDir, ".im-nobsidian-ignore"), "Private/\r\n");
+      const filtered = new NodeVaultFS(tempDir, { include: ["**/*.md"], exclude: ["*.tmp.md"] });
+
+      expect(filtered.excludesPath("Private/a.md")).toBe(true);
+      expect(filtered.excludesPath("Private", "folder")).toBe(true);
+      expect(filtered.excludesPath("Notes/x.tmp.md")).toBe(true);
+      expect(filtered.excludesPath("Notes/a.md")).toBe(false);
+      // 포함 패턴은 폴더를 빼지 않는다
+      expect(filtered.excludesPath("Notes", "folder")).toBe(false);
+      expect(filtered.excludesPath("Notes")).toBe(true);
     });
   });
 });

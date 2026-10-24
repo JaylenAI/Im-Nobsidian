@@ -278,6 +278,7 @@ export { sanitizeFileName } from "./utils/sanitize.js";
 export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./utils/markdown-path.js";
 export { systemTimeZone } from "./utils/zoned-time.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
+export { PathFilter, toVaultPath } from "./utils/path-filter.js";
 export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
 export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
