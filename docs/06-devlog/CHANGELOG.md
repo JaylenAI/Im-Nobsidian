@@ -5,6 +5,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-25
+
+> 문서 패치 — 코드는 0.9.0 과 같다. Obsidian 커뮤니티 디렉터리가 기본 브랜치(main)의 README 를 읽어, 제출 전에 공개 항목을
+> main 에 올린다.
+
+### Docs
+
+- **README 「Privacy and Network Use」 · 「개인정보 · 네트워크 사용」** — 디렉터리 정책이 요구하는 계정 · 네트워크 · 파일 ·
+  텔레메트리 · 광고 · 결제 공개. 접속하는 곳은 Notion API 와 Notion 파일 호스트뿐이다.
+- **커뮤니티 제출 절차** — 제출이 `obsidian-releases` PR 에서 포털(community.obsidian.md) 자동 검사로 바뀐 것(2026-05-12)을
+  `OBSIDIAN_PLUGIN_SUBMIT.md` 에 적었다. 로컬 디렉터리 검사 오류 0 · 경고 0.
+- README 첫 `# ` 줄로 읽히던 코드 블록 속 셸 주석을 글로 옮겼다(디렉터리 검사 `readme-name-mismatch` 경고).
+- 한국어 README 에 「볼트 하나에 Notion 워크스페이스 여럿」 절을 더했다.
+
 ## [0.9.0] - 2026-10-24
 
 > v0.4.1 다음 릴리스 — v0.5 ~ v0.9 범위를 한 번에 낸다(0.5 ~ 0.8 은 따로 내지 않았다). 볼트에서 Notion 으로 **DB 를 만든다**(ADR-036 · ADR-037). 받은 DB 를 새 워크스페이스로 올리면 스키마 ·
