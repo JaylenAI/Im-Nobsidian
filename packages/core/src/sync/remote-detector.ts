@@ -48,17 +48,24 @@ export interface RemoteDetection {
  * 감지하며 모은 «자식을 가진 페이지» 는 pull 이 폴더노트를 가를 때 읽는다({@link hasChildPages}).
  */
 export class RemoteDetector {
-  // 서브트리 직접 순회(getChildPagesRecursive) 시간 예산. 초과하면 search 기반 디스커버리로
-  // 폴백한다. 분기점 근거: 워크스페이스 search 열거는 latency-bound 로 대략 이 수준(수천 페이지
-  // 워크스페이스에서 ~100s)이므로, 순회가 이 시간을 넘기면 search 가 더 저렴해진다. 작은 볼트는
-  // 이 예산 안에서 순회가 끝나 폴백 없이 빠르게 완료된다. (단위: ms)
-  private static readonly DISCOVERY_RECURSIVE_BUDGET_MS = 90_000;
+  /**
+   * 직접 순회가 쓸 요청 수 — 넘으면 search 로 넘어간다. 예전의 시간 예산(90초 × 초당 3건)과 같은 크기다.
+   * 시간으로 재면 다른 작업과 속도 한도를 나눠 429 가 날 때 작은 서브트리도 워크스페이스 전체 search 로
+   * 넘어갔다(노트 51개 하위 트리 실측: 전체 대조 307 요청 중 search 95 · 블록 소유 해소 47).
+   */
+  private static readonly DISCOVERY_RECURSIVE_BUDGET_REQUESTS = 270;
+  /** 순회가 페이지 하나에 쓰는 최소 요청 — 자식 블록 목록 1 · 페이지 1. */
+  private static readonly TRAVERSAL_MIN_REQUESTS_PER_PAGE = 2;
 
   // pull 발견 단계에서 모든 페이지의 부모를 해소하며 채우는 "자식을 가진 페이지" 집합
   // (정규화된 page id). 폴더노트/폴더 판정의 단일 신뢰 원천 — 얕은 블록 검사로 callout·
   // column 등 컨테이너에 중첩된 자식 페이지를 놓쳐 폴더노트를 file 로 오분류하던 결함
   // (본문이 최상위로 밀려 ' (1).md' 로 분리)을 차단한다. detectRemoteChanges* 진입 시 재구성.
   private readonly _childParentIds = new Set<string>();
+
+  // 전체 대조가 순회 · search 로 받은 페이지 객체(정규화 id → 객체). 새 페이지를 받을 때 다시 읽지 않는다 —
+  // 그 사이 바뀌었어도 수정 시각을 이 객체의 것으로 적으므로 다음 pull 이 다시 받는다.
+  private readonly _pages = new Map<string, PageObjectResponse>();
 
   // 받은 본문에 실린 자식 페이지(정규화 id → 그 본문의 페이지)와 이번 실행이 이미 받기로 한 페이지.
   // 감지가 빠뜨린 자식을 {@link takeUndiscoveredChildren} 가 둘의 차로 고른다.
@@ -75,6 +82,11 @@ export class RemoteDetector {
   /** 이번 감지에서 자식 페이지를 가진 것으로 본 페이지인가 — 폴더노트 판정의 1차 근거. */
   hasChildPages(pageId: string): boolean {
     return this._childParentIds.has(normalizeNotionId(pageId));
+  }
+
+  /** 이번 감지가 이미 받은 페이지 객체 — 없으면 undefined. */
+  discoveredPage(pageId: string): PageObjectResponse | undefined {
+    return this._pages.get(normalizeNotionId(pageId));
   }
 
   /** 받은 페이지 본문(Notion 이 돌려준 원문)에 실린 자식 페이지를 적는다. */
@@ -94,6 +106,15 @@ export class RemoteDetector {
    *
    * DB 모드는 행만 받는다 — 행의 하위 페이지는 예전처럼 받지 않는다.
    */
+  /** {@link takeUndiscoveredChildren} 가 고를 자식이 남았나 — 요청 없이 본다. */
+  hasUndiscoveredChildren(): boolean {
+    if (isDatabaseMode(this.config)) return false;
+    for (const childId of this._bodyChildren.keys()) {
+      if (!this._queued.has(childId) && !this.stateDb.getByNotionId(childId)) return true;
+    }
+    return false;
+  }
+
   async takeUndiscoveredChildren(signal?: AbortLike): Promise<RemoteChange[]> {
     if (isDatabaseMode(this.config)) return [];
     const changes: RemoteChange[] = [];
@@ -107,6 +128,7 @@ export class RemoteDetector {
         const actualParent = await extractParentId(this.notionClient, page);
         if (!actualParent || !notionIdsEqual(actualParent, parentId)) continue;
         this._childParentIds.add(normalizeNotionId(parentId));
+        this._pages.set(normalizeNotionId(page.id), page);
         changes.push({
           pageId: page.id,
           type: "created",
@@ -179,6 +201,7 @@ export class RemoteDetector {
   async detectRemoteChanges(signal?: AbortLike): Promise<RemoteChange[]> {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
+    this._pages.clear();
     const lastPull = this.stateDb.getMeta(LAST_PULL_META_KEY);
     const syncedRecords = this.stateDb.getAll();
     const trackedPageIds = new Set(
@@ -205,30 +228,51 @@ export class RemoteDetector {
       //  1) 기본 — root 서브트리 직접 BFS 순회(getChildPagesRecursive). 비용이 실제 동기화
       //     대상(서브트리)에 비례해, 작은 볼트가 수천 페이지 워크스페이스에 있어도 빠르다
       //     (I10: 2-파일 볼트 pull ~12s). 단 비용은 서브트리 **전체 블록 수**에 비례하므로,
-      //  2) 콘텐츠가 많은 대규모 서브트리에서는 시간 예산(DISCOVERY_RECURSIVE_BUDGET_MS)을
+      //  2) 콘텐츠가 많은 대규모 서브트리에서는 요청 예산(DISCOVERY_RECURSIVE_BUDGET_REQUESTS)을
       //     초과할 수 있다. 그 경우 워크스페이스 search 기반 디스커버리를 **덧붙인다**(비용이
       //     워크스페이스 페이지 수에 비례·예측가능·유한).
       //
       // 두 경로를 경합시키지 않고 **합집합**을 쓰는 이유(R12-A): 둘은 같은 집합을 낸다고
       // 가정할 수 없다. search 는 워크스페이스 색인에 의존해 갓 만든 페이지가 빠질 수 있고,
-      // 직접 순회는 마감 때문에 깊은 가지가 빠질 수 있다. 그런데 어느 쪽이 도는지를 90초
-      // 벽시계가 정한다 — 실제로 같은 볼트에서 첫 pull 은 폴백(search), 재 pull 은 순회로
-      // 돌았고 페이지 수가 회차마다 흔들렸다. 더 나쁜 건 이걸 멱등성 게이트가 못 본다는
+      // 직접 순회는 예산 때문에 깊은 가지가 빠질 수 있다. 예전에는 어느 쪽이 도는지를 90초
+      // 벽시계가 정했다 — 실제로 같은 볼트에서 첫 pull 은 폴백(search), 재 pull 은 순회로
+      // 돌았고 페이지 수가 회차마다 흔들렸다(예산은 이제 요청 수지만, 서브트리는 경계 근처에서
+      // 자라고 줄어든다). 더 나쁜 건 이걸 멱등성 게이트가 못 본다는
       // 점이다: 두 번째 실행이 더 **적게** 찾아도 created/updated 는 0 이라 churn 0 이다.
       // 그리고 deleteSync 가 켜져 있으면 아래 orphan 판정이 그 차집합을 **삭제**한다.
       // 합집합은 이 경합을 없앤다. 순회 부분 결과는 이미 치른 비용이라 추가 요청도 없다.
-      let underRoot: PageObjectResponse[];
-      try {
-        underRoot = await this.notionClient.getChildPagesRecursive(this.config.notion.rootPageId, {
-          deadlineMs: Date.now() + RemoteDetector.DISCOVERY_RECURSIVE_BUDGET_MS,
-          signal,
-        });
-      } catch (error) {
-        if (!(error instanceof DiscoveryTooLargeError)) throw error;
+      //
+      // 추적 중인 페이지(행 제외)마다 순회는 적어도 두 요청(자식 목록 · 페이지)을 쓴다. 그것만으로 예산을
+      // 넘으면 순회는 끝날 수 없다 — 예산(270 요청)을 다 쓰고 부분 결과만 남기는 대신 바로 search 로 간다.
+      const trackedPages = syncedRecords.filter(
+        (r) => r.notionPageId !== null && r.fileType !== "db-row",
+      ).length;
+      const traversable =
+        trackedPages * RemoteDetector.TRAVERSAL_MIN_REQUESTS_PER_PAGE <=
+        RemoteDetector.DISCOVERY_RECURSIVE_BUDGET_REQUESTS;
+      let underRoot: PageObjectResponse[] | null = null;
+      let partial: readonly PageObjectResponse[] = [];
+      if (traversable) {
+        try {
+          underRoot = await this.notionClient.getChildPagesRecursive(
+            this.config.notion.rootPageId,
+            { maxRequests: RemoteDetector.DISCOVERY_RECURSIVE_BUDGET_REQUESTS, signal },
+          );
+        } catch (error) {
+          if (!(error instanceof DiscoveryTooLargeError)) throw error;
+          partial = error.partial;
+          getLogger().info(
+            `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 순회 부분 결과 ${partial.length}건에 ` +
+              `워크스페이스 search 기반 디스커버리를 합칩니다`,
+          );
+        }
+      } else {
         getLogger().info(
-          `[Im-Nobsidian] 서브트리가 큼(${error.message}) → 순회 부분 결과 ${error.partial.length}건에 ` +
-            `워크스페이스 search 기반 디스커버리를 합칩니다`,
+          `[Im-Nobsidian] 추적 중인 페이지 ${trackedPages}개 — 순회 예산 안에 끝날 수 없어 ` +
+            `워크스페이스 search 로 찾습니다`,
         );
+      }
+      if (underRoot === null) {
         const viaSearch = await this.notionClient.getPagesUnderRootViaSearch(
           this.config.notion.rootPageId,
           signal,
@@ -237,12 +281,12 @@ export class RemoteDetector {
         // _childParentIds 루프의 extractParentId 가 block 부모마다 API 를 부를 수 있어
         // 중복을 여기서 먼저 없애야 요청이 두 배로 새지 않는다.
         const byId = new Map<string, PageObjectResponse>();
-        for (const page of [...error.partial, ...viaSearch]) {
+        for (const page of [...partial, ...viaSearch]) {
           byId.set(normalizeNotionId(page.id), page);
         }
         underRoot = [...byId.values()];
         getLogger().info(
-          `[Im-Nobsidian] 디스커버리 합집합: 순회 ${error.partial.length} ∪ search ${viaSearch.length} → ${underRoot.length}건`,
+          `[Im-Nobsidian] 디스커버리 합집합: 순회 ${partial.length} ∪ search ${viaSearch.length} → ${underRoot.length}건`,
         );
       }
       // 폴더 판정용 _childParentIds: 발견된 각 페이지의 부모(자식을 가진 페이지)를 수집한다.
@@ -253,8 +297,10 @@ export class RemoteDetector {
         const parentId = await extractParentId(this.notionClient, page);
         if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
       }
-      for (const page of underRoot)
+      for (const page of underRoot) {
         titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
+        this._pages.set(normalizeNotionId(page.id), page);
+      }
       remotePages = underRoot.map(remoteStampOf);
     }
 
@@ -365,6 +411,7 @@ export class RemoteDetector {
     const changes: RemoteChange[] = [];
     const databaseIds = new Set<string>();
     this._childParentIds.clear();
+    this._pages.clear();
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
     const searchSince = incrementalSearchSince(since);

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import type { UploadedFile } from "../notion/property-mapper.js";
 import { Sema } from "async-sema";
 import type { VaultFS } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
@@ -41,6 +42,8 @@ export interface ImageDownloadResult {
   readonly size: number;
   /** 받은 파일의 전체 sha256 — 받은 미디어 기록에 적어 push 가 그 파일이 그대로인지 본다. */
   readonly fileHash?: string;
+  /** 임베드 별칭으로 쓸 이름 — 받은 이름에서 이 볼트가 붙인 내용 해시를 뗀 것({@link withoutOwnHash}). */
+  readonly name?: string;
 }
 
 /** 다운로드는 됐지만 아직 디스크에 쓰지 않은 이미지 — D6 dedup 판정 후 persist 한다. */
@@ -152,13 +155,17 @@ export function scanMarkdownLinks(markdown: string): MarkdownLinkSpan[] {
 
 /** 라벨을 `![[경로|별칭]]` 별칭으로 안전하게 쓸 수 있는 평문으로 변환한다. */
 export function toWikilinkAlias(label: string): string {
-  return label
-    .replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1")
-    .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, t: string, d?: string) => d ?? t)
-    .replace(/[\r\n]+/g, " ")
-    .replace(/\]\]/g, ")")
-    .replace(/\|/g, "-")
-    .trim();
+  return (
+    label
+      .replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1")
+      .replace(/\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g, (_m, t: string, d?: string) => d ?? t)
+      .replace(/[\r\n]+/g, " ")
+      // 캡션은 서식 없는 글이라 Notion 이 `*` 등을 `\*` 로 준다 — 별칭은 Obsidian 이 글자 그대로 쓴다(2026-10-23 실측).
+      .replace(/\\([!-/:-@[-`{-~])/g, "$1")
+      .replace(/\]\]/g, ")")
+      .replace(/\|/g, "-")
+      .trim()
+  );
 }
 
 const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;
@@ -173,6 +180,9 @@ const MEDIA_TAG_NAME_RE = /^<(file|video|audio|pdf)\s/;
 
 /** 캡션 없는 미디어에 pull 변환이 붙이는 자리 이름(`[📎 file](…)`) — 사람이 적은 캡션이 아니다. */
 const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio"]);
+
+/** Notion 이 붙여 넣은 이미지에 주는 자리 이름 — 이것으로 지으면 받은 이미지가 모두 `image-<해시>` 가 된다. */
+const PLACEHOLDER_IMAGE_STEMS = new Set(["image", "untitled"]);
 
 /** 별칭 끝의 `300` · `300x200` 은 크기다 — Obsidian 이 임베드의 너비(×높이)로 쓴다. */
 const EMBED_SIZE_RE = /^\d+(?:x\d+)?$/;
@@ -401,6 +411,46 @@ function stripAlias(target: string): string {
 }
 
 /** 서명 URL 경로 끝의 업로드 파일명. 캡션이 우리가 적은 것인지 대조하는 데 쓴다. */
+/**
+ * 받은 이미지 파일 이름의 앞부분 — 올라간 파일 이름(`pic.png` → `pic`). 그 이름이 없거나 Notion 의 자리 이름이면
+ * 노트 제목이다. 뒤에 내용 해시를 붙이므로 같은 이름의 다른 이미지와 겹치지 않는다.
+ */
+/** 받은 첨부 이름에 붙이는 내용 해시(sha256 16진)의 길이 — `이름-<해시>.확장자`. */
+const NAME_HASH_LENGTH = 12;
+
+/** 받은 첨부 이름에 붙이는 내용 해시 — 전체 sha256 의 앞부분. */
+function nameHashOf(fullHash: string): string {
+  return fullHash.slice(0, NAME_HASH_LENGTH);
+}
+
+/** 이미지 파일 이름에서 제목 몫의 최대 글자 수 — 뒤에 내용 해시와 확장자가 붙어도 파일 이름 한도 안에 든다. */
+const IMAGE_STEM_MAX = 50;
+
+/**
+ * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
+ *
+ * 받은 파일은 `이름-<해시>.확장자` 로 저장하고, push 는 그 파일 이름 그대로 올린다. 다른 볼트로 다시 받으면 올라간
+ * 이름 뒤에 같은 해시가 또 붙어(`이름-<해시>-<해시>.png`) 받을 때마다 이름이 길어졌다(2026-10-23 전체 E2E 첨부 41개).
+ * 해시는 받은 내용의 것과 같을 때만 뗀다 — 사람이 지은 이름은 그대로다.
+ */
+export function withoutOwnHash(name: string, hash: string): string {
+  if (hash.length !== NAME_HASH_LENGTH || !/^[0-9a-f]+$/.test(hash)) return name;
+  const stripped = name.replace(new RegExp(`-${hash}(\\.[^./]*)?$`), "");
+  return stripped === "" ? name : stripped;
+}
+
+function imageStemOf(uploadedName: string, pageTitle: string): string {
+  const stem = safeImageStem(uploadedName.replace(/\.[^.]*$/, ""));
+  return stem && !PLACEHOLDER_IMAGE_STEMS.has(stem.toLowerCase()) ? stem : safeImageStem(pageTitle);
+}
+
+function safeImageStem(name: string): string {
+  return name
+    .replace(/[^a-zA-Z0-9가-힣\s-]/g, "")
+    .replace(/\s+/g, "-")
+    .slice(0, IMAGE_STEM_MAX);
+}
+
 function uploadedFileNameFromUrl(url: string): string {
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
@@ -511,10 +561,15 @@ export class ImageHandler {
   }
 
   async downloadImage(url: string, pageTitle: string): Promise<ImageDownloadResult> {
-    return this.persistImage(await this.fetchImage(url, pageTitle));
+    return this.persistImage(await this.fetchImage(url, pageTitle, uploadedFileNameFromUrl(url)));
   }
 
-  private async fetchImage(url: string, pageTitle: string): Promise<FetchedImage> {
+  /** @param uploadedName Notion 에 올라간 파일 이름 — 받은 파일의 이름이 된다({@link imageStemOf}). */
+  private async fetchImage(
+    url: string,
+    pageTitle: string,
+    uploadedName: string,
+  ): Promise<FetchedImage> {
     const maxRetries = this.maxRetries;
     let lastError: Error | null = null;
 
@@ -536,13 +591,8 @@ export class ImageHandler {
 
         const buffer = Buffer.from(await response.arrayBuffer());
         const fullHash = createHash("sha256").update(buffer).digest("hex");
-        const hash = fullHash.slice(0, 12);
-        const safeName = pageTitle
-          .replace(/[^a-zA-Z0-9가-힣\s-]/g, "")
-          .replace(/\s+/g, "-")
-          .slice(0, 50);
-
-        const fileName = `${safeName}-${hash}${extension}`;
+        const hash = nameHashOf(fullHash);
+        const fileName = `${imageStemOf(withoutOwnHash(uploadedName, hash), pageTitle)}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 
         return { originalUrl: url, localPath, hash, fullHash, buffer };
@@ -716,7 +766,7 @@ export class ImageHandler {
         try {
           return {
             span,
-            fetched: await this.fetchImage(span.url, pageTitle),
+            fetched: await this.fetchImage(span.url, pageTitle, this.uploadedNameOf(span.url)),
           };
         } finally {
           sema.release();
@@ -753,7 +803,7 @@ export class ImageHandler {
           continue;
         }
 
-        const fetched = await this.fetchImage(realUrl, pageTitle);
+        const fetched = await this.fetchImage(realUrl, pageTitle, parsed.fileName);
         if (isAppendedCopy(fetched)) {
           result = result.replace(span.full, "");
           continue;
@@ -791,6 +841,23 @@ export class ImageHandler {
     const fileHash = createHash("sha256").update(buffer).digest("hex");
 
     return { localPath: resolvedPath, fileUploadId, fileHash, fileSize: buffer.length };
+  }
+
+  /**
+   * 노트가 가리키는 볼트 첨부 하나를 올린다 — 파일 속성 값으로 보낼 것.
+   *
+   * @returns 보일 이름은 받을 때 붙인 내용 해시를 뗀 것이다 — 다시 받으면 같은 이름 · 같은 경로가 된다.
+   */
+  async uploadNoteAttachment(target: string, notePath: string): Promise<UploadedFile> {
+    const uploaded = await this.uploadLocalImage(target, folderOf(notePath));
+    const base = uploaded.localPath.split("/").pop() ?? uploaded.localPath;
+    const name = withoutOwnHash(base, nameHashOf(uploaded.fileHash));
+    // 이미지는 확장자 없는 줄기에 해시를 붙여 받는다(`도식-<해시>.png`) — 뗀 이름에 확장자를 돌려준다.
+    const extension = /\.[^./]+$/.exec(base)?.[0] ?? "";
+    return {
+      fileUploadId: uploaded.fileUploadId,
+      name: name !== base && !/\.[^./]+$/.test(name) ? `${name}${extension}` : name,
+    };
   }
 
   async uploadAndAppendImages(
@@ -1294,11 +1361,15 @@ export class ImageHandler {
         if (!download.localPath) continue;
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         // 이름 · 캡션에 `$` 가 있어도(`가격$&.pdf`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
         result = result.replace(span.full, () => obsidianLink);
         received.push(
-          receivedMediaOf(span.url, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            span.url,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
@@ -1325,10 +1396,14 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(span.full, () => obsidianLink);
         received.push(
-          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            realUrl,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
@@ -1345,10 +1420,14 @@ export class ImageHandler {
         const download = await this.downloadFile(url, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
         received.push(
-          receivedMediaOf(url, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            url,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`파일 다운로드 실패: ${error}`);
@@ -1376,10 +1455,14 @@ export class ImageHandler {
         const download = await this.downloadFile(realUrl, pageTitle, caption);
         if (!download.localPath) continue;
         downloads.push(download);
-        const obsidianLink = fileEmbedOf(download.localPath, caption);
+        const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
         received.push(
-          receivedMediaOf(realUrl, download, fileEmbedTargetOf(download.localPath, caption)),
+          receivedMediaOf(
+            realUrl,
+            download,
+            fileEmbedTargetOf(download.localPath, download.name ?? caption),
+          ),
         );
       } catch (error) {
         getLogger().warn(`내부 파일 다운로드 실패: ${error}`);
@@ -1444,10 +1527,11 @@ export class ImageHandler {
 
         const buffer = Buffer.from(await response.arrayBuffer());
         const fileHash = createHash("sha256").update(buffer).digest("hex");
-        const hash = fileHash.slice(0, 12);
+        const hash = nameHashOf(fileHash);
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
-        const safeName = caption
+        const name = withoutOwnHash(caption, hash);
+        const safeName = name
           .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
           .replace(/\s+/g, "-")
           .slice(0, 80);
@@ -1457,7 +1541,7 @@ export class ImageHandler {
         await this.vaultFs.ensureFolder(this.attachmentFolder);
         await this.vaultFs.writeBinary(localPath, buffer);
 
-        return { originalUrl: url, localPath, hash, size: buffer.length, fileHash };
+        return { originalUrl: url, localPath, hash, size: buffer.length, fileHash, name };
       } catch (error) {
         lastError = error instanceof Error ? error : new Error(String(error));
       }

@@ -9,7 +9,13 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { editorLivePreviewField } from "obsidian";
-import { hasDesignMarker, readDesignLine } from "@im-nobsidian/core";
+import {
+  hasDesignMarker,
+  readColumnLayout,
+  readDesignLine,
+  type ColumnPlace,
+} from "@im-nobsidian/core";
+import { columnAttributes, hasColumns } from "./columns.js";
 import { DESIGN_CLASS, colorClass, styleClass } from "./design-classes.js";
 import { decorateRendered, type RenderOptions } from "./render-dom.js";
 import { TABLE_LINE_RE } from "./visible-text.js";
@@ -22,6 +28,8 @@ import { TABLE_LINE_RE } from "./visible-text.js";
  * 블록 색이 걸린 줄을 칠한다. 원문 모드(Source mode)에서는 아무것도 하지 않는다 — 원문을 보는 자리다.
  *
  * 콜아웃 · 표는 편집 화면에서도 위젯으로 그려진다. 그 안은 읽기 보기와 같은 방식으로 칠한다.
+ *
+ * 펼친 Notion 컬럼은 열마다 줄에 색 줄을 긋고, 숨긴 열 구분 마커 줄에 이름표를 단다(#74).
  */
 export function designLivePreview(options: RenderOptions): Extension {
   return ViewPlugin.fromClass(
@@ -72,16 +80,39 @@ function inCodeBlock(view: EditorView, pos: number): boolean {
   return /codeblock/i.test(syntaxTree(view.state).resolveInner(pos, 1).name);
 }
 
+/** 문서마다의 컬럼 자리 — 문서(Text)는 바뀔 때마다 새 객체라 그대로 열쇠가 된다. */
+const columnLayouts = new WeakMap<Text, (ColumnPlace | undefined)[]>();
+
+function columnLayoutOf(doc: Text): (ColumnPlace | undefined)[] {
+  let places = columnLayouts.get(doc);
+  if (!places) {
+    const text = doc.toString();
+    places = hasColumns(text) ? readColumnLayout(text.split("\n")) : [];
+    columnLayouts.set(doc, places);
+  }
+  return places;
+}
+
 function buildDecorations(view: EditorView): DecorationSet {
   if (!view.state.field(editorLivePreviewField)) return Decoration.none;
   const ranges: Range<Decoration>[] = [];
   const doc = view.state.doc;
   const selection = view.state.selection.ranges;
+  const columns = columnLayoutOf(doc);
 
   for (const { from, to } of view.visibleRanges) {
     for (let pos = from; pos <= to;) {
       const line = doc.lineAt(pos);
       pos = line.to + 1;
+      const place = columns[line.number - 1];
+      const column = columnAttributes(place, place?.head === true);
+      if (column) {
+        ranges.push(
+          Decoration.line({ class: column.className, attributes: column.attributes }).range(
+            line.from,
+          ),
+        );
+      }
       if (!hasDesignMarker(line.text) || inCodeBlock(view, line.from)) continue;
       const design = readDesignLine(line.text);
       // 커서 · 선택이 닿은 줄은 마커를 드러낸다 — 고칠 수 있어야 한다.

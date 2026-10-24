@@ -4,7 +4,12 @@ import type { Config } from "../types/config.js";
 import type { LocalChange, SyncRecord } from "../types/sync.js";
 import { notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
-import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
+import type { DatabaseCreator, NewDatabaseFolder } from "./database-creator.js";
+import {
+  DISCOVERED_DBS_META_KEY,
+  parseDiscoveredDbs,
+  ROOT_DATABASES_FOLDER,
+} from "./discovered-databases.js";
 import {
   ancestorFolders,
   databaseFolderIndex,
@@ -39,6 +44,9 @@ export class FolderPlacement {
   // 이 이유로 실패한다 — 「폴더 페이지가 아직 없다」 로 뭉개면 무엇을 고쳐야 하는지 모른다.
   private readonly unpreparedFolders = new Map<string, string>();
 
+  /** 사이드카가 있는 새 DB 폴더를 DB 로 만든다(ADR-036). 없으면 그런 폴더도 폴더 페이지로 만든다. */
+  private databases: DatabaseCreator | null = null;
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -47,6 +55,10 @@ export class FolderPlacement {
     private readonly drift: RemoteDriftChecker,
     private readonly recovery: InterruptedSyncRecovery,
   ) {}
+
+  useDatabaseCreator(creator: DatabaseCreator): void {
+    this.databases = creator;
+  }
 
   /** 지난 push 가 마련하지 못한 폴더를 잊는다 — push 마다 새로 적는다. */
   resetUnpreparedFolders(): void {
@@ -173,13 +185,22 @@ export class FolderPlacement {
   async prepareFolders(
     changes: readonly LocalChange[],
     pushFolderNote: (change: LocalChange) => Promise<void>,
+    /** 새 노트가 없는 새 DB 폴더(행이 없는 DB)도 만든다 — 범위를 좁힌 push 는 아니다. */
+    includeEmptyDatabases = false,
   ): Promise<Set<string>> {
     this.unpreparedFolders.clear();
     const newNotes = new Map(
       changes.filter((c) => c.type === "created").map((c) => [c.path, c] as const),
     );
     const pushed = new Set<string>();
-    for (const folder of this.foldersToEnsure(changes)) {
+    const newDatabases =
+      (await this.databases?.newDatabaseFolders(
+        changes,
+        this.folderLookup(),
+        includeEmptyDatabases,
+      )) ?? new Map<string, NewDatabaseFolder>();
+    for (const folder of this.foldersToEnsure(changes, [...newDatabases.keys()])) {
+      if (this.isRootDatabaseShelf(folder, changes)) continue;
       const inherited = ancestorFolders(folder)
         .map((ancestor) => this.unpreparedFolders.get(ancestor))
         .find((reason) => reason !== undefined);
@@ -188,6 +209,25 @@ export class FolderPlacement {
         continue;
       }
       try {
+        const newDatabase = newDatabases.get(folder);
+        if (newDatabase) {
+          await this.createDatabaseAt(newDatabase);
+          continue;
+        }
+        // 페이지 이름의 하위 폴더(`A/B` — DB 를 품은 페이지 · 행의 폴더)의 자리는 `A/B.md` 다. 그 노트가
+        // 이번 push 의 새 노트면 먼저 올린다. 예전에는 폴더 페이지 «B» 를 먼저 만들고 `B.md` 를 따로 만들어
+        // 같은 이름의 페이지가 둘 생겼다.
+        const pageNote = newNotes.get(`${folder}.md`);
+        if (pageNote && !folderContainer(folder, this.folderLookup())) {
+          if (!pushed.has(pageNote.path)) {
+            pushed.add(pageNote.path);
+            await pushFolderNote(pageNote);
+          }
+          if (!folderContainer(folder, this.folderLookup())) {
+            throw new Error(`폴더의 페이지(${pageNote.path})를 올리지 못함`);
+          }
+          continue;
+        }
         const note = newNotes.get(folderNoteOf(folder));
         const lookup = this.folderLookup();
         if (note && !lookup.databaseAt(folder)) {
@@ -209,6 +249,24 @@ export class FolderPlacement {
       }
     }
     return pushed;
+  }
+
+  /** 새 DB 폴더의 DB 를 부모 폴더의 페이지 아래에 만든다. 부모 자리는 얕은 폴더부터 앞서 마련했다. */
+  private async createDatabaseAt(target: NewDatabaseFolder): Promise<void> {
+    const parentFolder = parentFolderOf(target.folder);
+    let parentId = this.config.notion.rootPageId;
+    if (parentFolder && !this.isRootDatabaseShelf(parentFolder, [])) {
+      const parent = folderContainer(parentFolder, this.folderLookup());
+      if (parent?.kind !== "page") {
+        throw new Error(
+          parent?.kind === "database"
+            ? `DB 폴더(${parentFolder}) 바로 아래에 DB 를 만들지 않음 — DB 에는 행만 든다`
+            : this.folderNotReady(parentFolder, "만들지"),
+        );
+      }
+      parentId = parent.pageId;
+    }
+    await this.databases!.create(target, parentId);
   }
 
   async ensureFolderPage(folderPath: string): Promise<void> {
@@ -372,14 +430,34 @@ export class FolderPlacement {
    * 모든 변경의 조상을 폴더 페이지로 만들어, DB 폴더와 DB 를 품은 폴더가 Notion 에 빈 페이지로
    * 생겼다(S-04).
    */
-  private foldersToEnsure(changes: readonly LocalChange[]): string[] {
+  private foldersToEnsure(
+    changes: readonly LocalChange[],
+    newDatabaseFolders: readonly string[] = [],
+  ): string[] {
     const folders = new Set<string>();
     for (const change of changes) {
       if (change.type !== "created" && change.type !== "moved") continue;
       if (this.newRowDatabaseOf(change.path)) continue;
       for (const folder of ancestorFolders(change.path)) folders.add(folder);
     }
+    // 행이 없는 새 DB 폴더와 그 조상 — 들 노트가 없어도 DB 는 만든다.
+    for (const folder of newDatabaseFolders) {
+      for (const ancestor of ancestorFolders(`${folder}/_`)) folders.add(ancestor);
+    }
     return [...folders].sort((a, b) => a.split("/").length - b.split("/").length);
+  }
+
+  /**
+   * 부모를 볼트에 두지 않는 DB 들의 폴더(`databases`, pull 이 만든다) — 자리가 없고 그 바로 아래에 새 노트가
+   * 없으면 페이지로 만들지 않는다. 그 안의 DB 는 루트 아래에 선다. 예전에는 이 폴더가 Notion 에 빈 페이지로
+   * 생겨, 다시 받으면 DB 가 한 층 아래로 내려갔다.
+   */
+  private isRootDatabaseShelf(folder: string, changes: readonly LocalChange[]): boolean {
+    return (
+      folder === ROOT_DATABASES_FOLDER &&
+      !folderContainer(folder, this.folderLookup()) &&
+      !changes.some((c) => c.type === "created" && parentFolderOf(c.path) === folder)
+    );
   }
 
   /**

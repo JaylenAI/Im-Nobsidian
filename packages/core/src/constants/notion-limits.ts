@@ -8,6 +8,15 @@
 /** rich text 객체 하나의 `text.content` 최대 글자 수. */
 export const RICH_TEXT_CONTENT_MAX = 2000;
 
+/** files 속성 파일 하나의 `name` 최대 글자 수(검증 오류 문구 「name.length should be ≤ 100」 로 실측). */
+export const FILE_NAME_MAX = 100;
+
+/** select · multi_select · status 옵션 이름 하나의 최대 글자 수. 쉼표도 받지 않는다. */
+export const OPTION_NAME_MAX = 100;
+
+/** data source 조회 하나가 돌려주는 최대 행 수 — 넘으면 `request_status.incomplete` 로 멈춘다. */
+export const QUERY_RESULTS_MAX = 10_000;
+
 /** rich text 배열 하나의 최대 원소 수. */
 export const RICH_TEXT_ARRAY_MAX = 100;
 

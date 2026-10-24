@@ -21,6 +21,7 @@ import {
   MARKER_BRAND_RE,
   MARKER_PAYLOAD_CHAR,
   TABLE_MARKER_PARTS,
+  WIKILINK_PROTOCOL,
   parseAttrsPayload,
   tableMarker,
   type TableMarkerPart,
@@ -356,6 +357,10 @@ function toNfmTable(prefix: string, bodies: readonly string[]): string[] {
  * 칸 안에 파이프(`\|`)가 있는 표도 NFM 표로 보낸다 — Notion 은 파이프 표의 `\|` 를 이스케이프로
  * 읽지 않고 그 자리에서 칸을 갈라, `x\|y` 가 `x\` · `y` 두 칸이 되고 표에 열이 하나 늘었다
  * (2026-10-04 실측, F-06). NFM 칸에서는 `\|` 가 파이프 글자다.
+ *
+ * 볼트에 없는 노트를 가리키는 위키링크가 든 표도 NFM 표로 — 그 링크는 이 뒤에 글 `[[대상|별칭]]` 로 되돌아가는데
+ * ({@link WIKILINK_PROTOCOL} 보존 링크), 별칭의 `|` 를 파이프 표에 어떻게 적어도 Notion 이 칸을 가른다. NFM 칸은
+ * `[[x|y]]` 를 글자 그대로 둔다(2026-10-24 실측).
  */
 export function pipeTablesToNfmTables(content: string): string {
   const lines = content.split("\n");
@@ -400,7 +405,12 @@ export function pipeTablesToNfmTables(content: string): string {
       parts.slice(previous.end, i).every((p) => p.body.trim() === "");
     const table = lines.slice(i, end);
     const source = table.join("\n");
-    if (afterTable || HAS_TABLE_MARKER_RE.test(source) || source.includes(ESCAPED_PIPE)) {
+    if (
+      afterTable ||
+      HAS_TABLE_MARKER_RE.test(source) ||
+      source.includes(ESCAPED_PIPE) ||
+      source.includes(WIKILINK_PROTOCOL)
+    ) {
       out.push(
         ...toNfmTable(
           head.prefix,

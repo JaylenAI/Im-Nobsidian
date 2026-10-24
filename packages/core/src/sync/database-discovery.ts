@@ -16,6 +16,7 @@ import type { VaultFS } from "./vault-fs.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import {
   DISCOVERED_DBS_META_KEY,
+  ROOT_DATABASES_FOLDER,
   INACCESSIBLE_DBS_META_KEY,
   LINKED_DBS_META_KEY,
   loadInaccessibleDbIds,
@@ -80,6 +81,8 @@ export class DatabaseDiscovery {
   // 블록 트리 재귀 없이 markdown 신호만으로 컬럼/synced_block 등 깊이 중첩된
   // child_database 까지 발견해 폴더+.base 동기화 대상으로 등록한다.
   private readonly _inlineDbRefs = new Map<string, string>();
+  // 이번 pull 에서 본문을 받은 페이지(정규화 id) — 그 본문의 `<database>` 태그가 자식 DB 를 모두 싣는다.
+  private readonly _bodyReadPages = new Set<string>();
 
   constructor(
     private readonly config: Config,
@@ -92,6 +95,7 @@ export class DatabaseDiscovery {
   /** 이번 pull 이 받은 페이지 본문에서 모은 인라인 DB 참조를 비운다 — pull 마다 새로 모은다. */
   clearInlineRefs(): void {
     this._inlineDbRefs.clear();
+    this._bodyReadPages.clear();
   }
 
   // Markdown API는 인라인 데이터베이스를 <database url="..." ...>Title</database> 로 렌더한다
@@ -100,6 +104,7 @@ export class DatabaseDiscovery {
   // www.notion.so / app.notion.com/p 두 형태가 실측돼 고정하지 않는다 — 규칙은
   // extractInlineDbIds(blocks-API 폴백 마커 겸용) 참조.
   collectInlineDbRefs(parentPageId: string, rawMarkdown: string): void {
+    this._bodyReadPages.add(normalizeNotionId(parentPageId));
     for (const dbId of extractInlineDbIds(rawMarkdown)) {
       this._inlineDbRefs.set(dbId, parentPageId);
     }
@@ -290,6 +295,8 @@ export class DatabaseDiscovery {
         nextRetry.parents.push(...retry.parents);
         nextRetry.dbs.push(...retry.dbs);
       } else {
+        // 이번 pull 에서 본문을 받은 페이지는 훑지 않는다 — 그 본문이 자식 DB 를 모두 실었고 아래 (2) 가
+        // 등록한다. 첫 pull 은 모든 페이지의 본문을 받으므로 페이지마다 1회이던 조회가 거의 사라진다.
         const scanIds = scanAll
           ? [
               this.config.notion.rootPageId,
@@ -297,7 +304,7 @@ export class DatabaseDiscovery {
                 .getAll()
                 .filter((r) => r.notionPageId)
                 .map((r) => r.notionPageId!),
-            ]
+            ].filter((id) => !this._bodyReadPages.has(normalizeNotionId(id)))
           : retry.parents;
         if (scanIds.length > 0) {
           const { found, unread } = await this.discoverChildDatabases(scanIds);
@@ -361,6 +368,7 @@ export class DatabaseDiscovery {
               resolveDbFolder,
               paths,
               progress,
+              rescanRowChildren: forceRediscovery,
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
@@ -567,7 +575,7 @@ export class DatabaseDiscovery {
       safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
     }
     if (!safeName) safeName = `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
-    if (!parentFolder) parentFolder = "databases";
+    if (!parentFolder) parentFolder = ROOT_DATABASES_FOLDER;
     return {
       kind: "ok",
       config: {

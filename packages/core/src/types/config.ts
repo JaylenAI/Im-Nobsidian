@@ -3,6 +3,7 @@ import { isTimeZone } from "../utils/zoned-time.js";
 import { BLOCK_CHILDREN_MAX } from "../constants/notion-limits.js";
 import { DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 import { DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
+import { NOTIFICATION_MODES, type NotificationMode } from "../notion/sdk-client.js";
 
 /** Notion 내부 통합 토큰의 머리 — 설정 검증과 CLI 의 입력 검사가 함께 읽는다. */
 export const NOTION_TOKEN_PREFIX = "ntn_";
@@ -40,6 +41,8 @@ const DEFAULTS = {
     fullReconcileInterval: 3600,
     deleteSync: false,
     syncFiles: true,
+    createDatabases: true,
+    notifications: "silent" as NotificationMode,
   },
   paths: {
     include: ["**/*"],
@@ -101,6 +104,11 @@ export const ConfigSchema = z.object({
       .default(D.sync.fullReconcileInterval),
     deleteSync: z.boolean().default(D.sync.deleteSync),
     syncFiles: z.boolean().default(D.sync.syncFiles),
+    // 사이드카가 있는 새 DB 폴더를 push 가 Notion DB 로 만든다(ADR-036). 끄면 폴더 · 페이지로 올린다.
+    createDatabases: z.boolean().default(D.sync.createDatabases),
+    // 동기화가 만들고 고친 페이지가 알림을 보내나. silent 면 페이지 수정 · @멘션 · 사람 속성 알림을 보내지
+    // 않는다 — 볼트를 새 워크스페이스로 올리면 사람 속성이 있는 행마다 그 사람에게 알림이 갔다.
+    notifications: z.enum(NOTIFICATION_MODES).default(D.sync.notifications),
   }),
   paths: z.object({
     include: z.array(z.string()).default(() => [...D.paths.include]),

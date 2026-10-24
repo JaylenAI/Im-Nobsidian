@@ -36,16 +36,8 @@ jobs:
           for f in packages/obsidian-plugin/main.js manifest.json packages/obsidian-plugin/styles.css; do
             test -s "$f" || { echo "::error::plugin asset missing or empty: $f"; exit 1; }
           done
-          VERSION=$(node -p "require('./manifest.json').version")
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
-          test "$VERSION" = "$TAG_VERSION" || {
-            echo "::error::manifest.json version ($VERSION) != tag ($TAG_VERSION)"; exit 1;
-          }
-          MIN_APP=$(node -p "require('./manifest.json').minAppVersion")
-          LISTED=$(node -p "require('./versions.json')['$VERSION'] ?? ''")
-          test "$LISTED" = "$MIN_APP" || {
-            echo "::error::versions.json[$VERSION] ($LISTED) != manifest minAppVersion ($MIN_APP)"; exit 1;
-          }
+          # Tag == every package.json / manifest.json version, versions.json entry, release notes, CHANGELOG.
+          VERSION=$(node scripts/check-release-version.mjs "$GITHUB_REF_NAME")
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - run: pnpm --filter @im-nobsidian/core publish --access public --no-git-checks

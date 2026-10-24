@@ -1,4 +1,5 @@
 import { patchRichText, richTextChunks, type RichTextItem } from "./rich-text.js";
+import { FILE_NAME_MAX } from "../constants/notion-limits.js";
 import type { Config } from "../types/config.js";
 import type { RowPropertyChanges } from "../types/sync.js";
 import { plainFrontmatterValue, sameFrontmatterValue } from "../utils/frontmatter.js";
@@ -10,7 +11,17 @@ type NotionPropertySchema = {
   id: string;
   type: string;
   name: string;
+  /** relation 이 가리키는 DB — DB id · data source id. 모르면 없다. */
+  relationTargets?: readonly string[];
 };
+
+/** DB 속성 스키마 한 칸 — {@link NotionClient.getDatabaseSchema} 가 내는 꼴. */
+export interface DatabasePropertySchema {
+  readonly id: string;
+  readonly type: string;
+  /** relation 이 가리키는 DB — DB id · data source id. */
+  readonly relationTargets?: readonly string[];
+}
 
 type NotionPropertyValue = Record<string, unknown>;
 
@@ -20,6 +31,11 @@ type NotionPropertyValue = Record<string, unknown>;
 const DATE_REGEX =
   /^\d{4}-\d{2}-\d{2}(?:T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 const WIKILINK_REGEX = /^\[\[(.+?)(?:\|.+?)?\]\]$/;
+
+/** frontmatter 값이 날짜(시각)인가 — 날짜 속성에 보낼 수 있는 꼴. */
+export function isFrontmatterDate(value: unknown): boolean {
+  return DATE_REGEX.test(String(plainFrontmatterValue(value)));
+}
 
 /**
  * 기간(끝이 있는 날짜)의 끝을 적는 짝 키의 꼬리 — `마감` 의 끝은 `마감_end`(F-08).
@@ -65,7 +81,30 @@ function asArray<T>(value: unknown): T[] {
 
 export interface WikilinkResolver {
   resolve(title: string): string | null;
+  /** 대상 DB(`parentIds`)의 행 가운데서만 — relation 값. 없으면 {@link resolve} 로 찾는다. */
+  resolveIn?(title: string, parentIds: readonly string[]): string | null;
   resolvePageId(pageId: string): string | null;
+}
+
+/** 이름으로 적힌 사람의 사용자 id — 워크스페이스에 없거나 같은 이름이 여럿이면 null. */
+export type PeopleResolver = (name: string) => string | null;
+
+/**
+ * 워크스페이스 사용자 목록(`users.list`)으로 {@link PeopleResolver} 를 만든다.
+ *
+ * pull 은 사람 속성을 이름으로 적는다. 같은 이름이 둘이면 어느 쪽인지 알 수 없으므로 그 이름은 풀지 않는다.
+ * 손님(guest)은 목록에 없다 — API 가 돌려주지 않는다.
+ */
+export function peopleResolverOf(
+  users: ReadonlyArray<{ readonly id: string; readonly name?: string | null }>,
+): PeopleResolver {
+  const ids = new Map<string, string | null>();
+  for (const user of users) {
+    const name = user.name?.trim();
+    if (!name) continue;
+    ids.set(name, ids.has(name) ? null : user.id);
+  }
+  return (name) => ids.get(name.trim()) ?? null;
 }
 
 export interface PropertyMapperOptions {
@@ -87,11 +126,24 @@ export interface PropertyChangeContext {
    * ({@link patchRichText}). 없으면 평문으로 보낸다.
    */
   readonly remote?: Readonly<Record<string, unknown>>;
+  /**
+   * 파일 속성의 볼트 첨부(`[[attachments/…]]` 의 경로)를 올린 것 — 있으면 그 첨부를 올린 파일로 보낸다
+   * ({@link PropertyMapper.localFileTargets}). 없는 첨부가 섞인 값은 보내지 않는다.
+   */
+  readonly uploads?: ReadonlyMap<string, UploadedFile>;
+}
+
+/** Notion 에 올린 볼트 파일 — 파일 속성 값으로 보낸다. */
+export interface UploadedFile {
+  readonly fileUploadId: string;
+  /** Notion 에 보일 이름 — 받을 때 붙인 내용 해시를 뗀 것. */
+  readonly name: string;
 }
 
 export class PropertyMapper {
   private schema: Map<string, NotionPropertySchema> = new Map();
   private wikilinkResolver: WikilinkResolver | null = null;
+  private peopleResolver: PeopleResolver = () => null;
 
   constructor(private readonly options: PropertyMapperOptions = {}) {}
 
@@ -104,10 +156,24 @@ export class PropertyMapper {
     this.wikilinkResolver = resolver;
   }
 
-  loadSchema(properties: Record<string, { id: string; type: string }>): void {
+  setPeopleResolver(resolver: PeopleResolver): void {
+    this.peopleResolver = resolver;
+  }
+
+  /** 스키마에 사람 속성이 있는가 — 있을 때만 사용자 목록을 읽는다. */
+  hasPeopleProperty(): boolean {
+    return [...this.schema.values()].some((prop) => prop.type === "people");
+  }
+
+  loadSchema(properties: Record<string, DatabasePropertySchema>): void {
     this.schema.clear();
     for (const [name, prop] of Object.entries(properties)) {
-      this.schema.set(name, { id: prop.id, type: prop.type, name });
+      this.schema.set(name, {
+        id: prop.id,
+        type: prop.type,
+        name,
+        ...(prop.relationTargets ? { relationTargets: prop.relationTargets } : {}),
+      });
     }
   }
 
@@ -138,7 +204,12 @@ export class PropertyMapper {
         const converted = this.rangeRequest(key, frontmatter, zone);
         if (converted) result[key] = converted;
       } else if (schemaProp) {
-        const converted = this.convertBySchema(schemaProp.type, value, zone);
+        const converted = this.convertBySchema(
+          schemaProp.type,
+          value,
+          zone,
+          schemaProp.relationTargets,
+        );
         if (converted) result[key] = converted;
       } else if (this.schema.size === 0) {
         const inferred = this.inferAndConvert(value, zone);
@@ -194,7 +265,13 @@ export class PropertyMapper {
         ? null
         : schemaProp.type === "rich_text"
           ? richTextRequest(String(value), richTextRunsOf(context.remote, key))
-          : this.convertBySchema(schemaProp.type, value, zone);
+          : this.convertBySchema(
+              schemaProp.type,
+              value,
+              zone,
+              schemaProp.relationTargets,
+              context.uploads,
+            );
       if (converted) properties[key] = converted;
       else skipped.push(key);
     }
@@ -216,6 +293,65 @@ export class PropertyMapper {
     }
 
     return { properties, skipped };
+  }
+
+  /** Notion 이 값을 정하는 속성(수식 · 롤업 · ID · 생성일 …)이 스키마에 있는가 — 버튼은 값이 없다. */
+  hasComputedProperties(): boolean {
+    return [...this.schema.values()].some(
+      (prop) => READ_ONLY_TYPES.has(prop.type) && prop.type !== "button",
+    );
+  }
+
+  /**
+   * 바뀐 값 가운데 파일 속성이 가리키는 볼트 첨부의 경로 — 호출측이 올려 {@link PropertyChangeContext.uploads} 로 준다.
+   *
+   * pull 은 Notion 에 올라간 파일을 받아 `[[attachments/…]]` 로 적는다. 그 값을 새 행이나 바뀐 값으로 보낼 때
+   * 첨부를 다시 올리지 않으면 보낼 수가 없다 — 다른 페이지로 옮겨 올린 행의 파일 속성이 비었다(2026-10-23 E2E 9건).
+   */
+  localFileTargets(changed: Readonly<Record<string, unknown>>): string[] {
+    const targets = new Set<string>();
+    for (const [key, raw] of Object.entries(changed)) {
+      if (this.schema.get(key)?.type !== "files") continue;
+      const value = plainFrontmatterValue(raw);
+      for (const item of Array.isArray(value) ? value : [value]) {
+        const target = WIKILINK_REGEX.exec(String(item ?? "").trim())?.[1];
+        if (target) targets.add(target);
+      }
+    }
+    return [...targets];
+  }
+
+  /** relation 값(위키링크 · 페이지 id 목록)이 가리키는 페이지 가운데 알아본 것. */
+  relationTargets(value: unknown): string[] {
+    const plain = plainFrontmatterValue(value);
+    if (plain === null || plain === undefined || plain === "") return [];
+    const items = Array.isArray(plain) ? plain : [plain];
+    return items.map((item) => this.relationTargetOf(item)).filter((id): id is string => !!id);
+  }
+
+  /**
+   * @param targets relation 이 가리키는 DB. 알면 그 DB 의 행으로만 푼다 — 다른 DB 의 페이지는 Notion 이 오류
+   *   없이 빼 버리므로, 못 찾은 것으로 두어 보내지 않고 알린다.
+   */
+  private relationTargetOf(item: unknown, targets?: readonly string[]): string | null {
+    const str = String(item);
+    const match = str.match(WIKILINK_REGEX);
+    if (match?.[1]) {
+      const resolver = this.wikilinkResolver;
+      if (targets && targets.length > 0 && resolver?.resolveIn) {
+        return resolver.resolveIn(match[1], targets);
+      }
+      return resolver?.resolve(match[1]) ?? null;
+    }
+    return isNotionId(str) ? str : null;
+  }
+
+  /**
+   * 이 속성들 가운데 relation. 보내지 못한 relation 은 대상 노트가 아직 Notion 에 없었을 수 있다 —
+   * 호출측이 기준에서 빼 두고 다시 보낸다.
+   */
+  relationKeys(keys: readonly string[]): string[] {
+    return keys.filter((key) => this.schema.get(key)?.type === "relation");
   }
 
   /**
@@ -378,7 +514,13 @@ export class PropertyMapper {
     return this.convertBySchema("date", isBlank(end) ? start : { start, end }, zone);
   }
 
-  private convertBySchema(type: string, value: unknown, zone: string): NotionPropertyValue | null {
+  private convertBySchema(
+    type: string,
+    value: unknown,
+    zone: string,
+    relationTargets?: readonly string[],
+    uploads?: ReadonlyMap<string, UploadedFile>,
+  ): NotionPropertyValue | null {
     switch (type) {
       case "rich_text":
         return richTextValue(String(value));
@@ -431,6 +573,9 @@ export class PropertyMapper {
       case "phone_number":
         return { phone_number: String(value) };
 
+      case "place":
+        return placeRequest(value);
+
       case "status": {
         // select 와 동일 — 빈 상태 이름은 Notion 이 거부한다.
         const name = String(value);
@@ -443,14 +588,7 @@ export class PropertyMapper {
         const items = Array.isArray(value) ? value : [value];
         const ids: Array<{ id: string }> = [];
         for (const item of items) {
-          const str = String(item);
-          const match = str.match(WIKILINK_REGEX);
-          const pageId =
-            match?.[1] && this.wikilinkResolver
-              ? this.wikilinkResolver.resolve(match[1])
-              : isNotionId(str)
-                ? str
-                : null;
+          const pageId = this.relationTargetOf(item, relationTargets);
           if (!pageId) return null;
           ids.push({ id: pageId });
         }
@@ -458,11 +596,12 @@ export class PropertyMapper {
       }
 
       case "people": {
-        // pull 은 사람을 이름으로 적는다. 이름으로는 사용자를 찾을 수 없으므로 ID 로만 된
-        // 목록일 때만 보낸다(관계와 같은 이유).
+        // pull 은 사람을 이름으로 적는다 — 이름은 사용자 목록으로 id 를 찾는다. 하나라도 못 찾으면
+        // 보내지 않는다: 목록이 통째로 바뀌므로 못 찾은 사람이 Notion 에서 지워진다(관계와 같은 이유).
         const users = (Array.isArray(value) ? value : [value]).map(String);
-        if (users.length === 0 || !users.every(isNotionId)) return null;
-        return { people: users.map((id) => ({ object: "user" as const, id })) };
+        const ids = users.map((user) => (isNotionId(user) ? user : this.peopleResolver(user)));
+        if (ids.length === 0 || ids.some((id) => id === null)) return null;
+        return { people: ids.map((id) => ({ object: "user" as const, id: id! })) };
       }
 
       case "files": {
@@ -472,6 +611,11 @@ export class PropertyMapper {
         // (전송 시 통째 교체) 일부만 보내면 나머지 첨부가 삭제되고, 서명 URL 을 external
         // 로 되밀면 약 1시간 뒤 만료되는 깨진 파일로 Notion 원본이 오염된다(실측).
         // 미전송 시 Notion 이 기존 첨부를 그대로 보존하므로 이것이 무손실 경로다.
+        // 올린 볼트 첨부(uploads)는 그 파일로 보낸다 — 새 행 · 바뀐 값이라 지울 원격 파일이 없거나 바꾸려는 것이다.
+        const uploadOf = (u: string): UploadedFile | undefined => {
+          const target = WIKILINK_REGEX.exec(u.trim())?.[1];
+          return target ? uploads?.get(target) : undefined;
+        };
         const urls = fileList.map((f) => {
           if (typeof f === "object" && f !== null && "url" in f) {
             return String((f as { url?: unknown }).url ?? "");
@@ -479,7 +623,7 @@ export class PropertyMapper {
           return String(f);
         });
         const hasProtected = urls.some(
-          (u) => WIKILINK_REGEX.test(u.trim()) || isNotionHostedFileUrl(u),
+          (u) => (WIKILINK_REGEX.test(u.trim()) && !uploadOf(u)) || isNotionHostedFileUrl(u),
         );
         if (hasProtected) return null;
 
@@ -490,18 +634,30 @@ export class PropertyMapper {
               const obj = f as { name?: string; url: string };
               const url = String(obj.url ?? "");
               if (!url) return null;
-              return { type: "external", name: obj.name ?? "file", external: { url } };
+              return {
+                type: "external",
+                name: fileName(obj.name ?? "file", url),
+                external: { url },
+              };
             }
             const url = String(f);
             if (!url) return null;
-            return { type: "external", name: url, external: { url } };
+            const uploaded = uploadOf(url);
+            if (uploaded) {
+              return {
+                type: "file_upload",
+                name: fileName(uploaded.name, uploaded.name),
+                file_upload: { id: uploaded.fileUploadId },
+              };
+            }
+            return { type: "external", name: fileName(url, url), external: { url } };
           })
           .filter(Boolean);
         return { files: filesArr };
       }
 
       default:
-        // 읽기 전용 · 제목(따로 보낸다) · 모르는 타입(장소 등)은 보내지 않는다. 글로 바꿔
+        // 읽기 전용 · 제목(따로 보낸다) · 모르는 타입은 보내지 않는다. 글로 바꿔
         // 보내면 타입이 맞지 않아 요청 전체가 거부된다.
         return null;
     }
@@ -588,7 +744,7 @@ export class PropertyMapper {
       }
       case "formula": {
         const formula = prop.formula as { type: string; [k: string]: unknown } | undefined;
-        if (!formula) return null;
+        if (!formula || formula.type === UNCOMPUTED) return null;
         if (formula.type === "date") return dateValue(formula.date, zone);
         return formula[formula.type];
       }
@@ -605,7 +761,7 @@ export class PropertyMapper {
       }
       case "rollup": {
         const rollup = prop.rollup as { type: string; [k: string]: unknown } | undefined;
-        if (!rollup) return null;
+        if (!rollup || rollup.type === UNCOMPUTED) return null;
         if (rollup.type === "array") {
           const arr = asArray<{ type: string; [k: string]: unknown }>(rollup.array);
           return arr.map((item) => this.extractValue(item, zone));
@@ -628,11 +784,19 @@ export class PropertyMapper {
         const v = prop.verification as { state: string } | undefined;
         return v?.state ?? null;
       }
+      case "place":
+        return placeValue(prop.place);
       default:
         return null;
     }
   }
 }
+
+/**
+ * API 가 계산하지 못한 수식 · 롤업의 값 타입 — 관계가 너무 많은 값(2026-08-05 changelog). 값이 `{}` 로 와서 그대로
+ * 적으면 노트에 `수식: {}` 가 남았다. 값을 모르므로 적지 않는다 — 읽기 전용 속성이라 보내지도 않는다.
+ */
+const UNCOMPUTED = "unsupported";
 
 /** 날짜(시각) 값 — 기간이면 끝까지. */
 interface DateRangeValue {
@@ -660,6 +824,41 @@ function rangeEndKeyOf(
   if (!DATE_VALUED_TYPES.has(type)) return null;
   const endKey = name + RANGE_END_SUFFIX;
   return endKey in properties ? null : endKey;
+}
+
+/** 장소 값에서 frontmatter 에 적는 키 — 좌표와, 값이 있으면 이름 · 주소 · 장소 id. */
+const PLACE_KEYS = ["lat", "lon", "name", "address", "aws_place_id", "google_place_id"] as const;
+
+/** 장소 속성 값 — 빈 칸(null)은 뺀다. 좌표가 없으면 null. */
+function placeValue(place: unknown): Record<string, unknown> | null {
+  if (!place || typeof place !== "object") return null;
+  const raw = place as Record<string, unknown>;
+  if (typeof raw.lat !== "number" || typeof raw.lon !== "number") return null;
+  const out: Record<string, unknown> = {};
+  for (const key of PLACE_KEYS) {
+    if (raw[key] !== null && raw[key] !== undefined) out[key] = raw[key];
+  }
+  return out;
+}
+
+/**
+ * 장소를 보낼 값 — Notion 은 좌표가 없거나 범위를 벗어나면 요청 전체를 거부하고, 이름 · 주소로 좌표를 찾지
+ * 않는다. 그런 값은 null(보내지 않는다).
+ */
+function placeRequest(value: unknown): NotionPropertyValue | null {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const raw = value as Record<string, unknown>;
+  const lat = Number(raw.lat);
+  const lon = Number(raw.lon);
+  if (isBlank(raw.lat) || isBlank(raw.lon) || !Number.isFinite(lat) || !Number.isFinite(lon)) {
+    return null;
+  }
+  if (Math.abs(lat) > 90 || Math.abs(lon) > 180) return null;
+  const place: Record<string, unknown> = { lat, lon };
+  for (const key of PLACE_KEYS.slice(2)) {
+    if (typeof raw[key] === "string" && raw[key]) place[key] = raw[key];
+  }
+  return { place } as NotionPropertyValue;
 }
 
 /**
@@ -779,9 +978,42 @@ function emptyValueOf(type: string): NotionPropertyValue | null {
       return { relation: [] };
     case "people":
       return { people: [] };
+    case "place":
+      return { place: null };
     default:
       // files — 올라간 첨부를 지운다(볼트에는 그 파일이 없다) · status — 빈 값이 없다 ·
       // 수식 · 롤업 · 생성일 등 — 읽기 전용.
       return null;
   }
+}
+
+/** 자를 때 지키는 확장자의 최대 길이(점 포함) — 이보다 길면 확장자가 아니라 이름의 일부로 본다. */
+const EXTENSION_MAX = 10;
+
+/**
+ * files 속성 파일 하나의 이름 — Notion 은 {@link FILE_NAME_MAX} 자를 넘으면 페이지 생성 · 갱신 요청 전체를 거부한다.
+ * 긴 URL 은 마지막 경로 조각(파일 이름)으로, 그래도 길면 확장자를 남기고 줄인다.
+ */
+export function fileName(name: string, url: string): string {
+  if (name.length <= FILE_NAME_MAX) return name;
+  let base = name;
+  if (name === url) {
+    try {
+      const last = new URL(url).pathname.split("/").filter(Boolean).pop();
+      if (last) base = decodeURIComponent(last);
+    } catch {
+      // URL 이 아니거나 조각을 풀 수 없으면 이름 그대로 줄인다.
+    }
+  }
+  if (base.length <= FILE_NAME_MAX) return base;
+  const dot = base.lastIndexOf(".");
+  const ext = dot > 0 && base.length - dot <= EXTENSION_MAX ? base.slice(dot) : "";
+  // 글자 단위로 자른다 — 서로게이트 쌍(이모지 등)을 반으로 가르지 않는다.
+  const chars = Array.from(base.slice(0, base.length - ext.length));
+  let head = "";
+  for (const ch of chars) {
+    if (head.length + ch.length + 1 + ext.length > FILE_NAME_MAX) break;
+    head += ch;
+  }
+  return `${head}…${ext}`;
 }

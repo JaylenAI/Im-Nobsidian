@@ -307,6 +307,47 @@ describe("StateDB", () => {
       expect(result!.title).toBe("Project Plan");
     });
 
+    describe("relation 대상 DB 안에서만 — resolveWikilinkIn", () => {
+      const row = (obsidianPath: string, parent: string, title: string) => {
+        db.upsert({
+          obsidianPath,
+          notionPageId: `page-${obsidianPath}`,
+          notionParentId: parent,
+          contentHash: "h",
+          localLastModified: "2026-10-23T00:00:00Z",
+          syncDirection: "both",
+          fileType: "db-row",
+          status: "synced",
+        });
+        db.upsertWikilink({
+          obsidianPath,
+          notionPageId: `page-${obsidianPath}`,
+          title,
+          aliases: [],
+        });
+      };
+      const TARGET = "35a13b18-d382-80cf-9057-e37e6e473e41";
+
+      it("다른 DB 의 같은 제목 행을 고르지 않는다", () => {
+        row("Other/회의.md", "other-db", "회의");
+        row("Target/회의.md", TARGET.replace(/-/g, ""), "회의");
+
+        expect(db.resolveWikilinkIn("회의", [TARGET])?.obsidianPath).toBe("Target/회의.md");
+        expect(db.resolveWikilinkIn("회의", ["missing-db"])).toBeNull();
+        expect(db.resolveWikilinkIn("회의", [])).toBeNull();
+      });
+
+      it("파일 이름이 제목보다 먼저다 — 제목이 같은 두 행 가운데 링크가 가리키는 파일", () => {
+        row("Target/회의 (a1b2c).md", TARGET, "회의");
+        row("Target/회의.md", TARGET, "회의");
+
+        expect(db.resolveWikilinkIn("회의", [TARGET])?.obsidianPath).toBe("Target/회의.md");
+        expect(db.resolveWikilinkIn("회의 (a1b2c)", [TARGET])?.obsidianPath).toBe(
+          "Target/회의 (a1b2c).md",
+        );
+      });
+    });
+
     describe("파일 이름 조회 — 맨 위 노트 · 경로 붙은 링크 · LIKE 글자", () => {
       const entry = (obsidianPath: string, title: string, aliases: string[] = []) =>
         db.upsertWikilink({ obsidianPath, notionPageId: `page-${obsidianPath}`, title, aliases });

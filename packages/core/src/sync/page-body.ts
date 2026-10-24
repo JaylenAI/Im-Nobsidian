@@ -11,7 +11,7 @@ import { notionEnhancedToObsidian } from "../converter/enhanced-md-converter.js"
 import { replaceMissingUnknownTags, unknownTagKeys } from "../converter/unknown-tag-fallback.js";
 import { mentionUserIds } from "../converter/mention.js";
 import { needsCodeBlockTexts } from "../converter/nested-code-fence.js";
-import { isNotionValidationError, type NotionClient } from "../notion/client.js";
+import { isNotionValidationError, pageRecordLimitOf, type NotionClient } from "../notion/client.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { compactNotionId } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
@@ -55,6 +55,13 @@ export async function replacePageBody(
     return await client.replacePageMarkdown(pageId, markdown);
   } catch (error) {
     if (!isNotionValidationError(error)) throw error;
+    // 자식 · 자리 태그 탓이 아니다 — 그 큰 페이지를 다시 읽어도 보낼 수 없다.
+    const limit = pageRecordLimitOf(error);
+    if (limit !== null) {
+      throw new Error(
+        `Notion 페이지가 너무 커서 본문을 바꾸지 못함(레코드 ${Number.isNaN(limit) ? "한도" : `${limit}개`} 넘음) — Notion 에서 페이지를 나누세요`,
+      );
+    }
 
     const remote = (await client.getPageMarkdown(pageId)).markdown;
     const sendable = options.unknownTagFallbacks

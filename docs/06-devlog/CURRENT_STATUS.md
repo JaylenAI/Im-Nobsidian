@@ -1,8 +1,82 @@
 # 현재 진행 상황
 
-> 마지막 업데이트: 2026-10-21
-> 버전: **v0.4.0 릴리스 준비 완료**(버전 · 릴리스 노트 · 실볼트 사본 E2E 끝, 태그 대기) — 심층 QA 결함 23건 봉합 +
-> Git 식 증분 동기화(변경분만 보고 · 항목별 push/pull/되돌리기)
+> 마지막 업데이트: 2026-10-24
+> 버전: **v0.4.1 배포 끝** — dev 에 v0.4.2 ~ v0.8.0 의 범위가 모두 머지됨(릴리스 대기). v0.9 RC 전체 E2E 진행 중. 1.0.0 은 따로 정하기 전까지 내지 않는다(0.x 로만)
+
+## 남은 단계 (2026-10-23 확정 · 같은 날 갱신)
+
+| 버전   | 내용                                                                                      | 상태     |
+| ------ | ----------------------------------------------------------------------------------------- | -------- |
+| v0.4.2 | `fix/roundtrip-notation` 표기 왕복 · `chore/release-gate` 태그=버전 검사 · CHANGELOG 보충 | dev 머지 |
+| v0.5.0 | push 로 DB 만들기 — 스키마 · 행 · relation · 뷰(Views API, 2026-03) · 꾸밈                | dev 머지 |
+| v0.6.0 | 컬럼 열 경계 표시(#74) · 볼트 폴더 → Notion DB(#75)                                       | dev 머지 |
+| v0.7.0 | 성능 — 첫 pull 요청 −42% · 전체 대조 예산을 요청 수로                                     | dev 머지 |
+| v0.8.0 | 볼트 하나에 Notion 연결 여럿 — 연결 폴더(ADR-038) · CLI · 플러그인                        | dev 머지 |
+| v0.9.0 | 커뮤니티 등록 준비 — 전체 E2E 결함 수정 · 사용자 문서 · RC 전체 E2E                       | 진행     |
+
+릴리스는 사용자 승인 뒤에 한다. 바뀐 것 전체는 `CHANGELOG.md` 의 `[Unreleased]`.
+
+### v0.9.0 — 전체 워크스페이스 E2E 결함 (진행)
+
+v0.8 빌드 이전의 전체 E2E(실데이터 사본 → 탐침 아래 새 루트 · DB 164개 · 행 1,221개 → 빈 볼트로 다시 받기)에서 찾은 것을
+표본으로 재현해 고쳤다. 자세한 실측은 `journal/2026-10-23.md`.
+
+- `fix/files-property-name-length` · `fix/relation-target-resolve`(relation 91/1,510 어긋남) · `fix/db-formula-order`
+  (수식 · 롤업 순서 · 보기 실패 28 → 0) · `fix/attachment-hash-suffix`(첨부 이름 41개) · `fix/people-by-name`(사람 10) ·
+  `fix/files-property-upload`(파일 9)
+- 확인만 한 것: 아이콘 318 · 커버 9 누락은 행 꾸밈 push 이전 빌드 탓(지금 빌드로 20/20) · 본문 차이는 공백 · 목록 모양
+  같은 표기뿐 · 값 13건은 같은 제목 행의 이름 꼬리(id) 자리바꿈
+- API 한계로 남는 것: 관계 페이지 값을 계산하는 수식 · 롤업의 롤업 · 버튼 속성 만들기 · 사용자 이모지 · 손님 사람 값 ·
+  같은 토큰 같은 분 안의 편집(ADR-017)
+- RC 전체 E2E(`__e2e_v090__` · 1,225 노트)가 찾은 6건: `fix/row-subpage-discovery`(행 하위 페이지 4 미수신) ·
+  `fix/row-child-folder`(그 자리) · `fix/link-text-brackets`(9줄) · `fix/compact-export-whitespace`(빈 줄 210줄) ·
+  `fix/placeholder-list-indent`(42 노트) · `fix/nested-container-depth`(목록 속 깊은 콜아웃 · 토글). 나머지 차이는 API
+  한계 · Notion 표기 정리 — `journal/2026-10-23.md` 「RC 전체 E2E」
+- 실데이터 172 노트 재왕복 · 다시 받은 볼트 비교가 찾은 6건(10-24): `fix/request-blocked-no-retry` ·
+  `fix/empty-list-item-spacing` · `fix/fresh-pull-folder-only`(19) · `fix/unresolved-wikilink-text` ·
+  `fix/table-wikilink-alias` · `refactor/child-folder-extension`. 같은 Notion 을 새 빌드로 다시 받기 163/172 같음(나머지 9 는
+  100MB 넘는 동영상의 서명 주소) — `journal/2026-10-24.md`
+- 남은 것: 릴리스(승인 뒤)
+
+### v0.8.0 — 연결 폴더 (dev 머지)
+
+ADR-038. `feature/workspace-core`(ScopedVaultFS · init 거절 · ConnectionScopeError · CLI 볼트 열기 한 곳) ·
+`feature/workspace-plugin`(연결마다 ConnectionEngine · 이벤트를 경로로 · 연결 고르개 · 설정의 폴더 연결). 확인하지
+못한 것: 실제로 다른 워크스페이스 토큰 둘 · 모바일.
+
+### v0.7.0 — 성능 (dev 머지)
+
+`perf/pull-request-count`(같은 하위 트리 614 → 354 요청) · `perf/discovery-request-budget`(변경 0 전체 대조 307 요청 · 319초 →
+232 · 144초). 속도 한도는 2026-09-09 부터 고정 60초 창(Business · Enterprise 분당 600, 그 밖 180) — 기본 간격 350ms 는
+일반 플랜에 맞다.
+
+### v0.6.0 — 컬럼 · Bases (dev 머지)
+
+- `feature/column-guide` (#74): Notion 컬럼을 위아래로 펼친 글에 열마다 색 줄 · 이름표. 너비는 이제 NFM 이 보존한다(ADR-008 정정).
+- `feature/folder-to-database` (#75 · ADR-037): 볼트에서 만든 노트 폴더(+ `.base`)를 `prepare-db` · 폴더 메뉴로 준비하면
+  다음 push 가 DB 를 만든다. 인라인 DB ↔ `.base` 임베드 왕복은 ADR-036 으로 이미 된다.
+- `fix/keep-user-base-files`: 직접 만든 `.base` 를 pull 이 지우거나 덮어쓰지 않는다.
+- 남은 한계: 이미 페이지로 올라간 폴더는 DB 로 바꾸지 않는다(페이지를 data source 아래로 옮기는 길을 확인하지 못함).
+
+### v0.5.0 — push 로 DB 만들기 (dev 머지)
+
+ADR-036. 사이드카(`<DB>.notion.json`)를 스키마의 원본으로, 새 루트로 올린 DB 폴더를 Notion DB 로 만든다 — 스키마 →
+행 → relation · rollup · formula → 뷰 → 꾸밈. 사이드카가 가리키는 원래 DB 에는 쓰지 않는다.
+
+- `feature/db-schema-create` · `db-row-create` · `db-view-push` · `status-group-create` · `place-property` ·
+  `database-appearance` · `page-decorations` · `silent-notifications`
+- API changelog(2026-04~10) 대조로 고친 것: `query-row-limit`(10,000건) · `unsupported-view-type` · `api-changelog-gaps`
+  (수식 unsupported · 큰 페이지) · `sdk-browser-guard`(SDK 5.27+)
+- 기존 볼트에서 페이지 아이콘 · 커버를 받으려면 `pull --force` 한 번. 인라인 DB 에는 커버가 없다(API).
+
+### `fix/roundtrip-notation` (v0.4.2 · dev 머지)
+
+새 볼트로 받으면(fresh pull) 원본과 표기가 달랐던 네 가지와, 라이브에서 찾은 **데이터 손실** 하나.
+
+- **손실**: Notion 은 문장부호가 아닌 글자 앞의 `\` 를 지운다(`C:\Users\me` → `C:Usersme`). push 가 `\\` 로 보낸다.
+- 글 `\` · 글 백틱을 `\\` · `` \` `` 로 돌려받던 것 → 볼트에서 쓴 모양으로.
+- 이미지 캡션 별칭의 escape(`\*\*\*별칭\*\*\*`) → 글자 그대로.
+- 콜아웃 안 블록 사이 빈 `>` 줄이 사라지던 것 → 바깥 문단처럼 띄운다.
 
 ## v0.4.0 트랙 — 심층 QA 결함 봉합 + Git 식 증분 동기화 (완료 · 태그 대기)
 

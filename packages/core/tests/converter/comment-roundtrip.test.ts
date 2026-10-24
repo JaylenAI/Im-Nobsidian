@@ -127,9 +127,9 @@ describe("주석 왕복 — 배치마다 (S-29)", () => {
 
   it("압축형 export 는 콜아웃 속 문단의 경계를 내보내지 않는다 — 로컬 노트가 있으면 그 경계대로 둔다(F-06 · S-30)", () => {
     const [, note, shown] = LAYOUTS.find(([name]) => name === "콜아웃 속 문단")!;
-    // 받기 직전의 로컬 노트가 없으면(새 페이지) 경계를 모른다.
+    // 받기 직전의 로컬 노트가 없으면(새 페이지) 경계를 모른다 — 바깥 문단처럼 블록마다 띄운다.
     expect(pull(compact(sent(shown)), undefined, true)).toBe(
-      "> [!note] 제목\n> 본문 줄입니다.\n> 끝 줄입니다.",
+      "> [!note] 제목\n> 본문 줄입니다.\n>\n> 끝 줄입니다.",
     );
     // Notion 은 콜아웃 속 빈 줄을 읽지 않는다 — 경계가 있으나 없으나 같은 블록이라 로컬 노트의 경계를 둔다.
     expect(pull(compact(sent(shown)), shown, true)).toBe(shown);

@@ -93,6 +93,12 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     expect(content).toBe(`![[attachments/${name}-${SHA12}${ext}|${name}]]`);
   });
 
+  it("받은 파일을 올린 것을 다시 받으면 같은 이름 · 별칭이다 — 해시를 또 붙이지 않는다", async () => {
+    const content = await pull(`<file src="${signedUrl(`표.xlsx-${SHA12}.xlsx`)}"></file>`);
+
+    expect(content).toBe(`![[attachments/표.xlsx-${SHA12}.xlsx|표.xlsx]]`);
+  });
+
   it("태그로 남은 캡션 없는 파일도 같다", async () => {
     const content = await pull(`<file src="${signedUrl("표.xlsx")}"></file>`);
 

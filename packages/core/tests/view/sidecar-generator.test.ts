@@ -147,6 +147,37 @@ describe("SidecarGenerator", () => {
     expect(sorted.degraded.filter((d) => d.kind === "setting-dropped")).toHaveLength(0);
   });
 
+  it("보기 설정 원본을 속성 이름 칸 없이 적는다 — push 가 새 DB 에 같은 보기를 만든다", () => {
+    const s = build([
+      {
+        id: "v1",
+        name: "보드",
+        type: "board",
+        configuration: {
+          type: "board",
+          group_by: {
+            type: "status",
+            property_id: "[jiM",
+            property_name: "상태",
+            group_by: "group",
+            sort: { type: "manual" },
+          },
+        },
+        quickFilters: { abcd: { date: { is_not_empty: true } } },
+      },
+    ]);
+    expect(s.views[0]!.config["configuration"]).toEqual({
+      type: "board",
+      group_by: {
+        type: "status",
+        property_id: "[jiM",
+        group_by: "group",
+        sort: { type: "manual" },
+      },
+    });
+    expect(s.views[0]!.config["quickFilters"]).toEqual({ abcd: { date: { is_not_empty: true } } });
+  });
+
   it("속성은 이름 정렬 + select/status 옵션명 보존, title 도 포함", () => {
     const s = build([{ id: "v1", name: "표", type: "table" }]);
 
@@ -186,5 +217,39 @@ describe("SidecarGenerator", () => {
       { id: "v2", name: "A", type: "chart" },
     ]);
     expect(s.views.map((v) => v.name)).toEqual(["B", "A"]);
+  });
+});
+
+describe("DB 의 꾸밈", () => {
+  const base = {
+    databaseId: "db-1",
+    databaseName: "할 일",
+    schema: SCHEMA,
+    viewsConfig: { databaseId: "db-1", databaseName: "할 일", lastSynced: "", views: [] },
+  };
+
+  it("있는 것만 적는다", () => {
+    const s = gen.build({ ...base, appearance: { icon: "🗂️", showTitle: false } });
+    expect(s.appearance).toEqual({ icon: "🗂️", showTitle: false });
+  });
+
+  it("꾸밈이 없으면 키가 없다 — 예전 사이드카와 같은 바이트", () => {
+    const plain = gen.serialize(gen.build(base));
+    expect(gen.serialize(gen.build({ ...base, appearance: {} }))).toBe(plain);
+    expect(plain).not.toContain("appearance");
+  });
+
+  it("다시 읽으면 같은 값 — 없으면 제목은 보인다", async () => {
+    const { parseSidecarSchema } = await import("../../src/sync/database-schema.js");
+    const s = gen.build({
+      ...base,
+      appearance: { icon: "pizza:red", cover: "[[attachments/c.png]]", description: "설명" },
+    });
+    expect(parseSidecarSchema(gen.serialize(s))!.appearance).toEqual({
+      icon: "pizza:red",
+      cover: "[[attachments/c.png]]",
+      description: "설명",
+      showTitle: true,
+    });
   });
 });

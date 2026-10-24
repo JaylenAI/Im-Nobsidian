@@ -144,8 +144,42 @@ describe("ImageHandler.downloadAllImages — 받은 이미지 별칭", () => {
       "행",
     );
 
-    expect(signed.content).toBe(`앞 ![[attachments/행-${SHA12}.png|${caption}]] 뒤`);
+    expect(signed.content).toBe(`앞 ![[attachments/a-${SHA12}.png|${caption}]] 뒤`);
     expect(internal.content).toBe(signed.content);
+  });
+
+  // 새 볼트로 받으면 `pic.png` 가 `attachments/<노트>-<해시>.png` 가 됐다 — 볼트에서 그 파일을 알아볼 수 없다(2026-10-23 라이브).
+  it("받은 이미지 파일 이름은 올라간 이름을 따른다 — 서명 URL · 내부 참조 같다", async () => {
+    const signed = await handler.downloadAllImages(`![](${signedUrl("다이어그램 v2.png")})`, "행");
+    const internal = await handler.downloadAllImages(
+      `![](${internalUrl("다이어그램 v2.png")})`,
+      "행",
+    );
+
+    expect(signed.content).toBe(`![[attachments/다이어그램-v2-${SHA12}.png]]`);
+    expect(internal.content).toBe(signed.content);
+  });
+
+  // 받은 파일을 올리면 `이름-<해시>.png` 그대로 올라간다 — 다른 볼트로 다시 받으면 해시가 또 붙었다(2026-10-23 E2E).
+  it("이 볼트가 붙인 내용 해시로 끝나는 이름은 해시를 다시 붙이지 않는다 — 다른 해시는 이름이다", async () => {
+    const again = await handler.downloadAllImages(
+      `![](${signedUrl(`다이어그램-v2-${SHA12}.png`)})`,
+      "행",
+    );
+    const other = await handler.downloadAllImages(`![](${signedUrl("표-0123456789ab.png")})`, "행");
+
+    expect(again.content).toBe(`![[attachments/다이어그램-v2-${SHA12}.png]]`);
+    expect(other.content).toBe(`![[attachments/표-0123456789ab-${SHA12}.png]]`);
+  });
+
+  it.each([
+    ["Notion 이 붙인 자리 이름", "image.png"],
+    ["Notion 이 붙인 자리 이름 — 대문자", "Untitled.png"],
+    ["다듬으면 남는 글자가 없는 이름", "@@.png"],
+  ])("%s 는 노트 제목으로 — %s", async (_name, uploaded) => {
+    const result = await handler.downloadAllImages(`![](${signedUrl(uploaded)})`, "행");
+
+    expect(result.content).toBe(`![[attachments/행-${SHA12}.png]]`);
   });
 });
 
@@ -162,7 +196,7 @@ describe("ImageHandler — 재시도 0 설정", () => {
     const result = await handler.downloadImage("https://example.com/a.png", "노트");
 
     expect(download).toHaveBeenCalledTimes(1);
-    expect(result.localPath).toMatch(/^attachments\/노트-[0-9a-f]{12}\.png$/);
+    expect(result.localPath).toMatch(/^attachments\/a-[0-9a-f]{12}\.png$/);
   });
 });
 
@@ -277,6 +311,19 @@ describe("ImageHandler — 업로드", () => {
     expect(result.fileUploadId).toBe("file-upload-id-123");
     expect(mockFs.readBinary).toHaveBeenCalledWith("photo.png");
     expect(mockNotion.uploadFile).toHaveBeenCalledWith(expect.any(Blob), "photo.png", "image/png");
+  });
+
+  it("파일 속성으로 보낼 첨부는 받을 때 붙인 해시를 뗀 이름으로 보인다", async () => {
+    const bytes = Buffer.from("pdf-bytes");
+    const h = createHash("sha256").update(bytes).digest("hex").slice(0, 12);
+    (mockFs.readBinary as ReturnType<typeof vi.fn>).mockResolvedValue(bytes);
+
+    const named = async (target: string) =>
+      (await handler.uploadNoteAttachment(target, "DB/행.md")).name;
+
+    expect(await named(`attachments/보고서.pdf-${h}.pdf`)).toBe("보고서.pdf");
+    expect(await named(`attachments/도식-${h}.png`)).toBe("도식.png");
+    expect(await named("attachments/표-0123456789ab.png")).toBe("표-0123456789ab.png");
   });
 
   it("readBinary 실패 시 attachments 폴더에서 재시도", async () => {

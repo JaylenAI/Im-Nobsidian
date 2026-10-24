@@ -322,6 +322,25 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       return view(page);
     },
   );
+  // 아이콘 · 커버 — 돌려주는 모양으로 적는다. 올린 파일은 서명 주소의 파일로, `null` 은 지운다.
+  client.updatePageDecorations.mockImplementation(
+    async (id: string, decorations: Record<string, Record<string, unknown> | null>) => {
+      const page = touch(id);
+      for (const key of ["icon", "cover"] as const) {
+        if (!(key in decorations)) continue;
+        const value = decorations[key];
+        if (value === null) delete page[key];
+        else if (value!.type === "file_upload") {
+          const upload = value!.file_upload as { id: string };
+          page[key] = {
+            type: "file",
+            file: { url: `https://file.notion.so/f/f/${upload.id}.png?sig=${tick()}` },
+          };
+        } else page[key] = value!;
+      }
+      return view(page);
+    },
+  );
   // DB 조회 — 휴지통이 아닌 행. 생성 요청이 적용됐는지 모를 때 행을 찾는 경로가 제목 조건을 쓴다.
   client.queryAllDatabasePages.mockImplementation(
     async (databaseId: string, filter?: { title?: { equals?: string } }) =>

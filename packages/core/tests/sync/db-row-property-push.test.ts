@@ -136,6 +136,8 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
       [ROW_ID, { lastEdited: SYNCED_AT, title: "과제 A", properties: REMOTE_PROPS }],
     ]);
     notion.getDatabaseSchema.mockResolvedValue(SCHEMA);
+    // BASE 의 커버는 Notion 에 올린 파일을 내려받은 것이다 — 원격에도 있다.
+    notion.extractCover.mockReturnValue({ type: "file", url: "https://file.notion.so/f/f/c.png" });
     notion.getPage.mockImplementation(async (id: string) => {
       const row = remote.get(id);
       return {
@@ -214,6 +216,29 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     });
   });
 
+  // pull 이 받은 첨부(`[[attachments/…]]`)는 보낼 수 없어 바꿔도 Notion 에 가지 않았다 — 올려서 보낸다.
+  it("파일 속성을 볼트 첨부로 바꾸면 그 첨부를 올려 보낸다 — 그대로면 올리지 않는다", async () => {
+    files.set(ROW_PATH, BASE.replace("진척: 0.42", "진척: 0.5"));
+    await build().push();
+    expect(notion.uploadFile).not.toHaveBeenCalled();
+
+    files.set(
+      ROW_PATH,
+      BASE.replace("첨부: '[[attachments/spec.pdf]]'", "첨부:\n  - '[[attachments/계획.pdf]]'"),
+    );
+    await build().push();
+
+    expect(vaultFs.readBinary).toHaveBeenCalledWith("attachments/계획.pdf");
+    expect(notion.updatePageProperties).toHaveBeenLastCalledWith(
+      ROW_ID,
+      expect.objectContaining({
+        첨부: {
+          files: [{ type: "file_upload", name: "계획.pdf", file_upload: { id: "file-upload-id" } }],
+        },
+      }),
+    );
+  });
+
   it("날짜는 따옴표 유무가 달라도 같은 값이고, 바꾸면 날짜 속성으로 간다", async () => {
     files.set(ROW_PATH, BASE.replace("마감: 2026-10-01", "마감: '2026-10-01'"));
     await build().push();
@@ -236,13 +261,14 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
     });
   });
 
-  it("DB 에 없는 키(cover)만 바뀌면 Notion 에 아무것도 보내지 않고 동기화 완료로 적는다", async () => {
-    files.set(ROW_PATH, BASE.replace("cover.png", "cover2.png"));
+  it("DB 에 없는 키만 바뀌면 속성으로 보내지 않고 동기화 완료로 적는다", async () => {
+    files.set(ROW_PATH, BASE.replace("title: 과제 A\n", "title: 과제 A\naliases: [별칭]\n"));
 
     const result = await build().push();
 
     expect(result.failed).toEqual([]);
     expect(notion.updatePageProperties).not.toHaveBeenCalled();
+    expect(notion.updatePageDecorations).not.toHaveBeenCalled();
     expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
     expect(stateDb.updateHash).toHaveBeenCalledWith(
       "rec-row",
@@ -250,6 +276,19 @@ describe("S-01 · S-02 DB 행 push — 속성은 속성으로, 바뀐 것만", (
       expect.any(Buffer),
     );
     expect(stateDb.setRemoteObservation).not.toHaveBeenCalled();
+  });
+
+  it("커버를 바꾸면 속성이 아니라 행의 커버로 보낸다 — 본문 · 속성은 보내지 않는다", async () => {
+    files.set(ROW_PATH, BASE.replace("'[[attachments/cover.png]]'", "https://img.example/c.png"));
+
+    const result = await build().push();
+
+    expect(result.failed).toEqual([]);
+    expect(notion.updatePageDecorations).toHaveBeenCalledWith(ROW_ID, {
+      cover: { type: "external", external: { url: "https://img.example/c.png" } },
+    });
+    expect(notion.updatePageProperties).not.toHaveBeenCalled();
+    expect(notion.replacePageMarkdown).not.toHaveBeenCalled();
   });
 
   it("frontmatter 가 깨졌으면 보내지 않고 실패로 남긴다 — 모든 속성을 지우는 요청이 되지 않게", async () => {

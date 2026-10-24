@@ -1,10 +1,11 @@
+import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { DatabaseMeta, NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { Conflict, FailedOperation, ProgressItem, SyncRecord } from "../types/sync.js";
-import type { DatabaseViewsConfig } from "../types/view.js";
+import type { BasePropertySchema, DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
@@ -39,12 +40,13 @@ import {
 } from "../utils/frontmatter.js";
 import { mergeRowFrontmatter } from "../converter/frontmatter-merge.js";
 import { BaseFileGenerator } from "../view/base-file-generator.js";
-import { SidecarGenerator } from "../view/sidecar-generator.js";
-import { selectStaleDbArtifacts } from "./stale-db-artifacts.js";
+import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-generator.js";
+import { richTextToNfm } from "../converter/blocks-to-nfm.js";
+import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles } from "./db-base-files.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
-import { INTERNAL_DIR, DB_VIEWS_PATH } from "../constants/paths.js";
+import { INTERNAL_DIR, DB_VIEWS_PATH, BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import { notionBodyToObsidian } from "./page-body.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import {
@@ -56,6 +58,7 @@ import {
   type ObservationContext,
   type RemoteVerdict,
 } from "./remote-observation.js";
+import { PageDecorations, decorationsUnchanged } from "./page-decorations.js";
 
 export interface DatabaseSyncResult {
   created: number;
@@ -127,7 +130,15 @@ function emptyDatabaseSyncResult(): DatabaseSyncResult {
 
 export class DatabaseSyncer {
   private readonly propertyMapper: PropertyMapper;
+  private decorationsCache?: PageDecorations;
+  /**
+   * 받은 DB 마다 사이드카에 적을 꾸밈 — 한 pull 이 같은 DB 의 사이드카를 여러 번 다시 만든다(임베드 재작성).
+   * 올린 파일 아이콘 · 커버를 그때마다 내려받지 않는다.
+   */
+  private readonly appearances = new WeakMap<DatabaseMeta, Promise<SidecarAppearance>>();
   private readonly baseFileGenerator = new BaseFileGenerator();
+  /** 사용자가 만든 `.base` 라 덮어쓰지 않았다고 이미 알린 경로 — 한 pull 이 같은 DB 를 여러 번 다시 쓴다. */
+  private readonly keptUserBases = new Set<string>();
   private readonly sidecarGenerator = new SidecarGenerator();
 
   /**
@@ -135,6 +146,10 @@ export class DatabaseSyncer {
    * 않은 DB 의 것도 남아 있다({@link DbBaseFiles}).
    */
   readonly baseFileInfo: DbBaseFiles;
+
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
 
   constructor(
     private readonly config: Config,
@@ -148,6 +163,11 @@ export class DatabaseSyncer {
      * 아무것도 가라앉았다고 보지 않는다 — 수정 시각이 같은 행도 받아서 견준다.
      */
     private readonly observation: () => ObservationContext = () => NO_OBSERVATION,
+    /**
+     * 받은 행 본문(Notion 원문)을 알린다 — 감지가 행의 하위 페이지를 빠뜨렸을 때 그 본문의 자식 태그로
+     * 채운다({@link RemoteDetector.noteBodyChildren}).
+     */
+    private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
     this.propertyMapper = PropertyMapper.fromConfig(config);
@@ -169,6 +189,8 @@ export class DatabaseSyncer {
     readonly ledger?: DatabasePullLedger;
     /** 취소하면 다음 DB 를 조회하지 않는다 — 닿지 못한 DB 는 다음 pull 이 조회한다. */
     readonly signal?: AbortLike;
+    /** {@link pullDatabase} 의 같은 이름 옵션. */
+    readonly rescanRowChildren?: boolean;
   }): Promise<DatabaseSyncResult> {
     const databases = this.config.notion.databases;
     if (!databases || databases.length === 0) return emptyDatabaseSyncResult();
@@ -195,6 +217,7 @@ export class DatabaseSyncer {
         const result = await this.pullDatabase(dbConfig, {
           paths: opts?.paths,
           progress: opts?.progress,
+          rescanRowChildren: opts?.rescanRowChildren,
         });
         created += result.created;
         updated += result.updated;
@@ -236,6 +259,12 @@ export class DatabaseSyncer {
       paths?: readonly string[];
       /** 받은 행 · 지운 행을 하나씩 알린다. 예전에는 pull 진행 표시에 행이 하나도 보이지 않았다. */
       progress?: RowProgress;
+      /**
+       * `--force` — 그대로라 받지 않는 행도 본문을 읽어 하위 페이지를 알린다({@link noteRowBody}). 감지가 빠뜨린
+       * 행의 하위 페이지는 행 본문으로만 보이는데, 이미 받은 행은 바뀌기 전까지 본문을 다시 읽지 않는다.
+       * 행 파일은 쓰지 않는다.
+       */
+      rescanRowChildren?: boolean;
     },
   ): Promise<DatabaseSyncResult> {
     const scope = opts?.paths;
@@ -278,11 +307,15 @@ export class DatabaseSyncer {
 
     // 받을 행을 먼저 가른다 — 진행 표시가 이 DB 에서 받을 행 수를 받기 전에 안다.
     const pending: { page: PageObjectResponse; action: Exclude<RowAction, "skip"> }[] = [];
+    const unchanged: PageObjectResponse[] = [];
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
         const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
         if (action !== "skip") pending.push({ page, action });
+        else if (record && (wholeDbInScope || inAnyPathScope(record.obsidianPath, scope))) {
+          unchanged.push(page);
+        }
       } catch (error) {
         failed.push(rowFailure(page, error));
       }
@@ -334,6 +367,8 @@ export class DatabaseSyncer {
       }
     }
 
+    if (opts?.rescanRowChildren) await this.noteUnchangedRowBodies(unchanged);
+
     const removal = await this.pullDeletedRows(dbConfig, pages, opts?.paths, opts?.progress);
     const deleted = removal.deleted;
     conflicts.push(...removal.conflicts);
@@ -342,6 +377,27 @@ export class DatabaseSyncer {
       `[DB Sync] ${dbConfig.localFolder}: ${created} 생성, ${updated} 업데이트, ${deleted} 삭제, ${restored} 복원, ${conflicts.length} 충돌`,
     );
     return { created, updated, deleted, restored, conflicts, failed, writtenPaths };
+  }
+
+  /**
+   * 받지 않는 행의 본문을 읽어 하위 페이지만 알린다(`--force`). 읽지 못한 행은 경고만 남긴다 — 그 행은 받을 것이
+   * 없었고, 하위 페이지는 다음 `--force` 가 다시 찾는다.
+   */
+  private async noteUnchangedRowBodies(pages: readonly PageObjectResponse[]): Promise<void> {
+    for (const page of pages) {
+      try {
+        const { markdown } = await withDeadline(
+          () => this.notionClient.getPageMarkdown(page.id),
+          this.config.advanced.itemTimeoutMs,
+          `row body ${page.id}`,
+        );
+        this.noteRowBody(page.id, markdown);
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 행의 하위 페이지를 확인하지 못함 (${page.id}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   }
 
   /**
@@ -651,54 +707,58 @@ export class DatabaseSyncer {
     return { deleted, conflicts };
   }
 
+  /**
+   * DB 의 보기를 Notion 에서 다시 읽어 `db-views.json` 에 적는다. DB 를 통째로 받을 때(행이 바뀐 DB · 전체 대조)
+   * 마다 부른다 — 보기만 고친 것은 DB 의 수정 시각을 바꾸지 않아(2026-10-23 실측) 다음 전체 대조가 받는다.
+   * 예전에는 처음 받은 보기를 끝까지 썼다 — Notion 에서 더하거나 고친 보기가 `.base` 에 오지 않았다.
+   * 읽지 못하면 받아 둔 보기를 쓴다 — 보기가 빠진 `.base` 를 쓰지 않는다.
+   */
   private async pullDatabaseViews(
     dbConfig: DatabaseSyncConfig,
-    force = false,
   ): Promise<DatabaseViewsConfig | null> {
+    const configPath = DB_VIEWS_PATH;
+    // 파일이 없을 때만 빈 객체에서 시작한다. 있는데 읽지 못하면(깨진 JSON 등) 이 DB 의 설정만 담아 쓰면
+    // 다른 DB 들의 보기 설정이 모두 지워진다 — 이번에는 쓰지 않고 받은 설정만 돌려준다.
+    let allViewsConfigs: Record<string, DatabaseViewsConfig> | null = {};
     try {
-      const configPath = DB_VIEWS_PATH;
-
-      if (!force) {
-        try {
-          const existing = await this.vaultFs.readFile(configPath);
-          const parsed = JSON.parse(existing) as Record<string, DatabaseViewsConfig>;
-          if (parsed[dbConfig.databaseId]) return parsed[dbConfig.databaseId]!;
-        } catch {
-          // 파일 없으면 계속 진행
-        }
-      }
-
-      const viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
-      await this.vaultFs.ensureFolder(INTERNAL_DIR);
-
-      // 파일이 없을 때만 빈 객체에서 시작한다. 있는데 읽지 못하면(깨진 JSON 등) 이 DB 의 설정만 담아 쓰면
-      // 다른 DB 들의 보기 설정이 모두 지워진다 — 이번에는 쓰지 않고 받은 설정만 돌려준다.
-      let allViewsConfigs: Record<string, DatabaseViewsConfig> = {};
       if (await this.vaultFs.exists(configPath)) {
-        try {
-          allViewsConfigs = JSON.parse(await this.vaultFs.readFile(configPath)) as Record<
-            string,
-            DatabaseViewsConfig
-          >;
-        } catch (error) {
-          getLogger().warn(
-            `[DB Sync] ${configPath} 를 읽지 못해 이 DB 의 보기 설정을 저장하지 않음(파일은 그대로 둠):`,
-            error,
-          );
-          return viewsConfig;
-        }
+        allViewsConfigs = JSON.parse(await this.vaultFs.readFile(configPath)) as Record<
+          string,
+          DatabaseViewsConfig
+        >;
       }
+    } catch (error) {
+      getLogger().warn(
+        `[DB Sync] ${configPath} 를 읽지 못해 이 DB 의 보기 설정을 저장하지 않음(파일은 그대로 둠):`,
+        error,
+      );
+      allViewsConfigs = null;
+    }
+    const cached = allViewsConfigs?.[dbConfig.databaseId] ?? null;
 
+    let viewsConfig: DatabaseViewsConfig;
+    try {
+      viewsConfig = await this.notionClient.getDatabaseViewsConfig(dbConfig.databaseId);
+    } catch (error) {
+      getLogger().warn(
+        `[DB Sync] 뷰 설정을 받지 못함 — ${cached ? "받아 둔 보기로 씀" : "보기 없이 씀"}:`,
+        error,
+      );
+      return cached;
+    }
+    if (!allViewsConfigs) return viewsConfig;
+
+    try {
+      await this.vaultFs.ensureFolder(INTERNAL_DIR);
       allViewsConfigs[dbConfig.databaseId] = viewsConfig;
       await this.vaultFs.writeFile(configPath, JSON.stringify(allViewsConfigs, null, 2));
       getLogger().debug(
         `[DB Sync] 뷰 설정 ${viewsConfig.views.length}개 저장: ${dbConfig.databaseId}`,
       );
-      return viewsConfig;
     } catch (error) {
-      getLogger().warn(`[DB Sync] 뷰 설정 Pull 실패 (계속 진행):`, error);
-      return null;
+      getLogger().warn(`[DB Sync] 뷰 설정을 저장하지 못함 (계속 진행):`, error);
     }
+    return viewsConfig;
   }
 
   /** 행들 가운데 한 번이라도 기간인 날짜 속성 → 그 짝 키. */
@@ -751,16 +811,69 @@ export class DatabaseSyncer {
       });
 
       const safeName = sanitizeFileName(dbName);
-      const basePath = `${dbConfig.localFolder}/${safeName}.base`;
-      await this.vaultFs.writeFile(basePath, baseContent);
+      const basePath = `${dbConfig.localFolder}/${safeName}${BASE_SUFFIX}`;
+      if (await this.isUserFile(basePath)) {
+        if (!this.keptUserBases.has(basePath)) {
+          this.keptUserBases.add(basePath);
+          // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
+          getLogger().info(
+            `[DB Sync] 직접 만든 .base 라 Notion 보기로 덮어쓰지 않음: ${basePath} — Notion 보기를 받으려면 이 파일의 이름을 바꾸세요`,
+          );
+        }
+      } else {
+        await this.vaultFs.writeFile(basePath, baseContent);
+      }
       this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
-      await this.generateSidecar(dbConfig, dbName, safeName, schemaFull, resolvedViews);
+      await this.generateSidecar(
+        dbConfig,
+        dbName,
+        safeName,
+        schemaFull,
+        resolvedViews,
+        meta.isInline,
+        await this.appearanceOf(meta, safeName),
+      );
       await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
+  }
+
+  /**
+   * DB 의 아이콘 · 커버 · 설명 · 제목 표시 — push 가 DB 를 다시 만들 때 쓴다(ADR-036). 아이콘 · 커버는 페이지와
+   * 같은 꼴로 적고 올린 파일은 볼트로 내려받는다 — 서명 주소를 적으면 pull 마다 사이드카가 바뀐다.
+   */
+  private appearanceOf(meta: DatabaseMeta, safeName: string): Promise<SidecarAppearance> {
+    let found = this.appearances.get(meta);
+    if (!found) {
+      found = this.readAppearance(meta, safeName);
+      this.appearances.set(meta, found);
+    }
+    return found;
+  }
+
+  private async readAppearance(meta: DatabaseMeta, safeName: string): Promise<SidecarAppearance> {
+    const a = meta.appearance;
+    if (!a) return {};
+    const decorated = await this.decorations.pulled(
+      { icon: a.icon, cover: a.cover } as unknown as PageObjectResponse,
+      `${safeName}-db`,
+      true,
+    );
+    const description = richTextToNfm(a.description as Parameters<typeof richTextToNfm>[0]);
+    return {
+      ...decorated,
+      ...(description ? { description } : {}),
+      ...(a.showTitle ? {} : { showTitle: false as const }),
+    };
+  }
+
+  /** pull 이 쓰지 않은 `.base` · 사이드카가 이미 있는가 — 없거나 읽지 못하면 false. */
+  private async isUserFile(path: string): Promise<boolean> {
+    const content = await this.vaultFs.readFile(path).catch(() => null);
+    return content !== null && !isGeneratedDbArtifact(path, content);
   }
 
   /**
@@ -771,12 +884,13 @@ export class DatabaseSyncer {
   private async cleanupStaleDbArtifacts(localFolder: string, safeName: string): Promise<void> {
     try {
       const keep = new Set([
-        `${localFolder}/${safeName}.base`,
-        `${localFolder}/${safeName}.notion.json`,
+        `${localFolder}/${safeName}${BASE_SUFFIX}`,
+        `${localFolder}/${safeName}${SIDECAR_SUFFIX}`,
       ]);
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
       for (const path of stale) {
+        if (await this.isUserFile(path)) continue;
         await this.vaultFs.deleteFile(path);
         getLogger().info(`[DB Sync] 고아 DB 산출물 삭제(rename): ${path}`);
       }
@@ -794,8 +908,10 @@ export class DatabaseSyncer {
     dbConfig: DatabaseSyncConfig,
     dbName: string,
     safeName: string,
-    schemaFull: Record<string, { id: string; type: string; options?: Array<{ name: string }> }>,
+    schemaFull: Record<string, BasePropertySchema>,
     resolvedViews: DatabaseViewsConfig,
+    isInline: boolean,
+    appearance: SidecarAppearance,
   ): Promise<void> {
     try {
       const sidecar = this.sidecarGenerator.build({
@@ -803,14 +919,17 @@ export class DatabaseSyncer {
         databaseName: dbName,
         schema: schemaFull,
         viewsConfig: resolvedViews,
+        isInline,
+        appearance,
       });
-      const sidecarPath = `${dbConfig.localFolder}/${safeName}.notion.json`;
+      const sidecarPath = `${dbConfig.localFolder}/${safeName}${SIDECAR_SUFFIX}`;
       const serialized = this.sidecarGenerator.serialize(sidecar);
       // 같은 DB 가 한 번의 pull 에서 임베드 재작성 때마다 재생성된다(실측 최대 67회).
       // 결정적 직렬화라 동일 바이트면 쓰기·degrade 로그 모두 생략 — 로그 노이즈와
       // 불필요한 IO 를 없애고, 내용이 실제로 바뀔 때만 알린다.
       const existing = await this.vaultFs.readFile(sidecarPath).catch(() => null);
       if (existing === serialized) return;
+      if (existing !== null && !isGeneratedDbArtifact(sidecarPath, existing)) return;
       await this.vaultFs.writeFile(sidecarPath, serialized);
 
       if (sidecar.degraded.length > 0) {
@@ -818,7 +937,7 @@ export class DatabaseSyncer {
         const dropped = sidecar.degraded.length - unrep;
         getLogger().info(
           `[DB Sync] '${dbName}' degrade ${sidecar.degraded.length}건` +
-            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}.notion.json 보존`,
+            ` (미표현 뷰 ${unrep} · 미표현 설정 ${dropped}) → ${safeName}${SIDECAR_SUFFIX} 보존`,
         );
       }
     } catch (error) {
@@ -916,26 +1035,12 @@ export class DatabaseSyncer {
       await this.localizeFileProperties(rawProperties, properties, safeName);
     }
 
-    const cover = this.notionClient.extractCover(page);
-    const icon = this.notionClient.extractIcon(page);
-
-    if (cover) {
-      // notion-hosted 커버는 서명 URL(약 1시간 만료)이라 frontmatter 에 남기면 깨진
-      // 링크 + 풀마다 서명이 바뀌어 churn 이 된다(실측: LIFE/WORK). files 속성과 같은
-      // 로컬라이즈 경로(P3-A)로 첨부에 내려받고, 외부 URL(unsplash 등)은 원형 유지한다.
-      // (기존 구현은 downloadAllImages 결과를 `![cover](..)` 형태로 재매치했지만 성공
-      // 시 결과가 `![[..]]` 위키링크라 항상 미스매치 → 서명 URL 폴백이 되는 버그였다)
-      const local = downloadMedia
-        ? await this.imageHandler.localizeNotionFileUrl(cover.url, `${safeName}-cover`)
-        : null;
-      properties.cover = local ? `[[${local}]]` : cover.url;
-    }
-
-    if (icon) {
-      properties.icon = icon.value;
-    }
+    // 아이콘 · 커버 — Notion 에 올린 파일은 files 속성과 같이 첨부로 내려받는다(P3-A). 서명 URL(약 1시간
+    // 만료)을 적으면 깨진 링크가 되고 받을 때마다 주소가 바뀌어 churn 이 된다(실측: LIFE/WORK).
+    Object.assign(properties, await this.decorations.pulled(page, safeName, downloadMedia));
 
     const mdResult = await this.notionClient.getPageMarkdown(page.id);
+    this.noteRowBody(page.id, mdResult.markdown);
     const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);
@@ -975,29 +1080,27 @@ export class DatabaseSyncer {
         notionExportCompact: exportCompact,
         localContent: await readLocalNote(this.vaultFs, options?.localPath ?? filePath),
         // 이 렌더러가 적는 키 — 속성과 제목 · 커버 · 아이콘. 나머지는 로컬 키다(F-08).
-        notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", "cover", "icon"],
+        notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", ...DECORATION_KEYS],
       },
     );
     return { content, title, properties, bodyFingerprint };
   }
 
   /**
-   * 행의 본문 밖이 지난 동기화 사본 그대로인가(N-05) — 제목과 보낼 수 있는 속성, 그리고
-   * {@link renderRow} 로 받는 행이면 아이콘 · 커버. push 는 원격을 덮어써도 되는지, pull 은 받을
+   * 행의 본문 밖이 지난 동기화 사본 그대로인가(N-05) — 제목과 보낼 수 있는 속성, 아이콘 · 커버.
+   * push 는 원격을 덮어써도 되는지, pull 은 받을
    * 것이 있는지를 이 규칙으로 가른다. 읽기 전용 속성(수식 · 롤업 · 수정 시각)은 보지 않는다 —
    * 로컬에서 고칠 수 없고 push 가 보내지 않는다.
    *
    * @param mapper 그 행의 DB 스키마를 읽은 매퍼.
    * @param base 지난 동기화 시점의 frontmatter.
    * @param path 지난 동기화 시점의 경로 — 파일 이름을 따르던 제목을 가른다.
-   * @param decorated 아이콘 · 커버도 견주나 — {@link renderRow} 로 받는 행만 그것을 노트에 적는다.
    */
   rowOutsideBodyUnchanged(
     mapper: PropertyMapper,
     page: PageObjectResponse,
     base: Readonly<Record<string, unknown>>,
     path: string,
-    decorated: boolean,
   ): boolean {
     const raw = (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
     const { changed, cleared } = diffRowProperties(
@@ -1008,30 +1111,7 @@ export class DatabaseSyncer {
       this.notionClient.extractTitle(page) === noteTitle(base, path) &&
       Object.keys(changed).length === 0 &&
       cleared.length === 0 &&
-      (!decorated || this.decorationsUnchanged(page, base))
-    );
-  }
-
-  /**
-   * 원격 행의 아이콘 · 커버가 `frontmatter` 에 적힌 그대로인가 — {@link renderRow} 가 적는 모양으로
-   * 견준다(N-05). Notion 에 올린 파일은 읽을 때마다 주소가 바뀌고(서명) 커버는 볼트로 내려받아
-   * 적으므로, 있는지만 견준다.
-   */
-  private decorationsUnchanged(
-    page: PageObjectResponse,
-    frontmatter: Readonly<Record<string, unknown>>,
-  ): boolean {
-    const icon = this.notionClient.extractIcon(page);
-    const cover = this.notionClient.extractCover(page);
-    return (
-      sameDecoration(
-        icon === null ? null : { uploaded: icon.type === "file", value: icon.value },
-        frontmatter.icon,
-      ) &&
-      sameDecoration(
-        cover === null ? null : { uploaded: cover.type === "file", value: cover.url },
-        frontmatter.cover,
-      )
+      decorationsUnchanged(this.notionClient, page, base)
     );
   }
 
@@ -1115,13 +1195,7 @@ export class DatabaseSyncer {
         localExists &&
         base !== null &&
         bodyFingerprint === existingRecord.notionBodyFingerprint &&
-        this.rowOutsideBodyUnchanged(
-          this.propertyMapper,
-          page,
-          base,
-          existingRecord.obsidianPath,
-          true,
-        );
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, existingRecord.obsidianPath);
 
       const resolution = resolvePullConflict({
         record: existingRecord,
@@ -1235,17 +1309,4 @@ export class DatabaseSyncer {
 /** 원격 행의 속성(`page.properties`). */
 function rowProperties(page: PageObjectResponse): Record<string, unknown> {
   return (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
-}
-
-/**
- * 원격 아이콘 · 커버 하나가 frontmatter 에 적힌 값과 같은가. Notion 에 올린 파일(`uploaded`)은
- * 있는지만 본다. `remote` 는 원격에 없으면 null.
- */
-function sameDecoration(
-  remote: { readonly uploaded: boolean; readonly value: string } | null,
-  written: unknown,
-): boolean {
-  const present = written !== undefined && written !== null && written !== "";
-  if (remote === null) return !present;
-  return remote.uploaded ? present : written === remote.value;
 }

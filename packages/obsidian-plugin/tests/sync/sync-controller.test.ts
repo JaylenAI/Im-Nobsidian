@@ -23,6 +23,7 @@ interface MockOrchestrator {
   clearStaleConflicts: ReturnType<typeof vi.fn>;
   resolveConflict: ReturnType<typeof vi.fn>;
   discardLocalChange: ReturnType<typeof vi.fn>;
+  prepareFolderDatabase: ReturnType<typeof vi.fn>;
   localChangeDiff: ReturnType<typeof vi.fn>;
   remoteChangeDiff: ReturnType<typeof vi.fn>;
 }
@@ -57,6 +58,7 @@ function createMockOrchestrator(): MockOrchestrator {
       pendingOperations: 0,
     }),
     discardLocalChange: vi.fn().mockResolvedValue(undefined),
+    prepareFolderDatabase: vi.fn(),
     localChangeDiff: vi.fn(),
     remoteChangeDiff: vi.fn(),
     statusLocal: vi.fn().mockResolvedValue({
@@ -326,6 +328,38 @@ describe("SyncController", () => {
       await makeController(mock, hooks).discard("새.md");
       expect(onNotice).toHaveBeenCalledWith(expect.stringContaining("추적하지 않는 새 노트"));
       expect(onState).toHaveBeenLastCalledWith(expect.objectContaining({ syncState: "error" }));
+    });
+
+    it("폴더를 DB 로 올릴 준비 — 무엇을 만들지 알리고 변경 목록을 새로고친다", async () => {
+      mock.prepareFolderDatabase.mockResolvedValueOnce({
+        folder: "Books",
+        sidecarPath: "Books/Books.notion.json",
+        rows: 3,
+        properties: [{ name: "별점", type: "number", reason: "" }],
+        views: ["전체"],
+        skipped: [{ what: "보기 지도", reason: "" }],
+      });
+      const { hooks, onState, onNotice } = createHooks();
+      await makeController(mock, hooks).prepareDatabase("Books", ".obsidian");
+      expect(mock.prepareFolderDatabase).toHaveBeenCalledWith("Books", ".obsidian");
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Books 를 다음 push 에서 Notion DB 로 만듭니다 — 행 3 · 속성 1 · 보기 1 · " +
+          "옮기지 않은 것 1. 속성 타입은 Books/Books.notion.json 에서 고칠 수 있습니다.",
+      );
+      expect(mock.statusLocal).toHaveBeenCalled();
+      expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ syncState: "error" }));
+    });
+
+    it("준비를 거절하면 까닭만 알린다 — 오류 상태로 두지 않는다", async () => {
+      mock.prepareFolderDatabase.mockRejectedValueOnce(
+        new Error("노트 2개가 이미 Notion 페이지로 올라가 있다"),
+      );
+      const { hooks, onState, onNotice } = createHooks();
+      await makeController(mock, hooks).prepareDatabase("Books", ".obsidian");
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: DB 로 올릴 준비를 하지 못함 — 노트 2개가 이미 Notion 페이지로 올라가 있다",
+      );
+      expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ syncState: "error" }));
     });
 
     it("항목 받기는 그 노트만 pull 한다 — 전체 받기는 범위를 싣지 않는다", async () => {

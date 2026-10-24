@@ -1,3 +1,4 @@
+import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
   extractChildTags,
@@ -20,12 +21,14 @@ import { computeHash } from "../utils/hash.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
+import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { DatabaseSyncer } from "./database-syncer.js";
 import { folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
+import { PageDecorations } from "./page-decorations.js";
 import { moveOrigin } from "./local-moves.js";
 import { extractAliases, extractTitle, followsFileName } from "./note-title.js";
 import { extractParentId } from "./notion-parent.js";
@@ -61,6 +64,11 @@ export class PagePuller {
     string,
     { readonly previous: Promise<void>; readonly release: () => void }
   >();
+
+  private decorationsCache?: PageDecorations;
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
 
   constructor(
     private readonly config: Config,
@@ -152,29 +160,25 @@ export class PagePuller {
   }
 
   private async createPulledPage(pageId: string): Promise<string> {
-    const page = await this.notionClient.getPage(pageId);
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
 
     const parentPath = await this.resolveParentPath(page);
 
-    const hasChildPages = await this.pageHasChildContainers(pageId);
-
     const fetched = await this.fetchPageMarkdown(pageId);
-    const hasContent = fetched.content.trim().length > 0;
+    const hasChildPages = this.hasChildContainers(pageId, fetched.children);
+    if (hasChildPages && !fetched.hasBody) {
+      return this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName);
+    }
 
     let filePath: string;
-    let fileType: "file" | "folder-note" | "folder-only";
+    let fileType: "file" | "folder-note";
 
-    if (hasChildPages && hasContent) {
+    if (hasChildPages) {
       const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
       filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
       fileType = "folder-note";
-      await this.vaultFs.ensureFolder(folderPath);
-    } else if (hasChildPages && !hasContent) {
-      const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
-      fileType = "folder-only";
       await this.vaultFs.ensureFolder(folderPath);
     } else {
       filePath = await this.resolveUniqueFilePath(parentPath, safeName, pageId);
@@ -227,6 +231,39 @@ export class PagePuller {
     });
 
     return filePath;
+  }
+
+  /**
+   * 자식 말고 본문이 없는 페이지는 폴더로만 받는다 — 노트를 쓰지 않고 폴더 경로를 추적한다(폴더 레코드).
+   *
+   * push 가 폴더 노트 없는 폴더로 만든 페이지가 그렇다. 그 볼트에서는 폴더 레코드라 노트가 없는데, 새 볼트로
+   * 받으면 자식 태그가 `[[자식]]` 줄로 바뀐 본문을 «본문» 으로 보고 `X/X.md` 를 썼다(실데이터 재왕복 19 폴더).
+   * 본문이 생기면 다음 pull 이 폴더 노트로 받는다({@link pullFolderRecord}).
+   */
+  private async createFolderOnly(
+    pageId: string,
+    page: PageObjectResponse,
+    fingerprint: string | null,
+    parentPath: string,
+    safeName: string,
+  ): Promise<string> {
+    const folderPath = stripMarkdownExtension(
+      await this.resolveUniqueFilePath(parentPath, safeName, pageId),
+    );
+    const resolvedParentId = await extractParentId(this.notionClient, page);
+    await this.vaultFs.ensureFolder(folderPath);
+    this.stateDb.upsert({
+      obsidianPath: folderPath,
+      notionPageId: pageId,
+      notionParentId: resolvedParentId,
+      contentHash: "",
+      ...this.observation.fieldsOf(page, fingerprint),
+      localLastModified: new Date().toISOString(),
+      syncDirection: "both",
+      fileType: "folder-only",
+      status: "synced",
+    });
+    return folderPath;
   }
 
   async pullUpdate(change: RemoteChange): Promise<PullOutcome> {
@@ -472,7 +509,7 @@ export class PagePuller {
       await this.ensureDbSchema();
       const raw = (page as unknown as { properties: Record<string, unknown> }).properties;
       properties = this.propertyMapper.fromNotionProperties(raw);
-      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title"];
+      notionKeys = [...this.propertyMapper.ownedKeys(raw), "title", ...DECORATION_KEYS];
     } else {
       properties = this.notionClient.extractProperties(page);
     }
@@ -482,6 +519,11 @@ export class PagePuller {
     if (isDatabaseMode(this.config) || !input.titleFollowsName) {
       properties.title = title;
     }
+    // 아이콘 · 커버 — 예전에는 행 렌더러로 받는 행에만 적었다(행 렌더러와 같은 차례로).
+    Object.assign(
+      properties,
+      await this.decorations.pulled(page, sanitizeFileName(title), input.downloadMedia),
+    );
 
     let markdown = await this.imageHandler.restoreUploadedMedia(
       input.fetched.content,
@@ -531,6 +573,8 @@ export class PagePuller {
     compact: boolean;
     children: ChildTag[];
     fingerprint: string | null;
+    /** 자식 페이지 · 자식 DB 태그와 빈 블록 말고 본문이 있는가 — 받은 원문으로 본다({@link hasBodyBesidesChildren}). */
+    hasBody: boolean;
   }> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
@@ -546,6 +590,7 @@ export class PagePuller {
           compact: isCompactExport(result.markdown),
           children: extractChildTags(result.markdown),
           fingerprint: remoteBodyFingerprint(result.markdown),
+          hasBody: hasBodyBesidesChildren(result.markdown),
         };
       } catch (error) {
         // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
@@ -566,6 +611,7 @@ export class PagePuller {
       compact: isCompactExport(fallback.markdown),
       children: extractChildTags(fallback.markdown),
       fingerprint: null,
+      hasBody: hasBodyBesidesChildren(fallback.markdown),
     };
   }
 
@@ -639,27 +685,21 @@ export class PagePuller {
   }
 
   /**
-   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 신뢰성 있게 판정한다.
+   * 페이지가 폴더(자식 페이지·자식 DB 보유)인지 판정한다 — 요청 없이.
    *
    * 결함(폴더노트 본문분리)의 근본 원인은 얕은 판정이었다 — 최상위 블록 첫 페이지에서
    * child_page 만 검사하면 callout·column·toggle 안에 중첩된 자식 페이지나 child_database 를
    * 놓쳐 폴더노트가 file 로 오분류되고, 본문이 폴더 밖 최상위로 밀려 resolveUniqueFilePath
    * 충돌(' (1).md')로 쪼개졌다.
    *
-   * 1차: 발견 단계(서브트리 순회/증분)에서 전 페이지의 부모를 해소하며 만든
-   *      집합({@link RemoteDetector.hasChildPages})으로 O(1) 판정(추가 API 호출 0, 처리 순서
-   *      무관) — 전체 pull 경로.
-   * 폴백: 집합에 없을 때만(증분 pull 의 신규 폴더 등) fetchAllChildrenDeep 로 컨테이너를
-   *       재귀 탐색해 child_page·child_database 를 직접 확인한다.
+   * 1차: 발견 단계에서 전 페이지의 부모를 해소하며 만든 집합({@link RemoteDetector.hasChildPages}).
+   * 2차: 받은 본문의 자식 태그 — Markdown API 는 컨테이너 · 목록 안에 중첩된 자식 페이지(`<page>`)와
+   *      자식 DB(`<database>`, 링크드 보기 포함)를 모두 싣는다. 페이지 링크 블록은 `<page>` 가 아니다.
+   *      예전에는 집합에 없는 페이지(자식이 없는 모든 잎)마다 블록을 끝까지 다시 훑었다 — 실데이터
+   *      51 노트 받기에서 페이지 하나에 평균 8.6회(v0.7 성능, 2026-10-23).
    */
-  private async pageHasChildContainers(pageId: string): Promise<boolean> {
-    if (this.detector.hasChildPages(pageId)) return true;
-    try {
-      const deep = await this.notionClient.fetchAllChildrenDeep(pageId);
-      return deep.some((b) => b.type === "child_page" || b.type === "child_database");
-    } catch {
-      return false;
-    }
+  private hasChildContainers(pageId: string, children: readonly ChildTag[]): boolean {
+    return this.detector.hasChildPages(pageId) || children.length > 0;
   }
 
   /**
@@ -696,13 +736,10 @@ export class PagePuller {
         pathParts.pop();
         return pathParts.join("/");
       }
-      const pathParts = parentRecord.obsidianPath.split("/");
-      pathParts.pop();
-      const parentDir = pathParts.join("/");
-      return (
-        parentDir ||
-        sanitizeFileName(this.notionClient.extractTitle(await this.notionClient.getPage(parentId)))
-      );
+      // 노트 하나(행 · 자식 없이 받은 페이지)의 자식은 그 노트 이름의 폴더에 둔다 — push 가 `X.md` 옆
+      // `X/` 를 X 의 하위로 읽는다(`folderContainer`). 예전에는 노트 옆에 두어, 행의 하위 페이지가
+      // DB 폴더에 행처럼 섞이고(실데이터 E2E 4 페이지) 다시 올리면 부모가 바뀌었다.
+      return stripMarkdownExtension(parentRecord.obsidianPath);
     }
 
     try {

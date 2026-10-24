@@ -26,6 +26,8 @@ vi.mock("@im-nobsidian/core", async () => ({
     { fromConfig: vi.fn().mockReturnValue({}) },
   ),
   SyncOrchestrator: vi.fn().mockImplementation(() => ({ sync: mockOrchestratorSync })),
+  findConnectionFolders: vi.fn().mockResolvedValue([]),
+  ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
   WatchSyncService: vi.fn().mockImplementation(() => ({
     start: mockStart,

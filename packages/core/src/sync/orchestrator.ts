@@ -28,7 +28,11 @@ import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/com
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
-import { PropertyMapper, type WikilinkResolver } from "../notion/property-mapper.js";
+import {
+  PropertyMapper,
+  peopleResolverOf,
+  type WikilinkResolver,
+} from "../notion/property-mapper.js";
 import { getLogger } from "../utils/logger.js";
 import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
@@ -36,6 +40,7 @@ import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
+import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
 import { nextPullWatermark } from "./pull-watermark.js";
 import {
   DatabasePullLedger,
@@ -69,6 +74,10 @@ import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { rerenderTargets } from "./rerender-targets.js";
 import { detectMissingLocalFiles } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
+import { randomUUID } from "node:crypto";
+import { DatabaseCreator } from "./database-creator.js";
+import { prepareFolderDatabase, type FolderDatabaseReport } from "./folder-database.js";
+import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
@@ -93,6 +102,7 @@ export class SyncOrchestrator {
   // 볼트 폴더의 Notion 자리 — 새 노트 · 옮긴 노트의 부모, 폴더 페이지 마련, 둘 자리가 없는 것의
   // 거절(S-04 · S-11 · S-15).
   private readonly placement: FolderPlacement;
+  private readonly databaseCreator: DatabaseCreator;
 
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
@@ -175,6 +185,7 @@ export class SyncOrchestrator {
       pipeline,
       imageHandler,
       () => this.observation.context,
+      (pageId, rawMarkdown) => this.detector.noteBodyChildren(pageId, rawMarkdown),
     );
     this.discovery = new DatabaseDiscovery(
       config,
@@ -191,6 +202,8 @@ export class SyncOrchestrator {
     // 후처리로만 해소되는 2-write churn 이 생긴다(DB 모드는 propertyMapper 가 처리).
     const wikilinkResolver: WikilinkResolver = {
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
+      resolveIn: (title, parentIds) =>
+        stateDb.resolveWikilinkIn(title, parentIds)?.notionPageId ?? null,
       resolvePageId: (pageId: string) => {
         const entry = stateDb.resolvePageId(pageId);
         return entry ? wikilinkTitleFromPath(entry.obsidianPath) : null;
@@ -202,6 +215,7 @@ export class SyncOrchestrator {
       (databaseId) => notionClient.getDatabaseSchema(databaseId),
       wikilinkResolver,
       () => PropertyMapper.fromConfig(config),
+      async () => peopleResolverOf(await notionClient.listUsers()),
     );
 
     this.drift = new RemoteDriftChecker(
@@ -220,6 +234,14 @@ export class SyncOrchestrator {
       this.drift,
       this.recovery,
     );
+    this.databaseCreator = new DatabaseCreator(
+      config,
+      stateDb,
+      notionClient,
+      vaultFs,
+      new PageDecorations(notionClient, imageHandler),
+    );
+    this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
     this.puller = new PagePuller(
       config,
@@ -281,8 +303,23 @@ export class SyncOrchestrator {
     return this.gate.run("push", () => this.executePush(options));
   }
 
+  /**
+   * 다른 연결 폴더 안의 노트를 추적하고 있으면 아무것도 하지 않고 멈춘다(ADR-038) — 그 노트들은 이 연결의
+   * 목록에 없으므로, 그대로 돌리면 「볼트에서 지움」 으로 보고 Notion 페이지를 지우거나 되살리려 한다.
+   */
+  private assertConnectionScope(): void {
+    const vaultFs = this.vaultFs;
+    if (!vaultFs.ownsPath) return;
+    const foreign = this.stateDb
+      .getAll()
+      .map((record) => record.obsidianPath)
+      .filter((path) => !vaultFs.ownsPath!(path));
+    if (foreign.length > 0) throw new ConnectionScopeError(foreign);
+  }
+
   private async executePush(options?: PushOptions): Promise<PushResult> {
     const startTime = Date.now();
+    this.assertConnectionScope();
 
     if (this.config.sync.direction === "pull") {
       return {
@@ -304,6 +341,7 @@ export class SyncOrchestrator {
     }
     this.rowSchemas.clear();
     this.placement.resetUnpreparedFolders();
+    this.databaseCreator.reset();
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -327,6 +365,8 @@ export class SyncOrchestrator {
       .filter((move) => inAnyPathScope(move.to, options?.paths));
 
     if (filtered.length === 0 && folderMoves.length === 0) {
+      // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
+      if (!options?.dryRun) await this.completeDatabaseSchemas();
       return {
         created: 0,
         updated: 0,
@@ -372,7 +412,13 @@ export class SyncOrchestrator {
       items.forEach((item, index) => options?.onProgress?.(index + 1, items.length, item));
       const count = (operation: ProgressItem["operation"]): number =>
         items.filter((item) => item.operation === operation).length;
+      const newDatabases = await this.databaseCreator.newDatabaseFolders(
+        applicable,
+        view.lookup,
+        !options?.paths,
+      );
       return {
+        createdDatabases: newDatabases.size,
         created: count("create"),
         updated: count("update"),
         deleted: count("delete"),
@@ -442,7 +488,12 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.placement.prepareFolders(applicable, firstAttempt);
+    const pushedEarly = await this.placement.prepareFolders(
+      applicable,
+      firstAttempt,
+      !options?.paths,
+    );
+    await this.completeDatabaseSchemas();
     await runPool(
       applicable.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
@@ -478,11 +529,64 @@ export class SyncOrchestrator {
       // 첫 차례에 새 행 · 폴더 노트가 생기면 그 아래 폴더가 그제서야 자리를 얻는다 — 재시도 전에
       // 폴더를 다시 본다. 자리를 얻지 못한 폴더의 노트는 그 이유와 함께 실패로 남는다.
       const retriedEarly = await this.placement.prepareFolders(retryQueue, retry);
+      await this.completeDatabaseSchemas();
       await runPool(
         retryQueue.filter((c) => !retriedEarly.has(c.path)),
         retry,
         { concurrency: this.config.advanced.concurrency, signal: options?.signal },
       );
+    }
+
+    // 만든 DB 는 부모 페이지의 끝에 붙는다 — 부모 본문을 다시 보내 `.base` 임베드 자리에 세운다(ADR-036).
+    // 이번 push 가 만든 부모는 덮어쓴다 — DB 를 만들며 수정 시각이 올라 원격 편집과 가를 수 없지만, 방금
+    // 이 노트가 쓴 페이지다. 예전부터 있던 부모는 평소처럼 원격을 견주고, 못 보내면 DB 가 끝에 남는다.
+    for (const path of this.databaseCreator.parentNotesOfCreated()) {
+      if (options?.signal?.aborted) break;
+      try {
+        await withDeadline(
+          () => this.pusher.pushUpdate(path, { overwriteRemote: pushedBodies.has(path) }),
+          this.config.advanced.itemTimeoutMs,
+          `push ${path}`,
+        );
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 만든 DB 를 부모 본문의 자리로 옮기지 못함 — 페이지 끝에 있다 (${path}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    // 뒤에 만든 행 · 페이지를 가리키던 relation — 모두 올린 뒤 한 번 더 보낸다. 사본에서 빼 두었으므로
+    // 이번에 못 보내도 다음 push 가 다시 고른다(가리키는 노트가 Notion 에 생길 때까지).
+    if (!options?.signal?.aborted) {
+      await runPool(
+        this.pusher.takeUnsentRelations(),
+        async (path) => {
+          try {
+            await withDeadline(
+              () => this.pusher.pushUpdate(path),
+              this.config.advanced.itemTimeoutMs,
+              `push ${path}`,
+            );
+          } catch (error) {
+            getLogger().warn(
+              `[Im-Nobsidian] relation 을 다시 보내지 못함 — 다음 push 가 다시 보낸다 (${path}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+            );
+          }
+        },
+        { concurrency: this.config.advanced.concurrency, signal: options?.signal },
+      );
+      const unresolved = this.pusher.takeUnsentRelations();
+      if (unresolved.length > 0) {
+        getLogger().warn(
+          `[Im-Nobsidian] relation 이 가리키는 노트가 Notion 에 없어 보내지 못한 행 ${unresolved.length}개 — ` +
+            `그 노트를 올리면 다음 push 가 보낸다: ${unresolved.slice(0, 5).join(", ")}` +
+            (unresolved.length > 5 ? " …" : ""),
+        );
+      }
     }
 
     // 뒤에 만든 페이지로 가는 위키링크를 멘션으로 — 모두 올린 뒤 한 번 더 본다(N8).
@@ -540,6 +644,7 @@ export class SyncOrchestrator {
     this.stateDb.clearCompletedOperations();
 
     return {
+      createdDatabases: this.databaseCreator.createdCount,
       created: counts.created,
       updated: counts.updated,
       deleted: counts.deleted,
@@ -547,6 +652,32 @@ export class SyncOrchestrator {
       failed,
       duration: Date.now() - startTime,
     };
+  }
+
+  /**
+   * 만든 DB 에 relation · rollup · formula 를 붙이고, 행 스키마를 다시 읽게 한 뒤 보기를 만든다. 실패는
+   * 다음 push 가 이어 붙인다 — 행은 그대로 올린다.
+   */
+  private async completeDatabaseSchemas(): Promise<void> {
+    try {
+      await this.databaseCreator.completeSchemas();
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 속성을 붙이지 못함 — 다음 push 가 다시 붙인다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    this.rowSchemas.clear();
+    try {
+      await this.databaseCreator.completeViews();
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 보기를 만들지 못함 — 다음 push 가 이어 만든다: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /** 볼트의 노트가 마지막으로 올린 내용 그대로인가 — 읽지 못하면(지움 · 옮김) 아니다. */
@@ -566,6 +697,7 @@ export class SyncOrchestrator {
 
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
+    this.assertConnectionScope();
     this.puller.beginPull();
     this.rowSchemas.clear();
     const emptyResult: PullResult = {
@@ -788,6 +920,8 @@ export class SyncOrchestrator {
             progress: rowProgress,
             ledger,
             signal: options?.signal,
+            // 행의 하위 페이지는 페이지 모드만 받는다(takeUndiscoveredChildren).
+            rescanRowChildren: options?.force === true && !isDatabaseMode(this.config),
           });
           counts.created += dbResult.created;
           counts.updated += dbResult.updated;
@@ -827,6 +961,7 @@ export class SyncOrchestrator {
       counts.restored += dbDiscovery.restored;
     };
 
+    let databasesPulled = false;
     if (workItems.length === 0) {
       // 본문 페이지에 변경이 없어도 DB 행은 원격에서 바뀌었거나 로컬에서 사라졌을 수 있다.
       // 그래서 "변경 없음"으로 끊기 전에 DB 경로를 반드시 거친다 — 설정된 DB(pullAll)와
@@ -837,7 +972,11 @@ export class SyncOrchestrator {
       // 기록이 0건이면 writtenPaths 가 비어 linkCount 0 으로 마감된다(emptyResult 와 동일).
       // 기록이 생겼다면 그 행들의 본문 링크·frontmatter relation 을 finalize 가 해소한다(M2).
       await pullDatabases();
-      return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
+      databasesPulled = true;
+      // 받은 행 본문에 감지가 빠뜨린 하위 페이지가 있으면 아래 길로 받는다.
+      if (!this.detector.hasUndiscoveredChildren()) {
+        return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
+      }
     }
 
     this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "true");
@@ -915,7 +1054,12 @@ export class SyncOrchestrator {
           operation: op,
           ...(outcome.unchanged ? { unchanged: true } : {}),
         });
-      } catch {
+      } catch (error) {
+        // 다른 연결 폴더의 자리(ADR-038)는 다시 해도 같다 — 그 자리를 이름으로 알린다.
+        if (error instanceof ConnectionBoundaryError) {
+          failed.push({ ...toFailure(change, error), path: error.path });
+          return;
+        }
         retryQueue.push(change);
       }
     };
@@ -946,6 +1090,24 @@ export class SyncOrchestrator {
     });
     await pullBodyChildren(firstPass);
 
+    // 한 번 더 해 보고 실패하면 실패로 남긴다 — 재시도와, 재시도 뒤에 나온 자식에 쓴다.
+    const retryPass = async (change: RemoteChange): Promise<void> => {
+      try {
+        await withDeadline(
+          () => applyChange(change),
+          this.config.advanced.itemTimeoutMs,
+          `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
+        );
+        applied.add(change);
+        const record = this.stateDb.getByNotionId(change.pageId);
+        getLogger().info(`[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`);
+      } catch (error) {
+        const failure = toFailure(change, error);
+        failed.push(failure);
+        getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
+      }
+    };
+
     // 재시도 — 1차와 동일하게 워커 풀로 병렬 실행(기존엔 순차였다). 변경 객체를
     // 그대로 들고 있으므로 경로 문자열로 역매칭하던 취약함이 사라진다.
     if (retryQueue.length > 0) {
@@ -955,22 +1117,6 @@ export class SyncOrchestrator {
       );
       await new Promise((r) => setTimeout(r, retryWaitMs));
 
-      const retryPass = async (change: RemoteChange): Promise<void> => {
-        try {
-          await withDeadline(
-            () => applyChange(change),
-            this.config.advanced.itemTimeoutMs,
-            `pull ${this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId}`,
-          );
-          applied.add(change);
-          const record = this.stateDb.getByNotionId(change.pageId);
-          getLogger().info(`[Im-Nobsidian] 재시도 성공: ${record?.obsidianPath ?? change.pageId}`);
-        } catch (error) {
-          const failure = toFailure(change, error);
-          failed.push(failure);
-          getLogger().warn(`[Im-Nobsidian] 재시도 실패: ${failure.path}`);
-        }
-      };
       await runPool(retryQueue, retryPass, {
         concurrency: this.config.advanced.concurrency,
         signal: options?.signal,
@@ -979,7 +1125,9 @@ export class SyncOrchestrator {
       await pullBodyChildren(retryPass);
     }
 
-    await pullDatabases();
+    if (!databasesPulled) await pullDatabases();
+    // DB 행의 하위 페이지 — 행 본문을 받은 뒤라야 보인다. 재시도는 끝났으므로 실패하면 실패로 남긴다.
+    await pullBodyChildren(retryPass);
     return finalize(counts.created, counts.updated, counts.deleted, counts.restored);
   }
 
@@ -1019,6 +1167,7 @@ export class SyncOrchestrator {
 
   private async executeStatus(signal?: AbortLike): Promise<StatusResult> {
     throwIfAborted(signal);
+    this.assertConnectionScope();
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
@@ -1057,6 +1206,7 @@ export class SyncOrchestrator {
    * (옮긴 노트 · 폴더 포함). 상태 DB 는 바꾸지 않는다.
    */
   async statusLocal(): Promise<StatusResult> {
+    this.assertConnectionScope();
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);
@@ -1229,6 +1379,21 @@ export class SyncOrchestrator {
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
+  }
+
+  /**
+   * 볼트에서 만든 노트 폴더를 Notion DB 로 올릴 준비 — frontmatter · `.base` 로 사이드카를 써 둔다(#75).
+   * Notion 에는 쓰지 않는다. 다음 push 가 DB 를 만들고 노트를 행으로 올린다(ADR-036 · ADR-037).
+   *
+   * @param configDir Obsidian 설정 폴더 — 속성 타입(`types.json`)을 읽는다.
+   */
+  async prepareFolderDatabase(folder: string, configDir?: string): Promise<FolderDatabaseReport> {
+    return this.gate.run("prepare-database", () =>
+      prepareFolderDatabase(this.vaultFs, this.stateDb, folder, {
+        databaseId: randomUUID(),
+        ...(configDir === undefined ? {} : { configDir }),
+      }),
+    );
   }
 
   /** 충돌 미리보기용 줄 비교(로컬 vs 원격). 해소 없이 표시 전용. */

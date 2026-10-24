@@ -10,8 +10,9 @@ import {
 import { nfmToBlocks, type NfmBlock } from "../converter/nfm-to-blocks.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type { NotionClient } from "../notion/client.js";
-import type { PropertyMapper } from "../notion/property-mapper.js";
+import type { PropertyMapper, UploadedFile } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import { BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult, DeferredCode } from "../types/convert.js";
 import type { FailedOperation, FileType, LocalChange, SyncRecord } from "../types/sync.js";
@@ -20,10 +21,12 @@ import { computeHash } from "../utils/hash.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
 import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
+import { PageDecorations } from "./page-decorations.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
@@ -53,7 +56,7 @@ import {
   type RemoteDriftChecker,
 } from "./remote-drift.js";
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
-import { diffRowProperties } from "./row-properties.js";
+import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
 import type { RunObservation } from "./run-observation.js";
 import type { VaultFS } from "./vault-fs.js";
@@ -103,6 +106,11 @@ function pagePropertiesOf(page: PageObjectResponse): Record<string, unknown> {
  * 여기로 올린다({@link pushUpdate} · {@link pushCreate}).
  */
 export class PagePusher {
+  private decorationsCache?: PageDecorations;
+  private get decorations(): PageDecorations {
+    return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
+  }
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
@@ -116,6 +124,33 @@ export class PagePusher {
     private readonly placement: FolderPlacement,
     private readonly recovery: InterruptedSyncRecovery,
   ) {}
+
+  /** 이번 실행에서 relation 을 보내지 못한 행 — 대상 노트가 아직 Notion 에 없었다. */
+  private readonly unsentRelations = new Set<string>();
+
+  /**
+   * 우리 쓰기의 결과로 Notion 이 고친 페이지 — 다음 pull 이 내용으로 확인하게 본 기록에서 편집자 · 본 때를
+   * 지운다. 같은 토큰(봇)의 같은 분 안 쓰기라 그대로 두면 pull 은 «우리가 쓴 그대로» 로 보고 받지 않는다
+   * (ADR-017). relation 을 보내면 가리킨 행의 반대쪽 relation 이, 행을 만들면 그 행의 수식 · ID 가 바뀐다.
+   */
+  private markRemoteUnverified(pageIds: readonly string[]): void {
+    for (const pageId of new Set(pageIds)) {
+      const target = this.stateDb.getByNotionId(pageId);
+      if (!target?.notionLastEdited) continue;
+      this.stateDb.setRemoteObservation(target.id, {
+        lastEdited: target.notionLastEdited,
+        lastEditedBy: null,
+        seenAt: null,
+      });
+    }
+  }
+
+  /** relation 을 보내지 못한 행을 꺼낸다(목록은 비운다). */
+  takeUnsentRelations(): string[] {
+    const paths = [...this.unsentRelations].sort();
+    this.unsentRelations.clear();
+    return paths;
+  }
 
   async pushCreate(path: string): Promise<void> {
     // 멱등성/원자성: 이전 시도가 페이지 생성까지는 성공해 notionPageId 가 이미
@@ -203,6 +238,7 @@ export class PagePusher {
       title,
       conversionResult.content,
       conversionResult.properties,
+      { path, frontmatter: conversionResult.properties },
     );
     const { page } = created;
 
@@ -268,6 +304,29 @@ export class PagePusher {
    * 없었다. 충돌이면 해결에서 로컬 유지(새 페이지로 다시 만들기)와 원격 유지(볼트에서 지우기) 가운데
    * 고른다 — 어느 쪽도 묻지 않고 하지 않는다.
    */
+  /**
+   * 파일 속성이 가리키는 볼트 첨부를 올린다 — 못 올린 첨부가 섞인 값은 매퍼가 보내지 않는다(남은 원격 파일을 지우지 않게).
+   */
+  private async uploadsFor(
+    mapper: PropertyMapper,
+    changed: Readonly<Record<string, unknown>>,
+    path: string,
+  ): Promise<Map<string, UploadedFile>> {
+    const uploads = new Map<string, UploadedFile>();
+    for (const target of mapper.localFileTargets(changed)) {
+      try {
+        uploads.set(target, await this.imageHandler.uploadNoteAttachment(target, path));
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 파일 속성의 첨부를 올리지 못해 그 속성은 보내지 않음 (${path}): ${target} — ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return uploads;
+  }
+
   private async livePage(record: SyncRecord): Promise<PageObjectResponse> {
     const presence = await remotePresence(this.notionClient, record.notionPageId!);
     if (presence.kind === "alive") return presence.page;
@@ -343,6 +402,18 @@ export class PagePusher {
     // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
     const newTitle = this.changedPageTitle(record, content, path);
     const propsToUpdate = newTitle === null ? undefined : titleProperty(newTitle);
+    const decorated = await this.decorations.push(
+      record.notionPageId,
+      path,
+      conversionResult.properties,
+      options?.overwriteRemote === true
+        ? { remote }
+        : {
+            base: snapshotFrontmatter(record.baseSnapshot),
+            remote,
+            remoteSettled: remote.last_edited_time === record.notionLastEdited,
+          },
+    );
 
     // notionLastEdited 는 반드시 Notion 서버가 돌려준 값으로 저장한다. 로컬 시각
     // (new Date())을 쓰면 서버 시각과 클록 스큐·네트워크 지연만큼 어긋나 다음 pull 이
@@ -352,6 +423,8 @@ export class PagePusher {
     let written: RemotePageStamp | null = null;
     if (propsToUpdate && Object.keys(propsToUpdate).length > 0) {
       written = await this.notionClient.updatePageProperties(record.notionPageId, propsToUpdate);
+    } else if (decorated) {
+      written = decorated;
     } else if (settles) {
       written = await this.notionClient.getPage(record.notionPageId);
     }
@@ -547,15 +620,16 @@ export class PagePusher {
     // 보낼 것을 먼저 다 만든다 — WAL 은 생성 요청 바로 앞에 적어야, 스키마를 읽지 못해 요청을
     // 보내지도 않은 실행이 «적용됐는지 모름» 기록을 남기지 않는다.
     const mapper = await this.rowSchemas.mapperFor(databaseId);
-    const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(null, current.data),
-      title,
-      { current: current.data },
-    );
-    if (skipped.length > 0) {
+    const changes = diffRowProperties(null, current.data);
+    const { properties, skipped } = mapper.toNotionPropertyChanges(changes, title, {
+      current: current.data,
+      uploads: await this.uploadsFor(mapper, changes.changed, path),
+    });
+    const unsentProperties = withoutDecorations(skipped);
+    if (unsentProperties.length > 0) {
       getLogger().info(
-        `[Im-Nobsidian] 새 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `변환 불가): ${path} — ${skipped.join(", ")}`,
+        `[Im-Nobsidian] 새 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `변환 불가): ${path} — ${unsentProperties.join(", ")}`,
       );
     }
     const selectedPath = this.pipeline.selectPath(content);
@@ -614,6 +688,7 @@ export class PagePusher {
       title,
       conversionResult.content,
       properties,
+      { path, frontmatter: current.data },
     );
     const { page } = created;
 
@@ -634,20 +709,29 @@ export class PagePusher {
     });
 
     const settled = await this.finishCreatedPage(mapping.id, created, conversionResult, path);
+    this.markRemoteUnverified(
+      mapper
+        .relationKeys(Object.keys(properties))
+        .flatMap((key) => mapper.relationTargets(current.data[key])),
+    );
 
-    const fileStat = await this.vaultFs.getFileStat(path);
+    // 보내지 못한 relation 은 사본에서 빼 둔다 — 파일과 사본이 달라 다음 push 가 다시 고른다.
+    const unsent = mapper.relationKeys(skipped);
+    const snapshot = unsent.length > 0 ? withUnsentProperties(content, unsent, null) : content;
+    if (unsent.length > 0) this.unsentRelations.add(path);
+    const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: path,
         notionPageId: page.id,
         notionParentId: databaseId,
-        contentHash: computeHash(content),
+        contentHash: computeHash(snapshot),
         ...this.observation.fieldsOf(settled.page, settled.bodyFingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
         fileType,
         status: "synced",
-        baseSnapshot: Buffer.from(content, "utf-8"),
+        baseSnapshot: Buffer.from(snapshot, "utf-8"),
         localMtime: fileStat?.mtime ?? null,
         localFileSize: fileStat?.size ?? null,
       });
@@ -659,6 +743,9 @@ export class PagePusher {
       });
       this.stateDb.storePreserveMarkers(path, conversionResult.preserveMarkers);
     });
+    // 수식 · 롤업 · ID · 생성일은 Notion 이 정한다 — 로컬 노트에는 없다. 우리가 만든 그대로라 보고 받지
+    // 않으면 새 볼트로 받은 것과 영영 다르므로, 다음 pull 이 한 번 받아 적게 한다.
+    if (mapper.hasComputedProperties()) this.markRemoteUnverified([page.id]);
 
     this.stateDb.markPendingCompleted(walOpId);
   }
@@ -779,19 +866,29 @@ export class PagePusher {
       : this.baseRowState(record);
 
     const title = noteTitle(current.data, path);
+    const changes = diffRowProperties(
+      against?.properties ?? null,
+      options.overwriteRemote ? mapper.writableValues(current.data) : current.data,
+    );
     const { properties, skipped } = mapper.toNotionPropertyChanges(
-      diffRowProperties(
-        against?.properties ?? null,
-        options.overwriteRemote ? mapper.writableValues(current.data) : current.data,
-      ),
+      changes,
       against?.title === title ? null : title,
       // 글 속성 · 제목은 방금 읽은 원격의 서식 위에 바뀐 글자만 고친다 — 로컬은 평문만 안다(F-08).
-      { current: current.data, remote: pagePropertiesOf(remote) },
+      {
+        current: current.data,
+        remote: pagePropertiesOf(remote),
+        // 지난 동기화 사본과 견주어 바뀐 첨부만 올린다. 사본이 없거나 원격을 덮을 때는 받은 첨부까지 바뀐 것으로
+        // 보여, 올리면 원격 파일이 같은 내용의 사본으로 바뀐다 — 그때는 예전처럼 보내지 않는다.
+        ...(against === null || options.overwriteRemote
+          ? {}
+          : { uploads: await this.uploadsFor(mapper, changes.changed, path) }),
+      },
     );
-    if (skipped.length > 0) {
+    const unsentProperties = withoutDecorations(skipped);
+    if (unsentProperties.length > 0) {
       getLogger().info(
-        `[Im-Nobsidian] 행 속성 ${skipped.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `비울 수 없는 속성 · 변환 불가): ${path} — ${skipped.join(", ")}`,
+        `[Im-Nobsidian] 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
+          `비울 수 없는 속성 · 변환 불가): ${path} — ${unsentProperties.join(", ")}`,
       );
     }
 
@@ -830,11 +927,35 @@ export class PagePusher {
       }
     }
 
+    const decorated = await this.decorations.push(
+      pageId,
+      path,
+      current.data,
+      options.overwriteRemote
+        ? { remote }
+        : {
+            base: against?.properties ?? null,
+            remote,
+            remoteSettled: remote.last_edited_time === record.notionLastEdited,
+          },
+    );
+
     // notionLastEdited 는 서버가 돌려준 값으로 적는다(pushUpdate 와 같은 이유 — I5).
     // 보낸 것이 없으면(스키마에 없는 키만 바뀜) 원격은 그대로이므로 옛 값을 둔다.
     let written: RemotePageStamp | null = null;
     if (Object.keys(properties).length > 0) {
       written = await this.notionClient.updatePageProperties(pageId, properties);
+      // 새로 가리킨 행과 더는 가리키지 않는 행 둘 다 반대쪽 relation 이 바뀐다.
+      this.markRemoteUnverified(
+        mapper
+          .relationKeys(Object.keys(properties))
+          .flatMap((key) => [
+            ...mapper.relationTargets(current.data[key]),
+            ...mapper.relationTargets(against?.properties[key]),
+          ]),
+      );
+    } else if (decorated) {
+      written = decorated;
     } else if (bodyChanged && settles) {
       written = await this.notionClient.getPage(pageId);
     }
@@ -845,10 +966,19 @@ export class PagePusher {
       );
     }
 
-    const hash = computeHash(content);
-    const fileStat = await this.vaultFs.getFileStat(path);
+    // 보내지 못한 relation 은 Notion 에 남은 값으로 사본에 적는다(pushCreateRow 와 같은 이유). 파일의
+    // 시각 · 크기도 적지 않는다 — 적으면 빠른 변경 감지가 이 노트를 그대로라고 본다.
+    const unsent = mapper.relationKeys(skipped);
+    const snapshot =
+      unsent.length > 0
+        ? withUnsentProperties(content, unsent, against?.properties ?? null)
+        : content;
+    if (unsent.length > 0) this.unsentRelations.add(path);
+    else this.unsentRelations.delete(path);
+    const hash = computeHash(snapshot);
+    const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
-      this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
+      this.stateDb.updateHash(record.id, hash, Buffer.from(snapshot, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
         this.observation.record(record.id, written, bodyFingerprint);
@@ -956,8 +1086,12 @@ export class PagePusher {
     parentType: "page" | "database",
     title: string,
     markdownContent: string,
-    properties?: Record<string, unknown>,
+    properties: Record<string, unknown> | undefined,
+    note: { readonly path: string; readonly frontmatter: Readonly<Record<string, unknown>> },
   ): Promise<CreatedPage> {
+    // 아이콘 · 커버는 만든 뒤 따로 보낸다 — 모르는 아이콘 이름이면 Notion 이 요청 전체를 거절한다.
+    const decorate = async (page: PageObjectResponse): Promise<PageObjectResponse> =>
+      (await this.decorations.push(page.id, note.path, note.frontmatter, {})) ?? page;
     if (this.config.conversion.preferMarkdownApi !== false) {
       // 새 페이지에는 아무 블록도 없다 — 자리 태그는 모두 Notion 이 거절한다(N6).
       const deferred = deferSyncedReferences(obsidianToNotionEnhanced(markdownContent));
@@ -966,23 +1100,27 @@ export class PagePusher {
         new Set(),
         unknownTagFallbacks(markdownContent),
       ).nfm;
-      const page = await this.notionClient.createPageWithMarkdown({
-        parentId,
-        parentType,
-        title,
-        markdown,
-        properties,
-      });
+      const page = await decorate(
+        await this.notionClient.createPageWithMarkdown({
+          parentId,
+          parentType,
+          title,
+          markdown,
+          properties,
+        }),
+      );
       return { page, markdown, syncedRefs: deferred.refs, syncedRefText: deferred.removed };
     }
 
     const { blocks } = blockModeBody(markdownContent);
-    const page = await this.notionClient.createPage({
-      parentId,
-      parentType,
-      title,
-      properties,
-    });
+    const page = await decorate(
+      await this.notionClient.createPage({
+        parentId,
+        parentType,
+        title,
+        properties,
+      }),
+    );
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(page.id, blocks);
     }
@@ -1067,7 +1205,8 @@ export class PagePusher {
    * 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
    */
   private async databaseIdsOfBase(basePath: string): Promise<string[]> {
-    const sidecarPath = basePath.replace(/\.base$/i, ".notion.json");
+    // 부르는 쪽(child-tags)이 `.base` 로 끝나는 경로만 넘긴다.
+    const sidecarPath = basePath.slice(0, -BASE_SUFFIX.length) + SIDECAR_SUFFIX;
     let databaseId: unknown;
     try {
       databaseId = (
@@ -1078,10 +1217,12 @@ export class PagePusher {
     }
     if (typeof databaseId !== "string") return [];
     const own = compactNotionId(databaseId);
+    // 새 루트로 올리며 만든 DB(ADR-036) — 사이드카는 받아 온 곳의 DB 를 적고 있다.
+    const made = loadCreatedDatabases(this.stateDb).get(own)?.databaseId;
     const linked = [...loadLinkedDbMap(this.stateDb)]
       .filter(([, original]) => original === own)
       .map(([container]) => container);
-    return [own, ...linked];
+    return [own, ...(made ? [compactNotionId(made)] : []), ...linked];
   }
 
   /**
@@ -1197,4 +1338,9 @@ export class PagePusher {
 function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock[] } {
   const nfm = obsidianToNotionEnhanced(markdownContent);
   return { nfm, blocks: nfmToBlocks(nfm, { bookmarks: vaultBookmarks(markdownContent) }) };
+}
+
+/** 보내지 않은 행 속성 가운데 아이콘 · 커버는 뺀다 — 속성이 아니라 페이지의 아이콘 · 커버로 따로 보낸다. */
+function withoutDecorations(skipped: readonly string[]): string[] {
+  return skipped.filter((key) => key !== "icon" && key !== "cover");
 }

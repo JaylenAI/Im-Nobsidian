@@ -4,11 +4,11 @@ import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
-  NodeVaultFS,
   WatchSyncService,
   DEFAULT_WATCH_DEBOUNCE_MS,
 } from "@im-nobsidian/core";
 import type { SyncResult, WatchSyncScope } from "@im-nobsidian/core";
+import { openVaultFs } from "../utils/vault.js";
 
 function formatResult(result: SyncResult): string {
   const pull = `Pull: +${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}`;
@@ -57,7 +57,7 @@ export const watchCommand = new Command("watch")
     const stateDb = StateDB.open(configManager.dbPath);
 
     const client = NotionClient.fromConfig(config);
-    const vaultFs = new NodeVaultFS(cwd, config.paths);
+    const vaultFs = await openVaultFs(cwd, config.paths);
     const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
 
     const service = new WatchSyncService(cwd, orchestrator, {

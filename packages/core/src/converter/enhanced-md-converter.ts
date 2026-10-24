@@ -1,4 +1,12 @@
 import {
+  receiveLiteralBackslashes,
+  receiveLoneBackticks,
+  sendLiteralBackslashes,
+  sendWikilinkText,
+  receiveWikilinkText,
+  escapeLinkTextBrackets,
+} from "./literal-escapes.js";
+import {
   MARKER_BRAND_RE,
   compactMarker,
   TOGGLE_START,
@@ -35,6 +43,8 @@ import {
 } from "./container-indent.js";
 import {
   applyCalloutIndent,
+  containerDepthUnit,
+  lastTextLine,
   clampCalloutIndent,
   quoteCalloutBody,
   readCalloutIndentDepth,
@@ -121,6 +131,9 @@ export function notionEnhancedToObsidian(
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
   result = unescapeBrackets(result);
+  result = receiveWikilinkText(result);
+  result = receiveLiteralBackslashes(result);
+  result = receiveLoneBackticks(result);
   // 북마크의 이름은 escape 를 푼 뒤에 넣는다 — 캡션의 대괄호 escape 가 함께 풀리지 않게(F-09).
   result = linkBookmarks(result, options?.bookmarks);
   result = ensureCalloutContinuity(result);
@@ -196,6 +209,9 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
   // 자리표시자 들여쓰기는 그 뒤 — 모든 변환이 줄의 깊이를 정한 다음에 뒷줄과 견준다.
   result = indentPlaceholdersToNextLine(result);
   result = underscoreItalicsWithStar(result);
+  result = escapeLinkTextBrackets(result);
+  // 글 `\` 는 맨 끝 — 위 변환이 만든 escape 쌍을 escape 로 알아보게.
+  result = sendLiteralBackslashes(result);
 
   return result;
 }
@@ -242,7 +258,7 @@ function convertMentionPageIdToUrl(content: string): string {
 // unresolved 위키링크: preserve-link → 평문 위키링크 (Notion 이 텍스트로 보존, round-trip 수렴)
 function restoreWikilinkPreserveLinks(content: string): string {
   return content.replace(WIKILINK_PRESERVE_LINK_RE, (_match, label: string, enc: string) => {
-    return formatWikilink(decodeMarkerTarget(enc), label);
+    return formatWikilink(sendWikilinkText(decodeMarkerTarget(enc)), sendWikilinkText(label));
   });
 }
 
@@ -795,20 +811,27 @@ function convertTogglesToHtml(content: string): string {
     prev = result;
     result = result.replace(
       calloutToggleRe,
-      (_match, indent: string, rawTitle: string, body: string) => {
+      (_match, indent: string, rawTitle: string, body: string, offset: number, whole: string) => {
         const { depth, title } = readCalloutIndentDepth(indent, rawTitle);
         // 색상 토글 마커 → <details color> 속성으로 재조립(ADR-008)
         const colorMatch = TOGGLE_COLOR_MARKER_RE.exec(title);
         const cleanTitle = colorMatch ? title.replace(TOGGLE_COLOR_MARKER_RE, "") : title;
         const attrs = colorMatch ? ` color="${colorMatch[1]}"` : "";
-        const bodyText = restoreBodyIndent(
-          body
-            .split("\n")
-            .map((line) => line.replace(/^[ \t]*>\s?/, ""))
-            .join("\n"),
+        // 본문 속 콜아웃 · 토글은 여기서 먼저 바꾼다 — 토글을 들인 뒤에 바꾸면 그 들여쓰기를 제 깊이로
+        // 읽어(`\t\t\t> [!tip]` → 깊이 1) 목록 속 토글 안 콜아웃이 Notion 에서 바깥으로 빠졌다. 콜아웃 본문과 같은 순서다.
+        const bodyText = convertObsidianCallouts(
+          convertTogglesToHtml(
+            restoreBodyIndent(
+              body
+                .split("\n")
+                .map((line) => line.replace(/^[ \t]*>\s?/, ""))
+                .join("\n"),
+            ),
+          ),
         ).trim();
         const html = `<details${attrs}>\n<summary>${cleanTitle.trim()}</summary>\n\n${bodyText}\n\n</details>`;
-        return applyCalloutIndent(html, depth);
+        const above = lastTextLine(whole.slice(0, offset).split("\n"));
+        return applyCalloutIndent(html, depth, containerDepthUnit(depth, above));
       },
     );
   }
@@ -942,7 +965,8 @@ function convertObsidianCallouts(content: string): string {
         block.push(...indentContainerBody(innerConverted).split("\n"));
       }
       block.push("</callout>");
-      result.push(...applyCalloutIndent(block.join("\n"), depth).split("\n"));
+      const unit = containerDepthUnit(depth, lastTextLine(result));
+      result.push(...applyCalloutIndent(block.join("\n"), depth, unit).split("\n"));
     } else {
       result.push(lines[i]!);
       i++;

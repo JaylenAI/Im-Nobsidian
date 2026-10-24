@@ -24,6 +24,14 @@
     errorMessage: string | null;
     completionSummary: string | null;
     blocked: DirectionBlocks;
+    connections?: readonly ConnectionOption[];
+    activeConnection?: string;
+  }
+
+  /** 볼트 안 폴더 연결 하나(ADR-038) — 패널은 한 번에 한 연결을 보인다. */
+  interface ConnectionOption {
+    readonly folder: string;
+    readonly label: string;
   }
 
   interface Props {
@@ -42,6 +50,9 @@
     completionSummary: string | null;
     /** 동기화 방향이 막는 Push · Pull — 그 단추를 끄고 까닭을 설명으로 보인다. */
     blocked: DirectionBlocks;
+    /** 연결이 둘 이상이면 고르개를 그린다. */
+    connections?: readonly ConnectionOption[];
+    activeConnection?: string;
     onReady: (updater: (state: SyncStateUpdate) => void) => void;
     onPull: () => void;
     onPush: () => void;
@@ -56,6 +67,7 @@
     onShowLocalDiff: (change: LocalChange) => void;
     onShowRemoteDiff: (change: RemoteChange) => void;
     onResolveConflict: () => void;
+    onSelectConnection?: (folder: string) => void;
   }
 
   let {
@@ -71,6 +83,8 @@
     errorMessage: initialErrorMessage,
     completionSummary: initialCompletionSummary,
     blocked: initialBlocked,
+    connections: initialConnections = [],
+    activeConnection: initialActiveConnection = "",
     onReady,
     onPull,
     onPush,
@@ -84,6 +98,7 @@
     onShowLocalDiff,
     onShowRemoteDiff,
     onResolveConflict,
+    onSelectConnection = () => {},
   }: Props = $props();
 
   let lastSyncAt: string | null = $state(initialLastSyncAt);
@@ -98,6 +113,8 @@
   let errorMessage: string | null = $state(initialErrorMessage);
   let completionSummary: string | null = $state(initialCompletionSummary);
   let blocked: DirectionBlocks = $state(initialBlocked);
+  let connections: readonly ConnectionOption[] = $state(initialConnections);
+  let activeConnection: string = $state(initialActiveConnection);
   let completionVisible = $state(false);
   let completionTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -113,6 +130,8 @@
     progress = s.progress;
     errorMessage = s.errorMessage;
     blocked = s.blocked;
+    if (s.connections) connections = s.connections;
+    if (s.activeConnection !== undefined) activeConnection = s.activeConnection;
 
     if (s.completionSummary && s.completionSummary !== completionSummary) {
       completionSummary = s.completionSummary;
@@ -318,6 +337,23 @@
 {/snippet}
 
 <div class="im-sync-dashboard">
+  <!-- 연결 고르개 — 볼트 안 폴더 연결이 있을 때만(ADR-038). 패널의 목록 · 단추는 고른 연결의 것이다. -->
+  {#if connections.length > 1}
+    <div class="im-sync-connection">
+      <span class="im-sync-meta-label">연결</span>
+      <select
+        class="dropdown im-sync-connection-select"
+        aria-label="변경 패널이 보일 연결"
+        value={activeConnection}
+        disabled={isSyncing}
+        onchange={(event) => onSelectConnection((event.currentTarget as HTMLSelectElement).value)}
+      >
+        {#each connections as connection (connection.folder)}
+          <option value={connection.folder}>{connection.label}</option>
+        {/each}
+      </select>
+    </div>
+  {/if}
   <!-- Status Header -->
   <div class="im-sync-header">
     <div class="im-sync-status" data-state={syncState}>
@@ -589,6 +625,20 @@
     padding: 0;
     height: 100%;
     font-size: var(--font-ui-small);
+  }
+
+  /* 연결 고르개 */
+  .im-sync-connection {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px 0;
+    color: var(--text-muted);
+    font-size: var(--font-ui-smaller);
+  }
+  .im-sync-connection-select {
+    flex: 1;
+    min-width: 0;
   }
 
   /* Header */

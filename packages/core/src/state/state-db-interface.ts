@@ -37,6 +37,8 @@ export interface IStateDB {
 
   // wikilink_map
   resolveWikilink(text: string): WikilinkEntry | null;
+  /** relation 값의 위키링크 — 대상 DB(`parentIds`)의 행 가운데서만 찾는다(`wikilinkLookupsIn`). */
+  resolveWikilinkIn(text: string, parentIds: readonly string[]): WikilinkEntry | null;
   resolvePageId(pageId: string): WikilinkEntry | null;
   upsertWikilink(entry: WikilinkEntry): void;
   /** 레코드 삭제 시 해당 경로의 wikilink 항목을 제거한다 (stale 링크 방지). */

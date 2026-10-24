@@ -299,6 +299,14 @@ describe("isCompactExport — 원시 export 압축형 판정 (D1)", () => {
   it("말미 빈 줄은 계수하지 않는다", () => {
     expect(isCompactExport("한 줄뿐\n\n")).toBe(true);
   });
+
+  // 실데이터(2026-10-23 E2E): 공백 하나뿐인 문단 · 들여쓴 빈 자식 하나 때문에 13 노트의 블록이 빈 줄 없이 붙었다.
+  it.each([
+    ["공백 하나뿐인 문단", "앞\n \n뒤\n"],
+    ["들여쓴 공백 줄", "- 항목\n\t\t\t \n뒤\n"],
+  ])("공백만 든 줄은 빈 줄이 아니다 — %s", (_name, raw) => {
+    expect(isCompactExport(raw)).toBe(true);
+  });
 });
 
 describe("BlockSpacer 프로세서", () => {

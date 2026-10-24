@@ -6,6 +6,7 @@ import {
   notionIdsEqual,
   SyncBusyError,
 } from "@im-nobsidian/core";
+import { NOTICE_PREFIX } from "../constants.js";
 import type {
   SyncOrchestrator,
   GatedOperation,
@@ -54,6 +55,22 @@ export interface SyncDashboardState {
 }
 
 export type SyncStatePatch = Partial<SyncDashboardState>;
+
+/** 아무것도 모를 때의 패널 — 처음 열 때와 연결을 바꿀 때 이것에서 시작한다. */
+export const EMPTY_DASHBOARD_STATE: SyncDashboardState = {
+  lastSyncAt: null,
+  lastFullScanAt: null,
+  localChanges: [],
+  folderMoves: [],
+  remoteChanges: [],
+  conflictRecords: [],
+  syncState: "ready",
+  operationType: null,
+  progress: null,
+  errorMessage: null,
+  completionSummary: null,
+  blocked: { push: null, pull: null },
+};
 
 /** 패널이 지금 보이는 단계 · 진행 · 오류 — 도는 작업이나 끝난 작업이 정한다. */
 type ShownPhase = Pick<
@@ -163,7 +180,7 @@ export class SyncController {
     if (this.closed) return false;
     if (!this.active) return true;
     this.hooks.onNotice?.(
-      `Im-Nobsidian: ${new SyncBusyError(this.active.operation, requested).message}`,
+      `${NOTICE_PREFIX}: ${new SyncBusyError(this.active.operation, requested).message}`,
     );
     return false;
   }
@@ -199,13 +216,13 @@ export class SyncController {
       errorMessage: null,
       completionSummary: null,
     });
-    this.hooks.onNotice?.(`Im-Nobsidian: ${label} 시작...`);
+    this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${label} 시작...`);
   }
 
   /** 실패 공통 처리(에러 표시 + 상태바 error). */
   private fail(label: string, error: unknown): void {
     const msg = error instanceof Error ? error.message : String(error);
-    this.hooks.onNotice?.(`Im-Nobsidian ${label} 실패: ${msg}`);
+    this.hooks.onNotice?.(`${NOTICE_PREFIX} ${label} 실패: ${msg}`);
     this.hooks.onStatusBar?.("error");
     this.emitState({
       syncState: "error",
@@ -217,7 +234,7 @@ export class SyncController {
 
   /** 취소한 작업이 멈췄다 — 그때까지 처리한 것은 남는다. */
   private cancelled(label = "동기화", summary = "동기화가 취소되었습니다"): void {
-    this.hooks.onNotice?.(`Im-Nobsidian: ${label} 취소됨`);
+    this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${label} 취소됨`);
     this.hooks.onStatusBar?.("ready");
     this.emitState({
       syncState: "ready",
@@ -249,7 +266,7 @@ export class SyncController {
         } else {
           const { summary, phase } = report(result);
           this.hooks.onNotice?.(
-            `Im-Nobsidian: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
+            `${NOTICE_PREFIX}: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
           );
           this.hooks.onStatusBar?.(phase);
           // 패널도 상태바와 같은 단계로 둔다 — 아래 새로고침이 실패해도 「동기화 중」 에 남지 않는다.
@@ -362,10 +379,37 @@ export class SyncController {
     await this.exclusive("discard", async () => {
       try {
         await this.orchestrator.discardLocalChange(path);
-        this.hooks.onNotice?.(`Im-Nobsidian: 되돌림 — ${path}`);
+        this.hooks.onNotice?.(`${NOTICE_PREFIX}: 되돌림 — ${path}`);
         await this.refreshLocal(true);
       } catch (error) {
         this.fail("되돌리기", error);
+      }
+    });
+  }
+
+  /**
+   * 볼트의 노트 폴더를 다음 push 에서 Notion DB 로 만들도록 사이드카를 써 둔다(#75). Notion 에는 쓰지 않는다.
+   * 거절은 사용자가 고를 수 있는 일(이미 올린 폴더 · 이미 DB)이라 오류 상태로 두지 않고 까닭만 알린다.
+   *
+   * @param configDir Obsidian 설정 폴더 — 속성 타입을 읽는다.
+   */
+  async prepareDatabase(folder: string, configDir: string): Promise<void> {
+    if (!this.admit("prepare-database")) return;
+    await this.exclusive("prepare-database", async () => {
+      try {
+        const report = await this.orchestrator.prepareFolderDatabase(folder, configDir);
+        const skipped =
+          report.skipped.length > 0 ? ` · 옮기지 않은 것 ${report.skipped.length}` : "";
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: ${report.folder} 를 다음 push 에서 Notion DB 로 만듭니다 — 행 ${report.rows} · ` +
+            `속성 ${report.properties.length} · 보기 ${report.views.length}${skipped}. ` +
+            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.`,
+        );
+        await this.refreshLocal(true);
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: DB 로 올릴 준비를 하지 못함 — ${error instanceof Error ? error.message : String(error)}`,
+        );
       }
     });
   }
@@ -467,7 +511,7 @@ export class SyncController {
       const message = `변경 목록을 읽지 못했습니다: ${errorMessage(error)}`;
       if (settle) {
         // 방금 끝난 작업은 이미 단계를 정했다(충돌이면 충돌 · 해결 단추). 그 단계를 지키고 알리기만 한다.
-        this.hooks.onNotice?.(`Im-Nobsidian: ${message}`, ACTIONABLE_NOTICE_MS);
+        this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${message}`, ACTIONABLE_NOTICE_MS);
         return;
       }
       this.listReadError = message;
@@ -515,7 +559,7 @@ export class SyncController {
     const active = this.active;
     if (!active || active.abort.signal.aborted) return;
     active.abort.abort();
-    this.hooks.onNotice?.("Im-Nobsidian: 취소하는 중 — 처리 중인 항목을 마친 뒤 멈춥니다");
+    this.hooks.onNotice?.(`${NOTICE_PREFIX}: 취소하는 중 — 처리 중인 항목을 마친 뒤 멈춥니다`);
   }
 
   /**
@@ -583,7 +627,7 @@ export class SyncController {
    */
   async getStatus(): Promise<Awaited<ReturnType<SyncOrchestrator["status"]>> | null> {
     if (this.closed)
-      throw new Error("Im-Nobsidian 을 다시 불러오는 중입니다 — 잠시 뒤 다시 시도하세요");
+      throw new Error(`${NOTICE_PREFIX} 을 다시 불러오는 중입니다 — 잠시 뒤 다시 시도하세요`);
     if (this.active) throw new SyncBusyError(this.active.operation, "status");
     let status: Awaited<ReturnType<SyncOrchestrator["status"]>> | null = null;
     await this.exclusive("status", async (signal) => {
@@ -591,7 +635,7 @@ export class SyncController {
         status = await this.orchestrator.status({ signal });
       } catch (error) {
         if (!signal.aborted) throw error;
-        this.hooks.onNotice?.("Im-Nobsidian: 상태 확인 취소됨");
+        this.hooks.onNotice?.(`${NOTICE_PREFIX}: 상태 확인 취소됨`);
       }
     });
     return status;
@@ -626,13 +670,13 @@ export class SyncController {
       conflicts = await this.orchestrator.listConflicts();
     } catch (error) {
       this.hooks.onNotice?.(
-        `Im-Nobsidian: 충돌 목록을 읽지 못함 — ${errorMessage(error)}`,
+        `${NOTICE_PREFIX}: 충돌 목록을 읽지 못함 — ${errorMessage(error)}`,
         ACTIONABLE_NOTICE_MS,
       );
       return;
     }
     if (conflicts.length === 0) {
-      this.hooks.onNotice?.("Im-Nobsidian: 충돌이 없습니다.");
+      this.hooks.onNotice?.(`${NOTICE_PREFIX}: 충돌이 없습니다.`);
       this.hooks.onStatusBar?.("ready");
       return;
     }
@@ -653,11 +697,13 @@ export class SyncController {
         const result = await this.orchestrator.resolveConflict(conflict, choice);
         if (result.success) {
           resolved++;
-          this.hooks.onNotice?.(`Im-Nobsidian: ${path} → ${choiceText(conflict, choice).label}`);
+          this.hooks.onNotice?.(
+            `${NOTICE_PREFIX}: ${path} → ${choiceText(conflict, choice).label}`,
+          );
         } else {
           remaining++;
           this.hooks.onNotice?.(
-            `Im-Nobsidian: 자동 병합이 겹치는 줄을 남겼습니다 — ${path} 에서 충돌 표시(<<<<<<<)를 고친 뒤 다시 해결하세요.`,
+            `${NOTICE_PREFIX}: 자동 병합이 겹치는 줄을 남겼습니다 — ${path} 에서 충돌 표시(<<<<<<<)를 고친 뒤 다시 해결하세요.`,
             ACTIONABLE_NOTICE_MS,
           );
         }
@@ -666,8 +712,8 @@ export class SyncController {
         this.hooks.onNotice?.(
           // Notion 에서 지운 노트는 충돌로 되돌리지 않는다 — 무엇이 남았는지는 오류가 말한다.
           isRemoteDeletion(conflict)
-            ? `Im-Nobsidian: ${errorMessage(error)}`
-            : `Im-Nobsidian: 충돌을 해결하지 못함 (${path}) — ${errorMessage(error)}. 충돌로 남겨 두었습니다.`,
+            ? `${NOTICE_PREFIX}: ${errorMessage(error)}`
+            : `${NOTICE_PREFIX}: 충돌을 해결하지 못함 (${path}) — ${errorMessage(error)}. 충돌로 남겨 두었습니다.`,
           ACTIONABLE_NOTICE_MS,
         );
       }
@@ -676,7 +722,7 @@ export class SyncController {
     const parts = [`해결 ${resolved}건`, `남음 ${remaining}건`];
     if (failed > 0) parts.push(`실패 ${failed}건`);
     if (cleared.size > 0) parts.push(`양쪽이 이미 같아 표시만 푼 ${cleared.size}건`);
-    this.hooks.onNotice?.(`Im-Nobsidian: 충돌 해결 — ${parts.join(" · ")}`);
+    this.hooks.onNotice?.(`${NOTICE_PREFIX}: 충돌 해결 — ${parts.join(" · ")}`);
     this.hooks.onStatusBar?.(remaining + failed > 0 ? "conflict" : "ready");
   }
 }

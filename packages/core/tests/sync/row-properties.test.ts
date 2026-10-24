@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { diffRowProperties } from "../../src/sync/row-properties.js";
+import { diffRowProperties, withUnsentProperties } from "../../src/sync/row-properties.js";
+import { parseFrontmatter } from "../../src/utils/frontmatter.js";
 
 describe("diffRowProperties — 지난 동기화 뒤 바뀐 속성만 (S-01)", () => {
   const base = {
@@ -76,5 +77,33 @@ describe("diffRowProperties — 지난 동기화 뒤 바뀐 속성만 (S-01)", (
       changed: { 진척: 0.5 },
       cleared: [],
     });
+  });
+});
+
+describe("withUnsentProperties — 보내지 못한 속성만 Notion 쪽 값으로", () => {
+  const note = [
+    "---",
+    "이름: 행",
+    "마감: 2026-10-23",
+    "담당:",
+    '  - "[[김]]"',
+    '  - "[[이]]"',
+    "# 메모",
+    "---",
+    "본문",
+    "",
+  ].join("\n");
+
+  it("새 행 — 그 키만 빼고 다른 줄은 글자 그대로", () => {
+    expect(withUnsentProperties(note, ["담당"], null)).toBe(
+      ["---", "이름: 행", "마감: 2026-10-23", "# 메모", "---", "본문", ""].join("\n"),
+    );
+  });
+
+  it("고친 행 — Notion 에 남은 값으로 되돌린다", () => {
+    const out = withUnsentProperties(note, ["담당"], { 담당: ["[[김]]"] });
+    expect(out).toContain("마감: 2026-10-23\n");
+    expect(parseFrontmatter(out).data["담당"]).toEqual(["[[김]]"]);
+    expect(parseFrontmatter(out).body).toBe("본문");
   });
 });

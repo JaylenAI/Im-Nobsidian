@@ -103,7 +103,7 @@ export function clampCalloutIndent(content: string): string {
  * 부모 항목의 content indent 기준으로 판정하므로 탭이어도 코드가 되지 않는다(실측 1,721건
  * 전부 정상 렌더). 여기서 눌러 버리면 멀쩡한 중첩 리스트가 평평해진다.
  */
-const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])\s)/;
+const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])(?:\s|$))/;
 
 /** 본문 줄 하나의 선행 탭을 클램프 폭으로 누른다({@link BODY_INDENT_RE} 주석 참조). */
 export function clampBodyIndent(line: string): string {
@@ -193,6 +193,28 @@ export function readCalloutIndentDepth(
  * **내부**는 NFM 이 열 0 에 두는 비대칭 구조라 탭을 붙이면 안 된다. 붙이면 pull 이 그
  * 탭을 제 것으로 알고 벗기지 않아 왕복마다 한 겹씩 쌓이는 래칫이 된다.
  */
-export function applyCalloutIndent(block: string, depth: number): string {
-  return depth > 0 ? indentContainerBody(block, "\t".repeat(depth)) : block;
+export function applyCalloutIndent(block: string, depth: number, unit = "\t"): string {
+  return depth > 0 ? indentContainerBody(block, unit.repeat(depth)) : block;
+}
+
+/** 칸으로 들인 한 단계 — Notion 은 칸 4개를 탭 하나와 같은 깊이로 읽는다. */
+const SPACE_LEVEL = "    ";
+
+/**
+ * 깊이 마커로 되살린 컨테이너를 무엇으로 들일지 — 바로 위 글 줄이 칸으로 들여 있으면 칸이다.
+ *
+ * 실측(2026-10-23): Notion 은 칸으로 들인 목록 항목 아래에 탭으로 들인 컨테이너를 한 단계 얕게 받는다
+ * (`    - [ ] 할` 아래 `\t\t<callout>` → 항목의 형제). 칸으로만 들이면(`        <callout>`) 항목의 자식이 된다.
+ * 받은 볼트의 목록은 칸으로 들여 있어 깊이 2 이상 콜아웃 · 토글이 모두 한 단계씩 올라갔다(실데이터 E2E 7개).
+ * 깊이 1 은 마커 없이 왕복하던 그대로 탭이다.
+ */
+export function containerDepthUnit(depth: number, aboveLine: string | undefined): string {
+  if (depth < 2) return "\t";
+  return /^[\t ]* (?=\S)/.test(aboveLine ?? "") ? SPACE_LEVEL : "\t";
+}
+
+/** 글 끝에서 거슬러 올라간 첫 비지 않은 줄. */
+export function lastTextLine(lines: readonly string[]): string | undefined {
+  for (let i = lines.length - 1; i >= 0; i--) if (lines[i]!.trim() !== "") return lines[i];
+  return undefined;
 }

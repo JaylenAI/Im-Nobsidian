@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { PropertyMapper } from "../../src/notion/property-mapper.js";
+import { PropertyMapper, peopleResolverOf } from "../../src/notion/property-mapper.js";
 
 describe("PropertyMapper", () => {
   let mapper: PropertyMapper;
@@ -684,12 +684,80 @@ describe("PropertyMapper", () => {
       ).toBeUndefined();
     });
 
-    it("사람은 ID 로만 된 목록일 때만 보낸다 — pull 이 적는 이름으로는 사용자를 못 찾는다", () => {
+    it("사용자 목록이 없으면 사람은 ID 로만 된 목록일 때만 보낸다", () => {
       expect(mapper.toNotionProperties({ who: [A] }, "T").who).toEqual({
         people: [{ object: "user", id: A }],
       });
       expect(mapper.toNotionProperties({ who: [A, "홍길동"] }, "T").who).toBeUndefined();
       expect(mapper.toNotionProperties({ who: ["홍길동"] }, "T").who).toBeUndefined();
+    });
+
+    // pull 은 사람을 이름으로 적는다 — 다른 페이지로 옮겨 올릴 때 사람 값이 빠졌다(2026-10-23 전체 E2E 10건).
+    it("pull 이 적은 이름은 사용자 목록으로 id 를 찾는다 — 같은 이름이 둘이거나 없는 이름이면 보내지 않는다", () => {
+      mapper.setPeopleResolver(
+        peopleResolverOf([
+          { id: A, name: "홍길동" },
+          { id: "u-2", name: "동명이인" },
+          { id: "u-3", name: "동명이인" },
+          { id: "bot", name: null },
+        ]),
+      );
+
+      expect(mapper.toNotionProperties({ who: ["홍길동", B] }, "T").who).toEqual({
+        people: [
+          { object: "user", id: A },
+          { object: "user", id: B },
+        ],
+      });
+      expect(mapper.toNotionProperties({ who: "홍길동" }, "T").who).toEqual({
+        people: [{ object: "user", id: A }],
+      });
+      expect(mapper.toNotionProperties({ who: ["홍길동", "동명이인"] }, "T").who).toBeUndefined();
+      expect(mapper.toNotionProperties({ who: ["홍길동", "손님"] }, "T").who).toBeUndefined();
+    });
+  });
+
+  describe("relation 은 대상 DB 의 행으로만 푼다", () => {
+    const ROW = "35a13b18d38280cf9057e37e6e473e43";
+    const OTHER = "35a13b18d38280cf9057e37e6e473e44";
+    const calls: Array<readonly string[]> = [];
+
+    beforeEach(() => {
+      calls.length = 0;
+      mapper.loadSchema({
+        rel: { id: "a", type: "relation", relationTargets: ["db-target", "ds-target"] },
+        loose: { id: "b", type: "relation" },
+      });
+      mapper.setWikilinkResolver({
+        // 제목만 보면 다른 DB 의 같은 이름 페이지가 먼저 나온다.
+        resolve: () => OTHER,
+        resolveIn: (title, parents) => {
+          calls.push(parents);
+          return title === "대상 행" ? ROW : null;
+        },
+        resolvePageId: () => null,
+      });
+    });
+
+    it("대상 DB 를 알면 그 DB 의 행만 본다", () => {
+      expect(mapper.toNotionProperties({ rel: "[[대상 행]]" }, "T").rel).toEqual({
+        relation: [{ id: ROW }],
+      });
+      expect(calls).toEqual([["db-target", "ds-target"]]);
+    });
+
+    it("대상 DB 에 없으면 보내지 않는다 — 다른 DB 의 페이지는 Notion 이 오류 없이 뺀다", () => {
+      expect(mapper.toNotionProperties({ rel: "[[다른 DB 의 행]]" }, "T").rel).toBeUndefined();
+      expect(
+        mapper.toNotionPropertyChanges({ changed: { rel: "[[다른 DB 의 행]]" }, cleared: [] }, null)
+          .skipped,
+      ).toEqual(["rel"]);
+    });
+
+    it("대상 DB 를 모르면 예전처럼 볼트 전체에서 찾는다", () => {
+      expect(mapper.toNotionProperties({ loose: "[[아무 노트]]" }, "T").loose).toEqual({
+        relation: [{ id: OTHER }],
+      });
     });
   });
 
