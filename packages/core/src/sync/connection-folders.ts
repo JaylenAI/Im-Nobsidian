@@ -114,6 +114,11 @@ export class ScopedVaultFS implements VaultFS {
     );
   }
 
+  holdsOtherConnection(folder: string): boolean {
+    const joined = normalizeVaultPath(this.folder === "" ? folder : `${this.folder}/${folder}`);
+    return joined !== null && this.nested.some((c) => matchesPathScope(c, joined));
+  }
+
   excludesPath(path: string, kind?: "file" | "folder"): boolean {
     const joined = normalizeVaultPath(this.folder === "" ? path : `${this.folder}/${path}`);
     return joined !== null && (this.base.excludesPath?.(joined, kind) ?? false);

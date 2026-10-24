@@ -13,6 +13,8 @@ export type {
   SyncOptions,
   PushResult,
   PullResult,
+  RemoteMove,
+  RemoteMoveSkip,
   SyncResult,
   StatusResult,
   RemoteScanInfo,

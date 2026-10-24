@@ -30,6 +30,8 @@ export interface VaultFS {
    * 이 볼트(연결)가 맡은 경로인가 — 볼트 안의 다른 연결 폴더(ADR-038)는 false. 없으면 전부 맡는다.
    */
   ownsPath?(path: string): boolean;
+  /** 이 폴더 안에 다른 연결 폴더가 있나 — 폴더를 통째로 옮기기 전에 묻는다. 없으면 없다. */
+  holdsOtherConnection?(folder: string): boolean;
   /**
    * 설정(`paths.include` · `paths.exclude`)이나 `.im-nobsidian-ignore` 가 동기화에서 뺀 경로인가 (이슈 #8).
    * 뺀 노트는 목록에 없다 — 추적하던 노트라도 「볼트에서 지움」 으로 보지 않고, pull 이 받거나 되살리지도
