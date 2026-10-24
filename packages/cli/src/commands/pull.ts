@@ -93,11 +93,20 @@ export const pullCommand = new Command("pull")
       const failedCount = result.failed.length;
       console.log(`\n  ${completionHeader("Pull", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted)}  ${failedCountText(failedCount)}`,
+        `  ${summary(result.created, result.updated, result.deleted, result.moved?.length)}  ${failedCountText(failedCount)}`,
       );
       // 복원은 별도 줄로 알린다 — 볼트에서 파일이 사라졌었다는 사실은 조용히 넘길 일이 아니다.
       if (result.restored > 0) {
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
+      }
+      // Notion 에서 옮긴 페이지 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039).
+      for (const move of result.moved ?? []) {
+        console.log(
+          `  ${icons.move} ${move.from} → ${move.to} ${dimText(options.dryRun ? "(would move)" : "(moved)")}`,
+        );
+      }
+      for (const skip of result.moveSkipped ?? []) {
+        console.log(`  ${icons.conflict} ${skip.path} ${dimText(`(not moved: ${skip.reason})`)}`);
       }
       console.log(`  ${duration(result.duration)}`);
       if (result.remoteScan) {
