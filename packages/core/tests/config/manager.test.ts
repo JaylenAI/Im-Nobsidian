@@ -48,7 +48,8 @@ describe("ConfigManager", () => {
       expect(gitignore).toContain(".im-nobsidian/");
     });
 
-    it("읽지 못한 .gitignore 는 덮지 않는다", async () => {
+    // Windows 는 chmod 로 읽기를 막지 못한다(쓰기 금지만 바뀐다).
+    it.skipIf(process.platform === "win32")("읽지 못한 .gitignore 는 덮지 않는다", async () => {
       const gitignore = join(tempDir, ".gitignore");
       await writeFile(gitignore, "node_modules/\n");
       await chmod(gitignore, 0o200);
@@ -86,14 +87,18 @@ describe("ConfigManager", () => {
       await expect(manager.load()).rejects.toThrow("설정 파일을 찾을 수 없습니다");
     });
 
-    it("있는데 읽지 못하면 「찾을 수 없음」 이 아니라 읽지 못한 까닭", async () => {
-      await manager.init({ token: "ntn_test_perm", rootPageId: "page-id" });
-      await chmod(manager.configPath, 0o200);
+    // Windows 는 chmod 로 읽기를 막지 못한다(쓰기 금지만 바뀐다).
+    it.skipIf(process.platform === "win32")(
+      "있는데 읽지 못하면 「찾을 수 없음」 이 아니라 읽지 못한 까닭",
+      async () => {
+        await manager.init({ token: "ntn_test_perm", rootPageId: "page-id" });
+        await chmod(manager.configPath, 0o200);
 
-      const load = new ConfigManager(tempDir).load();
-      await expect(load).rejects.toThrow("설정 파일을 읽지 못했습니다");
-      await expect(load).rejects.toThrow("EACCES");
-    });
+        const load = new ConfigManager(tempDir).load();
+        await expect(load).rejects.toThrow("설정 파일을 읽지 못했습니다");
+        await expect(load).rejects.toThrow("EACCES");
+      },
+    );
   });
 
   describe("save", () => {
