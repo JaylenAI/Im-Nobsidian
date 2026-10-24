@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-25
+
+> 이슈 #8 — Windows 에서 CLI 가 새 노트를 찾지 못하고 `paths.include` · `exclude` 가 먹지 않던 것. 포함 패턴 · 뺀 노트 판정은 모든
+> OS 에서 틀렸다. CI 가 이제 Windows 에서도 전체 시험을 돌린다.
+
 ### Fixed
 
 - **Windows CLI 가 새 노트를 찾지 못하고 `paths.include` · `exclude` 가 먹지 않던 것 (#8)** — 볼트 목록이 `relative()` 의
