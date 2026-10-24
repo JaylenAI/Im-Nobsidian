@@ -54,6 +54,17 @@ describe("ScopedVaultFS", () => {
     vault.write(".obsidian/types.json", '{"types":{}}');
   });
 
+  it("폴더 안에 다른 연결이 있는지 — 폴더를 통째로 옮기기 전에 묻는다(ADR-039)", () => {
+    const top = new ScopedVaultFS(vault.fs(), "", ["", "Projects/Work"]);
+    expect(top.holdsOtherConnection("Projects")).toBe(true);
+    expect(top.holdsOtherConnection("Projects/Work")).toBe(true);
+    expect(top.holdsOtherConnection("Project")).toBe(false);
+    expect(top.holdsOtherConnection("Other")).toBe(false);
+    const nested = new ScopedVaultFS(vault.fs(), "Projects", ["", "Projects", "Projects/Work"]);
+    expect(nested.holdsOtherConnection("")).toBe(true);
+    expect(nested.holdsOtherConnection("Notes")).toBe(false);
+  });
+
   it("하위 연결은 자기 폴더의 노트만 자기 기준 경로로 본다", async () => {
     const work = new ScopedVaultFS(vault.fs(), "Work", CONNECTIONS);
     expect((await work.listMarkdownFiles()).map((f) => [f.path, f.content])).toEqual([

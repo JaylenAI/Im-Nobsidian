@@ -5,6 +5,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Notion 에서 옮긴 페이지를 볼트에서도 옮긴다 (ADR-039)** — `pages.move` 는 수정 시각을 바꾸지 않아 예전에는 감지되지
+  않았고 노트가 옛 폴더에 남았다. 전체 대조가 받은 부모를 상태 DB 의 부모와 견주어, 노트(와 옆의 자식 폴더) · 폴더 노트 ·
+  폴더를 새 부모의 폴더로 옮긴다. 이름은 그대로라 `[[링크]]` 는 끊기지 않는다. 옮길 자리에 같은 이름이 있거나, 볼트에서
+  옮긴 것을 아직 올리지 않았거나, 폴더에 DB 나 다른 연결이 있으면 옮기지 않고 까닭을 보인다. CLI 는 `from → to (moved)` ·
+  JSON `moved` · `moveSkipped`, 플러그인은 알림의 「이동 N」.
+
 ## [0.9.2] - 2026-10-25
 
 > 이슈 #8 — Windows 에서 CLI 가 새 노트를 찾지 못하고 `paths.include` · `exclude` 가 먹지 않던 것. 포함 패턴 · 뺀 노트 판정은 모든

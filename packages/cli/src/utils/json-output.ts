@@ -33,7 +33,10 @@ export interface PullJson {
   readonly updated: number;
   readonly deleted: number;
   readonly restored: number;
-  /** 볼트에 실제로 쓴 항목 수 — 복원도 쓰기다. 멱등 판정의 기준값. */
+  /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
+  readonly moved: number;
+  readonly moveSkipped: number;
+  /** 볼트에 실제로 쓴 항목 수 — 복원 · 옮기기도 쓰기다. 멱등 판정의 기준값. */
   readonly churn: number;
   readonly conflicts: number;
   readonly failed: readonly FailedOperation[];
@@ -70,7 +73,14 @@ export function pullJson(result: PullResult): PullJson {
     updated: result.updated,
     deleted: result.deleted,
     restored: result.restored,
-    churn: result.created + result.updated + result.deleted + result.restored,
+    moved: result.moved?.length ?? 0,
+    moveSkipped: result.moveSkipped?.length ?? 0,
+    churn:
+      result.created +
+      result.updated +
+      result.deleted +
+      result.restored +
+      (result.moved?.length ?? 0),
     conflicts: result.conflicts.length,
     failed: result.failed,
     writtenPaths: result.writtenPaths.length,

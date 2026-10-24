@@ -208,6 +208,22 @@ export interface PullResult {
   readonly linkCount: number;
   /** 원격을 얼마나 훑었나. 원격을 보지 않은 실행(받기 방향이 아님 · 취소)에는 없다. */
   readonly remoteScan?: RemoteScanInfo;
+  /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 것(ADR-039) — dry-run 은 옮길 것. 없으면 옮긴 것이 없다. */
+  readonly moved?: readonly RemoteMove[];
+  /** Notion 에서 옮겼지만 볼트에서 옮기지 않은 것과 그 까닭. */
+  readonly moveSkipped?: readonly RemoteMoveSkip[];
+}
+
+/** Notion 에서 옮긴 페이지를 볼트에서 옮긴 것 하나 — 노트 하나거나 폴더 하나다. */
+export interface RemoteMove {
+  readonly from: string;
+  readonly to: string;
+}
+
+/** 옮기지 않고 둔 것과 그 까닭 — 볼트에서 직접 옮기면 다음 push 가 Notion 을 맞춘다. */
+export interface RemoteMoveSkip {
+  readonly path: string;
+  readonly reason: string;
 }
 
 export interface SyncResult {

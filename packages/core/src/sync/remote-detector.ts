@@ -15,6 +15,7 @@ import {
   parseDiscoveredDbs,
 } from "./discovered-databases.js";
 import { extractParentId } from "./notion-parent.js";
+import { movedInNotion } from "./remote-moves.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { incrementalSearchSince } from "./pull-watermark.js";
 import { remoteDeletionChange, remotePresence } from "./remote-deletion.js";
@@ -71,6 +72,10 @@ export class RemoteDetector {
   // 감지가 빠뜨린 자식을 {@link takeUndiscoveredChildren} 가 둘의 차로 고른다.
   private readonly _bodyChildren = new Map<string, string>();
   private readonly _queued = new Set<string>();
+
+  // Notion 에서 부모가 바뀐 추적 페이지(정규화 id → 새 부모 페이지 id) — pull 이 볼트에서도 옮긴다(ADR-039).
+  // 옮겨도 수정 시각이 바뀌지 않아(실측) 변경으로는 보이지 않는다. 감지마다 다시 채운다.
+  private readonly _moved = new Map<string, string>();
 
   constructor(
     private readonly config: Config,
@@ -147,6 +152,18 @@ export class RemoteDetector {
     return changes;
   }
 
+  /** 이번 감지가 본, Notion 에서 옮긴 추적 페이지 — 페이지 id → 새 부모 페이지 id. */
+  get movedPages(): ReadonlyMap<string, string> {
+    return this._moved;
+  }
+
+  /** 받은 부모가 상태 DB 의 것과 다르면 옮긴 페이지로 적는다. */
+  private noteParent(pageId: string, parentId: string): void {
+    const record = this.stateDb.getByNotionId(pageId);
+    if (record && movedInNotion(record, parentId))
+      this._moved.set(normalizeNotionId(pageId), parentId);
+  }
+
   /** 새 감지를 시작한다 — 지난 실행의 본문 자식과 받기로 한 페이지를 비우고 이번 변경을 적는다. */
   private beginDetection(changes: readonly RemoteChange[]): void {
     this._bodyChildren.clear();
@@ -202,6 +219,7 @@ export class RemoteDetector {
     const changes: RemoteChange[] = [];
     this._childParentIds.clear();
     this._pages.clear();
+    this._moved.clear();
     const lastPull = this.stateDb.getMeta(LAST_PULL_META_KEY);
     const syncedRecords = this.stateDb.getAll();
     const trackedPageIds = new Set(
@@ -295,7 +313,10 @@ export class RemoteDetector {
       for (const page of underRoot) {
         throwIfAborted(signal);
         const parentId = await extractParentId(this.notionClient, page);
-        if (parentId) this._childParentIds.add(normalizeNotionId(parentId));
+        if (parentId) {
+          this._childParentIds.add(normalizeNotionId(parentId));
+          this.noteParent(page.id, parentId);
+        }
       }
       for (const page of underRoot) {
         titles.set(normalizeNotionId(page.id), this.notionClient.extractTitle(page));
@@ -412,6 +433,7 @@ export class RemoteDetector {
     const databaseIds = new Set<string>();
     this._childParentIds.clear();
     this._pages.clear();
+    this._moved.clear();
     // 안전창만큼 과거로 되돌려 조회(F20). 넓어진 창에 들어온 무변경 페이지는 아래
     // last_edited 비교가 걸러내므로 재처리 비용 없이 멱등하다.
     const searchSince = incrementalSearchSince(since);
@@ -447,6 +469,8 @@ export class RemoteDetector {
       }
       // 조회 창(기준 시각 − 안전창 15분)은 가라앉지 않은 레코드의 수정 시각을 늘 담는다 — 가라앉지
       // 않았다는 것은 그 시각이 마지막으로 본 때(기준 시각 뒤)보다 2분 안쪽이라는 뜻이다.
+      // 부모가 페이지면 요청 없이 견준다 — 옮긴 뒤 고친 페이지만 여기 든다. 나머지는 전체 대조가 잡는다.
+      if (page.parent.type === "page_id") this.noteParent(page.id, page.parent.page_id);
       const modified = this.observation.modification(record, page);
       // 바뀐 행의 DB 만 조회한다 — 창에 다시 든 그대로인 행으로 조회하면 안전창 동안 pull 마다 같은
       // DB 를 다시 조회한다.

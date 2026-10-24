@@ -63,6 +63,7 @@ import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
 import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
+import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { ChangeInspector } from "./change-inspector.js";
 import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
@@ -106,6 +107,7 @@ export class SyncOrchestrator {
 
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
+  private readonly remoteMoves: RemoteMoveFollower;
 
   // 원격에서 바뀐 것 — 전체 대조 · 증분 감지(ADR-027).
   private readonly detector: RemoteDetector;
@@ -246,6 +248,9 @@ export class SyncOrchestrator {
     );
     this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
+    this.remoteMoves = new RemoteMoveFollower(config, stateDb, vaultFs, () =>
+      this.placement.folderLookup(),
+    );
     this.puller = new PagePuller(
       config,
       stateDb,
@@ -698,6 +703,18 @@ export class SyncOrchestrator {
     return this.gate.run("pull", () => this.executePull(options));
   }
 
+  /** 감지가 본, Notion 에서 옮긴 페이지를 볼트에서 옮긴다 — 경로를 좁힌 pull 은 그 범위의 것만. */
+  private async followRemoteMoves(options?: PullOptions): Promise<RemoteMoveResult> {
+    const moved = new Map(
+      [...this.detector.movedPages].filter(([pageId]) => {
+        const record = this.stateDb.getByNotionId(pageId);
+        return !!record && (!options?.paths || inAnyPathScope(record.obsidianPath, options.paths));
+      }),
+    );
+    if (moved.size === 0) return { moved: [], skipped: [] };
+    return await this.remoteMoves.follow(moved, { dryRun: options?.dryRun });
+  }
+
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
@@ -772,6 +789,8 @@ export class SyncOrchestrator {
     }
     const remoteChanges = detection.changes;
     detected = remoteChanges;
+    // Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039) — 아래 받기 · 되살리기가 새 경로를 본다.
+    const remoteMoves = await this.followRemoteMoves(options);
     const pendingDatabases = parsePendingDatabases(
       this.stateDb.getMeta(PENDING_DATABASES_META_KEY),
     );
@@ -837,6 +856,8 @@ export class SyncOrchestrator {
           ),
           skippedDatabases: ledger.skipped,
         },
+        moved: remoteMoves.moved,
+        moveSkipped: remoteMoves.skipped,
       };
     };
 
@@ -890,7 +911,7 @@ export class SyncOrchestrator {
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
     // 예전에는 페이지 변경이 없으면 dry-run 도 아래 DB 경로로 가 행을 실제로 썼다(N-01).
     if (options?.dryRun) {
-      return this.pullPlanner.planPull(
+      const plan = await this.pullPlanner.planPull(
         filtered,
         restoreChanges,
         restoreIds,
@@ -900,6 +921,7 @@ export class SyncOrchestrator {
         scan,
         ledger,
       );
+      return { ...plan, moved: remoteMoves.moved, moveSkipped: remoteMoves.skipped };
     }
 
     let pullTotal = workItems.length;

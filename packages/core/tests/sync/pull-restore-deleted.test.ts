@@ -322,7 +322,11 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
     stageMissingFile(rec);
     // 같은 페이지가 원격에서도 수정됨 → filtered 에 이미 존재.
     notion.searchRecentPages.mockResolvedValue([
-      { id: rec.notionPageId, last_edited_time: "2026-05-02T00:00:00.000Z" },
+      {
+        id: rec.notionPageId,
+        last_edited_time: "2026-05-02T00:00:00.000Z",
+        parent: { type: "page_id", page_id: "root-page-id" },
+      },
     ]);
     notion.getPage.mockResolvedValue({
       id: rec.notionPageId,
@@ -346,7 +350,11 @@ describe("삭제된 로컬 파일 복원 (D-DELETE-NORESTORE)", () => {
     const rec = makeRecord();
     stageMissingFile(rec);
     notion.searchRecentPages.mockResolvedValue([
-      { id: rec.notionPageId, last_edited_time: "2026-05-02T00:00:00.000Z" },
+      {
+        id: rec.notionPageId,
+        last_edited_time: "2026-05-02T00:00:00.000Z",
+        parent: { type: "page_id", page_id: "root-page-id" },
+      },
     ]);
     notion.getPage.mockResolvedValue({
       id: rec.notionPageId,
