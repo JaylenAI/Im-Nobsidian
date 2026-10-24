@@ -25,7 +25,7 @@ import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { DatabaseSyncer } from "./database-syncer.js";
-import { folderNoteOf, isFolderRecord } from "./folder-container.js";
+import { childFolderOf, folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
@@ -721,26 +721,7 @@ export class PagePuller {
     if (!parentId || notionIdsEqual(parentId, this.config.notion.rootPageId)) return "";
 
     const parentRecord = this.stateDb.getByNotionId(parentId);
-    if (parentRecord) {
-      // push 가 만든 폴더 페이지는 폴더 경로 자체로 추적한다 — 그 폴더가 자식의 자리다. 예전에는
-      // 폴더 노트 파일처럼 마지막 조각을 떼어 한 층 위에 받았다(S-16). v0.3 이 DB 폴더 자리에 만든
-      // 폴더 페이지는 빼고 예전 자리에 둔다 — DB 폴더에는 행만 든다.
-      if (
-        isFolderRecord(parentRecord) &&
-        !this.placement.folderLookup().databaseAt(parentRecord.obsidianPath)
-      ) {
-        return parentRecord.obsidianPath;
-      }
-      if (parentRecord.fileType === "folder-note" || parentRecord.fileType === "folder-only") {
-        const pathParts = parentRecord.obsidianPath.split("/");
-        pathParts.pop();
-        return pathParts.join("/");
-      }
-      // 노트 하나(행 · 자식 없이 받은 페이지)의 자식은 그 노트 이름의 폴더에 둔다 — push 가 `X.md` 옆
-      // `X/` 를 X 의 하위로 읽는다(`folderContainer`). 예전에는 노트 옆에 두어, 행의 하위 페이지가
-      // DB 폴더에 행처럼 섞이고(실데이터 E2E 4 페이지) 다시 올리면 부모가 바뀌었다.
-      return stripMarkdownExtension(parentRecord.obsidianPath);
-    }
+    if (parentRecord) return childFolderOf(parentRecord, this.placement.folderLookup());
 
     try {
       const parentPage = await this.notionClient.getPage(parentId);
