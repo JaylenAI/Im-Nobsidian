@@ -50,7 +50,9 @@ export async function detectMissingLocalFiles(
       (r.fileType === "file" || r.fileType === "folder-note") &&
       !isFolderRecord(r) &&
       r.notionPageId !== null &&
-      inAnyPathScope(r.obsidianPath, paths),
+      inAnyPathScope(r.obsidianPath, paths) &&
+      // 설정이 뺀 노트는 목록에 없을 뿐 지운 것이 아니다 — 되살리지 않는다(이슈 #8).
+      !(vaultFs.excludesPath?.(r.obsidianPath) ?? false),
   );
   if (scoped.length === 0) return [];
 

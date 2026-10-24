@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import chalk from "chalk";
 import { icons, failedItem } from "../utils/format.js";
-import { obsidianConfigDir, openVaultFs } from "../utils/vault.js";
+import { obsidianConfigDir, openVaultFs, vaultArgPath } from "../utils/vault.js";
 
 // 볼트에서 만든 노트 폴더를 Notion DB 로 올릴 준비(#75) — frontmatter · `.base` 로 사이드카를 써 둔다.
 // Notion 에는 쓰지 않는다. 사이드카는 JSON 이라 push 전에 고칠 수 있다 — 무엇을 왜 그렇게 정했는지 보인다.
@@ -19,7 +19,10 @@ export const prepareDbCommand = new Command("prepare-db")
       const client = NotionClient.fromConfig(config);
       const vaultFs = await openVaultFs(cwd, config.paths);
       const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
-      const report = await orchestrator.prepareFolderDatabase(folder, obsidianConfigDir(cwd));
+      const report = await orchestrator.prepareFolderDatabase(
+        vaultArgPath(folder),
+        obsidianConfigDir(cwd),
+      );
 
       console.log(`  ${icons.success} ${report.sidecarPath} — 행 ${report.rows}개`);
       for (const property of report.properties) {

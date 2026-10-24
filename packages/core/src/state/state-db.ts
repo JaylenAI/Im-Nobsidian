@@ -8,6 +8,7 @@ import type {
   RemoteObservation,
 } from "../types/index.js";
 import { generateId } from "../utils/id.js";
+import { getLogger } from "../utils/logger.js";
 import { STATE_DB_MIGRATIONS } from "./migrations/index.js";
 import type { IStateDB } from "./state-db-interface.js";
 import { SAVED_STATE_TABLES_QUERY, SavedStateDbError } from "./saved-state-db-error.js";
@@ -42,7 +43,10 @@ export class StateDB implements IStateDB {
   }
 
   private static openLocked(dbPath: string, lock: StateLock): StateDB {
-    const savedBytes = existsSync(dbPath) ? statSync(dbPath).size : null;
+    // 파일만 «저장된 상태 DB» 다 — 폴더는 SQLite 가 여는 데서 실패하고 그 까닭을 그대로 던진다. Windows 는 폴더의
+    // size 를 0 으로 주어 예전에는 「빈 파일」 로 진단했다.
+    const saved = existsSync(dbPath) ? statSync(dbPath) : null;
+    const savedBytes = saved?.isFile() ? saved.size : null;
     // 비었으면 열지도 않는다 — SQLite 는 0바이트 파일을 읽을 때 옆 WAL 파일을 지운다.
     if (savedBytes === 0) throw SavedStateDbError.noTables(0);
     const db = new Database(dbPath);
@@ -53,6 +57,7 @@ export class StateDB implements IStateDB {
       }
       const stateDb = new StateDB(db, lock);
       stateDb.migrate();
+      if (process.platform === "win32") stateDb.normalizePathSeparators();
       return stateDb;
     } catch (error) {
       db.close();
@@ -66,6 +71,71 @@ export class StateDB implements IStateDB {
     for (const migration of STATE_DB_MIGRATIONS) {
       if (version < migration.version) this.db.exec(migration.sql);
     }
+  }
+
+  /**
+   * `\` 로 이은 경로를 `/` 로 고쳐 적는다 — Windows 에서만 부른다(이슈 #8). 0.9.1 까지의 CLI 는 Windows 에서
+   * 볼트 경로를 `relative()` 그대로(`00 Me\a.md`) 적었다. 이제 목록은 `/` 로 이으므로 그대로 두면 그
+   * 노트들이 「볼트에서 지움」 과 「새 노트」 로 보인다.
+   *
+   * 같은 노트가 이미 `/` 경로로도 추적되고 있으면(pull 이 `/` 로 적은 노트를 `\` 목록이 새 노트로 보고 또
+   * 올렸다) `\` 쪽 기록을 버린다 — 그 기록의 Notion 페이지는 그때 생긴 사본이다. 지우지 않고 추적만 놓는다.
+   * Linux · macOS 에서는 `\` 가 파일 이름의 글자일 수 있어 부르지 않는다.
+   *
+   * @returns 고쳐 적은 경로 수와 버린 사본 기록 수
+   */
+  normalizePathSeparators(): { readonly renamed: number; readonly dropped: number } {
+    let renamed = 0;
+    let dropped = 0;
+    const fix = (path: string) => path.replace(/\\/g, "/");
+    this.db.transaction(() => {
+      const unique = (table: string, column: string, key: string) => {
+        const rows = this.db
+          .prepare(
+            `SELECT ${key} AS k, ${column} AS p FROM ${table} WHERE instr(${column}, '\\') > 0`,
+          )
+          .all() as Array<{ k: string; p: string }>;
+        for (const row of rows) {
+          const taken = this.db
+            .prepare(`SELECT 1 FROM ${table} WHERE ${column} = ?`)
+            .get(fix(row.p));
+          if (taken) {
+            this.db.prepare(`DELETE FROM ${table} WHERE ${key} = ?`).run(row.k);
+            if (table === "sync_state") dropped++;
+          } else {
+            this.db
+              .prepare(`UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`)
+              .run(fix(row.p), row.k);
+            if (table === "sync_state") renamed++;
+          }
+        }
+      };
+      unique("sync_state", "obsidian_path", "id");
+      unique("wikilink_map", "obsidian_path", "obsidian_path");
+      unique("file_registry", "local_path", "id");
+      this.db
+        .prepare("UPDATE image_registry SET local_path = replace(local_path, '\\', '/')")
+        .run();
+      const markers = this.db
+        .prepare(
+          "SELECT key FROM sync_metadata WHERE key LIKE 'preserve_markers:%' AND instr(key, '\\') > 0",
+        )
+        .all() as Array<{ key: string }>;
+      for (const { key } of markers) {
+        const taken = this.db.prepare("SELECT 1 FROM sync_metadata WHERE key = ?").get(fix(key));
+        if (taken) this.db.prepare("DELETE FROM sync_metadata WHERE key = ?").run(key);
+        else this.db.prepare("UPDATE sync_metadata SET key = ? WHERE key = ?").run(fix(key), key);
+      }
+    })();
+    if (renamed + dropped > 0) {
+      getLogger().warn(
+        `[Im-Nobsidian] Windows 경로 ${renamed}개를 / 로 고쳐 적음` +
+          (dropped > 0
+            ? ` · 같은 노트를 또 올린 사본 기록 ${dropped}개는 추적을 놓음(Notion 페이지는 남음)`
+            : ""),
+      );
+    }
+    return { renamed, dropped };
   }
 
   private getSchemaVersion(): number {

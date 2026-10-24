@@ -16,7 +16,7 @@ import {
   remoteScanLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
-import { openVaultFs } from "../utils/vault.js";
+import { openVaultFs, vaultArgPath } from "../utils/vault.js";
 
 export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
@@ -55,7 +55,7 @@ export const pullCommand = new Command("pull")
 
       const result = await orchestrator.pull({
         dryRun: options.dryRun,
-        paths: options.path,
+        paths: options.path?.map((path: string) => vaultArgPath(path)),
         force: options.force,
         rerender: options.rerender,
         onProgress: json

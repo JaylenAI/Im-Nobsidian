@@ -8,7 +8,6 @@ import { once } from "node:events";
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
 import { writeFileAtomically } from "../../src/state/atomic-write.js";
 
 const dirs: string[] = [];
@@ -59,7 +58,8 @@ describe("파일을 한 번에 갈아 끼우기", () => {
     const file = join(tempDir(), "sync.db");
     const size = 4 * 1024 * 1024;
     await writeFileAtomically(file, new Uint8Array(size).fill(1));
-    const module = fileURLToPath(new URL("../../src/state/atomic-write.ts", import.meta.url));
+    // import 는 주소로 — Windows 의 `D:\…` 경로는 import 하지 못한다.
+    const module = new URL("../../src/state/atomic-write.ts", import.meta.url).href;
     // 한 바이트 값으로 채운 4MB 를 값을 바꿔 가며 끝없이 쓴다. 첫 쓰기를 마치면 알린다.
     const writer = `
       import { writeFileAtomically } from ${JSON.stringify(module)};

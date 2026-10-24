@@ -333,7 +333,7 @@ describe("splitFrontmatter — Obsidian 과 같은 줄에서 여닫고, 키-값�
     })(src);
     const importers = files
       .filter((f) => /from\s+["']gray-matter["']/.test(readFileSync(f, "utf-8")))
-      .map((f) => relative(src, f));
+      .map((f) => relative(src, f).replaceAll("\\", "/"));
     expect(importers).toEqual(["utils/frontmatter.ts"]);
   });
 });

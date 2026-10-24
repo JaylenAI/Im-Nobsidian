@@ -13,7 +13,7 @@ import {
   failedCountText,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pushJson } from "../utils/json-output.js";
-import { openVaultFs } from "../utils/vault.js";
+import { openVaultFs, vaultArgPath } from "../utils/vault.js";
 
 export const pushCommand = new Command("push")
   .description("로컬 변경사항을 Notion에 반영")
@@ -41,7 +41,7 @@ export const pushCommand = new Command("push")
 
       const result = await orchestrator.push({
         dryRun: options.dryRun,
-        paths: options.path,
+        paths: options.path?.map((path: string) => vaultArgPath(path)),
         onProgress: json
           ? undefined
           : (current, total, item) => {

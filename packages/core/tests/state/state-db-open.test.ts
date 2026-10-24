@@ -91,7 +91,12 @@ describe("저장된 상태 DB 파일로 열기 (CLI)", () => {
     const error = openFailure(path);
 
     expect(error).toBeInstanceOf(SavedStateDbError);
-    expect(error.message).toBe(`저장된 상태 DB 파일에 동기화 기록이 없음 (${length}바이트)`);
+    // Windows 의 SQLite 는 1바이트 파일을 빈 DB 로 열지 않고 「database 가 아님」 으로 거절한다 — 어느 쪽이든 덮지 않는다.
+    expect(error.message).toBe(
+      length === 1 && process.platform === "win32"
+        ? "저장된 상태 DB 파일을 열지 못함 (file is not a database)"
+        : `저장된 상태 DB 파일에 동기화 기록이 없음 (${length}바이트)`,
+    );
     expect(readFileSync(path)).toEqual(damaged);
   });
 

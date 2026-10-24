@@ -147,7 +147,10 @@ export class SyncOrchestrator {
     this.observation = new RunObservation(stateDb, notionClient);
     this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
     this.detector = new RemoteDetector(config, stateDb, notionClient, this.observation);
-    const changeDetector = new ChangeDetector(stateDb);
+    const changeDetector = new ChangeDetector(
+      stateDb,
+      (path) => vaultFs.excludesPath?.(path) ?? false,
+    );
     const pipeline = createDefaultPipeline({
       wikilinkResolver: (text) => stateDb.resolveWikilink(text),
     });
@@ -837,12 +840,13 @@ export class SyncOrchestrator {
       };
     };
 
-    const filtered = options?.paths
-      ? remoteChanges.filter((c) => {
-          const record = this.stateDb.getByNotionId(c.pageId);
-          return !!record && inAnyPathScope(record.obsidianPath, options.paths);
-        })
-      : remoteChanges;
+    // 설정이 뺀 노트(이슈 #8)는 받지도 지우지도 않는다 — 예전에는 뺀 폴더의 추적 노트도 받았다.
+    const excludes = (path: string) => this.vaultFs.excludesPath?.(path) ?? false;
+    const filtered = remoteChanges.filter((c) => {
+      const record = this.stateDb.getByNotionId(c.pageId);
+      if (record && excludes(record.obsidianPath)) return false;
+      return !options?.paths || (!!record && inAnyPathScope(record.obsidianPath, options.paths));
+    });
 
     // D-DELETE-NORESTORE: 원격 변경 감지는 "Notion 에서 바뀐 것"만 본다. 로컬에서 지워진
     // 추적 파일은 어느 경로로도 큐에 오르지 않아, 증분이든 --force 든 되살아나지 않고
@@ -878,6 +882,7 @@ export class SyncOrchestrator {
           queued: new Set([...queuedIds, ...restoreIds]),
           adopting,
           paths: options.paths,
+          excludes,
         })
       : [];
     const workItems = [...filtered, ...restoreChanges, ...rerenderChanges];

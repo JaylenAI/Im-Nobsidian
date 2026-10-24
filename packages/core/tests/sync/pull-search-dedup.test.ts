@@ -157,7 +157,8 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
           if (ent.name === ".im-nobsidian") continue;
           const full = join(d, ent.name);
           if (ent.isDirectory()) await walk(full);
-          else if (ent.name.endsWith(".md")) onDisk.push(full.slice(vault.length + 1));
+          else if (ent.name.endsWith(".md"))
+            onDisk.push(full.slice(vault.length + 1).replaceAll("\\", "/"));
         }
       };
       await walk(vault);

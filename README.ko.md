@@ -306,7 +306,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
 }
 ```
 
-`.im-nobsidian-ignore` 파일 (`.gitignore`와 동일한 문법)로 동기화 대상에서 제외할 수 있습니다.
+CLI 는 볼트 맨 위의 `.im-nobsidian-ignore`(한 줄에 제외 패턴 하나, `#` 주석)도 읽습니다. 옵시디언 플러그인은 아직 `paths.include` · `paths.exclude` · 무시 파일을 적용하지 않습니다. 패턴 규칙은 [설정](docs/05-guides/CONFIGURATION.md#include--exclude) 을 보세요.
 
 ## 데이터베이스 모드
 
@@ -354,7 +354,7 @@ nobsi sync                       # 그 폴더에서 실행. 최상위 연결은 
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.9.1 (릴리스 자산 / BRAT)                                                                                 |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.9.2 (릴리스 자산 / BRAT)                                                                                 |
 
 ### 라이브러리로 사용하기
 
