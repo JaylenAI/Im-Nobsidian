@@ -5,7 +5,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-> v0.4.1 이후 dev — 볼트에서 Notion 으로 **DB 를 만든다**(ADR-036 · ADR-037). 받은 DB 를 새 워크스페이스로 올리면 스키마 ·
+## [0.9.0] - 2026-10-24
+
+> v0.4.1 다음 릴리스 — v0.5 ~ v0.9 범위를 한 번에 낸다(0.5 ~ 0.8 은 따로 내지 않았다). 볼트에서 Notion 으로 **DB 를 만든다**(ADR-036 · ADR-037). 받은 DB 를 새 워크스페이스로 올리면 스키마 ·
 > 행 · relation · 보기 · 꾸밈이 그대로 생기고, 볼트에서 직접 만든 노트 폴더(+ Bases)도 DB 로 올릴 수 있다. **볼트 하나에
 > Notion 연결 여럿**(ADR-038)과 첫 pull 요청 수 줄이기를 더했다. 그 사이 Notion API changelog(2026-04~10)를 대조해 고친 것,
 > 표기 왕복 수정, 전체 워크스페이스 E2E(DB 164개 · 행 1,221개 생성 → 다시 받기)에서 찾은 결함 수정을 함께 담는다.
@@ -22,7 +24,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **동기화의 쓰기가 사람에게 알림을 보내지 않는다** — 볼트를 새 루트로 올리면 사람 속성이 있는 행마다 그 사람에게 알림이 갔다. 페이지 만들기 · 수정 · 블록 추가에 `notifications.mode: "silent"` 를 싣는다. 설정 `sync.notifications: "default"` 면 예전과 같다.
 - **볼트 하나에 Notion 연결 여럿 (ADR-038)** — 연결마다 볼트 안 폴더 하나를 맡고 그 폴더의 `.im-nobsidian/` 에 설정 · 상태 DB 를 둔다. CLI 는 그 폴더에서 돌리고(`cd Work && nobsi init`), 플러그인은 설정 「폴더 연결 추가」. 바깥 연결은 안쪽 연결 폴더를 올리지도 덮어쓰지도 않는다. 이미 동기화하던 폴더는 따로 연결하지 않는다(init 이 거절 · 엔진이 멈춤).
 - **첫 pull 요청 수 −42%** — 폴더 판정 · 하위 DB 스캔 · 발견한 DB 확인의 중복 조회를 뺐다(같은 하위 트리 614 → 354 요청). 전체 대조 순회의 예산을 벽시계 90초에서 요청 270건으로 바꿔, 다른 작업과 속도 한도를 나눠도 search 폴백으로 넘어가지 않는다(232 요청 · 144초).
-- - **릴리스 게이트** — 태그와 `package.json` 넷 · `manifest.json` · `versions.json` · 릴리스 노트 · CHANGELOG 절이 하나라도 다르면 발행하지 않는다.
+- **릴리스 게이트** — 태그와 `package.json` 넷 · `manifest.json` · `versions.json` · 릴리스 노트 · CHANGELOG 절이 하나라도 다르면 발행하지 않는다.
 
 ### Fixed
 
