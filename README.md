@@ -359,7 +359,7 @@ root page. Commands run every ready connection in turn, and the changes panel le
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.4.1 (release assets / BRAT)                                                                              |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.9.0 (release assets / BRAT)                                                                              |
 
 ### Using as a Library
 
@@ -443,11 +443,11 @@ Escapes inside fenced or inline code are untouched, and `\\[` (an escaped backsl
 ## Roadmap
 
 ```
-dev     (unreleased, v0.5–v0.9) push creates Notion databases from the vault (schema,
-        rows, relations, rollups, formulas, views, icons/covers), vault folders → Notion
-        databases, column guides, several workspaces in one vault (connection folders),
-        42% fewer requests on a first pull, person/file properties survive a copy to
-        another root, full-workspace E2E on the release candidate
+v0.9.0 ✅ push creates Notion databases from the vault (schema, rows, relations,
+        rollups, formulas, views, icons/covers), vault folders → Notion databases,
+        column guides, several workspaces in one vault (connection folders), 42% fewer
+        requests on a first pull, person/file properties survive a copy to another root,
+        full-workspace E2E and a 172-note re-round-trip on the release candidate
 v0.4.1 ✅ real-data round trip: 1,492-note push to a new root (346 → 1,492), synced-block
         originals left untouched, glued inline math, child links with `/` in the title,
         out-of-vault mention titles, no rewrite on pull right after push
