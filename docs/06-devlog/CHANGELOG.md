@@ -5,6 +5,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-10-25
+
+> Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039). 동작이 바뀌는 변경이라 마이너를 올린다.
+
 ### Added
 
 - **Notion 에서 옮긴 페이지를 볼트에서도 옮긴다 (ADR-039)** — `pages.move` 는 수정 시각을 바꾸지 않아 예전에는 감지되지
