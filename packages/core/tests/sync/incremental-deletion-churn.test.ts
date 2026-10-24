@@ -173,7 +173,11 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
     // ── pull #1: 로컬과 다른 내용 → 정상 write. 파이프라인 산출물을 캡처한다. ──
     vaultFs.readFile.mockResolvedValue("LOCAL-OLD");
     notion.searchRecentPages.mockResolvedValue([
-      { id: "page-id-123", last_edited_time: "2026-05-02T00:00:00.000Z" },
+      {
+        id: "page-id-123",
+        last_edited_time: "2026-05-02T00:00:00.000Z",
+        parent: { type: "page_id", page_id: "root-page-id" },
+      },
     ]);
     const orch1 = makeOrchestrator(config);
     const r1 = await orch1.pull();
@@ -194,7 +198,11 @@ describe("증분 삭제 전파 + content_hash 멱등 (I10·I5)", () => {
       properties: { title: { type: "title", title: [{ plain_text: "Test Page" }] } },
     });
     notion.searchRecentPages.mockResolvedValue([
-      { id: "page-id-123", last_edited_time: "2026-05-03T00:00:00.000Z" },
+      {
+        id: "page-id-123",
+        last_edited_time: "2026-05-03T00:00:00.000Z",
+        parent: { type: "page_id", page_id: "root-page-id" },
+      },
     ]);
     const orch2 = makeOrchestrator(config);
     const r2 = await orch2.pull();
