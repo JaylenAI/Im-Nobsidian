@@ -54,3 +54,37 @@ jobs:
         with:
           name: coverage
           path: packages/*/coverage/
+
+  # 이슈 #8 — Windows 의 볼트 경로(`\`)는 ubuntu 에서 드러나지 않는다. 경로 · 패턴 · 상태 DB 의 시험은 막고,
+  # 나머지 시험은 Windows 에서 무엇이 다른지 보려고 돌린다(실패해도 막지 않는다).
+  windows:
+    name: Windows paths
+    runs-on: windows-latest
+
+    steps:
+      # 픽스처의 줄 끝을 LF 그대로 받는다 — 바뀌면 왕복 시험이 줄 끝으로 갈린다.
+      - run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Path tests
+        run: |
+          pnpm --filter @im-nobsidian/core exec vitest run tests/utils/path-filter.test.ts tests/sync/node-vault-fs.test.ts tests/sync/excluded-paths.test.ts tests/state/windows-paths.test.ts
+          pnpm --filter im-nobsidian exec vitest run tests/utils/vault.test.ts
+
+      - name: All tests (informational)
+        continue-on-error: true
+        run: pnpm test
