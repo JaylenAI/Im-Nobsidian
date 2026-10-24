@@ -1,5 +1,5 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
-import { mapOutsideCode } from "../../utils/md-regions.js";
+import { LIST_MARKER_SOURCE, mapOutsideCode } from "../../utils/md-regions.js";
 import { mathCloseAt } from "../literal-dollar.js";
 
 const BLOCK_MATH_REGEX = /\$\$([\s\S]+?)\$\$/g;
@@ -101,8 +101,9 @@ function withoutPrefix(line: string, prefix: string): string | null {
  */
 const DOUBLE_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g;
 /** 제 줄의 `$$` — 줄머리 · 목록 표지 · 콜아웃 머리(`[!note]`) 뒤에 `$$` 만 있다. 블록 수식의 경계다. */
-const OWN_LINE_DOLLARS_RE =
-  /^(?:[ \t]*>)*[ \t]*(?:\[![^\]]*\][+-]?[ \t]*|(?:[-*+]|\d+[.)])[ \t]+)?\$\$[ \t]*$/;
+const OWN_LINE_DOLLARS_RE = new RegExp(
+  String.raw`^(?:[ \t]*>)*[ \t]*(?:\[![^\]]*\][+-]?[ \t]*|${LIST_MARKER_SOURCE}[ \t]+)?\$\$[ \t]*$`,
+);
 
 /** 코드 밖 줄마다 {@link settleLineDollars}. */
 function settleDollars(content: string, final: boolean): string {
