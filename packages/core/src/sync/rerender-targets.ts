@@ -26,6 +26,8 @@ export function rerenderTargets(
     readonly queued: ReadonlySet<string>;
     readonly adopting: ReadonlySet<string>;
     readonly paths?: string[];
+    /** 설정이 동기화에서 뺀 경로(이슈 #8). */
+    readonly excludes?: (path: string) => boolean;
   },
 ): RemoteChange[] {
   return stateDb
@@ -37,7 +39,8 @@ export function rerenderTargets(
         !scope.queued.has(record.notionPageId) &&
         !scope.adopting.has(record.id) &&
         !(scope.localChangedPaths?.has(record.obsidianPath) ?? false) &&
-        inAnyPathScope(record.obsidianPath, scope.paths),
+        inAnyPathScope(record.obsidianPath, scope.paths) &&
+        !(scope.excludes?.(record.obsidianPath) ?? false),
     )
     .map((record) => ({
       pageId: record.notionPageId,

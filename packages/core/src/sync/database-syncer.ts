@@ -521,6 +521,9 @@ export class DatabaseSyncer {
     if (!wholeDbInScope && !scope!.some((path) => matchesPathScope(path, dbConfig.localFolder))) {
       return { kind: "out-of-scope" };
     }
+    // 설정이 뺀 DB 폴더(이슈 #8)는 조회하지도 쓰지도 않는다.
+    if (this.vaultFs.excludesPath?.(dbConfig.localFolder, "folder"))
+      return { kind: "out-of-scope" };
 
     const meta = await this.notionClient.getDatabaseMeta(dbConfig.databaseId);
     const pages = await this.notionClient.queryAllDatabasePages(
@@ -566,6 +569,7 @@ export class DatabaseSyncer {
     scope: readonly string[] | undefined,
   ): Promise<RowAction> {
     if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) return "skip";
+    if (record && this.vaultFs.excludesPath?.(record.obsidianPath)) return "skip";
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
     const changed = misplaced || this.remoteVerdict(record, page) !== "unchanged";
@@ -656,7 +660,8 @@ export class DatabaseSyncer {
           record.notionParentId !== null &&
           notionIdsEqual(record.notionParentId, dbConfig.databaseId) &&
           !listed.has(normalizeNotionId(record.notionPageId)) &&
-          inAnyPathScope(record.obsidianPath, paths),
+          inAnyPathScope(record.obsidianPath, paths) &&
+          !(this.vaultFs.excludesPath?.(record.obsidianPath) ?? false),
       );
   }
 
