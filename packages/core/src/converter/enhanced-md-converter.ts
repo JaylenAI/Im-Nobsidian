@@ -67,6 +67,7 @@ import { DEFAULT_CALLOUT_TYPE, calloutIconOf, calloutTypeOf } from "./callout-ty
 import { startsWithParagraph } from "./nfm-to-blocks.js";
 import { quotedCodeToChildren } from "./quote-code.js";
 import { unescapeSafeLiteralDollars } from "./literal-dollar.js";
+import { unescapeAngleBrackets } from "./literal-angles.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -130,6 +131,7 @@ export function notionEnhancedToObsidian(
   result = emptyBlocksToBreaks(result);
   result = unescapePipes(result);
   result = unescapeNotionChars(result);
+  result = unescapeAngleBrackets(result);
   result = unescapeBrackets(result);
   result = receiveWikilinkText(result);
   result = receiveLiteralBackslashes(result);
