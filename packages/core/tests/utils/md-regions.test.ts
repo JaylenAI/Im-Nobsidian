@@ -3,6 +3,7 @@ import {
   collapseBlankLines,
   computeAnchor,
   indentWidth,
+  LIST_MARKER_SOURCE,
   indentedCodeLineMask,
   inlineCodeRanges,
   mapOutsideCode,
@@ -298,5 +299,23 @@ describe("indentedCodeLineMask — Obsidian 이 들여쓴 코드로 그리는 �
 
   it("목록이 맨 바깥 글에서 끝나면 다시 코드다", () => {
     expect(coded("- a\n\n문단\n\n    코드")).toEqual(["    코드"]);
+  });
+});
+
+describe("LIST_MARKER_SOURCE — 목록 항목의 표", () => {
+  const marker = new RegExp(`^${LIST_MARKER_SOURCE}$`);
+
+  it("글머리표 셋과 번호 두 꼴", () => {
+    for (const text of ["-", "*", "+", "1.", "1)", "123456789."])
+      expect(marker.test(text)).toBe(true);
+  });
+
+  it("열 자리 번호 · 표 없는 수 · 다른 기호는 표가 아니다 — CommonMark", () => {
+    for (const text of ["1234567890.", "1", "1:", "#", "a."]) expect(marker.test(text)).toBe(false);
+  });
+
+  it("열 자리 번호 줄은 목록이 아니라 그 아래 네 칸 줄이 코드다", () => {
+    const text = "1234567890. a\n\n    코드";
+    expect(text.split("\n").filter((_, i) => indentedCodeLineMask(text)[i])).toEqual(["    코드"]);
   });
 });
