@@ -3,7 +3,7 @@
  * 한곳에서 보장한다. 토글/콜아웃/칼럼(enhanced-md-converter)과 토글 헤딩
  * (toggle-heading)이 같은 기준을 공유해야 왕복이 수렴한다.
  */
-import { indentWidth, inlineCodeRanges } from "../utils/md-regions.js";
+import { indentWidth, inlineCodeRanges, LIST_MARKER_SOURCE } from "../utils/md-regions.js";
 
 /**
  * 컨테이너 본문 한 줄의 성격. 들여쓰기를 **붙일 때도 뗄 때도** 같은 기준으로 갈라야
@@ -297,7 +297,7 @@ function widenAmbiguousFences(
 }
 
 /** 목록 항목 줄 — 글머리표 · 번호 · 할 일(`- [ ]`). 빈 항목은 표 한 글자로 끝난다(`-`). */
-const LIST_ITEM_LINE_RE = /^[\t ]*(?:[-*+]|\d{1,9}[.)])(?:[\t ]|$)/;
+const LIST_ITEM_LINE_RE = new RegExp(String.raw`^[\t ]*${LIST_MARKER_SOURCE}(?:[\t ]|$)`);
 
 /**
  * 목록 안 코드블록의 코드 줄을 경계 펜스와 같은 깊이로 들여쓴다(S-24).

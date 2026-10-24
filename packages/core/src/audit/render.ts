@@ -19,6 +19,7 @@ import {
   MATH_FENCE_RE,
   openCodeFence,
 } from "../utils/md-regions.js";
+import { LIST_MARKER_SOURCE } from "../utils/md-regions.js";
 
 /**
  * 컨테이너 태그 누수(③)의 규칙 번호. `<details>` · `<summary>` 는 사용자가 볼트에 적는 HTML 이기도 하다 —
@@ -81,7 +82,7 @@ const SEPARATOR_RE = new RegExp(`^[\\t ]*>?[\\t ]*\\|${SEPARATOR_BODY}[ \\t:|-]*
 /** 4칸 넘게 들여쓴 코드펜스 — 목록 밖이면 들여쓰기 코드블록이 되어 펜스가 글자로 보인다. */
 const DEEP_FENCE_RE = /^ {4,}```/;
 /** 목록 항목 줄 — 줄머리 · 표시(글머리표 · 번호). 할 일(`- [ ]`)의 상자는 내용이다. */
-const LIST_ITEM_RE = /^([\t ]*)([-*+]|\d{1,9}[.)])(?:[\t ]|$)/;
+const LIST_ITEM_RE = new RegExp(String.raw`^([\t ]*)(${LIST_MARKER_SOURCE})(?:[\t ]|$)`);
 /** 이 폭부터 들여쓴 코드블록이다 — 품은 목록 항목의 내용 폭에서 센다(CommonMark). */
 const CODE_INDENT = 4;
 /** 각주 정의의 이어지는 문단은 이만큼 들여쓴다 — 그 안은 각주다. */

@@ -22,7 +22,7 @@
  */
 import { MARKER_BRAND_RE, calloutIndentMarker } from "../constants/markers.js";
 import { classifyContainerLines, indentContainerBody } from "./container-indent.js";
-import { indentWidth } from "../utils/md-regions.js";
+import { indentWidth, LIST_MARKER_SOURCE } from "../utils/md-regions.js";
 
 /** 클램프된 인용 들여쓰기 — 코드블록 임계 미만이면서 리스트 자식 위치를 유지하는 폭. */
 export const CLAMPED_INDENT = "  ";
@@ -103,7 +103,7 @@ export function clampCalloutIndent(content: string): string {
  * 부모 항목의 content indent 기준으로 판정하므로 탭이어도 코드가 되지 않는다(실측 1,721건
  * 전부 정상 렌더). 여기서 눌러 버리면 멀쩡한 중첩 리스트가 평평해진다.
  */
-const BODY_INDENT_RE = /^\t+(?![ \t]*(?:[-*+]|\d+[.)])(?:\s|$))/;
+const BODY_INDENT_RE = new RegExp(String.raw`^\t+(?![ \t]*${LIST_MARKER_SOURCE}(?:\s|$))`);
 
 /** 본문 줄 하나의 선행 탭을 클램프 폭으로 누른다({@link BODY_INDENT_RE} 주석 참조). */
 export function clampBodyIndent(line: string): string {

@@ -1,4 +1,4 @@
-import { inlineCodeRanges, mapOutsideCodeFences } from "../utils/md-regions.js";
+import { inlineCodeRanges, LIST_MARKER_SOURCE, mapOutsideCodeFences } from "../utils/md-regions.js";
 
 /**
  * pull 쪽 — Notion 의 글 `<` · `>` 를 볼트에 쓸 모양으로 (이슈 #8).
@@ -22,7 +22,7 @@ export function unescapeAngleBrackets(content: string): string {
 }
 
 /** 인용이나 목록 표지만 있는 줄머리 — 이 뒤의 `>` 는 인용을 연다. */
-const BLOCK_PREFIX_RE = /^[ \t]*(?:(?:>|[-*+]|\d+[.)])[ \t]*)*$/;
+const BLOCK_PREFIX_RE = new RegExp(String.raw`^[ \t]*(?:(?:>|${LIST_MARKER_SOURCE})[ \t]*)*$`);
 /** `<` 뒤에 오면 태그 · 자동 링크 · 주석을 여는 글자. */
 const TAG_START_RE = /[A-Za-z/!?]/;
 

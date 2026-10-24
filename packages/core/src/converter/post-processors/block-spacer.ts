@@ -9,6 +9,7 @@ import {
   MATH_FENCE_RE,
   openCodeFence,
 } from "../../utils/md-regions.js";
+import { LIST_MARKER_SOURCE } from "../../utils/md-regions.js";
 
 /**
  * 블록 간격 정규화(D1) — Notion markdown export 는 블록 사이 빈 줄이 없는 압축형이라
@@ -77,7 +78,7 @@ type BlockKind = "list" | "quote" | "table" | "footnote" | "fence" | "math" | "o
  * 목록 항목 줄. 표 다음이 줄 끝이어도 항목이다 — Notion 은 빈 글머리표를 `-` 한 글자로 내보낸다(2026-10-23 실측).
  * 공백을 요구하면 빈 항목이 문단으로 보여 그 자식과의 사이에 빈 줄이 들어가고, 자식이 항목 밖 문단이 됐다.
  */
-const LIST_ITEM_RE = /^[ \t]*(?:[-*+]|\d+[.)])(?:\s|$)/;
+const LIST_ITEM_RE = new RegExp(String.raw`^[ \t]*${LIST_MARKER_SOURCE}(?:\s|$)`);
 const QUOTE_RE = /^[ \t]*>/;
 const CALLOUT_START_RE = /^[ \t]*>\s*\[![^\]]*\]/;
 const TABLE_ROW_RE = /^[ \t]*\|/;

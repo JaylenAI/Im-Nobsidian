@@ -192,7 +192,11 @@ describe("pull 경로 충돌 — 동명 페이지 (덮어쓰기·churn 회귀 �
     // 2회차는 증분 경로로 들어간다 — 세 페이지를 모두 "최근 편집"으로 올려
     // 재평가시켜야 경로 재산정이 실제로 일어나는지 본다(네트워크 호출도 함께 차단).
     vi.spyOn(client, "searchRecentPages").mockResolvedValue(
-      [...PAGES.keys()].map((id) => ({ id, last_edited_time: "2026-05-01T00:00:00.000Z" })),
+      [...PAGES.values()].map(({ id, parent }) => ({
+        id,
+        last_edited_time: "2026-05-01T00:00:00.000Z",
+        parent,
+      })) as never,
     );
     // 스키마를 고친 DB 도 search 로 찾는다(ADR-027) — 오프라인 시험이 실제 search 로 나가지 않게.
     vi.spyOn(client, "searchRecentDataSources").mockResolvedValue([]);

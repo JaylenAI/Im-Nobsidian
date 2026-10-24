@@ -10,6 +10,12 @@
 /** 가드 콜백 — 조각과 입력 기준 절대 offset 을 받아 치환된 조각을 돌려준다. */
 export type SegmentMapper = (segment: string, offset: number) => string;
 
+/**
+ * 목록 항목의 표 — 글머리표(`-` · `*` · `+`)나 번호(`1.` · `1)`). 정규식 조각이다(`new RegExp` 로 잇는다).
+ * 번호는 아홉 자리까지다(CommonMark) — 열 자리 번호 줄은 문단이다.
+ */
+export const LIST_MARKER_SOURCE = String.raw`(?:[-*+]|\d{1,9}[.)])`;
+
 /** 문단을 가르는 빈 줄 — 공백만 있는 줄도 빈 줄이다. */
 const BLANK_LINE_RE = /\n[ \t]*\n/;
 
@@ -125,8 +131,9 @@ export interface CodeFence {
 }
 
 /** 여는 펜스 — 인용 표시 · 들여쓰기 · 목록 표시 · 펜스 · 정보 문자열(줄 끝 `\r` 앞까지). */
-const QUOTED_FENCE_OPEN_RE =
-  /^((?:[\t ]*>)*)([\t ]*)((?:[-*+]|\d{1,9}[.)])[\t ]+)?(`{3,}|~{3,})(.*)\r?$/;
+const QUOTED_FENCE_OPEN_RE = new RegExp(
+  String.raw`^((?:[\t ]*>)*)([\t ]*)(${LIST_MARKER_SOURCE}[\t ]+)?(\`{3,}|~{3,})(.*)\r?$`,
+);
 const QUOTE_MARK_RE = /^[\t ]*>/;
 const LEADING_SPACE_RE = /^[\t ]*/;
 
@@ -265,7 +272,7 @@ export function codeLineMask(content: string): boolean[] {
 }
 
 /** 목록 항목 줄 — 줄머리 세 칸까지(네 칸이면 들여쓴 코드다). */
-const TOP_LIST_ITEM_RE = /^ {0,3}(?:[-*+]|\d{1,9}[.)])(?:[\t ]|$)/;
+const TOP_LIST_ITEM_RE = new RegExp(String.raw`^ {0,3}${LIST_MARKER_SOURCE}(?:[\t ]|$)`);
 /** 들여쓴 코드의 폭 — CommonMark 는 네 칸(탭 하나)부터 코드로 읽는다. */
 const INDENTED_CODE_WIDTH = 4;
 

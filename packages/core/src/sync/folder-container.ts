@@ -51,6 +51,29 @@ export function isFolderRecord(record: {
   );
 }
 
+/**
+ * 이 레코드의 하위 페이지가 놓일 폴더 — 새 페이지를 받을 때(`PagePuller`)와 Notion 에서 옮긴 페이지를 따를 때
+ * (`RemoteMoveFollower`)가 이 규칙 하나를 읽는다.
+ *
+ * - push 가 만든 폴더 페이지 · 폴더로만 받은 페이지는 폴더 경로 자체로 추적한다 — 그 폴더가 자식의 자리다(S-16).
+ *   v0.3 이 DB 폴더 자리에 만든 폴더 페이지는 빼고 예전 자리에 둔다 — DB 폴더에는 행만 든다
+ * - 폴더 노트(`A/A.md`)는 그 폴더
+ * - 노트 하나(행 · 자식 없이 받은 페이지)는 그 노트 이름의 폴더 — push 가 `X.md` 옆 `X/` 를 X 의 하위로 읽는다
+ *   (`folderContainer`). 예전에는 노트 옆에 두어, 행의 하위 페이지가 DB 폴더에 행처럼 섞였다(실데이터 E2E 4 페이지)
+ */
+export function childFolderOf(
+  record: { readonly fileType: string; readonly obsidianPath: string },
+  lookup: Pick<FolderLookup, "databaseAt">,
+): string {
+  if (isFolderRecord(record) && !lookup.databaseAt(record.obsidianPath)) {
+    return record.obsidianPath;
+  }
+  if (record.fileType === "folder-note" || record.fileType === "folder-only") {
+    return parentFolderOf(record.obsidianPath);
+  }
+  return stripMarkdownExtension(record.obsidianPath);
+}
+
 /** 파일 · 폴더의 부모 폴더. 볼트 루트면 빈 문자열. */
 export function parentFolderOf(path: string): string {
   const slash = path.lastIndexOf("/");

@@ -21,11 +21,11 @@
  * 항목 안에 보이는 것보다 낫다. push 는 그대로 보낸다 — Notion 은 빈 줄을 버린다.
  */
 import { classifyContainerLines, splitContainerPrefix } from "./container-indent.js";
-import { indentWidth } from "../utils/md-regions.js";
+import { indentWidth, LIST_MARKER_SOURCE } from "../utils/md-regions.js";
 
 /** 인용 접두 — 줄머리의 여백과 `>` 가 이어진 부분, 마지막 `>` 까지. */
 const QUOTE_PREFIX_RE = /^[\t >]*>/;
-const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])(?:[\t ]|$)/;
+const LIST_ITEM_RE = new RegExp(String.raw`^${LIST_MARKER_SOURCE}(?:[\t ]|$)`);
 /**
  * 앞 문단에 이어 붙지 않는 줄 — 제목 · 인용 · 콜아웃 머리 · 구분선은 문단을 끊고, 표 · 빈 블록은 각
  * 변환이 띄우고, 보존 마커는 앞 블록에 붙어 있어야 한다.
@@ -35,7 +35,7 @@ const NOT_LAZY_RE = /^(?:#{1,6}(?:[\t ]|$)|>|\[!|(?:[-*_][\t ]*){3,}$|\||<br\s*\
 const NOT_PARAGRAPH_RE = /^(?:#{1,6}(?:[\t ]|$)|(?:[-*_][\t ]*){3,}$|\||<br\s*\/?>[\t ]*$|\$\$|%%)/;
 
 /** 글이 있는 목록 항목 — 표시 뒤에 문단이 열린다. */
-const LIST_PARAGRAPH_RE = /^(?:[-*+]|\d+[.)])[\t ]+\S/;
+const LIST_PARAGRAPH_RE = new RegExp(String.raw`^${LIST_MARKER_SOURCE}[\t ]+\S`);
 /** 코드 펜스 줄 — 목록 자식 코드의 닫는 펜스 뒤에는 이어 붙을 문단이 없다. */
 const FENCE_LINE_RE = /^(?:`{3,}|~{3,})/;
 

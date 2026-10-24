@@ -84,7 +84,7 @@ export const syncCommand = new Command("sync")
       const pushFailed = pushResult.failed.length;
       console.log(`\n  ${completionHeader("Sync", pullFailed + pushFailed)}`);
       console.log(
-        `  ${chalk.blue("Pull:")} ${summary(pullResult.created, pullResult.updated, pullResult.deleted)}` +
+        `  ${chalk.blue("Pull:")} ${summary(pullResult.created, pullResult.updated, pullResult.deleted, pullResult.moved?.length)}` +
           // 사라졌던 파일이 되살아난 경우에만 덧붙인다 — 평상시 요약을 어지럽히지 않는다.
           (pullResult.restored > 0 ? `  ${chalk.yellow(`${pullResult.restored} restored`)}` : "") +
           (pullFailed > 0 ? `  ${chalk.red(`${pullFailed} failed`)}` : ""),

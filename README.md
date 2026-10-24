@@ -222,9 +222,13 @@ Obsidian Vault                        Notion Workspace
 2. Once an hour (`sync.fullReconcileInterval`) it runs a **full scan** instead: reads every page under
    your root page and every database. Only the full scan notices pages deleted in Notion or moved out of
    scope — Notion's search doesn't return trashed pages
-3. Detects changes by `last_edited_time`
-4. Converts Notion blocks → markdown, properties → frontmatter
-5. Downloads images to your attachments folder (deduplicated)
+3. Pages you moved to another parent in Notion are moved in the vault too (same file name, into the new
+   parent's folder). Moving a page doesn't change its edit time, so the full scan is what notices it.
+   A move is left alone, with the reason printed, if the target name is taken, the note was moved in
+   the vault and not yet pushed, or the folder holds a database
+4. Detects changes by `last_edited_time`
+5. Converts Notion blocks → markdown, properties → frontmatter
+6. Downloads images to your attachments folder (deduplicated)
 
 The first pull, `pull --force` and database mode always run a full scan. `pull`, `sync` and `status`
 say which scan ran and when the last full scan was; after a changes-only scan with `sync.deleteSync` on,
@@ -359,7 +363,7 @@ root page. Commands run every ready connection in turn, and the changes panel le
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.9.2 (release assets / BRAT)                                                                              |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.10.0 (release assets / BRAT)                                                                             |
 
 ### Using as a Library
 

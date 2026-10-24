@@ -94,6 +94,12 @@ export class MemoryVault {
       }
     });
     fs.ensureFolder.mockImplementation(async (folder: string) => this.addFolders(`${folder}/`));
+    // 노트도 폴더도 옮긴다 — Obsidian 의 vault.rename 처럼.
+    fs.moveFile.mockImplementation(async (from: string, to: string) => {
+      if (this.files.has(from)) this.rename(from, to);
+      else if (this.folders.has(from)) this.renameFolder(from, to);
+      else throw new Error(`ENOENT: ${from}`);
+    });
     return fs as unknown as VaultFS;
   }
 
