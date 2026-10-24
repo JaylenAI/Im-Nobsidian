@@ -57,12 +57,16 @@ describe("남은 WAL", () => {
     );
   });
 
-  it("WAL 을 보지 못한 까닭이 «없음» 이 아니면 그대로 던진다 — 없는 것으로 보고 열지 않는다", () => {
-    const path = dbPath();
-    // 폴더 자리에 파일이 있으면 그 아래 경로는 ENOTDIR
-    const blocked = join(path, "sub", "sync.db");
-    writeFileSync(path, "");
+  // Windows 는 파일 아래 경로를 ENOTDIR 가 아니라 ENOENT 로 답한다 — 그 OS 에서는 «없음» 과 가를 수 없다.
+  it.skipIf(process.platform === "win32")(
+    "WAL 을 보지 못한 까닭이 «없음» 이 아니면 그대로 던진다 — 없는 것으로 보고 열지 않는다",
+    () => {
+      const path = dbPath();
+      // 폴더 자리에 파일이 있으면 그 아래 경로는 ENOTDIR
+      const blocked = join(path, "sub", "sync.db");
+      writeFileSync(path, "");
 
-    expect(() => pendingWalBytes(blocked)).toThrow(/ENOTDIR/);
-  });
+      expect(() => pendingWalBytes(blocked)).toThrow(/ENOTDIR/);
+    },
+  );
 });

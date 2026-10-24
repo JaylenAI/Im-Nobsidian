@@ -16,6 +16,7 @@ function stylesheets(): { file: string; css: string }[] {
     readdirSync(new URL("../src", import.meta.url), { recursive: true }) as string[]
   )
     .filter((file) => file.endsWith(".svelte"))
+    .map((file) => file.replaceAll("\\", "/"))
     .sort()
     .map((file) => ({
       file: `src/${file}`,

@@ -43,7 +43,10 @@ export class StateDB implements IStateDB {
   }
 
   private static openLocked(dbPath: string, lock: StateLock): StateDB {
-    const savedBytes = existsSync(dbPath) ? statSync(dbPath).size : null;
+    // 파일만 «저장된 상태 DB» 다 — 폴더는 SQLite 가 여는 데서 실패하고 그 까닭을 그대로 던진다. Windows 는 폴더의
+    // size 를 0 으로 주어 예전에는 「빈 파일」 로 진단했다.
+    const saved = existsSync(dbPath) ? statSync(dbPath) : null;
+    const savedBytes = saved?.isFile() ? saved.size : null;
     // 비었으면 열지도 않는다 — SQLite 는 0바이트 파일을 읽을 때 옆 WAL 파일을 지운다.
     if (savedBytes === 0) throw SavedStateDbError.noTables(0);
     const db = new Database(dbPath);
