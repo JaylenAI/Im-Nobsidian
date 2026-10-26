@@ -20,6 +20,8 @@ export interface DbBaseFile {
  */
 export class DbBaseFiles {
   private entries: Map<string, DbBaseFile> | null = null;
+  /** 마지막으로 읽거나 쓴 메타 값 — 그 사이 다른 쪽(폴더를 옮긴 NoteRelocator)이 고쳐 적었으면 다시 읽는다. */
+  private loadedRaw: string | null = null;
 
   constructor(private readonly stateDb: Pick<IStateDB, "getMeta" | "setMeta">) {}
 
@@ -33,14 +35,17 @@ export class DbBaseFiles {
     const known = entries.get(key);
     if (known?.basePath === info.basePath && known.title === info.title) return;
     entries.set(key, { basePath: info.basePath, title: info.title });
-    this.stateDb.setMeta(DB_BASE_FILES_META_KEY, JSON.stringify(Object.fromEntries(entries)));
+    this.loadedRaw = JSON.stringify(Object.fromEntries(entries));
+    this.stateDb.setMeta(DB_BASE_FILES_META_KEY, this.loadedRaw);
   }
 
-  /** 상태 메타에서 한 번 읽는다. 없거나 깨졌으면 비어 있다 — 이번 실행이 기록하는 것부터 다시 쌓는다. */
+  /** 상태 메타에서 읽는다 — 값이 그대로면 읽어 둔 것을 쓴다. 없거나 깨졌으면 비어 있다 — 이번 실행이 기록하는 것부터 다시 쌓는다. */
   private load(): Map<string, DbBaseFile> {
-    if (this.entries) return this.entries;
-    this.entries = new Map();
     const raw = this.stateDb.getMeta(DB_BASE_FILES_META_KEY);
+    // 비어 있으면 읽어 둔 것을 쓴다 — 지우는 쪽은 없고, 적은 값을 돌려주지 않는 저장소(시험 모의)도 있다.
+    if (this.entries && (raw === null || raw === this.loadedRaw)) return this.entries;
+    this.entries = new Map();
+    this.loadedRaw = raw;
     if (!raw) return this.entries;
     try {
       const parsed = JSON.parse(raw) as unknown;

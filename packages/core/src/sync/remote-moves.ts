@@ -51,7 +51,7 @@ export class RemoteMoveFollower {
     private readonly vaultFs: VaultFS,
     private readonly folderLookup: () => FolderLookup,
   ) {
-    this.relocator = new NoteRelocator(stateDb, vaultFs);
+    this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
   }
 
   /**

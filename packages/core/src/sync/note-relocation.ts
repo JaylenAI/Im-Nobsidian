@@ -1,9 +1,9 @@
 import type { IStateDB } from "../state/state-db-interface.js";
+import type { DatabaseSyncConfig } from "../types/config.js";
 import type { RemoteMove, SyncRecord } from "../types/sync.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
-import { DB_BASE_FILES_META_KEY } from "./db-base-files.js";
-import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
+import { retargetBaseFiles, rewriteDatabaseFolders } from "./db-folder-moves.js";
 import { isFolderRecord, parentFolderOf } from "./folder-container.js";
 import type { VaultFS } from "./vault-fs.js";
 
@@ -12,11 +12,17 @@ import type { VaultFS } from "./vault-fs.js";
  *
  * 옮기기 전에 막을 까닭을 다 보고({@link blocked}), 여럿을 옮기다 하나가 실패하면 옮긴 것을 되돌린다. 다 옮기면
  * 그 아래의 상태 DB 레코드 · 위키링크 · 보존 마커 · 첨부 기록을 새 경로로 옮겨 적는다.
+ *
+ * DB 가 든 폴더도 옮긴다 — 발견한 DB 의 폴더(`discovered_dbs`) · 기록한 `.base` 경로(`db_base_files`) · 동기화가
+ * 만든 `.base` 의 폴더 필터(`file.inFolder`)를 새 자리로 고친다. 설정 파일에 적은 DB(`notion.databases`)의 폴더와
+ * 다른 연결 폴더는 고쳐 적을 수 없어 옮기지 않는다.
  */
 export class NoteRelocator {
   constructor(
     private readonly stateDb: IStateDB,
     private readonly vaultFs: VaultFS,
+    /** 설정 파일(플러그인 설정)에 적은 DB — 그 폴더는 사용자가 정했다. */
+    private readonly configuredDatabases: readonly DatabaseSyncConfig[] = [],
   ) {}
 
   /**
@@ -40,8 +46,11 @@ export class NoteRelocator {
     if (this.vaultFs.excludesPath?.(move.to, isFolder ? "folder" : "file")) {
       return `옮길 자리(${move.to})가 동기화에서 빠진다(paths · .im-nobsidian-ignore)`;
     }
-    if (isFolder && this.holdsDatabaseOrConnection(move.from)) {
-      return "폴더 안에 DB 나 다른 연결이 있다 — DB 보기(.base)가 폴더 경로를 품는다. Obsidian 에서 옮기면 다음 push 가 Notion 을 맞춘다";
+    if (isFolder && this.holdsConfiguredDatabase(move.from)) {
+      return "폴더 안에 설정 파일로 정한 DB 폴더(notion.databases)가 있다 — 설정의 localFolder 를 고친 뒤 Obsidian 에서 옮기면 다음 push 가 Notion 을 맞춘다";
+    }
+    if (isFolder && (this.vaultFs.holdsOtherConnection?.(move.from) ?? false)) {
+      return "폴더 안에 다른 연결 폴더가 있다 — Obsidian 에서 옮기면 다음 push 가 Notion 을 맞춘다";
     }
     return null;
   }
@@ -72,30 +81,16 @@ export class NoteRelocator {
     }
     this.stateDb.transaction(() => {
       for (const move of moves) this.rewritePaths(move);
+      rewriteDatabaseFolders(this.stateDb, moves);
       alsoInTransaction?.();
     });
+    await retargetBaseFiles(this.vaultFs, moves);
   }
 
-  private holdsDatabaseOrConnection(folder: string): boolean {
-    const databases = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    if (databases.some((db) => within(db.localFolder.replace(/\/+$/, ""), folder))) return true;
-    const baseFiles = this.stateDb.getMeta(DB_BASE_FILES_META_KEY);
-    if (baseFiles) {
-      try {
-        const entries = Object.values(
-          JSON.parse(baseFiles) as Record<string, { basePath?: string }>,
-        );
-        if (entries.some((entry) => entry.basePath && within(entry.basePath, folder))) return true;
-      } catch {
-        // 깨진 메타 — DB 폴더 목록과 행 레코드로 본다.
-      }
-    }
-    if (
-      this.stateDb.getAll().some((r) => r.fileType === "db-row" && within(r.obsidianPath, folder))
-    ) {
-      return true;
-    }
-    return this.vaultFs.holdsOtherConnection?.(folder) ?? false;
+  private holdsConfiguredDatabase(folder: string): boolean {
+    return this.configuredDatabases.some((db) =>
+      within(db.localFolder.replace(/\/+$/, ""), folder),
+    );
   }
 
   /** 옮긴 것 아래의 레코드 · 위키링크 · 보존 마커 · 첨부 기록을 새 경로로 옮겨 적는다. */

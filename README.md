@@ -225,8 +225,10 @@ Obsidian Vault                        Notion Workspace
 3. Pages you moved to another parent in Notion are moved in the vault too (same file name, into the new
    parent's folder). Moving a page doesn't change its edit time, so the full scan is what notices it.
    A move is left alone, with the reason printed, if the target name is taken, the note was moved in
-   the vault and not yet pushed, or the folder holds a database. Links to the moved note written as a
-   path (`[[Folder/Note]]`, `[x](Folder/Note.md)`) are updated in your other notes.
+   the vault and not yet pushed, or the folder holds a database you listed in `notion.databases`. A folder
+   holding found databases moves with them — their `.base` views and embeds follow the new folder (the
+   same when you move it in the vault). Links to the moved note written as a path (`[[Folder/Note]]`,
+   `[x](Folder/Note.md)`) are updated in your other notes.
    A title changed in Notion goes into the note's frontmatter `title:` and the file name stays — turn on
    `sync.renameOnTitleChange` (plugin: **Settings → Notion 에서 바꾼 제목으로 이름 바꾸기**) to rename the
    file instead; links to it are updated the same way

@@ -4,6 +4,7 @@ import type { FolderMoveChange, SyncRecord } from "../types/sync.js";
 import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { ChangeDetector, LocalScan, LocalScanOptions } from "./change-detector.js";
+import { retargetBaseFiles, rewriteDatabaseFolders } from "./db-folder-moves.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import { isFolderNotePath, isFolderRecord, type FolderLookup } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
@@ -151,7 +152,7 @@ export class LocalPlanner {
    * 쓴다. Notion 에 반영할 것은 이동 WAL 이 «마지막으로 반영한 경로» 로 적고, 반영을 마치면
    * 지운다(pushMove). 반영하기 전에 그 자리로 되돌아오면 반영할 것이 없어 바로 지운다.
    */
-  adoptLocalMoves(plan: LocalPlan): void {
+  async adoptLocalMoves(plan: LocalPlan): Promise<void> {
     const { adoptions } = plan.scan;
     const moved = adoptions.length + plan.folderMoves.length + plan.databaseFolderMoves.length;
     if (moved === 0 && plan.settledMoveOps.length === 0 && isEmptyRenameHints(plan.hints)) return;
@@ -187,9 +188,7 @@ export class LocalPlanner {
         const record = this.stateDb.getByPath(move.from);
         if (record) this.moveRecord(record, move.to);
       }
-      if (plan.databaseFolderMoves.length > 0) {
-        this.remapDiscoveredDbFolders(plan.databaseFolderMoves);
-      }
+      rewriteDatabaseFolders(this.stateDb, [...plan.folderMoves, ...plan.databaseFolderMoves]);
       // 이번 스캔이 쓴 힌트만 지운다 — 그 사이 플러그인이 적은 힌트는 다음 실행이 쓴다.
       if (!isEmptyRenameHints(plan.hints)) {
         this.writeRenameHints(pruneRenameHints(this.renameHints(), plan.hints));
@@ -203,6 +202,7 @@ export class LocalPlanner {
         }건을 상태에 옮겨 적음`,
       );
     }
+    await retargetBaseFiles(this.vaultFs, [...plan.folderMoves, ...plan.databaseFolderMoves]);
     for (const move of plan.databaseFolderMoves) {
       getLogger().info(
         `[Im-Nobsidian] DB 폴더를 옮김: ${move.from} → ${move.to} — 볼트 쪽 자리만 바뀐다. ` +
@@ -359,19 +359,5 @@ export class LocalPlanner {
       this.stateDb.storePreserveMarkers(to, markers);
       this.stateDb.storePreserveMarkers(from, []);
     }
-  }
-
-  /** 옮겨진 자동 발견 DB 폴더를 설정에 옮겨 적는다 — pull 이 행을 새 폴더에 쓴다. */
-  private remapDiscoveredDbFolders(moves: readonly FolderMove[]): void {
-    const target = new Map(moves.map((move) => [move.from, move.to]));
-    const configs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    let changed = false;
-    for (const config of configs) {
-      const to = target.get(config.localFolder.replace(/\/+$/, ""));
-      if (to === undefined) continue;
-      config.localFolder = to;
-      changed = true;
-    }
-    if (changed) this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(configs));
   }
 }

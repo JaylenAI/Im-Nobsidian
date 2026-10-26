@@ -17,6 +17,7 @@ import { StateDB } from "../../src/state/state-db.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { ProgressItem } from "../../src/types/sync.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { BASE_FILE_HEADER } from "../../src/view/base-file-generator.js";
 import { createConfig } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
@@ -126,7 +127,7 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
     expect((await orchestrator.statusLocal()).folderMoves).toEqual([]);
   });
 
-  it("DB 폴더를 옮기면 변경 목록에 보이고, push 는 볼트 쪽 자리만 옮겨 적는다", async () => {
+  it("DB 폴더를 옮기면 변경 목록에 보이고, push 는 볼트 쪽 자리 · 보기 · 기록한 .base 경로만 옮겨 적는다", async () => {
     db.setMeta(
       "discovered_dbs",
       JSON.stringify([{ databaseId: DB_ID, localFolder: "Tasks", titleProperty: "Name" }]),
@@ -149,6 +150,17 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
       localMtime: stat.mtime,
       localFileSize: stat.size,
     });
+    // 바뀐 DB 만 조회한다(ADR-027) — 다음 pull 이 DB 를 받지 않아도 보기 · 임베드가 새 자리를 가리켜야 한다.
+    const view = `${BASE_FILE_HEADER} from Notion\nfilters:\n  and:\n    - file.inFolder("Tasks")\n`;
+    vault.write("Tasks/Tasks.base", view);
+    const mine = 'filters:\n  and:\n    - file.inFolder("Tasks")\n';
+    vault.write("Tasks/mine.base", mine);
+    db.setMeta(
+      "db_base_files",
+      JSON.stringify({
+        [DB_ID.replace(/-/g, "")]: { basePath: "Tasks/Tasks.base", title: "Tasks" },
+      }),
+    );
     vault.renameFolder("Tasks", "Work/Tasks");
 
     const status = await orchestrator.statusLocal();
@@ -160,6 +172,11 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
     expect(JSON.parse(db.getMeta("discovered_dbs")!)).toEqual([
       expect.objectContaining({ databaseId: DB_ID, localFolder: "Work/Tasks" }),
     ]);
+    expect(Object.values(JSON.parse(db.getMeta("db_base_files")!))).toEqual([
+      { basePath: "Work/Tasks/Tasks.base", title: "Tasks" },
+    ]);
+    expect(vault.read("Work/Tasks/Tasks.base")).toBe(view.replace('"Tasks"', '"Work/Tasks"'));
+    expect(vault.read("Work/Tasks/mine.base")).toBe(mine);
     expect(notion.pages.get(page.id)!.parent).toBe(DB_ID);
     expect((await orchestrator.statusLocal()).folderMoves).toEqual([]);
   });

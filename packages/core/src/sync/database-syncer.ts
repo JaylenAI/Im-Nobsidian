@@ -184,7 +184,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
-    this.relocator = new NoteRelocator(stateDb, vaultFs);
+    this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
     this.propertyMapper = PropertyMapper.fromConfig(config);
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,

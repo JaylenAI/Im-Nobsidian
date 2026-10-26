@@ -261,6 +261,7 @@ export class SyncOrchestrator {
       notionClient,
       async (pageId) =>
         this.detector.discoveredPage(pageId) ?? (await notionClient.getPage(pageId)),
+      config.notion.databases ?? [],
     );
     this.linkUpdater = new LinkUpdater(stateDb, vaultFs);
     this.puller = new PagePuller(
@@ -368,7 +369,7 @@ export class SyncOrchestrator {
     // 한다 — dry-run 은 옮겨 적지 않고 같은 모습을 겹쳐 본다.
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const view = this.planner.localView(plan);
-    if (!options?.dryRun) this.planner.adoptLocalMoves(plan);
+    if (!options?.dryRun) await this.planner.adoptLocalMoves(plan);
     const changes = plan.scan.changes;
 
     const conflictPaths = new Set(this.stateDb.getByStatus("conflict").map((r) => r.obsidianPath));
@@ -794,7 +795,7 @@ export class SyncOrchestrator {
         }`,
       );
     }
-    if (localPlan && !options?.dryRun) this.planner.adoptLocalMoves(localPlan);
+    if (localPlan && !options?.dryRun) await this.planner.adoptLocalMoves(localPlan);
     const adopting = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
 
     const counts = { created: 0, updated: 0, deleted: 0, restored: 0 };

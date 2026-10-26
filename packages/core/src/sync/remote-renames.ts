@@ -1,6 +1,7 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import type { NotionClient } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
+import type { DatabaseSyncConfig } from "../types/config.js";
 import type { RemoteChange, RemoteMove, RemoteMoveSkip, SyncRecord } from "../types/sync.js";
 import { pagePathCandidates } from "../utils/db-row-path.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
@@ -38,8 +39,9 @@ export class RemoteRenameFollower {
     private readonly vaultFs: VaultFS,
     private readonly notionClient: NotionClient,
     private readonly pageOf: (pageId: string) => Promise<PageObjectResponse>,
+    configuredDatabases: readonly DatabaseSyncConfig[] = [],
   ) {
-    this.relocator = new NoteRelocator(stateDb, vaultFs);
+    this.relocator = new NoteRelocator(stateDb, vaultFs, configuredDatabases);
   }
 
   async follow(
