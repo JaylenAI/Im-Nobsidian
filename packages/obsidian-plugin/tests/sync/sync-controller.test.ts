@@ -256,13 +256,14 @@ describe("SyncController", () => {
           { from: "e.md", to: "f.md", renamed: true },
         ],
         relinked: ["x.md"],
+        excluded: ["Private/a.md"],
       });
       mock.statusLocal.mockResolvedValue(localStatus([]));
       const { hooks, onNotice } = createHooks();
       await makeController(mock, hooks).pull();
 
       expect(onNotice).toHaveBeenCalledWith(
-        "Im-Nobsidian: Pull 완료 — 생성 0 / 수정 0 / 삭제 0 / 이동 1 / 이름 변경 2 / 링크 고침 1 (1.0s)",
+        "Im-Nobsidian: Pull 완료 — 생성 0 / 수정 0 / 삭제 0 / 이동 1 / 이름 변경 2 / 링크 고침 1 / 받지 않음 1(동기화 범위 밖) (1.0s)",
       );
     });
 
@@ -716,6 +717,50 @@ describe("SyncController", () => {
 
       await expect(status).resolves.toBeNull();
       expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: 상태 확인 취소됨");
+    });
+
+    it("원격까지 본 확인은 다음 Pull 이 옮기거나 이름을 바꿀 노트 · 받지 않을 새 페이지를 알린다", async () => {
+      mock.status.mockResolvedValue({
+        lastSyncAt: null,
+        localChanges: [],
+        folderMoves: [],
+        remoteChanges: [],
+        conflicts: [],
+        conflictRecords: [],
+        pendingOperations: 0,
+        remoteMoves: [
+          { from: "A/c.md", to: "B/c.md" },
+          { from: "A/old.md", to: "A/new.md", renamed: true },
+        ],
+        remoteMoveSkipped: [{ path: "A/d.md", reason: "x" }],
+        remoteExcluded: ["Private/a.md", "Private/b.md", "Private/c.md", "Private/d.md"],
+      });
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).refreshStatus(true);
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 다음 Pull 이 볼트에 반영합니다 — Notion 에서 옮긴 노트 1 · Notion 에서 제목을 바꾼 노트 1 · 옮기지 못할 노트 1\n" +
+          "Notion 의 새 페이지 4개는 동기화 범위(경로 패턴 · .im-nobsidian-ignore) 밖이라 받지 않습니다: Private/a.md, Private/b.md, Private/c.md …",
+        8000,
+      );
+    });
+
+    it("원격까지 본 확인에 옮길 것이 없으면 따로 알리지 않는다", async () => {
+      mock.status.mockResolvedValue({
+        lastSyncAt: null,
+        localChanges: [],
+        folderMoves: [],
+        remoteChanges: [],
+        conflicts: [],
+        conflictRecords: [],
+        pendingOperations: 0,
+        remoteMoves: [],
+        remoteExcluded: [],
+      });
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).refreshStatus(true);
+
+      expect(onNotice).not.toHaveBeenCalled();
     });
 
     it("fullCheck=true 면 원격까지 조회하고 remoteChanges 를 방출한다", async () => {
