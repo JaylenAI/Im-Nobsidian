@@ -280,13 +280,14 @@ export { sanitizeFileName } from "./utils/sanitize.js";
 export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./utils/markdown-path.js";
 export { systemTimeZone } from "./utils/zoned-time.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
-export { PathFilter, toVaultPath } from "./utils/path-filter.js";
+export { PathFilter, parseIgnorePatterns, toVaultPath } from "./utils/path-filter.js";
 export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
 export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
 export type { Logger } from "./utils/logger.js";
 
 // 볼트 하나에 연결 여럿(ADR-038)
+export { FilteredVaultFS } from "./sync/filtered-vault-fs.js";
 export {
   ScopedVaultFS,
   ConnectionBoundaryError,

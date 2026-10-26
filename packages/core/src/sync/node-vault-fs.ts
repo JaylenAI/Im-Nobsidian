@@ -5,7 +5,7 @@ import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
 import type { FileInfo } from "./change-detector.js";
 import { IGNORE_FILE } from "../constants/paths.js";
 import { isMarkdownPath } from "../utils/markdown-path.js";
-import { PathFilter, toVaultPath } from "../utils/path-filter.js";
+import { PathFilter, parseIgnorePatterns, toVaultPath } from "../utils/path-filter.js";
 
 export interface PathFilterConfig {
   readonly include?: string[];
@@ -31,11 +31,7 @@ export class NodeVaultFS implements VaultFS {
   private loadImNobsidianIgnore(): string[] {
     try {
       const ignorePath = join(this.rootPath, IGNORE_FILE);
-      const content = readFileSync(ignorePath, "utf-8");
-      return content
-        .split("\n")
-        .map((line: string) => line.trim())
-        .filter((line: string) => line && !line.startsWith("#"));
+      return parseIgnorePatterns(readFileSync(ignorePath, "utf-8"));
     } catch (error) {
       // 읽지 못한 제외 파일을 빈 목록으로 보면 제외했던 파일이 말없이 올라간다 — 없을 때만 빈 목록이다.
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
