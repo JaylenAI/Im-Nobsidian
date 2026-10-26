@@ -159,7 +159,7 @@ That's it. Your vault and Notion workspace are now linked.
 | `nobsi push`                | Push local changes to Notion                                                                                                                     |
 | `nobsi pull`                | Pull Notion changes to local                                                                                                                     |
 | `nobsi sync`                | Bidirectional sync (pull → push)                                                                                                                 |
-| `nobsi status`              | Show sync status + conflicts (add `--full` for bidirectional)                                                                                    |
+| `nobsi status`              | Show sync status + conflicts (add `--full` for Notion too: changes, pages the next pull moves or renames)                                        |
 | `nobsi diff [path]`         | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)                                                                   |
 | `nobsi discard <path...>`   | Discard local edits — restore notes to the last synced text (Notion untouched)                                                                   |
 | `nobsi prepare-db <folder>` | Turn a vault folder of notes (+ its `.base`) into a Notion database on the next push — infers property types and views, writes nothing to Notion |
@@ -319,6 +319,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 ```
 
 The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin applies the same patterns from **Settings → 동기화 범위** (sync scope, one pattern per line) and reads the ignore file in each connection folder. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
+New Notion pages that would land in an excluded place aren't pulled — `pull` and `status --full` list them.
 
 ## Database Mode
 

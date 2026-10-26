@@ -230,6 +230,40 @@ describe("status command", () => {
     expect(lines.join("\n")).not.toContain("11111111");
   });
 
+  it("--full 은 다음 pull 이 옮기거나 이름을 바꿀 것 · 받지 않을 새 페이지를 따로 보인다", async () => {
+    mockStatus.mockResolvedValueOnce({
+      localChanges: [],
+      folderMoves: [],
+      remoteChanges: [],
+      conflicts: [],
+      conflictRecords: [],
+      pendingOperations: 0,
+      lastSyncAt: null,
+      remoteMoves: [
+        { from: "A/c.md", to: "B/c.md" },
+        { from: "A/old.md", to: "A/new.md", renamed: true },
+      ],
+      remoteMoveSkipped: [{ path: "A/d.md", reason: "옮길 자리(B/d.md)에 같은 이름이 있다" }],
+      remoteExcluded: ["Private/새 글.md"],
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runStatus("--full");
+    const lines = spy.mock.calls.map(([line]) => String(line));
+    spy.mockRestore();
+
+    expect(lines).toContainEqual(expect.stringContaining("Moved in Notion (next pull):"));
+    expect(lines).toContainEqual(expect.stringMatching(/A\/c\.md → B\/c\.md \(will move\)$/));
+    expect(lines).toContainEqual(expect.stringMatching(/A\/old\.md → A\/new\.md \(will rename\)$/));
+    expect(lines).toContainEqual(expect.stringContaining("A/d.md (won't move: 옮길 자리(B/d.md)"));
+    expect(lines).toContainEqual(
+      expect.stringContaining(
+        "New in Notion, not pulled (excluded by paths / .im-nobsidian-ignore): 1",
+      ),
+    );
+    expect(lines).toContainEqual(expect.stringContaining("Private/새 글.md"));
+    expect(lines.join("\n")).not.toContain("Everything up to date");
+  });
+
   it("--full 이 바뀐 것만 찾았으면 원격 삭제가 반영되는 때를 적는다", async () => {
     mockStatus.mockResolvedValueOnce({
       localChanges: [],

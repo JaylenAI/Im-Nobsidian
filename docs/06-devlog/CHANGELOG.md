@@ -20,6 +20,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   노트는 고친 글을 사본으로 적어 다음 push 가 다시 올리지 않는다. CLI 는 「links updated in N notes」 와 JSON `relinked`,
   플러그인은 알림의 「링크 고침 N」.
 
+### Changed
+
+- **`status --full` 이 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 노트를 보인다** — Notion 에서 옮긴 페이지(ADR-039) ·
+  바꾼 제목(ADR-040)은 원격 변경 목록에 들지 않아, pull 하기 전에는 알 수 없었다. 「Moved in Notion (next pull)」 에
+  `(will move)` · `(will rename)` · 옮기지 못할 까닭을 보인다. 플러그인은 원격까지 본 새로고침 뒤 알림으로 알린다.
+
+### Fixed
+
+- **뺀 자리에 놓일 Notion 의 새 페이지를 받던 것** — 뺀 폴더 아래에 Notion 에서 만든 페이지 · 포함 패턴 밖의 페이지를
+  받아, 사용자가 뺀 폴더에 파일이 생기고 그 노트는 목록에서 빠져 다시 올라가지 않았다. 받지 않고 경로를 알린다 — CLI
+  `pull` · `status --full`(JSON `excluded`), 플러그인 알림의 「받지 않음 N」.
+
 ## [0.10.0] - 2026-10-25
 
 > Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039). 동작이 바뀌는 변경이라 마이너를 올린다.
