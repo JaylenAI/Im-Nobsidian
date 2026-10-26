@@ -313,7 +313,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 }
 ```
 
-The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin does not apply `paths.include`, `paths.exclude` or the ignore file yet. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
+The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin applies the same patterns from **Settings → 동기화 범위** (sync scope, one pattern per line) and reads the ignore file in each connection folder. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
 
 ## Database Mode
 

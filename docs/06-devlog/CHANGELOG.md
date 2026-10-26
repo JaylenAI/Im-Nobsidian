@@ -5,6 +5,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **플러그인이 경로 패턴을 적용한다** — 예전 플러그인은 `paths.include` · `paths.exclude` · `.im-nobsidian-ignore` 를
+  무시하고 볼트의 모든 노트를 올렸다. 설정의 「동기화 범위」 에 포함 · 제외 패턴을 한 줄에 하나 적고(볼트 연결 · 폴더 연결
+  마다), 연결 폴더의 `.im-nobsidian-ignore` 도 읽는다. 규칙은 CLI 와 같다(`PathFilter` · `parseIgnorePatterns` 공유).
+  동기화하던 노트를 빼도 Notion 페이지를 지우지 않는다.
+
 ## [0.10.0] - 2026-10-25
 
 > Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039). 동작이 바뀌는 변경이라 마이너를 올린다.

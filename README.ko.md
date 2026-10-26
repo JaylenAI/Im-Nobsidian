@@ -309,7 +309,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
 }
 ```
 
-CLI 는 볼트 맨 위의 `.im-nobsidian-ignore`(한 줄에 제외 패턴 하나, `#` 주석)도 읽습니다. 옵시디언 플러그인은 아직 `paths.include` · `paths.exclude` · 무시 파일을 적용하지 않습니다. 패턴 규칙은 [설정](docs/05-guides/CONFIGURATION.md#include--exclude) 을 보세요.
+CLI 는 볼트 맨 위의 `.im-nobsidian-ignore`(한 줄에 제외 패턴 하나, `#` 주석)도 읽습니다. 옵시디언 플러그인은 **설정 → 동기화 범위** 에 같은 패턴을 한 줄에 하나씩 적고, 연결 폴더마다 무시 파일을 읽습니다. 패턴 규칙은 [설정](docs/05-guides/CONFIGURATION.md#include--exclude) 을 보세요.
 
 ## 데이터베이스 모드
 
