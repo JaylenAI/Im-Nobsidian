@@ -40,6 +40,7 @@ const DEFAULTS = {
     autoSyncInterval: 300,
     fullReconcileInterval: 3600,
     deleteSync: false,
+    renameOnTitleChange: false,
     syncFiles: true,
     createDatabases: true,
     notifications: "silent" as NotificationMode,
@@ -103,6 +104,8 @@ export const ConfigSchema = z.object({
       .max(604800)
       .default(D.sync.fullReconcileInterval),
     deleteSync: z.boolean().default(D.sync.deleteSync),
+    // Notion 에서 바꾼 제목으로 노트 이름을 바꾼다 — 끄면 이름은 두고 새 제목을 frontmatter `title` 에 적는다.
+    renameOnTitleChange: z.boolean().default(D.sync.renameOnTitleChange),
     syncFiles: z.boolean().default(D.sync.syncFiles),
     // 사이드카가 있는 새 DB 폴더를 push 가 Notion DB 로 만든다(ADR-036). 끄면 폴더 · 페이지로 올린다.
     createDatabases: z.boolean().default(D.sync.createDatabases),

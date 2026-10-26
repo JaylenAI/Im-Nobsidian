@@ -64,6 +64,8 @@ import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
 import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
+import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
+import { LinkUpdater } from "./link-updater.js";
 import { ChangeInspector } from "./change-inspector.js";
 import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
@@ -108,6 +110,8 @@ export class SyncOrchestrator {
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
   private readonly remoteMoves: RemoteMoveFollower;
+  private readonly remoteRenames: RemoteRenameFollower;
+  private readonly linkUpdater: LinkUpdater;
 
   // 원격에서 바뀐 것 — 전체 대조 · 증분 감지(ADR-027).
   private readonly detector: RemoteDetector;
@@ -251,6 +255,14 @@ export class SyncOrchestrator {
     this.remoteMoves = new RemoteMoveFollower(config, stateDb, vaultFs, () =>
       this.placement.folderLookup(),
     );
+    this.remoteRenames = new RemoteRenameFollower(
+      stateDb,
+      vaultFs,
+      notionClient,
+      async (pageId) =>
+        this.detector.discoveredPage(pageId) ?? (await notionClient.getPage(pageId)),
+    );
+    this.linkUpdater = new LinkUpdater(stateDb, vaultFs);
     this.puller = new PagePuller(
       config,
       stateDb,
@@ -715,6 +727,22 @@ export class SyncOrchestrator {
     return await this.remoteMoves.follow(moved, { dryRun: options?.dryRun });
   }
 
+  /**
+   * Notion 에서 제목을 바꾼 페이지의 노트 이름을 바꾼다 — `sync.renameOnTitleChange` 를 켰을 때만, 경로를 좁힌 pull 은
+   * 그 범위의 것만. 설정이 뺀 노트는 두지 않는다.
+   */
+  private async followRemoteRenames(
+    changes: readonly RemoteChange[],
+    options?: PullOptions,
+  ): Promise<RemoteRenameResult> {
+    if (!this.config.sync.renameOnTitleChange) return { renamed: [], skipped: [], applied: [] };
+    const scoped = changes.filter((change) => {
+      const record = this.stateDb.getByNotionId(change.pageId);
+      return !!record && (!options?.paths || inAnyPathScope(record.obsidianPath, options.paths));
+    });
+    return await this.remoteRenames.follow(scoped, { dryRun: options?.dryRun });
+  }
+
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
@@ -791,6 +819,13 @@ export class SyncOrchestrator {
     detected = remoteChanges;
     // Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039) — 아래 받기 · 되살리기가 새 경로를 본다.
     const remoteMoves = await this.followRemoteMoves(options);
+    // Notion 에서 바꾼 제목으로 노트 이름을 바꾼다 — 옮긴 뒤 · 받기 전에. 다른 노트의 링크는 마감에서 고친다.
+    const remoteRenames = await this.followRemoteRenames(remoteChanges, options);
+    const relocated = {
+      moved: [...remoteMoves.moved, ...remoteRenames.renamed],
+      skipped: [...remoteMoves.skipped, ...remoteRenames.skipped],
+      applied: [...remoteMoves.moved, ...remoteRenames.applied],
+    };
     const pendingDatabases = parsePendingDatabases(
       this.stateDb.getMeta(PENDING_DATABASES_META_KEY),
     );
@@ -814,6 +849,8 @@ export class SyncOrchestrator {
       deleted: number,
       restored = 0,
     ): Promise<PullResult> => {
+      const renamedRows = this.databaseSyncer.takeRenamedRows();
+      const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
       // 있으면 그 수정 시각 앞으로 묶는다. 경로를 좁힌 pull 은 범위 밖을 받지 않았으므로
@@ -856,8 +893,9 @@ export class SyncOrchestrator {
           ),
           skippedDatabases: ledger.skipped,
         },
-        moved: remoteMoves.moved,
-        moveSkipped: remoteMoves.skipped,
+        moved: [...relocated.moved, ...renamedRows.renamed],
+        moveSkipped: relocated.skipped,
+        relinked,
       };
     };
 
@@ -921,7 +959,7 @@ export class SyncOrchestrator {
         scan,
         ledger,
       );
-      return { ...plan, moved: remoteMoves.moved, moveSkipped: remoteMoves.skipped };
+      return { ...plan, moved: relocated.moved, moveSkipped: relocated.skipped };
     }
 
     let pullTotal = workItems.length;
