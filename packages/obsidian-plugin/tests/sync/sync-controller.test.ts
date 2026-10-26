@@ -241,6 +241,31 @@ describe("SyncController", () => {
   });
 
   describe("pull", () => {
+    it("옮긴 노트와 이름을 바꾼 노트를 따로 세고, 링크를 고친 노트 수를 알린다 (ADR-040)", async () => {
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: 1000,
+        moved: [
+          { from: "a.md", to: "b.md", renamed: true },
+          { from: "c.md", to: "D/c.md" },
+          { from: "e.md", to: "f.md", renamed: true },
+        ],
+        relinked: ["x.md"],
+      });
+      mock.statusLocal.mockResolvedValue(localStatus([]));
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Pull 완료 — 생성 0 / 수정 0 / 삭제 0 / 이동 1 / 이름 변경 2 / 링크 고침 1 (1.0s)",
+      );
+    });
+
     it("충돌이 있으면 conflict 상태와 충돌 건수를 요약에 포함한다", async () => {
       mock.pull.mockResolvedValue({
         created: 1,

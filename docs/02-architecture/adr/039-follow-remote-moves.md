@@ -47,5 +47,5 @@
 
 - 옮기기만 하고 고치지 않은 페이지는 **전체 대조**(한 시간에 한 번 · `pull --force`)에서 따라간다. 그 사이의 증분 pull 은
   옛 자리를 둔다.
-- Notion 에서 제목을 바꾼 것은 여전히 파일 이름을 바꾸지 않는다(frontmatter `title:` 로 받는다) — 별도 결정.
+- Notion 에서 제목을 바꾼 것은 여전히 파일 이름을 바꾸지 않는다(frontmatter `title:` 로 받는다) — 별도 결정(ADR-040).
 - DB 를 품은 폴더는 따라가지 않는다. Obsidian 에서 옮기면 push 가 Notion 을 맞추고 `.base` 를 다시 쓴다.

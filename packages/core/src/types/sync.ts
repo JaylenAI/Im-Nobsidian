@@ -212,12 +212,16 @@ export interface PullResult {
   readonly moved?: readonly RemoteMove[];
   /** Notion 에서 옮겼지만 볼트에서 옮기지 않은 것과 그 까닭. */
   readonly moveSkipped?: readonly RemoteMoveSkip[];
+  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. */
+  readonly relinked?: readonly string[];
 }
 
 /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 것 하나 — 노트 하나거나 폴더 하나다. */
 export interface RemoteMove {
   readonly from: string;
   readonly to: string;
+  /** Notion 에서 바꾼 제목으로 이름을 바꾼 것(`sync.renameOnTitleChange`) — 없으면 옮긴 것. */
+  readonly renamed?: boolean;
 }
 
 /** 옮기지 않고 둔 것과 그 까닭 — 볼트에서 직접 옮기면 다음 push 가 Notion 을 맞춘다. */

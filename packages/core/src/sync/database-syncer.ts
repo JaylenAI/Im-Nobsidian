@@ -4,7 +4,13 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { DatabaseMeta, NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
-import type { Conflict, FailedOperation, ProgressItem, SyncRecord } from "../types/sync.js";
+import type {
+  Conflict,
+  FailedOperation,
+  ProgressItem,
+  RemoteMove,
+  SyncRecord,
+} from "../types/sync.js";
 import type { BasePropertySchema, DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { PropertyMapper } from "../notion/property-mapper.js";
@@ -18,7 +24,7 @@ import {
   remotePresence,
 } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
-import { extractAliases, noteTitle } from "./note-title.js";
+import { extractAliases, noteTitle, retitledInNotion } from "./note-title.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import {
@@ -31,6 +37,7 @@ import { isDirectDbRowPath } from "../utils/db-folder-path.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
 import {
@@ -44,6 +51,7 @@ import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-genera
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles } from "./db-base-files.js";
+import { NoteRelocator, within } from "./note-relocation.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH, BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
@@ -140,6 +148,12 @@ export class DatabaseSyncer {
   /** 사용자가 만든 `.base` 라 덮어쓰지 않았다고 이미 알린 경로 — 한 pull 이 같은 DB 를 여러 번 다시 쓴다. */
   private readonly keptUserBases = new Set<string>();
   private readonly sidecarGenerator = new SidecarGenerator();
+  /** Notion 에서 바꾼 제목으로 이름을 바꾼 행과 실제로 옮긴 차례 — pull 마감이 가져가 다른 노트의 링크를 고친다. */
+  private readonly relocator: NoteRelocator;
+  private renamedRows: { renamed: RemoteMove[]; applied: RemoteMove[] } = {
+    renamed: [],
+    applied: [],
+  };
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -170,6 +184,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.relocator = new NoteRelocator(stateDb, vaultFs);
     this.propertyMapper = PropertyMapper.fromConfig(config);
     this.propertyMapper.setWikilinkResolver({
       resolve: (title: string) => stateDb.resolveWikilink(title)?.notionPageId ?? null,
@@ -1144,6 +1159,13 @@ export class DatabaseSyncer {
       this.stateDb.getByPath(path) ?? (untracked.has(path) ? { notionPageId: null } : null);
   }
 
+  /** 이름을 바꾼 행을 가져가고 비운다. */
+  takeRenamedRows(): { renamed: RemoteMove[]; applied: RemoteMove[] } {
+    const rows = this.renamedRows;
+    this.renamedRows = { renamed: [], applied: [] };
+    return rows;
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -1157,7 +1179,20 @@ export class DatabaseSyncer {
     // 타므로 충돌 시절 붙은 id 접미사도 새 폴더에서 자연 이름으로 되돌아온다.
     const recordPath = existingRecord?.obsidianPath;
     let filePath: string;
-    if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
+    // Notion 에서 제목을 바꿨으면(sync.renameOnTitleChange) 새 이름의 자리로 — 옮기는 것은 아래 재배치와 같다.
+    const retitled =
+      !!existingRecord &&
+      !!recordPath &&
+      this.config.sync.renameOnTitleChange &&
+      isDirectDbRowPath(dbConfig.localFolder, recordPath) &&
+      retitledInNotion(
+        snapshotFrontmatter(existingRecord.baseSnapshot),
+        null,
+        recordPath,
+        this.notionClient.extractTitle(page),
+      ) &&
+      !this.stateDb.getIncompleteOpByState(existingRecord.id, "move");
+    if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath) && !retitled) {
       filePath = recordPath;
     } else {
       filePath = resolveDbRowPath(
@@ -1167,6 +1202,23 @@ export class DatabaseSyncer {
         await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
       );
     }
+    // 행의 하위 페이지 폴더(`행/`)도 새 이름으로 — 옮길 수 없으면 이름을 바꾸지 않는다(예전처럼 제목만 받는다).
+    let childFolderMove: RemoteMove | null = null;
+    if (retitled) {
+      const from = stripMarkdownExtension(recordPath);
+      if (this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
+        childFolderMove = { from, to: stripMarkdownExtension(filePath) };
+        const blocked = await this.relocator.blocked(childFolderMove);
+        if (blocked) {
+          getLogger().warn(
+            `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꾸지 않음 (${recordPath}): 하위 페이지 폴더 — ${blocked}`,
+          );
+          filePath = recordPath;
+          childFolderMove = null;
+        }
+      }
+    }
+    const renaming = retitled && filePath !== recordPath;
 
     const {
       content: finalContent,
@@ -1276,6 +1328,12 @@ export class DatabaseSyncer {
         // 중복 INSERT(UNIQUE 위반)가 안 난다. 옛 경로 위키링크도 함께 제거.
         this.stateDb.updatePath(existingRecord.id, filePath);
         this.stateDb.deleteWikilink(recordPath);
+        // 보존 마커는 경로에 매인다 — 옮기지 않으면 다음 받기가 새 경로에서 마커를 찾지 못한다.
+        const markers = this.stateDb.getPreserveMarkers(recordPath);
+        if (markers.length > 0) {
+          this.stateDb.storePreserveMarkers(filePath, markers);
+          this.stateDb.storePreserveMarkers(recordPath, []);
+        }
       }
       this.stateDb.upsert({
         obsidianPath: filePath,
@@ -1304,6 +1362,17 @@ export class DatabaseSyncer {
         await this.vaultFs.deleteFile(recordPath);
       } catch {
         // 옛 파일 삭제 실패는 재배치 자체를 무르지 않는다(다음 pull 재시도 여지).
+      }
+      if (renaming) {
+        if (childFolderMove) await this.relocator.relocate([childFolderMove]);
+        this.renamedRows.renamed.push({ from: recordPath, to: filePath, renamed: true });
+        this.renamedRows.applied.push(
+          { from: recordPath, to: filePath },
+          ...(childFolderMove ? [childFolderMove] : []),
+        );
+        getLogger().info(
+          `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꿈: ${recordPath} → ${filePath}`,
+        );
       }
     }
 

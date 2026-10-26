@@ -110,6 +110,19 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Notion 에서 바꾼 제목으로 이름 바꾸기")
+      .setDesc(
+        "Notion 에서 페이지 제목을 바꾸면 노트 파일 이름도 바꾸고, 그 노트를 가리키던 다른 노트의 링크를 고칩니다. " +
+          "끄면 파일 이름은 두고 새 제목을 frontmatter 의 title 에 적습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.renameOnTitleChange ?? false).onChange(async (value) => {
+          settings.renameOnTitleChange = value;
+          await this.changeConnection();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("자동 동기화")
       .setDesc(
         `노트를 고치면 ${DEFAULT_WATCH_DEBOUNCE_MS / 1000}초 뒤에, 그리고 아래 간격마다 동기화합니다(동기화 방향을 따름). ` +

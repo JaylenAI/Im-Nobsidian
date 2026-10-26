@@ -117,6 +117,8 @@ export class ConnectionEngine {
         conflictStrategy: settings.conflictStrategy,
         // 플러그인은 늘 삭제를 맞춘다(README 의 deleteSync 설명) — CLI 기본값(false)과 다르다.
         deleteSync: true,
+        renameOnTitleChange:
+          settings.renameOnTitleChange ?? DEFAULT_CONFIG.sync.renameOnTitleChange,
       },
       paths: {
         ...DEFAULT_CONFIG.paths,

@@ -256,4 +256,21 @@ describe("pull command", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
     spy.mockRestore();
   });
+
+  it("Notion 에서 바꾼 제목으로 이름을 바꾼 노트와 링크를 고친 노트 수를 알린다 (ADR-040)", async () => {
+    mockPull.mockResolvedValueOnce({
+      ...BASE_RESULT,
+      moved: [
+        { from: "A/old.md", to: "A/new.md", renamed: true },
+        { from: "A/c.md", to: "B/c.md" },
+      ],
+      relinked: ["x.md", "y.md"],
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("A/old.md → A/new.md (renamed)"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("A/c.md → B/c.md (moved)"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("links updated in 2 notes"));
+    spy.mockRestore();
+  });
 });
