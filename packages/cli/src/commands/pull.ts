@@ -1,5 +1,11 @@
 import { Command, Option } from "commander";
-import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
+import {
+  ConfigManager,
+  StateDB,
+  NotionClient,
+  SyncOrchestrator,
+  IGNORE_FILE,
+} from "@im-nobsidian/core";
 import chalk from "chalk";
 import {
   header,
@@ -105,6 +111,14 @@ export const pullCommand = new Command("pull")
         console.log(
           `  ${icons.move} ${move.from} → ${move.to} ${dimText(options.dryRun ? `(would ${verb})` : `(${verb}d)`)}`,
         );
+      }
+      const excluded = result.excluded ?? [];
+      if (excluded.length > 0) {
+        console.log(
+          `  ${icons.conflict} ${dimText(`${excluded.length} new in Notion ${options.dryRun ? "would not be" : "not"} pulled — excluded by paths / ${IGNORE_FILE}:`)}`,
+        );
+        for (const path of excluded.slice(0, 10)) console.log(`    ${dimText(`· ${path}`)}`);
+        if (excluded.length > 10) console.log(dimText(`    ... and ${excluded.length - 10} more`));
       }
       if ((result.relinked?.length ?? 0) > 0) {
         console.log(

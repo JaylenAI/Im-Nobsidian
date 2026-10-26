@@ -43,6 +43,7 @@ vi.mock("@im-nobsidian/core", () => ({
   findConnectionFolders: vi.fn().mockResolvedValue([]),
   ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
+  IGNORE_FILE: ".im-nobsidian-ignore",
   setLogger: (...args: unknown[]) => mockSetLogger(...args),
 }));
 
@@ -120,7 +121,13 @@ describe("--json 출력 계약", () => {
       relinked: ["x.md"],
     });
     await run(pullCommand, "pull", "--json");
-    expect(stdoutJson(write)).toMatchObject({ moved: 2, renamed: 1, relinked: 1, churn: 3 });
+    expect(stdoutJson(write)).toMatchObject({
+      moved: 2,
+      renamed: 1,
+      relinked: 1,
+      excluded: 0,
+      churn: 3,
+    });
   });
 
   it("push --dry-run: churn 은 생성·수정·삭제·옮김의 합", async () => {
