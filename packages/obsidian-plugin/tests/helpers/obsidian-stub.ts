@@ -111,6 +111,9 @@ export class Setting {
   addText(cb: (t: StubControl) => void) {
     return this.add("text", cb);
   }
+  addTextArea(cb: (t: StubControl) => void) {
+    return this.add("textarea", cb);
+  }
   addDropdown(cb: (d: StubControl) => void) {
     return this.add("dropdown", cb);
   }

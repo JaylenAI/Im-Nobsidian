@@ -74,6 +74,11 @@ vi.mock("@im-nobsidian/core", async () => ({
       configDirFrom: core.configDirFrom,
       normalizeVaultPath: core.normalizeVaultPath,
       ScopedVaultFS: core.ScopedVaultFS,
+      // 경로 패턴 — 거르기 · 제외 파일 읽기는 진짜를 쓴다
+      FilteredVaultFS: core.FilteredVaultFS,
+      PathFilter: core.PathFilter,
+      IGNORE_FILE: core.IGNORE_FILE,
+      parseIgnorePatterns: core.parseIgnorePatterns,
       // 플러그인 기본 설정은 core 의 기본값을 읽는다 — 손으로 적은 사본이면 둘이 갈라져도 모른다
       DEFAULT_CONFIG: core.DEFAULT_CONFIG,
       DEFAULT_WATCH_DEBOUNCE_MS: core.DEFAULT_WATCH_DEBOUNCE_MS,
@@ -137,7 +142,7 @@ import {
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { ConnectionEngine } from "../src/connection/connection-engine.js";
-import { ScopedVaultFS } from "@im-nobsidian/core";
+import { FilteredVaultFS, IGNORE_FILE, ScopedVaultFS } from "@im-nobsidian/core";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 
@@ -189,7 +194,10 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
     vault: {
       adapter: {
         basePath: vaultPath,
-        exists: async () => true,
+        // 상태 DB 는 `readBinary` 가 준다 — 제외 파일(.im-nobsidian-ignore)만 볼트 폴더에서 찾는다.
+        exists: async (path: string) =>
+          !path.endsWith(IGNORE_FILE) || existsSync(join(vaultPath, path)),
+        read: async (path: string) => readFileSync(join(vaultPath, path), "utf-8"),
         readBinary: () => {
           reads++;
           return readBinary();
@@ -1083,6 +1091,46 @@ describe("ImNobsidianPlugin", () => {
         message: "준비됨 — 동기화할 수 있습니다.",
       });
       expect(plugin.knownConnectionFolders).toEqual(["", "Work"]);
+    });
+
+    it("경로 패턴 · 연결 폴더의 .im-nobsidian-ignore 를 연결마다 댄다 — 폴더 연결은 그 폴더 기준", async () => {
+      const { plugin, internals, vaultPath } = pluginWithStateFile(() =>
+        Promise.resolve(new ArrayBuffer(0)),
+      );
+      const own = internals as unknown as Internals;
+      own.app.secretStorage = keychain({ notion: "ntn_test", work: "ntn_work" });
+      plugin.settings.excludePaths = ["Archive"];
+      plugin.settings.connections = [
+        { folder: "Work", tokenSecret: "work", rootPageId: WORK_ROOT, includePaths: ["*.md"] },
+      ];
+      mkdirSync(join(vaultPath, "Work"), { recursive: true });
+      writeFileSync(join(vaultPath, "Work", IGNORE_FILE), "# 초안\ndrafts/\n");
+      onTestFinished(() => own.closeExtras());
+      orchestratorArgs.splice(0);
+
+      await plugin.initOrchestrator();
+
+      const [rootFs, workFs] = orchestratorArgs.map((args) => args[3] as FilteredVaultFS);
+      expect(rootFs).toBeInstanceOf(FilteredVaultFS);
+      expect(rootFs!.excludesPath("Archive/a.md")).toBe(true);
+      expect(rootFs!.excludesPath("Notes/a.md")).toBe(false);
+      // 맨 위 연결은 여전히 폴더 연결을 비켜 간다
+      expect(rootFs!.ownsPath!("Work/a.md")).toBe(false);
+      expect(workFs!.excludesPath("drafts/a.md")).toBe(true);
+      expect(workFs!.excludesPath("drafts", "folder")).toBe(true);
+      expect(workFs!.excludesPath("x.pdf")).toBe(true);
+      expect(workFs!.excludesPath("회의.md")).toBe(false);
+      // 볼트 연결의 패턴은 폴더 연결에 대지 않는다
+      expect(workFs!.excludesPath("Archive/a.md")).toBe(false);
+    });
+
+    it("패턴도 제외 파일도 없으면 감싸지 않는다", async () => {
+      const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      orchestratorArgs.splice(0);
+
+      await plugin.initOrchestrator();
+
+      expect(orchestratorArgs[0]![3]).not.toBeInstanceOf(FilteredVaultFS);
     });
 
     it("한 폴더 연결이 열리지 않아도 다른 연결은 연다 — 그 연결의 까닭을 연결 이름과 함께 알린다", async () => {

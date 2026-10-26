@@ -108,7 +108,7 @@ meeting.md                   →    📄 meeting
 
 ## Ignore Files / 파일 제외
 
-`.im-nobsidian-ignore` 파일을 볼트 루트에 생성합니다 — 한 줄에 제외 패턴 하나(CLI, 규칙은 [CONFIGURATION](CONFIGURATION.md#include--exclude)):
+`.im-nobsidian-ignore` 파일을 볼트 루트에 생성합니다 — 한 줄에 제외 패턴 하나(CLI · 플러그인, 규칙은 [CONFIGURATION](CONFIGURATION.md#include--exclude)):
 
 ```
 # 템플릿 제외
