@@ -12,7 +12,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import { StateDB } from "../../src/state/state-db.js";
-import { DEFAULT_CONFIG } from "../../src/types/config.js";
+import { DEFAULT_CONFIG, type DatabaseSyncConfig } from "../../src/types/config.js";
 import { createConfig } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
@@ -197,19 +197,93 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
     expect(notion.pages.get(idOf("C/c.md"))!.parent).toBe(idOf("C"));
   });
 
-  it("DB 폴더를 품은 폴더는 옮기지 않는다 — .base 보기가 경로를 품는다", async () => {
-    await seed({ "A/a.md": "a\n", "B/b.md": "b\n" });
-    db.setMeta(
-      "discovered_dbs",
-      JSON.stringify([{ databaseId: "db-1", localFolder: "A/Tasks", titleProperty: "Name" }]),
-    );
-    moveInNotion("A", "B");
+  describe("DB 가 든 폴더", () => {
+    const DB_ID = "db000000-0000-4000-8000-0000000000d1";
+    /** 전체 대조를 pull 마다 — 발견한 DB 의 행을 처음 받는다. */
+    const everyPull = (databases: DatabaseSyncConfig[] = []) =>
+      new SyncOrchestrator(
+        createConfig({
+          notion: { token: "ntn_test_token", rootPageId: ROOT, databases },
+          sync: { ...DEFAULT_CONFIG.sync, fullReconcileInterval: 0 },
+          advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
+        }),
+        db,
+        notion.client as never,
+        vault.fs(),
+      );
+    const bases = () => [...vault.files.keys()].filter((path) => path.endsWith(".base")).sort();
 
-    const result = await orchestrator.pull({ force: true });
+    beforeEach(() => {
+      notion.client.getDatabaseSchema.mockResolvedValue({ Name: { id: "title", type: "title" } });
+      notion.client.getDatabaseViewsConfig.mockResolvedValue({
+        databaseId: DB_ID,
+        lastSynced: "",
+        views: [],
+      });
+    });
 
-    expect(result.moved).toEqual([]);
-    expect(result.moveSkipped?.[0]?.path).toBe("A");
-    expect(notes()).toEqual(["A/a.md", "B/b.md"]);
+    it("발견한 DB 의 폴더 · .base 보기 · 행을 함께 옮기고 링크를 고친다 — 다시 돌려도 바뀌는 것이 없다", async () => {
+      await seed({ "A/a.md": "a\n", "B/b.md": "b\n" });
+      db.setMeta(
+        "discovered_dbs",
+        JSON.stringify([{ databaseId: DB_ID, localFolder: "A/Tasks", titleProperty: "Name" }]),
+      );
+      const row = notion.add(DB_ID, "행", "행 본문", { properties: {} });
+      // 플러그인처럼 같은 오케스트레이터를 계속 쓴다 — 읽어 둔 `.base` 기록이 옮긴 뒤에도 맞아야 한다.
+      const sync = everyPull();
+      expect((await sync.pull()).failed).toEqual([]);
+      expect(notes()).toContain("A/Tasks/행.md");
+      const [base] = bases();
+      expect(base).toMatch(/^A\/Tasks\/.+\.base$/);
+      expect(vault.read(base!)).toContain('file.inFolder("A/Tasks")');
+      vault.write("x.md", `![[${base!}]] [[A/Tasks/행]]\n`);
+      const mine = 'filters:\n  and:\n    - file.inFolder("A/Tasks")\n';
+      vault.write("A/mine.base", mine);
+      expect((await sync.push()).failed).toEqual([]);
+
+      moveInNotion("A", "B");
+      // 행 · DB 는 그대로다 — 이 pull 은 DB 를 조회하지 않는다(ADR-027). 보기 · 기록을 옮긴 쪽이 고쳐야 한다.
+      const result = await orchestrator.pull();
+      // 직접 만든 `.base` 는 함께 옮기되 내용은 둔다.
+      expect(vault.read("B/A/mine.base")).toBe(mine);
+
+      expect(result.failed).toEqual([]);
+      expect(result.moved).toEqual([{ from: "A", to: "B/A" }]);
+      const moved = `B/${base!}`;
+      expect(bases()).toEqual([moved, "B/A/mine.base"]);
+      expect(vault.read(moved)).toContain('file.inFolder("B/A/Tasks")');
+      expect(notes()).toEqual(["B/A/Tasks/행.md", "B/A/a.md", "B/b.md", "x.md"]);
+      expect(vault.read("x.md")).toBe(`![[${moved}]] [[B/A/Tasks/행]]\n`);
+      expect(db.getByNotionId(row.id)?.obsidianPath).toBe("B/A/Tasks/행.md");
+      expect(JSON.parse(db.getMeta("discovered_dbs")!)).toMatchObject([
+        { databaseId: DB_ID, localFolder: "B/A/Tasks" },
+      ]);
+      expect(Object.values(JSON.parse(db.getMeta("db_base_files")!))).toEqual([
+        expect.objectContaining({ basePath: moved }),
+      ]);
+
+      // 같은 오케스트레이터가 DB 를 다시 받아도 옛 자리에 쓰지 않는다.
+      const again = await sync.pull();
+      expect(again).toMatchObject({ created: 0, updated: 0, deleted: 0, moved: [], failed: [] });
+      expect([...vault.files.keys()].filter((path) => path.startsWith("A/"))).toEqual([]);
+      expect(bases()).toEqual([moved, "B/A/mine.base"]);
+      expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0 });
+    });
+
+    it("설정 파일로 정한 DB 의 폴더는 옮기지 않는다 — 설정을 고쳐 적을 수 없다", async () => {
+      await seed({ "A/a.md": "a\n", "B/b.md": "b\n" });
+      moveInNotion("A", "B");
+
+      const result = await everyPull([
+        { databaseId: DB_ID, localFolder: "A/Tasks", titleProperty: "Name" },
+      ]).pull();
+
+      expect(result.moved).toEqual([]);
+      expect(result.moveSkipped).toEqual([
+        { path: "A", reason: expect.stringContaining("notion.databases") },
+      ]);
+      expect(notes()).toEqual(expect.arrayContaining(["A/a.md", "B/b.md"]));
+    });
   });
 
   it("dry-run 은 옮길 것만 알리고 쓰지 않는다", async () => {

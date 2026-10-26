@@ -261,6 +261,7 @@ export class SyncOrchestrator {
       notionClient,
       async (pageId) =>
         this.detector.discoveredPage(pageId) ?? (await notionClient.getPage(pageId)),
+      config.notion.databases ?? [],
     );
     this.linkUpdater = new LinkUpdater(stateDb, vaultFs);
     this.puller = new PagePuller(
