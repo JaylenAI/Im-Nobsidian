@@ -57,6 +57,14 @@ export interface ImNobsidianSettings {
   attachments: string;
   /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */
   timeZone: string;
+  /**
+   * 동기화할 노트 · 첨부의 경로 패턴 — CLI 의 `paths.include` · `paths.exclude` 와 같은 규칙. 비면 전부 · 아무것도
+   * 빼지 않는다. 볼트 맨 위의 `.im-nobsidian-ignore` 도 함께 뺀다.
+   */
+  includePaths?: string[];
+  excludePaths?: string[];
+  /** Notion 에서 바꾼 제목으로 노트 이름을 바꾸고 링크를 고친다(`sync.renameOnTitleChange`). 없으면 끈다. */
+  renameOnTitleChange?: boolean;
   databases?: DatabaseConfig[];
   /** 볼트 안 폴더마다의 다른 연결(ADR-038) — 볼트 맨 위 연결은 위의 토큰 · 루트 페이지다. */
   connections?: FolderConnectionSettings[];
@@ -69,6 +77,9 @@ export interface FolderConnectionSettings {
   /** Obsidian 키체인에 둔 그 연결의 Notion 토큰 이름. */
   tokenSecret: string;
   rootPageId: string;
+  /** 이 연결의 경로 패턴 — 폴더 기준. 폴더의 `.im-nobsidian-ignore` 도 함께 뺀다. */
+  includePaths?: string[];
+  excludePaths?: string[];
 }
 
 // 동기화 기본값은 core 설정 기본값(DEFAULT_CONFIG)을 읽는다 — CLI 와 같은 값.
@@ -504,6 +515,7 @@ export default class ImNobsidianPlugin extends Plugin {
         token,
         rootPageId: this.settings.rootPageId,
         settings: this.settings,
+        paths: { include: this.settings.includePaths, exclude: this.settings.excludePaths },
         connections: await connections(),
       });
       this.onEnginePhase(this.primary, "ready");
@@ -537,6 +549,7 @@ export default class ImNobsidianPlugin extends Plugin {
           token,
           rootPageId: settings.rootPageId,
           settings: this.settings,
+          paths: { include: settings.includePaths, exclude: settings.excludePaths },
           connections: await connections(),
         });
         this.onEnginePhase(engine, "ready");

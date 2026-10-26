@@ -33,6 +33,7 @@ vi.mock("@im-nobsidian/core", () => ({
   findConnectionFolders: vi.fn().mockResolvedValue([]),
   ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
+  IGNORE_FILE: ".im-nobsidian-ignore",
 }));
 
 vi.mock("chalk", () => {
@@ -254,6 +255,36 @@ describe("pull command", () => {
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images → media/첨부/"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files → media/첨부/"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
+    spy.mockRestore();
+  });
+
+  it("Notion 에서 바꾼 제목으로 이름을 바꾼 노트와 링크를 고친 노트 수를 알린다 (ADR-040)", async () => {
+    mockPull.mockResolvedValueOnce({
+      ...BASE_RESULT,
+      moved: [
+        { from: "A/old.md", to: "A/new.md", renamed: true },
+        { from: "A/c.md", to: "B/c.md" },
+      ],
+      relinked: ["x.md", "y.md"],
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("A/old.md → A/new.md (renamed)"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("A/c.md → B/c.md (moved)"));
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("links updated in 2 notes"));
+    spy.mockRestore();
+  });
+
+  it("뺀 자리라 받지 않은 새 페이지를 경로로 알린다", async () => {
+    mockPull.mockResolvedValueOnce({ ...BASE_RESULT, excluded: ["Private/새 글.md"] });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    await runPull();
+    expect(spy).toHaveBeenCalledWith(
+      expect.stringContaining(
+        "1 new in Notion not pulled — excluded by paths / .im-nobsidian-ignore",
+      ),
+    );
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("· Private/새 글.md"));
     spy.mockRestore();
   });
 });

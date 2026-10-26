@@ -11,13 +11,17 @@ import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
   DEFAULT_CONFIG,
   EntryEditor,
+  FilteredVaultFS,
+  IGNORE_FILE,
   NotionClient,
+  PathFilter,
   STATE_DB_PATH,
   ScopedVaultFS,
   SyncOrchestrator,
   ViewDataProvider,
   getLogger,
   notionIdFromInput,
+  parseIgnorePatterns,
   type Config,
   type VaultFS,
 } from "@im-nobsidian/core";
@@ -43,6 +47,8 @@ export interface EngineOptions {
   readonly token: string;
   readonly rootPageId: string;
   readonly settings: ImNobsidianSettings;
+  /** 이 연결의 경로 패턴(폴더 기준) — 비거나 없으면 전부 · 아무것도 빼지 않는다. */
+  readonly paths?: { readonly include?: readonly string[]; readonly exclude?: readonly string[] };
   /** 볼트의 연결 폴더 전부 — 이 연결은 안쪽 것을 비켜 간다. */
   readonly connections: readonly string[];
 }
@@ -111,9 +117,13 @@ export class ConnectionEngine {
         conflictStrategy: settings.conflictStrategy,
         // 플러그인은 늘 삭제를 맞춘다(README 의 deleteSync 설명) — CLI 기본값(false)과 다르다.
         deleteSync: true,
+        renameOnTitleChange:
+          settings.renameOnTitleChange ?? DEFAULT_CONFIG.sync.renameOnTitleChange,
       },
       paths: {
         ...DEFAULT_CONFIG.paths,
+        include: [...(options.paths?.include ?? DEFAULT_CONFIG.paths.include)],
+        exclude: [...(options.paths?.exclude ?? DEFAULT_CONFIG.paths.exclude)],
         attachments: settings.attachments,
       },
       conversion: {
@@ -123,7 +133,11 @@ export class ConnectionEngine {
     };
 
     const client = NotionClient.fromConfig(config, obsidianFetch);
-    const syncFs = this.scoped(vaultAdapter, options.connections);
+    const syncFs = await this.filtered(
+      this.scoped(vaultAdapter, options.connections),
+      config.paths.include,
+      config.paths.exclude,
+    );
     const orchestrator = new SyncOrchestrator(config, stateDb, client, syncFs, obsidianFetch);
     // 동기화 실행은 전부 SyncController 가 담당한다. 플러그인은 Notice/사이드바/상태바 표시만 훅으로 넘긴다.
     this.controller = new SyncController(
@@ -137,6 +151,24 @@ export class ConnectionEngine {
     );
     this.viewProvider = new ViewDataProvider(viewVault);
     this.entryEditor = new EntryEditor(viewVault);
+  }
+
+  /**
+   * 경로 패턴과 이 연결 폴더의 `.im-nobsidian-ignore` 를 대는 볼트 — CLI 와 같은 규칙(이슈 #8 뒤). 패턴이 없으면
+   * 감싸지 않는다. 제외 파일을 읽지 못하면 던진다 — 빈 목록으로 보면 뺐던 노트가 말없이 올라간다.
+   */
+  private async filtered(
+    fs: VaultFS,
+    include: readonly string[],
+    exclude: readonly string[],
+  ): Promise<VaultFS> {
+    const ignorePath = this.toVault(IGNORE_FILE);
+    const adapter = this.host.app.vault.adapter;
+    const ignored = (await adapter.exists(ignorePath))
+      ? parseIgnorePatterns(await adapter.read(ignorePath))
+      : [];
+    const filter = new PathFilter(include, [...exclude, ...ignored]);
+    return filter.isEmpty() ? fs : new FilteredVaultFS(fs, filter);
   }
 
   /** 이 연결 폴더만 보는 볼트 — 볼트 맨 위이고 안쪽 연결이 없으면 어댑터 그대로(예전과 같다). */

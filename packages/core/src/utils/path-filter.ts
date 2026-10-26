@@ -22,6 +22,11 @@ export class PathFilter {
     this.exclude = compileAll(exclude);
   }
 
+  /** 아무것도 빼지 않는다 — 포함 패턴이 없거나 전부(`**\/*`)이고 제외 패턴이 없다. */
+  isEmpty(): boolean {
+    return this.exclude.length === 0 && this.include.every((pattern) => pattern.kind === "all");
+  }
+
   /** 동기화하지 않는 노트 · 첨부 — 포함 패턴 어느 것에도 맞지 않거나 제외 패턴에 맞는다. */
   excludesFile(path: string): boolean {
     if (this.include.length > 0 && !this.include.some((p) => matchesWithin(path, p))) return true;
@@ -35,6 +40,16 @@ export class PathFilter {
   excludesFolder(path: string): boolean {
     return this.exclude.some((p) => matchesWithin(path, p));
   }
+}
+
+/**
+ * `.im-nobsidian-ignore` 의 글 → 패턴. 빈 줄과 `#` 로 시작하는 줄은 뺀다. CLI 와 플러그인이 같은 규칙으로 읽는다.
+ */
+export function parseIgnorePatterns(content: string): string[] {
+  return content
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => line !== "" && !line.startsWith("#"));
 }
 
 /** 운영체제 구분자로 이은 상대 경로 → 볼트 경로(`/`). `relative()` 의 결과에 쓴다. */

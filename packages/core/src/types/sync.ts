@@ -212,12 +212,21 @@ export interface PullResult {
   readonly moved?: readonly RemoteMove[];
   /** Notion 에서 옮겼지만 볼트에서 옮기지 않은 것과 그 까닭. */
   readonly moveSkipped?: readonly RemoteMoveSkip[];
+  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. */
+  readonly relinked?: readonly string[];
+  /**
+   * Notion 에 새로 생겼지만 동기화에서 뺀 자리(paths · `.im-nobsidian-ignore`)에 놓일 것이라 받지 않은 페이지 —
+   * 받았다면 놓였을 경로. dry-run 은 받지 않을 것.
+   */
+  readonly excluded?: readonly string[];
 }
 
 /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 것 하나 — 노트 하나거나 폴더 하나다. */
 export interface RemoteMove {
   readonly from: string;
   readonly to: string;
+  /** Notion 에서 바꾼 제목으로 이름을 바꾼 것(`sync.renameOnTitleChange`) — 없으면 옮긴 것. */
+  readonly renamed?: boolean;
 }
 
 /** 옮기지 않고 둔 것과 그 까닭 — 볼트에서 직접 옮기면 다음 push 가 Notion 을 맞춘다. */
@@ -271,6 +280,14 @@ export interface StatusResult {
   readonly lastFullScanAt: string | null;
   /** 원격을 얼마나 훑었나. 로컬만 본 확인(`statusLocal`)에는 없다. */
   readonly remoteScan?: RemoteScanInfo;
+  /**
+   * 다음 pull 이 볼트에서 옮기거나(Notion 에서 옮긴 페이지) 이름을 바꿀(바꾼 제목) 노트 · 옮기지 않을 것과 까닭.
+   * 원격을 본 확인에만 있다. 옮기기만 하고 고치지 않은 페이지는 전체 대조(pull)에서야 보인다.
+   */
+  readonly remoteMoves?: readonly RemoteMove[];
+  readonly remoteMoveSkipped?: readonly RemoteMoveSkip[];
+  /** Notion 에 새로 생겼지만 뺀 자리에 놓일 것이라 다음 pull 이 받지 않을 페이지의 경로. `remoteChanges` 에서 뺐다. */
+  readonly remoteExcluded?: readonly string[];
 }
 
 export interface FailedOperation {

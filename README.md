@@ -159,7 +159,7 @@ That's it. Your vault and Notion workspace are now linked.
 | `nobsi push`                | Push local changes to Notion                                                                                                                     |
 | `nobsi pull`                | Pull Notion changes to local                                                                                                                     |
 | `nobsi sync`                | Bidirectional sync (pull → push)                                                                                                                 |
-| `nobsi status`              | Show sync status + conflicts (add `--full` for bidirectional)                                                                                    |
+| `nobsi status`              | Show sync status + conflicts (add `--full` for Notion too: changes, pages the next pull moves or renames)                                        |
 | `nobsi diff [path]`         | Show local edits since the last sync as a unified diff (`--remote`: vs Notion)                                                                   |
 | `nobsi discard <path...>`   | Discard local edits — restore notes to the last synced text (Notion untouched)                                                                   |
 | `nobsi prepare-db <folder>` | Turn a vault folder of notes (+ its `.base`) into a Notion database on the next push — infers property types and views, writes nothing to Notion |
@@ -225,7 +225,13 @@ Obsidian Vault                        Notion Workspace
 3. Pages you moved to another parent in Notion are moved in the vault too (same file name, into the new
    parent's folder). Moving a page doesn't change its edit time, so the full scan is what notices it.
    A move is left alone, with the reason printed, if the target name is taken, the note was moved in
-   the vault and not yet pushed, or the folder holds a database
+   the vault and not yet pushed, or the folder holds a database you listed in `notion.databases`. A folder
+   holding found databases moves with them — their `.base` views and embeds follow the new folder (the
+   same when you move it in the vault). Links to the moved note written as a path (`[[Folder/Note]]`,
+   `[x](Folder/Note.md)`) are updated in your other notes.
+   A title changed in Notion goes into the note's frontmatter `title:` and the file name stays — turn on
+   `sync.renameOnTitleChange` (plugin: **Settings → Notion 에서 바꾼 제목으로 이름 바꾸기**) to rename the
+   file instead; links to it are updated the same way
 4. Detects changes by `last_edited_time`
 5. Converts Notion blocks → markdown, properties → frontmatter
 6. Downloads images to your attachments folder (deduplicated)
@@ -302,6 +308,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "deleteSync": false, // true: deleting a note deletes it on the other side too (the plugin always does)
+    "renameOnTitleChange": false, // true: a title changed in Notion renames the file and updates links to it
     "fullReconcileInterval": 3600, // seconds between full scans of Notion — 0 = every pull
     "notifications": "silent", // "silent": pages the sync writes don't notify people (mentions, person properties) | "default"
   },
@@ -313,7 +320,8 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 }
 ```
 
-The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin does not apply `paths.include`, `paths.exclude` or the ignore file yet. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
+The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin applies the same patterns from **Settings → 동기화 범위** (sync scope, one pattern per line) and reads the ignore file in each connection folder. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
+New Notion pages that would land in an excluded place aren't pulled — `pull` and `status --full` list them.
 
 ## Database Mode
 
@@ -363,7 +371,7 @@ root page. Commands run every ready connection in turn, and the changes panel le
 | --------------------------------------------------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | Sync engine — conversion, state, conflict resolution | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI tool (`nobsi` command)                           | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.10.0 (release assets / BRAT)                                                                             |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian plugin (sync sidebar + DB views)            | v0.11.0 (release assets / BRAT)                                                                             |
 
 ### Using as a Library
 

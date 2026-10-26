@@ -221,7 +221,12 @@ Obsidian 볼트                          Notion 워크스페이스
    않습니다)
 3. Notion 에서 다른 부모로 옮긴 페이지는 볼트에서도 옮깁니다(이름 그대로, 새 부모의 폴더로). 옮겨도 수정 시각이
    바뀌지 않아 전체 대조가 알아봅니다. 옮길 자리에 같은 이름이 있거나, 볼트에서 옮긴 것을 아직 올리지 않았거나,
-   폴더에 DB 가 있으면 옮기지 않고 까닭을 보입니다
+   폴더에 설정 파일로 정한 DB(`notion.databases`)가 있으면 옮기지 않고 까닭을 보입니다. 찾아 둔 DB 가 든 폴더는 함께
+   옮기고 그 `.base` 보기 · 임베드도 새 폴더를 가리키게 고칩니다(볼트에서 옮겨도 같습니다). 옮긴 노트를 경로로 적은
+   링크(`[[폴더/노트]]` · `[x](폴더/노트.md)`)는 다른 노트에서 고칩니다.
+   Notion 에서 바꾼 제목은 노트 frontmatter 의 `title:` 로 받고 파일 이름은 둡니다 — `sync.renameOnTitleChange`
+   (플러그인: **설정 → Notion 에서 바꾼 제목으로 이름 바꾸기**)를 켜면 파일 이름을 바꾸고 그 노트를 가리키던 링크를
+   같은 식으로 고칩니다
 4. `last_edited_time`으로 변경 감지
 5. Notion 블록 → 마크다운, 속성 → 프론트매터 변환
 6. 이미지를 첨부파일 폴더에 다운로드 (중복 제거)
@@ -298,6 +303,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "deleteSync": false, // true: 한쪽에서 지운 노트를 다른 쪽에서도 지움 (플러그인은 늘 켬)
+    "renameOnTitleChange": false, // true: Notion 에서 바꾼 제목으로 파일 이름을 바꾸고 링크를 고침
     "fullReconcileInterval": 3600, // Notion 전체 대조 주기(초) — 0 이면 pull 마다
     "notifications": "silent", // "silent": 동기화가 쓴 페이지는 알림을 보내지 않음(멘션 · 사람 속성) | "default"
   },
@@ -309,7 +315,8 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
 }
 ```
 
-CLI 는 볼트 맨 위의 `.im-nobsidian-ignore`(한 줄에 제외 패턴 하나, `#` 주석)도 읽습니다. 옵시디언 플러그인은 아직 `paths.include` · `paths.exclude` · 무시 파일을 적용하지 않습니다. 패턴 규칙은 [설정](docs/05-guides/CONFIGURATION.md#include--exclude) 을 보세요.
+CLI 는 볼트 맨 위의 `.im-nobsidian-ignore`(한 줄에 제외 패턴 하나, `#` 주석)도 읽습니다. 옵시디언 플러그인은 **설정 → 동기화 범위** 에 같은 패턴을 한 줄에 하나씩 적고, 연결 폴더마다 무시 파일을 읽습니다. 패턴 규칙은 [설정](docs/05-guides/CONFIGURATION.md#include--exclude) 을 보세요.
+뺀 자리에 놓일 Notion 의 새 페이지는 받지 않습니다 — `pull` 과 `status --full` 이 경로로 알립니다.
 
 ## 데이터베이스 모드
 
@@ -357,7 +364,7 @@ nobsi sync                       # 그 폴더에서 실행. 최상위 연결은 
 | --------------------------------------------------- | ------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
 | [`@im-nobsidian/core`](packages/core)               | 동기화 엔진 — 변환, 상태, 충돌 해결  | [![npm](https://img.shields.io/npm/v/@im-nobsidian/core)](https://www.npmjs.com/package/@im-nobsidian/core) |
 | [`im-nobsidian`](packages/cli)                      | CLI 도구 (`nobsi` 명령어)            | [![npm](https://img.shields.io/npm/v/im-nobsidian)](https://www.npmjs.com/package/im-nobsidian)             |
-| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.10.0 (릴리스 자산 / BRAT)                                                                                |
+| [`obsidian-im-nobsidian`](packages/obsidian-plugin) | Obsidian 플러그인 (사이드바 + DB 뷰) | v0.11.0 (릴리스 자산 / BRAT)                                                                                |
 
 ### 라이브러리로 사용하기
 

@@ -1,6 +1,12 @@
 import type { App } from "obsidian";
 import { PluginSettingTab, SecretComponent, Setting } from "obsidian";
-import { DEFAULT_WATCH_DEBOUNCE_MS, notionIdFromInput, systemTimeZone } from "@im-nobsidian/core";
+import {
+  DEFAULT_WATCH_DEBOUNCE_MS,
+  IGNORE_FILE,
+  notionIdFromInput,
+  parseIgnorePatterns,
+  systemTimeZone,
+} from "@im-nobsidian/core";
 import { AUTO_SYNC_INTERVAL_MINUTES } from "./constants.js";
 import type ImNobsidianPlugin from "./main.js";
 import type { FolderConnectionSettings, ImNobsidianSettings } from "./main.js";
@@ -104,6 +110,19 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
       });
 
     new Setting(containerEl)
+      .setName("Notion 에서 바꾼 제목으로 이름 바꾸기")
+      .setDesc(
+        "Notion 에서 페이지 제목을 바꾸면 노트 파일 이름도 바꾸고, 그 노트를 가리키던 다른 노트의 링크를 고칩니다. " +
+          "끄면 파일 이름은 두고 새 제목을 frontmatter 의 title 에 적습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.renameOnTitleChange ?? false).onChange(async (value) => {
+          settings.renameOnTitleChange = value;
+          await this.changeConnection();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("자동 동기화")
       .setDesc(
         `노트를 고치면 ${DEFAULT_WATCH_DEBOUNCE_MS / 1000}초 뒤에, 그리고 아래 간격마다 동기화합니다(동기화 방향을 따름). ` +
@@ -134,6 +153,9 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
           this.plugin.startAutoSync();
         });
       });
+
+    new Setting(containerEl).setName("동기화 범위").setHeading();
+    this.pathPatterns(containerEl, "", settings);
 
     new Setting(containerEl).setName("변환").setHeading();
 
@@ -316,6 +338,50 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
             await this.changeConnection();
           }),
       );
+
+    this.pathPatterns(containerEl, `폴더 연결 ${index + 1} — `, connection);
+  }
+
+  /**
+   * 동기화할 경로의 포함 · 제외 패턴 — CLI 의 `paths.include` · `paths.exclude` 와 같은 규칙이다. 한 줄에 하나,
+   * `#` 로 시작하는 줄은 주석. 연결 폴더 기준 경로이고, 그 폴더의 `.im-nobsidian-ignore` 도 함께 뺀다.
+   */
+  private pathPatterns(
+    containerEl: HTMLElement,
+    prefix: string,
+    target: { includePaths?: string[]; excludePaths?: string[] },
+  ): void {
+    const area = (
+      name: string,
+      desc: string,
+      placeholder: string,
+      key: "includePaths" | "excludePaths",
+    ) =>
+      new Setting(containerEl)
+        .setName(`${prefix}${name}`)
+        .setDesc(desc)
+        .addTextArea((text) =>
+          text
+            .setPlaceholder(placeholder)
+            .setValue((target[key] ?? []).join("\n"))
+            .onChange(async (value) => {
+              target[key] = parseIgnorePatterns(value);
+              await this.changeConnection();
+            }),
+        );
+    area(
+      "포함 패턴",
+      "이 패턴에 맞는 노트 · 첨부만 동기화합니다 — 한 줄에 하나. 비우면 전부. 예: `Work/**/*.md` 는 Work 아래 노트만.",
+      "Work/**/*.md",
+      "includePaths",
+    );
+    area(
+      "제외 패턴",
+      `이 패턴에 맞는 노트 · 폴더는 동기화하지 않습니다 — 한 줄에 하나. 폴더의 ${IGNORE_FILE} 에 적은 것도 뺍니다. ` +
+        "이미 동기화한 노트를 빼도 Notion 페이지는 지우지 않습니다.",
+      "Private\ntemplates/\n*.pdf",
+      "excludePaths",
+    );
   }
 
   /**

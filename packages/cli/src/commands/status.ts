@@ -4,6 +4,7 @@ import {
   StateDB,
   NotionClient,
   SyncOrchestrator,
+  IGNORE_FILE,
   isRemoteDeletion,
 } from "@im-nobsidian/core";
 import chalk from "chalk";
@@ -192,6 +193,40 @@ export const statusCommand = new Command("status")
         }
       }
 
+      // Notion 에서 옮기거나 제목을 바꾼 것 — 다음 pull 이 볼트에서 옮길 자리(ADR-039 · ADR-040).
+      const remoteMoves = status.remoteMoves ?? [];
+      const remoteMoveSkipped = status.remoteMoveSkipped ?? [];
+      if (remoteMoves.length + remoteMoveSkipped.length > 0) {
+        console.log(`\n  ${header("Moved in Notion (next pull):")}`);
+        for (const move of remoteMoves.slice(0, 10)) {
+          console.log(
+            `    ${icons.move} ${move.from} → ${move.to} ${dimText(move.renamed ? "(will rename)" : "(will move)")}`,
+          );
+        }
+        if (remoteMoves.length > 10) {
+          console.log(dimText(`    ... and ${remoteMoves.length - 10} more`));
+        }
+        for (const skip of remoteMoveSkipped) {
+          console.log(
+            `    ${icons.conflict} ${skip.path} ${dimText(`(won't move: ${skip.reason})`)}`,
+          );
+        }
+      }
+
+      // 뺀 자리에 놓일 새 페이지 — 다음 pull 이 받지 않는다. 모르고 넘어가면 Notion 에만 있는 글이 된다.
+      const remoteExcluded = status.remoteExcluded ?? [];
+      if (remoteExcluded.length > 0) {
+        console.log(
+          `\n  ${header(`New in Notion, not pulled (excluded by paths / ${IGNORE_FILE}): ${remoteExcluded.length}`)}`,
+        );
+        for (const path of remoteExcluded.slice(0, 10)) {
+          console.log(`    ${dimText("·")} ${path}`);
+        }
+        if (remoteExcluded.length > 10) {
+          console.log(dimText(`    ... and ${remoteExcluded.length - 10} more`));
+        }
+      }
+
       // Conflicts
       if (conflictCount > 0) {
         console.log(`\n  ${header(chalk.magenta("Conflicts:"))}`);
@@ -212,6 +247,7 @@ export const statusCommand = new Command("status")
         status.localChanges.length > 0 ||
         folderMoves.length > 0 ||
         status.remoteChanges.length > 0 ||
+        remoteMoves.length > 0 ||
         conflictCount > 0;
       if (hasChanges) {
         console.log("");

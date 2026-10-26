@@ -36,6 +36,11 @@ export interface PullJson {
   /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
   readonly moved: number;
   readonly moveSkipped: number;
+  /** 그중 Notion 에서 바꾼 제목으로 이름을 바꾼 수(ADR-040) · 옮긴 노트를 가리키던 링크를 고친 노트 수. */
+  readonly renamed: number;
+  readonly relinked: number;
+  /** Notion 에 새로 생겼지만 뺀 자리(paths · .im-nobsidian-ignore)에 놓일 것이라 받지 않은 페이지 수. */
+  readonly excluded: number;
   /** 볼트에 실제로 쓴 항목 수 — 복원 · 옮기기도 쓰기다. 멱등 판정의 기준값. */
   readonly churn: number;
   readonly conflicts: number;
@@ -75,12 +80,16 @@ export function pullJson(result: PullResult): PullJson {
     restored: result.restored,
     moved: result.moved?.length ?? 0,
     moveSkipped: result.moveSkipped?.length ?? 0,
+    renamed: result.moved?.filter((move) => move.renamed).length ?? 0,
+    relinked: result.relinked?.length ?? 0,
+    excluded: result.excluded?.length ?? 0,
     churn:
       result.created +
       result.updated +
       result.deleted +
       result.restored +
-      (result.moved?.length ?? 0),
+      (result.moved?.length ?? 0) +
+      (result.relinked?.length ?? 0),
     conflicts: result.conflicts.length,
     failed: result.failed,
     writtenPaths: result.writtenPaths.length,

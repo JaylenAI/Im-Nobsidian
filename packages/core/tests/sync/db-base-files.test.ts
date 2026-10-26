@@ -43,13 +43,17 @@ describe("DbBaseFiles", () => {
     expect(new DbBaseFiles(store).get(DB_ID)).toEqual({ ...INFO, title: "Tasks v3" });
   });
 
-  it("상태 메타는 처음 한 번만 읽는다", () => {
+  it("다른 쪽이 메타를 고쳐 적으면 다시 읽는다 — DB 가 든 폴더를 옮기면 경로가 바뀐다(ADR-041)", () => {
     const store = memoryMeta();
     const files = new DbBaseFiles(store);
-    files.get(DB_ID);
-    files.get(DB_ID);
     files.set(DB_ID, INFO);
-    expect(store.getMeta).toHaveBeenCalledTimes(1);
+    const moved = { ...INFO, basePath: `Archive/${INFO.basePath}` };
+    store.meta.set(DB_BASE_FILES_META_KEY, JSON.stringify({ [COMPACT]: moved }));
+
+    expect(files.get(DB_ID)).toEqual(moved);
+    // 읽어 둔 옛 값으로 덮어쓰지 않는다 — 다른 DB 를 적을 때도.
+    files.set("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", { basePath: "b.base", title: "b" });
+    expect(JSON.parse(store.meta.get(DB_BASE_FILES_META_KEY)!)[COMPACT]).toEqual(moved);
   });
 
   it.each(["not json", "[]", "null", "42"])(

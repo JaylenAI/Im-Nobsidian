@@ -134,3 +134,27 @@ export function extractAliases(properties: Record<string, unknown>): string[] {
       .filter(Boolean);
   return [];
 }
+
+/**
+ * Notion 에서 제목을 바꿔 파일 이름도 따라 바꿀 때인가(`sync.renameOnTitleChange`).
+ *
+ * 파일 이름이 지난 동기화 때의 제목을 따르고 있었고, Notion 의 지금 제목은 따르지 않을 때다. 사용자가 파일 이름과
+ * 따로 정한 제목(frontmatter `title`)이면 바꾸지 않는다 — 그 노트는 처음부터 이름이 제목을 따르지 않았다. 볼트에서
+ * 제목을 고치고 아직 올리지 않았어도 바꾸지 않는다 — 어느 제목이 맞는지는 충돌 처리가 정한다.
+ *
+ * @param base 지난 동기화 시점의 frontmatter. 모르면 null — 이름이 제목을 따랐다고 본다.
+ * @param local 지금 볼트 노트의 frontmatter. 모르면 null.
+ * @param path 지금 경로 — 폴더로 추적하는 페이지는 폴더 경로.
+ */
+export function retitledInNotion(
+  base: Frontmatter | null,
+  local: Frontmatter | null,
+  path: string,
+  remoteTitle: string,
+): boolean {
+  if (followsFileName(remoteTitle, path)) return false;
+  const previous = base ? explicitTitle(base) : null;
+  if (previous !== null && !followsFileName(previous, path)) return false;
+  if (local && explicitTitle(local) !== previous) return false;
+  return true;
+}

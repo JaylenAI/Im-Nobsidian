@@ -1,5 +1,6 @@
 import {
   getLogger,
+  IGNORE_FILE,
   inAnyPathScope,
   isMarkdownPath,
   isRemoteDeletion,
@@ -320,7 +321,7 @@ export class SyncController {
           ...(rerender ? { rerender } : {}),
         }),
       (result) => ({
-        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved?.length ? ` / 이동 ${result.moved.length}` : ""}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
       }),
       (result) => this.dropPulled(result, paths),
@@ -483,6 +484,8 @@ export class SyncController {
         const status = await this.orchestrator.status({ signal });
         this.remoteChanges = status.remoteChanges;
         this.settle(status, { remoteChanges: status.remoteChanges });
+        const pending = remoteStatusText(status);
+        if (pending) this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${pending}`, ACTIONABLE_NOTICE_MS);
       } catch (error) {
         // 취소한 것은 실패가 아니다 — 원격 목록은 지난번 것을 그대로 둔다.
         if (signal.aborted) this.cancelled("상태 확인", "상태 확인이 취소되었습니다");
@@ -740,4 +743,42 @@ function listsOf(status: StatusResult): SyncStatePatch {
     folderMoves: [...status.folderMoves],
     conflictRecords: status.conflictRecords,
   };
+}
+
+/**
+ * 받으며 옮긴 것 — Notion 에서 옮긴 페이지와 바꾼 제목으로 이름을 바꾼 노트를 따로 센다(ADR-040). 고친 링크와 범위 밖이라
+ * 받지 않은 새 페이지도.
+ */
+function movedText(result: PullResult): string {
+  const moves = result.moved ?? [];
+  const renamed = moves.filter((move) => move.renamed).length;
+  const moved = moves.length - renamed;
+  return (
+    (moved > 0 ? ` / 이동 ${moved}` : "") +
+    (renamed > 0 ? ` / 이름 변경 ${renamed}` : "") +
+    (result.relinked?.length ? ` / 링크 고침 ${result.relinked.length}` : "") +
+    (result.excluded?.length ? ` / 받지 않음 ${result.excluded.length}(동기화 범위 밖)` : "")
+  );
+}
+
+/**
+ * 원격까지 본 상태 확인이 찾은, 다음 Pull 이 볼트에서 옮기거나 이름을 바꿀 노트와 받지 않을 새 페이지 — 없으면 null.
+ * 원격 변경 목록에는 들지 않는 것이라 알림으로 알린다.
+ */
+function remoteStatusText(status: StatusResult): string | null {
+  const moves = status.remoteMoves ?? [];
+  const renamed = moves.filter((move) => move.renamed).length;
+  const parts = [
+    moves.length - renamed > 0 ? `Notion 에서 옮긴 노트 ${moves.length - renamed}` : "",
+    renamed > 0 ? `Notion 에서 제목을 바꾼 노트 ${renamed}` : "",
+    status.remoteMoveSkipped?.length ? `옮기지 못할 노트 ${status.remoteMoveSkipped.length}` : "",
+  ].filter(Boolean);
+  const excluded = status.remoteExcluded?.length ?? 0;
+  const lines = [
+    parts.length > 0 ? `다음 Pull 이 볼트에 반영합니다 — ${parts.join(" · ")}` : "",
+    excluded > 0
+      ? `Notion 의 새 페이지 ${excluded}개는 동기화 범위(경로 패턴 · ${IGNORE_FILE}) 밖이라 받지 않습니다: ${status.remoteExcluded!.slice(0, 3).join(", ")}${excluded > 3 ? " …" : ""}`
+      : "",
+  ].filter(Boolean);
+  return lines.length > 0 ? lines.join("\n") : null;
 }

@@ -3,16 +3,8 @@ import type { Config } from "../types/config.js";
 import type { RemoteMove, RemoteMoveSkip, SyncRecord } from "../types/sync.js";
 import { notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
-import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
-import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
-import { DB_BASE_FILES_META_KEY } from "./db-base-files.js";
-import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
-import {
-  childFolderOf,
-  isFolderRecord,
-  parentFolderOf,
-  type FolderLookup,
-} from "./folder-container.js";
+import { childFolderOf, type FolderLookup } from "./folder-container.js";
+import { NoteRelocator, baseName, joinPath } from "./note-relocation.js";
 import type { VaultFS } from "./vault-fs.js";
 
 export interface RemoteMoveResult {
@@ -51,12 +43,16 @@ export function movedInNotion(record: SyncRecord, parentId: string): boolean {
  *   - 폴더 안에 DB 폴더나 다른 연결 폴더가 있다 — DB 의 `.base` 보기가 폴더 경로를 품고 있다
  */
 export class RemoteMoveFollower {
+  private readonly relocator: NoteRelocator;
+
   constructor(
     private readonly config: Config,
     private readonly stateDb: IStateDB,
     private readonly vaultFs: VaultFS,
     private readonly folderLookup: () => FolderLookup,
-  ) {}
+  ) {
+    this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
+  }
 
   /**
    * @param moved 페이지 id → Notion 의 새 부모 페이지 id.
@@ -106,34 +102,19 @@ export class RemoteMoveFollower {
     const folder = this.parentFolder(parentId);
     if (folder === null) return skip("Notion 의 새 부모가 볼트에 없다");
 
-    const units = this.unitsOf(record);
+    const units = this.relocator.unitsOf(record);
     const moves = units.map((from) => ({ from, to: joinPath(folder, baseName(from)) }));
     if (moves.every((move) => move.from === move.to)) {
       if (!dryRun) this.stateDb.setNotionParentId(record.id, parentId);
       return { moves: [] };
     }
     for (const move of moves) {
-      const blocked = await this.blocked(move);
+      const blocked = await this.relocator.blocked(move);
       if (blocked) return skip(blocked);
     }
     if (dryRun) return { moves };
 
-    // 노트와 자식 폴더를 함께 옮기다 한쪽에서 실패하면 옮긴 것을 되돌린다 — 상태 DB 는 아직 옛 경로다.
-    const done: RemoteMove[] = [];
-    try {
-      for (const move of moves) {
-        await this.vaultFs.moveFile(move.from, move.to);
-        done.push(move);
-      }
-    } catch (error) {
-      for (const move of done.reverse())
-        await this.vaultFs.moveFile(move.to, move.from).catch(() => {});
-      throw error;
-    }
-    this.stateDb.transaction(() => {
-      for (const move of moves) this.rewritePaths(move);
-      this.stateDb.setNotionParentId(record.id, parentId);
-    });
+    await this.relocator.relocate(moves, () => this.stateDb.setNotionParentId(record.id, parentId));
     for (const move of moves) {
       getLogger().info(
         `[Im-Nobsidian] Notion 에서 옮긴 페이지를 볼트에서 옮김: ${move.from} → ${move.to}`,
@@ -148,110 +129,4 @@ export class RemoteMoveFollower {
     const parent = this.stateDb.getByNotionId(parentId);
     return parent ? childFolderOf(parent, this.folderLookup()) : null;
   }
-
-  /**
-   * 함께 옮길 것 — 폴더로 추적하는 페이지는 그 폴더, 폴더 노트(`X/X.md`)는 든 폴더, 노트는 그 파일과 옆의 자식
-   * 폴더(`X/`, 있으면).
-   */
-  private unitsOf(record: SyncRecord): string[] {
-    if (isFolderRecord(record)) return [record.obsidianPath];
-    if (record.fileType !== "file") return [parentFolderOf(record.obsidianPath)];
-    const children = stripMarkdownExtension(record.obsidianPath);
-    const hasChildren = this.stateDb.getAll().some((r) => within(r.obsidianPath, children));
-    return hasChildren ? [record.obsidianPath, children] : [record.obsidianPath];
-  }
-
-  /** 옮기지 못할 까닭 — 없으면 null. */
-  private async blocked(move: RemoteMove): Promise<string | null> {
-    if (within(move.to, move.from)) return "제 안으로 옮길 수 없다";
-    if (!(await this.vaultFs.exists(move.from))) return "볼트에 노트가 없다";
-    if (
-      (await this.vaultFs.exists(move.to)) ||
-      this.stateDb.getAll().some((r) => within(r.obsidianPath, move.to))
-    ) {
-      return `옮길 자리(${move.to})에 같은 이름이 있다`;
-    }
-    const isFolder = !isMarkdownPath(move.from);
-    if (this.vaultFs.excludesPath?.(move.to, isFolder ? "folder" : "file")) {
-      return `옮길 자리(${move.to})가 동기화에서 빠진다(paths · .im-nobsidian-ignore)`;
-    }
-    if (isFolder && this.holdsDatabaseOrConnection(move.from)) {
-      return "폴더 안에 DB 나 다른 연결이 있다 — DB 보기(.base)가 폴더 경로를 품는다. Obsidian 에서 옮기면 다음 push 가 Notion 을 맞춘다";
-    }
-    return null;
-  }
-
-  private holdsDatabaseOrConnection(folder: string): boolean {
-    const databases = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    if (databases.some((db) => within(db.localFolder.replace(/\/+$/, ""), folder))) return true;
-    const baseFiles = this.stateDb.getMeta(DB_BASE_FILES_META_KEY);
-    if (baseFiles) {
-      try {
-        const entries = Object.values(
-          JSON.parse(baseFiles) as Record<string, { basePath?: string }>,
-        );
-        if (entries.some((entry) => entry.basePath && within(entry.basePath, folder))) return true;
-      } catch {
-        // 깨진 메타 — DB 폴더 목록과 행 레코드로 본다.
-      }
-    }
-    if (
-      this.stateDb.getAll().some((r) => r.fileType === "db-row" && within(r.obsidianPath, folder))
-    ) {
-      return true;
-    }
-    return this.vaultFs.holdsOtherConnection?.(folder) ?? false;
-  }
-
-  /** 옮긴 것 아래의 레코드 · 위키링크 · 보존 마커 · 첨부 기록을 새 경로로 옮겨 적는다. */
-  private rewritePaths(move: RemoteMove): void {
-    for (const record of this.stateDb.getAll()) {
-      if (!within(record.obsidianPath, move.from)) continue;
-      const from = record.obsidianPath;
-      const to = move.to + from.slice(move.from.length);
-      this.stateDb.updatePath(record.id, to);
-      const entry = record.notionPageId ? this.stateDb.resolvePageId(record.notionPageId) : null;
-      if (entry && entry.obsidianPath === from) {
-        this.stateDb.deleteWikilink(from);
-        this.stateDb.upsertWikilink({
-          obsidianPath: to,
-          notionPageId: entry.notionPageId,
-          title: wikilinkTitleFromPath(to),
-          aliases: entry.aliases,
-        });
-      }
-      const markers = this.stateDb.getPreserveMarkers(from);
-      if (markers.length > 0) {
-        this.stateDb.storePreserveMarkers(to, markers);
-        this.stateDb.storePreserveMarkers(from, []);
-      }
-      if (record.notionPageId) {
-        for (const file of this.stateDb.getFilesByPageId(record.notionPageId)) {
-          if (!within(file.localPath, move.from)) continue;
-          this.stateDb.registerFile({
-            localPath: move.to + file.localPath.slice(move.from.length),
-            notionPageId: file.notionPageId,
-            fileUploadId: file.fileUploadId,
-            fileType: file.fileType,
-            fileHash: file.fileHash,
-            fileSize: file.fileSize,
-          });
-          this.stateDb.deleteFileRegistry(file.localPath);
-        }
-      }
-    }
-  }
-}
-
-/** `path` 가 `unit` 이거나 그 폴더 안이다. */
-function within(path: string, unit: string): boolean {
-  return path === unit || path.startsWith(`${unit}/`);
-}
-
-function baseName(path: string): string {
-  return path.slice(path.lastIndexOf("/") + 1);
-}
-
-function joinPath(folder: string, name: string): string {
-  return folder === "" ? name : `${folder}/${name}`;
 }

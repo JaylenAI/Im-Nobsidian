@@ -14,7 +14,15 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       autoSync: boolean;
       autoSyncInterval: number;
       timeZone: string;
-      connections?: { folder: string; tokenSecret: string; rootPageId: string }[];
+      includePaths?: string[];
+      excludePaths?: string[];
+      connections?: {
+        folder: string;
+        tokenSecret: string;
+        rootPageId: string;
+        includePaths?: string[];
+        excludePaths?: string[];
+      }[];
     };
     knownConnectionFolders: string[];
     trackedNotesUnder: ReturnType<typeof vi.fn>;
@@ -199,6 +207,37 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
   });
 
+  it("동기화 범위 — 포함 · 제외 패턴은 한 줄에 하나, 빈 줄 · 주석은 빼고 창을 닫을 때 다시 연결한다", async () => {
+    plugin.settings.excludePaths = ["Archive"];
+    const { row, control } = display();
+    expect(control("제외 패턴").kind).toBe("textarea");
+    expect(control("제외 패턴").value).toBe("Archive");
+    expect(row("제외 패턴").desc).toContain(".im-nobsidian-ignore");
+
+    await control("포함 패턴").change("Work/**/*.md\n\n");
+    await control("제외 패턴").change(" Private/ \n# 임시 노트\n*.tmp.md\n");
+
+    expect(plugin.settings.includePaths).toEqual(["Work/**/*.md"]);
+    expect(plugin.settings.excludePaths).toEqual(["Private/", "*.tmp.md"]);
+    expect(plugin.initOrchestrator).not.toHaveBeenCalled();
+    settingTab.hide();
+    expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
+  it("Notion 에서 바꾼 제목으로 이름 바꾸기 — 기본은 꺼짐, 켜면 창을 닫을 때 다시 연결한다", async () => {
+    const { control } = display();
+    const toggle = control("Notion 에서 바꾼 제목으로 이름 바꾸기");
+    expect(toggle.kind).toBe("toggle");
+    expect(toggle.value).toBe(false);
+
+    await toggle.change(true);
+
+    expect(plugin.settings.renameOnTitleChange).toBe(true);
+    expect(plugin.initOrchestrator).not.toHaveBeenCalled();
+    settingTab.hide();
+    expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
   describe("폴더 연결 (ADR-038)", () => {
     it("폴더는 고르개다 — 점 폴더 · 볼트 연결이 이미 동기화하는 폴더 · 다른 연결의 폴더는 고를 수 없다", async () => {
       plugin.settings.connections = [{ folder: "Work/Team", tokenSecret: "", rootPageId: "" }];
@@ -236,6 +275,16 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       });
       // 볼트 연결의 설정은 그대로다
       expect(plugin.settings.tokenSecret).toBe("im-nobsidian-notion-token");
+    });
+
+    it("폴더 연결도 제 경로 패턴을 따로 적는다 — 볼트 연결의 패턴은 그대로다", async () => {
+      plugin.settings.connections = [{ folder: "Work", tokenSecret: "", rootPageId: "" }];
+      const { control } = display();
+
+      await control("폴더 연결 1 — 제외 패턴").change("drafts\n");
+
+      expect(plugin.settings.connections[0]!.excludePaths).toEqual(["drafts"]);
+      expect(plugin.settings.excludePaths).toBeUndefined();
     });
 
     it("볼트 연결이 노트를 동기화하던 폴더를 (밖에서) 적어 두었으면 따로 연결하지 않는다고 알린다", () => {

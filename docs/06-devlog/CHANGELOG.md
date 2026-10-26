@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+> 플러그인이 경로 패턴을 적용하고, Notion 에서 바꾼 제목 · 옮긴 폴더를 볼트가 따라간다(ADR-040 · 041). 동작이 바뀌는 변경이라
+> 마이너를 올린다 — 플러그인은 예전에 올리던 뺀 노트를 이제 올리지 않는다.
+
+### Added
+
+- **플러그인이 경로 패턴을 적용한다** — 예전 플러그인은 `paths.include` · `paths.exclude` · `.im-nobsidian-ignore` 를
+  무시하고 볼트의 모든 노트를 올렸다. 설정의 「동기화 범위」 에 포함 · 제외 패턴을 한 줄에 하나 적고(볼트 연결 · 폴더 연결
+  마다), 연결 폴더의 `.im-nobsidian-ignore` 도 읽는다. 규칙은 CLI 와 같다(`PathFilter` · `parseIgnorePatterns` 공유).
+  동기화하던 노트를 빼도 Notion 페이지를 지우지 않는다.
+- **Notion 에서 바꾼 제목으로 노트 이름을 바꾸는 선택(`sync.renameOnTitleChange`, 기본 꺼짐 · ADR-040)** — 켜면 pull 이
+  파일 이름(자식 폴더 · 폴더 노트의 폴더 · DB 행의 하위 페이지 폴더도)을 새 제목으로 바꾼다. 끄면 예전처럼 frontmatter
+  `title:` 로 받는다. 플러그인은 설정의 토글, CLI 는 `(renamed)` 줄과 JSON 의 `renamed` 수로 알린다.
+- **동기화가 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친다** — 예전에는 Notion 에서 옮긴 노트(ADR-039)를 경로로
+  적은 `[[폴더/노트]]` · `[x](폴더/노트.md)` 가 끊겼다(플러그인도 `vault.rename` 이라 Obsidian 의 링크 자동 갱신이 돌지
+  않는다). 위키링크 · 임베드 · 마크다운 링크를 원래 꼴(이름 · 경로 · 상대 경로) 그대로 고치고, 코드 안은 두며, 동기화된
+  노트는 고친 글을 사본으로 적어 다음 push 가 다시 올리지 않는다. CLI 는 「links updated in N notes」 와 JSON `relinked`,
+  플러그인은 알림의 「링크 고침 N」.
+
+### Changed
+
+- **`status --full` 이 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 노트를 보인다** — Notion 에서 옮긴 페이지(ADR-039) ·
+  바꾼 제목(ADR-040)은 원격 변경 목록에 들지 않아, pull 하기 전에는 알 수 없었다. 「Moved in Notion (next pull)」 에
+  `(will move)` · `(will rename)` · 옮기지 못할 까닭을 보인다. 플러그인은 원격까지 본 새로고침 뒤 알림으로 알린다.
+
+### Fixed
+
+- **DB 가 든 폴더를 옮기면 `.base` 보기가 빈 표가 되던 것 (ADR-041)** — 볼트에서 옮기면 발견한 DB 의 폴더만 고쳐 적어,
+  바뀌지 않은 DB 는 다시 받지 않으므로(ADR-027) `.base` 의 `file.inFolder("옛 폴더")` 와 인라인 DB 임베드의 옛 경로가 남았다.
+  동기화가 만든 `.base` 의 필터와 기록한 `.base` 경로를 새 자리로 고친다. 사용자가 만든 `.base` 는 둔다. Notion 에서 옮긴
+  폴더도 DB 가 들었으면 따라가지 않았는데, 이제 같은 식으로 옮긴다 — 설정 파일로 정한 DB(`notion.databases`) · 다른 연결이
+  든 폴더만 막는다.
+- **뺀 자리에 놓일 Notion 의 새 페이지를 받던 것** — 뺀 폴더 아래에 Notion 에서 만든 페이지 · 포함 패턴 밖의 페이지를
+  받아, 사용자가 뺀 폴더에 파일이 생기고 그 노트는 목록에서 빠져 다시 올라가지 않았다. 받지 않고 경로를 알린다 — CLI
+  `pull` · `status --full`(JSON `excluded`), 플러그인 알림의 「받지 않음 N」.
+
 ## [0.10.0] - 2026-10-25
 
 > Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039). 동작이 바뀌는 변경이라 마이너를 올린다.
