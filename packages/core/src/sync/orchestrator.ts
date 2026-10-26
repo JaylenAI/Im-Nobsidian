@@ -715,6 +715,17 @@ export class SyncOrchestrator {
     return this.gate.run("pull", () => this.executePull(options));
   }
 
+  /** 새 원격 페이지 가운데 동기화에서 뺀 자리에 놓일 것 — 페이지 id → 그 자리. dry-run 이 받지 않을 것으로 알린다. */
+  private async plannedExclusions(changes: readonly RemoteChange[]): Promise<Map<string, string>> {
+    const exclusions = new Map<string, string>();
+    for (const change of changes) {
+      if (change.type !== "created") continue;
+      const path = await this.puller.plannedExclusion(change.pageId);
+      if (path !== null) exclusions.set(change.pageId, path);
+    }
+    return exclusions;
+  }
+
   /** 감지가 본, Notion 에서 옮긴 페이지를 볼트에서 옮긴다 — 경로를 좁힌 pull 은 그 범위의 것만. */
   private async followRemoteMoves(options?: PullOptions): Promise<RemoteMoveResult> {
     const moved = new Map(
@@ -790,6 +801,8 @@ export class SyncOrchestrator {
     this.discovery.clearInlineRefs();
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
+    // 동기화에서 뺀 자리에 놓일 새 원격 페이지 — 받지 않고 알린다.
+    const excluded: string[] = [];
     const failed: FailedOperation[] = [];
     // 감지한 원격 변경과 그중 적용을 마친 것 — 받지 못한 변경이 다음 기준 시각을 묶는다.
     let detected: readonly RemoteChange[] = [];
@@ -896,6 +909,7 @@ export class SyncOrchestrator {
         moved: [...relocated.moved, ...renamedRows.renamed],
         moveSkipped: relocated.skipped,
         relinked,
+        excluded,
       };
     };
 
@@ -949,8 +963,9 @@ export class SyncOrchestrator {
     // dry-run 은 여기서 끝낸다 — 아래 DB 경로 · 마감(finalize)은 행을 쓰고 기준 시각을 옮긴다.
     // 예전에는 페이지 변경이 없으면 dry-run 도 아래 DB 경로로 가 행을 실제로 썼다(N-01).
     if (options?.dryRun) {
+      const exclusions = await this.plannedExclusions(filtered);
       const plan = await this.pullPlanner.planPull(
-        filtered,
+        filtered.filter((change) => !exclusions.has(change.pageId)),
         restoreChanges,
         restoreIds,
         localPlan,
@@ -959,7 +974,12 @@ export class SyncOrchestrator {
         scan,
         ledger,
       );
-      return { ...plan, moved: relocated.moved, moveSkipped: relocated.skipped };
+      return {
+        ...plan,
+        moved: relocated.moved,
+        moveSkipped: relocated.skipped,
+        excluded: [...exclusions.values()],
+      };
     }
 
     let pullTotal = workItems.length;
@@ -1063,10 +1083,14 @@ export class SyncOrchestrator {
     ): Promise<{ readonly path?: string; readonly unchanged: boolean }> => {
       switch (change.type) {
         case "created": {
-          const path = await this.puller.pullCreate(change.pageId);
-          writtenPaths.push(path);
+          const created = await this.puller.pullCreate(change.pageId);
+          if (created.excluded) {
+            excluded.push(created.path);
+            return { path: created.path, unchanged: true };
+          }
+          writtenPaths.push(created.path);
           counts.created++;
-          return { path, unchanged: false };
+          return { path: created.path, unchanged: false };
         }
         case "modified": {
           const outcome = await this.puller.pullUpdate(change);
@@ -1242,7 +1266,12 @@ export class SyncOrchestrator {
     // 때마다 분 단위를 쓰게 된다. 원격 삭제는 다음 pull 의 전체 대조가 보인다(ADR-027).
     const scan = this.detector.remoteScan({ force: false, deferDue: true });
     const detection = await this.detector.detectRemote(scan, { signal, databases: false });
-    const remoteChanges = await this.drift.withoutUnchangedRemotes(detection.changes, signal);
+    const detected = await this.drift.withoutUnchangedRemotes(detection.changes, signal);
+    // 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 것(ADR-039 · ADR-040)과 뺀 자리라 받지 않을 새 페이지 — 바꾸지 않고 본다.
+    const moves = await this.followRemoteMoves({ dryRun: true });
+    const renames = await this.followRemoteRenames(detected, { dryRun: true });
+    const exclusions = await this.plannedExclusions(detected);
+    const remoteChanges = detected.filter((change) => !exclusions.has(change.pageId));
     const conflictRecords = this.stateDb.getByStatus("conflict");
     throwIfAborted(signal);
 
@@ -1263,6 +1292,9 @@ export class SyncOrchestrator {
       lastSyncAt,
       lastFullScanAt,
       remoteScan: remoteScanInfo(scan, lastFullScanAt, this.config.sync.deleteSync),
+      remoteMoves: [...moves.moved, ...renames.renamed],
+      remoteMoveSkipped: [...moves.skipped, ...renames.skipped],
+      remoteExcluded: [...exclusions.values()],
     };
   }
 

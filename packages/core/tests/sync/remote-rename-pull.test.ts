@@ -163,6 +163,17 @@ describe("Notion 에서 바꾼 제목으로 노트 이름을 바꾼다", () => {
     expect(notes()).toContain("C/old.md");
   });
 
+  it("status 는 다음 pull 이 바꿀 이름을 보인다 — 끄면 보이지 않는다", async () => {
+    await seed({ "A/old.md": "old\n" });
+    retitle("A/old.md", "new");
+
+    expect((await orchestrator().status()).remoteMoves).toEqual([
+      { from: "A/old.md", to: "A/new.md", renamed: true },
+    ]);
+    expect((await orchestrator(false).status()).remoteMoves).toEqual([]);
+    expect(notes()).toEqual(["A/old.md"]);
+  });
+
   it("dry-run 은 바꿀 것만 알리고 쓰지 않는다", async () => {
     await seed({ "A/old.md": "old\n", "B/b.md": "[[old]]\n" });
     retitle("A/old.md", "new");

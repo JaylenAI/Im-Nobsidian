@@ -88,6 +88,21 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
     expect(notes()).toEqual(["B/b.md", "B/c.md"]);
   });
 
+  it("status 는 다음 pull 이 옮길 것과 옮기지 않을 것을 보이고 볼트는 둔다", async () => {
+    await seed({ "A/c.md": "c\n", "B/b.md": "b\n", "A/d.md": "d\n", "B/d.md": "other\n" });
+    moveInNotion("A/c.md", "B");
+    moveInNotion("A/d.md", "B");
+
+    const status = await orchestrator.status();
+
+    expect(status.remoteMoves).toEqual([{ from: "A/c.md", to: "B/c.md" }]);
+    expect(status.remoteMoveSkipped).toEqual([
+      { path: "A/d.md", reason: expect.stringContaining("B/d.md") },
+    ]);
+    expect(notes()).toEqual(["A/c.md", "A/d.md", "B/b.md", "B/d.md"]);
+    expect((await orchestrator.pull()).moved).toEqual([{ from: "A/c.md", to: "B/c.md" }]);
+  });
+
   it("루트로 옮긴 노트", async () => {
     await seed({ "A/c.md": "c\n", "A/a.md": "a\n" });
     moveInNotion("A/c.md", null);

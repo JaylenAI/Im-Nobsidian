@@ -150,7 +150,10 @@ export class PagePuller {
     return ordered;
   }
 
-  async pullCreate(pageId: string): Promise<string> {
+  /**
+   * @returns 쓴 노트(폴더) 경로. 동기화에서 뺀 자리에 놓일 페이지면 `excluded` — 받지 않았다.
+   */
+  async pullCreate(pageId: string): Promise<{ readonly path: string; readonly excluded?: true }> {
     try {
       return await this.createPulledPage(pageId);
     } finally {
@@ -159,17 +162,54 @@ export class PagePuller {
     }
   }
 
-  private async createPulledPage(pageId: string): Promise<string> {
+  /**
+   * 새 원격 페이지가 동기화에서 뺀 자리(paths · `.im-nobsidian-ignore`)에 놓일 것이면 그 자리 — 아니면 null.
+   * dry-run 이 받지 않을 것을 미리 알리는 데 쓴다. 볼트도 상태 DB 도 바꾸지 않는다.
+   */
+  async plannedExclusion(pageId: string): Promise<string | null> {
+    if (!this.vaultFs.excludesPath) return null;
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
+    return this.excludedCreatePath(
+      await this.resolveParentPath(page),
+      sanitizeFileName(this.notionClient.extractTitle(page)),
+    );
+  }
+
+  /**
+   * 새 페이지가 놓일 자리가 뺀 자리인가 — 부모 폴더 · 노트 이름 · 폴더 노트가 될 때의 폴더를 본다. 받기 전에는 폴더 노트가
+   * 될지 모른다(본문을 받아 봐야 안다) — 어느 쪽이든 빠지면 뺀다. 자연 이름으로 보고, 같은 이름이 있을 때 붙는 id 접미사는
+   * 보지 않는다.
+   */
+  private excludedCreatePath(parentPath: string, safeName: string): string | null {
+    const excludes = this.vaultFs.excludesPath?.bind(this.vaultFs);
+    if (!excludes) return null;
+    const folder = parentPath ? `${parentPath}/${safeName}` : safeName;
+    const note = `${folder}.md`;
+    const blocked =
+      (parentPath !== "" && excludes(parentPath, "folder")) ||
+      excludes(note) ||
+      excludes(folder, "folder");
+    return blocked ? note : null;
+  }
+
+  private async createPulledPage(
+    pageId: string,
+  ): Promise<{ readonly path: string; readonly excluded?: true }> {
     const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
 
     const parentPath = await this.resolveParentPath(page);
+    // 뺀 자리에 놓일 페이지는 받지 않는다 — 받은 노트는 목록에서 빠져 push 가 보지 못하고, 사용자가 뺀 폴더에 파일이 생긴다.
+    const excluded = this.excludedCreatePath(parentPath, safeName);
+    if (excluded !== null) return { path: excluded, excluded: true };
 
     const fetched = await this.fetchPageMarkdown(pageId);
     const hasChildPages = this.hasChildContainers(pageId, fetched.children);
     if (hasChildPages && !fetched.hasBody) {
-      return this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName);
+      return {
+        path: await this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName),
+      };
     }
 
     let filePath: string;
@@ -230,7 +270,7 @@ export class PagePuller {
       });
     });
 
-    return filePath;
+    return { path: filePath };
   }
 
   /**
