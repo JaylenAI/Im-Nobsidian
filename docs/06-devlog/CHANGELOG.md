@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-10-26
+
+> 플러그인이 경로 패턴을 적용하고, Notion 에서 바꾼 제목 · 옮긴 폴더를 볼트가 따라간다(ADR-040 · 041). 동작이 바뀌는 변경이라
+> 마이너를 올린다 — 플러그인은 예전에 올리던 뺀 노트를 이제 올리지 않는다.
+
 ### Added
 
 - **플러그인이 경로 패턴을 적용한다** — 예전 플러그인은 `paths.include` · `paths.exclude` · `.im-nobsidian-ignore` 를
