@@ -18,6 +18,7 @@
     "autoSync": false, // watch 모드 시 자동 동기화
     "autoSyncInterval": 300, // 자동 동기화 간격 (초)
     "deleteSync": false, // 삭제 동기화 여부
+    "renameOnTitleChange": false, // Notion 에서 바꾼 제목으로 파일 이름 바꾸기
   },
   "paths": {
     "include": ["**/*"], // 동기화 포함 glob 패턴
@@ -88,6 +89,17 @@ https://www.notion.so/My-Page-abc123def456...
 
 어느 쪽이든 Notion 에서 지운 페이지(휴지통 · 보관)의 노트를 고쳐 push 하면 올리지 않고 충돌로 남깁니다. 충돌
 해결에서 로컬 유지(Notion 에 새 페이지로 다시 만들기)나 삭제 따르기(Obsidian 파일도 지우기)를 고르세요.
+
+### renameOnTitleChange
+
+- `false` (기본값) — Notion 에서 바꾼 제목은 노트 frontmatter 의 `title:` 로 받고 파일 이름은 둔다
+- `true` — 파일 이름을 새 제목으로 바꾸고(같은 이름이 있으면 새 페이지를 받을 때처럼 `(id8)` 을 붙인다), 그 노트를
+  가리키던 다른 노트의 위키링크 · 임베드 · 마크다운 링크를 고친다. 노트 옆의 자식 폴더 · 폴더 노트의 폴더 · DB 행의
+  하위 페이지 폴더도 함께 바꾼다
+
+이름을 바꾸지 않는 경우 — frontmatter `title:` 을 파일 이름과 따로 정해 두었거나, 그 노트의 제목을 볼트에서도 고쳤거나,
+볼트에서 옮긴 것을 아직 올리지 않았거나, 폴더 안에 DB · 다른 연결 폴더가 있으면 예전처럼 제목만 받는다(ADR-040).
+플러그인은 설정의 「Notion 에서 바꾼 제목으로 이름 바꾸기」 다.
 
 ## Path Settings / 경로 설정
 

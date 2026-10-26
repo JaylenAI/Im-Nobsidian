@@ -221,7 +221,11 @@ Obsidian 볼트                          Notion 워크스페이스
    않습니다)
 3. Notion 에서 다른 부모로 옮긴 페이지는 볼트에서도 옮깁니다(이름 그대로, 새 부모의 폴더로). 옮겨도 수정 시각이
    바뀌지 않아 전체 대조가 알아봅니다. 옮길 자리에 같은 이름이 있거나, 볼트에서 옮긴 것을 아직 올리지 않았거나,
-   폴더에 DB 가 있으면 옮기지 않고 까닭을 보입니다
+   폴더에 DB 가 있으면 옮기지 않고 까닭을 보입니다. 옮긴 노트를 경로로 적은 링크(`[[폴더/노트]]` ·
+   `[x](폴더/노트.md)`)는 다른 노트에서 고칩니다.
+   Notion 에서 바꾼 제목은 노트 frontmatter 의 `title:` 로 받고 파일 이름은 둡니다 — `sync.renameOnTitleChange`
+   (플러그인: **설정 → Notion 에서 바꾼 제목으로 이름 바꾸기**)를 켜면 파일 이름을 바꾸고 그 노트를 가리키던 링크를
+   같은 식으로 고칩니다
 4. `last_edited_time`으로 변경 감지
 5. Notion 블록 → 마크다운, 속성 → 프론트매터 변환
 6. 이미지를 첨부파일 폴더에 다운로드 (중복 제거)
@@ -298,6 +302,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
     "deleteSync": false, // true: 한쪽에서 지운 노트를 다른 쪽에서도 지움 (플러그인은 늘 켬)
+    "renameOnTitleChange": false, // true: Notion 에서 바꾼 제목으로 파일 이름을 바꾸고 링크를 고침
     "fullReconcileInterval": 3600, // Notion 전체 대조 주기(초) — 0 이면 pull 마다
     "notifications": "silent", // "silent": 동기화가 쓴 페이지는 알림을 보내지 않음(멘션 · 사람 속성) | "default"
   },
