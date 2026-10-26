@@ -109,6 +109,20 @@ describe("--json 출력 계약", () => {
     expect(stdoutJson(write)).toMatchObject({ remoteScan: null });
   });
 
+  it("pull: 이름을 바꾼 수와 링크를 고친 노트 수 — 링크를 고친 것도 볼트에 쓴 것이다", async () => {
+    mockPull.mockResolvedValueOnce({
+      ...pullResult,
+      restored: 0,
+      moved: [
+        { from: "a.md", to: "b.md", renamed: true },
+        { from: "c.md", to: "D/c.md" },
+      ],
+      relinked: ["x.md"],
+    });
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ moved: 2, renamed: 1, relinked: 1, churn: 3 });
+  });
+
   it("push --dry-run: churn 은 생성·수정·삭제·옮김의 합", async () => {
     mockPush.mockResolvedValueOnce({ ...pushResult, created: 1, deleted: 1, moved: 2 });
     await run(pushCommand, "push", "--dry-run", "--json");

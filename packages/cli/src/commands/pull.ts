@@ -99,10 +99,16 @@ export const pullCommand = new Command("pull")
       if (result.restored > 0) {
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
       }
-      // Notion 에서 옮긴 페이지 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039).
+      // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {
+        const verb = move.renamed ? "rename" : "move";
         console.log(
-          `  ${icons.move} ${move.from} → ${move.to} ${dimText(options.dryRun ? "(would move)" : "(moved)")}`,
+          `  ${icons.move} ${move.from} → ${move.to} ${dimText(options.dryRun ? `(would ${verb})` : `(${verb}d)`)}`,
+        );
+      }
+      if ((result.relinked?.length ?? 0) > 0) {
+        console.log(
+          `  ${icons.success} ${dimText(`links updated in ${result.relinked!.length} notes`)}`,
         );
       }
       for (const skip of result.moveSkipped ?? []) {
