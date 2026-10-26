@@ -150,6 +150,10 @@ templates/
 private/
 ```
 
+뺀 자리에 놓일 Notion 의 새 페이지(뺀 폴더 아래에 만든 페이지 · 포함 패턴 밖의 페이지)는 받지 않습니다 — 받으면
+사용자가 뺀 폴더에 파일이 생기고, 그 노트는 다시 올라가지 않습니다. `pull` 은 받지 않은 페이지를 경로로 알리고(JSON
+`excluded`), `status --full` 은 원격 변경과 따로 「New in Notion, not pulled」 로 보입니다. 플러그인은 알림으로 알립니다.
+
 ### attachments
 
 Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입니다.
