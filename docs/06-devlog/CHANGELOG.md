@@ -28,6 +28,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **DB 가 든 폴더를 옮기면 `.base` 보기가 빈 표가 되던 것 (ADR-041)** — 볼트에서 옮기면 발견한 DB 의 폴더만 고쳐 적어,
+  바뀌지 않은 DB 는 다시 받지 않으므로(ADR-027) `.base` 의 `file.inFolder("옛 폴더")` 와 인라인 DB 임베드의 옛 경로가 남았다.
+  동기화가 만든 `.base` 의 필터와 기록한 `.base` 경로를 새 자리로 고친다. 사용자가 만든 `.base` 는 둔다. Notion 에서 옮긴
+  폴더도 DB 가 들었으면 따라가지 않았는데, 이제 같은 식으로 옮긴다 — 설정 파일로 정한 DB(`notion.databases`) · 다른 연결이
+  든 폴더만 막는다.
 - **뺀 자리에 놓일 Notion 의 새 페이지를 받던 것** — 뺀 폴더 아래에 Notion 에서 만든 페이지 · 포함 패턴 밖의 페이지를
   받아, 사용자가 뺀 폴더에 파일이 생기고 그 노트는 목록에서 빠져 다시 올라가지 않았다. 받지 않고 경로를 알린다 — CLI
   `pull` · `status --full`(JSON `excluded`), 플러그인 알림의 「받지 않음 N」.
