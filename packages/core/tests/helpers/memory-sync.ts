@@ -63,6 +63,12 @@ export class MemoryVault {
     // Obsidian 의 노트 목록처럼 `.MD` 도 노트다(B15).
     const markdown = () => [...this.files.keys()].filter((path) => isMarkdownPath(path)).sort();
     fs.listMarkdownFileStats.mockImplementation(async () => markdown().map((p) => this.stat(p)!));
+    fs.listNonMarkdownFiles.mockImplementation(async () =>
+      [...this.files.keys()]
+        .filter((path) => !isMarkdownPath(path))
+        .sort()
+        .map((path) => this.stat(path)!),
+    );
     fs.listMarkdownFiles.mockImplementation(async () =>
       markdown().map((path) => ({
         path,
