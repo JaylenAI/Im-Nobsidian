@@ -63,6 +63,8 @@ export interface ImNobsidianSettings {
    */
   includePaths?: string[];
   excludePaths?: string[];
+  /** Notion 에서 바꾼 제목으로 노트 이름을 바꾸고 링크를 고친다(`sync.renameOnTitleChange`). 없으면 끈다. */
+  renameOnTitleChange?: boolean;
   databases?: DatabaseConfig[];
   /** 볼트 안 폴더마다의 다른 연결(ADR-038) — 볼트 맨 위 연결은 위의 토큰 · 루트 페이지다. */
   connections?: FolderConnectionSettings[];

@@ -320,7 +320,7 @@ export class SyncController {
           ...(rerender ? { rerender } : {}),
         }),
       (result) => ({
-        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved?.length ? ` / 이동 ${result.moved.length}` : ""}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
       }),
       (result) => this.dropPulled(result, paths),
@@ -740,4 +740,16 @@ function listsOf(status: StatusResult): SyncStatePatch {
     folderMoves: [...status.folderMoves],
     conflictRecords: status.conflictRecords,
   };
+}
+
+/** 받으며 옮긴 것 — Notion 에서 옮긴 페이지와 바꾼 제목으로 이름을 바꾼 노트를 따로 센다(ADR-040). */
+function movedText(result: PullResult): string {
+  const moves = result.moved ?? [];
+  const renamed = moves.filter((move) => move.renamed).length;
+  const moved = moves.length - renamed;
+  return (
+    (moved > 0 ? ` / 이동 ${moved}` : "") +
+    (renamed > 0 ? ` / 이름 변경 ${renamed}` : "") +
+    (result.relinked?.length ? ` / 링크 고침 ${result.relinked.length}` : "")
+  );
 }

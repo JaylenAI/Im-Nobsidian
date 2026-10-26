@@ -1124,6 +1124,24 @@ describe("ImNobsidianPlugin", () => {
       expect(workFs!.excludesPath("Archive/a.md")).toBe(false);
     });
 
+    it("Notion 에서 바꾼 제목으로 이름 바꾸기는 설정을 따른다 — 없으면 끈다", async () => {
+      const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      expect(
+        (orchestratorArgs[0]![0] as { sync: { renameOnTitleChange: boolean } }).sync
+          .renameOnTitleChange,
+      ).toBe(false);
+
+      plugin.settings.renameOnTitleChange = true;
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      expect(
+        (orchestratorArgs[0]![0] as { sync: { renameOnTitleChange: boolean } }).sync
+          .renameOnTitleChange,
+      ).toBe(true);
+    });
+
     it("패턴도 제외 파일도 없으면 감싸지 않는다", async () => {
       const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
       orchestratorArgs.splice(0);
