@@ -2,6 +2,7 @@ import { BASE_SUFFIX } from "../constants/paths.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { getLogger } from "../utils/logger.js";
 import { isMarkdownPath } from "../utils/markdown-path.js";
+import { IN_FOLDER_FILTER_RE, inFolderFilter } from "../view/base-file-generator.js";
 import { DB_BASE_FILES_META_KEY } from "./db-base-files.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import { isGeneratedDbArtifact } from "./stale-db-artifacts.js";
@@ -74,9 +75,9 @@ export async function retargetBaseFiles(
       if (!file.path.endsWith(BASE_SUFFIX)) continue;
       const content = await vaultFs.readFile(file.path);
       if (!isGeneratedDbArtifact(file.path, content)) continue;
-      const next = content.replace(IN_FOLDER, (whole, folder: string) => {
+      const next = content.replace(IN_FOLDER_FILTER_RE, (whole, folder: string) => {
         const to = finalPath(folder, folders);
-        return to === folder ? whole : `file.inFolder("${to}")`;
+        return to === folder ? whole : inFolderFilter(to);
       });
       if (next !== content) await vaultFs.writeFile(file.path, next);
     }
@@ -88,9 +89,6 @@ export async function retargetBaseFiles(
     );
   }
 }
-
-/** `.base` 의 폴더 필터 — `BaseFileGenerator` 가 적는 꼴 그대로(따옴표 안에 경로). 고친 것도 같은 꼴로 적는다. */
-const IN_FOLDER = /file\.inFolder\("([^"\n]*)"\)/g;
 
 /** 차례로 옮긴 뒤 `path` 가 놓이는 자리. */
 function finalPath(path: string, moves: readonly PathMove[]): string {
