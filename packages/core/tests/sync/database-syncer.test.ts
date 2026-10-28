@@ -182,6 +182,7 @@ describe("DatabaseSyncer", () => {
       expect(syncer.baseFileInfo.get("db123")).toEqual({
         basePath: "para/0-인박스/0. 인박스.base",
         title: "0. 인박스",
+        hash: expect.any(String),
       });
       expect(mockVaultFs.writeFile).toHaveBeenCalledWith(
         "para/0-인박스/0. 인박스.base",
@@ -1555,6 +1556,75 @@ describe("DatabaseSyncer", () => {
 
       const deleted = (mockVaultFs.deleteFile as any).mock.calls.map((c: any[]) => c[0]);
       expect(deleted).toEqual(["databases/tasks/Old.base", "databases/tasks/Old.notion.json"]);
+    });
+  });
+
+  describe("pull 이 쓴 .base 를 볼트에서 고쳤으면 덮어쓰거나 지우지 않는다", () => {
+    const BASE = "databases/tasks/Tasks.base";
+    let files: Map<string, string>;
+    const views = (...names: string[]) => ({
+      databaseId: "db-123",
+      databaseName: "Tasks",
+      lastSynced: "2026-10-28T00:00:00.000Z",
+      views: names.map((name, i) => ({ id: `v${i}`, name, type: "table" as const })),
+    });
+
+    beforeEach(() => {
+      files = new Map();
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+      (mockVaultFs.readFile as any).mockImplementation(async (p: string) => {
+        const content = files.get(p);
+        if (content === undefined) throw new Error(`ENOENT: ${p}`);
+        return content;
+      });
+      (mockVaultFs.writeFile as any).mockImplementation(async (p: string, c: string) => {
+        files.set(p, c);
+      });
+      (mockVaultFs.deleteFile as any).mockImplementation(async (p: string) => {
+        files.delete(p);
+      });
+      (mockVaultFs.listNonMarkdownFiles as any).mockImplementation(async () =>
+        [...files.keys()].map((path) => ({ path })),
+      );
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("Table"));
+    });
+
+    it("고친 .base 는 Notion 보기가 바뀌어도 그대로 두고, 지우면 다시 받는다", async () => {
+      await syncer.pullAll();
+      const generated = files.get(BASE)!;
+      const edited = `${generated}\n# 볼트에서 더한 줄\n`;
+      files.set(BASE, edited);
+
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("Table", "Board"));
+      await syncer.pullAll();
+      expect(files.get(BASE)).toBe(edited);
+
+      files.delete(BASE);
+      await syncer.pullAll();
+      expect(files.get(BASE)).toContain("Board");
+    });
+
+    it("고치지 않은 .base 는 Notion 보기를 따라간다", async () => {
+      await syncer.pullAll();
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("Table", "Board"));
+      await syncer.pullAll();
+      expect(files.get(BASE)).toContain("Board");
+    });
+
+    it("DB 제목이 바뀌어 옛 이름이 된 .base 도 고쳤으면 지우지 않는다", async () => {
+      await syncer.pullAll();
+      const edited = `${files.get(BASE)!}\n# 볼트에서 더한 줄\n`;
+      files.set(BASE, edited);
+
+      mockNotionClient.getDatabaseTitle.mockResolvedValue("Tasks 2026");
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue({
+        ...views("Table"),
+        databaseName: "Tasks 2026",
+      });
+      await syncer.pullAll();
+
+      expect(files.get(BASE)).toBe(edited);
+      expect(files.has("databases/tasks/Tasks 2026.base")).toBe(true);
     });
   });
 

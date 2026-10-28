@@ -20,6 +20,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   없어 정보 로그만 남겼고, 사본에는 볼트의 값이 남아 다음 pull 도 «우리가 쓴 그대로» 로 보고 받지 않았다. Notion 이 그
   행을 바꿀 때까지 볼트와 Notion 이 달랐다. 이제 push 가 경고하고(CLI 요약 · `--json` 의 `readOnlySkipped` · 플러그인
   알림), 다음 pull 이 Notion 값으로 되돌린다.
+- **pull 이 만든 `.base` 를 볼트에서 고치면 다음 pull 이 덮어쓰던 것** — 생성 머리만 보고 «pull 이 쓴 것» 으로 판정해, 보기 ·
+  열을 고친 것이 사라졌다. DB 제목이 바뀌면 옛 이름의 고친 `.base` 를 고아로 지우기도 했다. 이제 pull 은 마지막으로 쓴 내용의
+  해시를 기억해 그와 다르면 덮어쓰지도 지우지도 않고 경고한다. Notion 의 보기를 다시 받으려면 그 파일을 지우면 된다.
 
 ## [0.11.0] - 2026-10-26
 

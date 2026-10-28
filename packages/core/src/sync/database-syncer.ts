@@ -50,7 +50,7 @@ import { BaseFileGenerator } from "../view/base-file-generator.js";
 import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-generator.js";
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
-import { DbBaseFiles } from "./db-base-files.js";
+import { DbBaseFiles, type DbBaseFile } from "./db-base-files.js";
 import { NoteRelocator, within } from "./note-relocation.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
@@ -145,7 +145,7 @@ export class DatabaseSyncer {
    */
   private readonly appearances = new WeakMap<DatabaseMeta, Promise<SidecarAppearance>>();
   private readonly baseFileGenerator = new BaseFileGenerator();
-  /** 사용자가 만든 `.base` 라 덮어쓰지 않았다고 이미 알린 경로 — 한 pull 이 같은 DB 를 여러 번 다시 쓴다. */
+  /** 사용자가 만들거나 고친 `.base` 라 덮어쓰지 않았다고 이미 알린 경로 — 한 pull 이 같은 DB 를 여러 번 다시 쓴다. */
   private readonly keptUserBases = new Set<string>();
   private readonly sidecarGenerator = new SidecarGenerator();
   /** Notion 에서 바꾼 제목으로 이름을 바꾼 행과 실제로 옮긴 차례 — pull 마감이 가져가 다른 노트의 링크를 고친다. */
@@ -832,7 +832,10 @@ export class DatabaseSyncer {
 
       const safeName = sanitizeFileName(dbName);
       const basePath = `${dbConfig.localFolder}/${safeName}${BASE_SUFFIX}`;
-      if (await this.isUserFile(basePath)) {
+      const previous = this.baseFileInfo.get(dbConfig.databaseId);
+      const existing = await this.vaultFs.readFile(basePath).catch(() => null);
+      let hash = computeHash(baseContent);
+      if (existing !== null && !isGeneratedDbArtifact(basePath, existing)) {
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
           // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
@@ -840,10 +843,18 @@ export class DatabaseSyncer {
             `[DB Sync] 직접 만든 .base 라 Notion 보기로 덮어쓰지 않음: ${basePath} — Notion 보기를 받으려면 이 파일의 이름을 바꾸세요`,
           );
         }
-      } else {
+      } else if (
+        existing !== null &&
+        existing !== baseContent &&
+        editedSince(previous, basePath, existing)
+      ) {
+        // pull 이 쓴 뒤 볼트에서 고친 보기 — 덮어쓰면 고친 것이 사라진다. 기록한 해시는 그대로 둔다(계속 «고친 것»).
+        hash = previous!.hash!;
+        this.warnEditedBase(basePath);
+      } else if (existing !== baseContent) {
         await this.vaultFs.writeFile(basePath, baseContent);
       }
-      this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName });
+      this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName, hash });
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
       await this.generateSidecar(
@@ -855,7 +866,7 @@ export class DatabaseSyncer {
         meta.isInline,
         await this.appearanceOf(meta, safeName),
       );
-      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName);
+      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName, previous);
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
@@ -890,10 +901,13 @@ export class DatabaseSyncer {
     };
   }
 
-  /** pull 이 쓰지 않은 `.base` · 사이드카가 이미 있는가 — 없거나 읽지 못하면 false. */
-  private async isUserFile(path: string): Promise<boolean> {
-    const content = await this.vaultFs.readFile(path).catch(() => null);
-    return content !== null && !isGeneratedDbArtifact(path, content);
+  /** 볼트에서 고친 `.base` 를 덮어쓰거나 지우지 않았다고 한 번 알린다. */
+  private warnEditedBase(path: string): void {
+    if (this.keptUserBases.has(path)) return;
+    this.keptUserBases.add(path);
+    getLogger().warn(
+      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
+    );
   }
 
   /**
@@ -901,7 +915,12 @@ export class DatabaseSyncer {
    * 같은 폴더에 고아로 잔존한다(drift·부활 원인). DB 폴더 **직속**의 산출물 중 현재 이름이
    * 아닌 것을 삭제해 멱등을 보장한다. 하위 폴더(중첩 DB)의 산출물은 보호한다.
    */
-  private async cleanupStaleDbArtifacts(localFolder: string, safeName: string): Promise<void> {
+  private async cleanupStaleDbArtifacts(
+    localFolder: string,
+    safeName: string,
+    /** 이 DB 의 `.base` 를 지난번에 쓴 기록 — 제목이 바뀌어 옛 이름이 된 것을 볼트에서 고쳤으면 지우지 않는다. */
+    previous?: DbBaseFile,
+  ): Promise<void> {
     try {
       const keep = new Set([
         `${localFolder}/${safeName}${BASE_SUFFIX}`,
@@ -910,7 +929,12 @@ export class DatabaseSyncer {
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
       for (const path of stale) {
-        if (await this.isUserFile(path)) continue;
+        const content = await this.vaultFs.readFile(path).catch(() => null);
+        if (content === null || !isGeneratedDbArtifact(path, content)) continue;
+        if (editedSince(previous, path, content)) {
+          this.warnEditedBase(path);
+          continue;
+        }
         await this.vaultFs.deleteFile(path);
         getLogger().info(`[DB Sync] 고아 DB 산출물 삭제(rename): ${path}`);
       }
@@ -1383,4 +1407,16 @@ export class DatabaseSyncer {
 /** 원격 행의 속성(`page.properties`). */
 function rowProperties(page: PageObjectResponse): Record<string, unknown> {
   return (page as unknown as { properties?: Record<string, unknown> }).properties ?? {};
+}
+
+/**
+ * pull 이 그 경로에 쓴 뒤 볼트에서 고쳤는가 — 지난번에 쓴 내용의 해시와 견준다. 기록이 없거나 다른 경로의 기록이면
+ * 가를 수 없어 false 다(예전 버전이 쓴 것).
+ */
+function editedSince(previous: DbBaseFile | undefined, path: string, content: string): boolean {
+  return (
+    previous?.basePath === path &&
+    previous.hash !== undefined &&
+    computeHash(content) !== previous.hash
+  );
 }
