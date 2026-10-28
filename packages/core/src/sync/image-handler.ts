@@ -8,7 +8,7 @@ import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
-import { getBlockType, getMimeType, isNotionUploadable } from "../utils/mime.js";
+import { getBlockType, getMimeType, isHtmlBlockFile, isNotionUploadable } from "../utils/mime.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
 import {
   fileUrlOfBlock,
@@ -169,17 +169,30 @@ export function toWikilinkAlias(label: string): string {
 }
 
 const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;
-const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊)\s*/u;
+const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊|🌐)\s*/u;
 
-/** 미디어 태그 `<file|pdf|video|audio src="…">캡션</…>` — markdown API 가 파일 블록을 이렇게 준다. */
-const MEDIA_TAG_RE =
-  /<(?:file|video|audio|pdf)\s+src="([^"]+)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
+/**
+ * 파일을 싣는 미디어 태그의 이름 — markdown API 가 파일 블록을 `<file|pdf|video|audio src="…">캡션</…>` 로 준다.
+ * HTML 블록(파일을 붙인 embed)은 `<embed src="…">캡션</embed>` 로 온다 — 주소가 Notion 이 호스팅한 파일일 때만
+ * 미디어로 본다(바깥 주소의 embed 는 링크다).
+ */
+const MEDIA_TAG_NAMES = "file|video|audio|pdf|embed";
+
+/** 미디어 태그 `<이름 src="주소">캡션</이름>`. 주소 모양은 `src` 로 고른다. */
+function mediaTagRe(src: string): RegExp {
+  return new RegExp(
+    `<(?:${MEDIA_TAG_NAMES})\\s+src="(${src})">([\\s\\S]*?)<\\/(?:${MEDIA_TAG_NAMES})>`,
+    "g",
+  );
+}
+
+const MEDIA_TAG_RE = mediaTagRe('[^"]+');
 
 /** 미디어 태그의 이름 — 그대로 둘 미디어를 같은 종류의 태그로 다시 싣는다. */
-const MEDIA_TAG_NAME_RE = /^<(file|video|audio|pdf)\s/;
+const MEDIA_TAG_NAME_RE = new RegExp(`^<(${MEDIA_TAG_NAMES})\\s`);
 
 /** 캡션 없는 미디어에 pull 변환이 붙이는 자리 이름(`[📎 file](…)`) — 사람이 적은 캡션이 아니다. */
-const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio"]);
+const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio", "html"]);
 
 /** Notion 이 붙여 넣은 이미지에 주는 자리 이름 — 이것으로 지으면 받은 이미지가 모두 `image-<해시>` 가 된다. */
 const PLACEHOLDER_IMAGE_STEMS = new Set(["image", "untitled"]);
@@ -503,6 +516,7 @@ function mediaBlock(
   const description = captionOfEmbed(target);
   const caption = description ? [{ type: "text", text: { content: description } }] : [];
   const file = { type: "file_upload", file_upload: { id: fileUploadId }, caption };
+  if (kind !== "image" && isHtmlBlockFile(vaultTarget)) return { type: "embed", embed: file };
   const type = kind === "image" ? "image" : getBlockType(baseName(vaultTarget));
   return type === "file"
     ? { type, file: { ...file, name: baseName(vaultTarget) } }
@@ -1329,14 +1343,10 @@ export class ImageHandler {
     );
     const mdInternalMatches = fileLinks.filter((s) => INTERNAL_FILE_URL_RE.test(s.url));
 
-    const xmlHttpRegex =
-      /<(?:file|video|audio|pdf)\s+src="(https?:\/\/[^"]+)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
-    const xmlHttpMatches = [...markdown.matchAll(xmlHttpRegex)];
+    const xmlHttpMatches = [...markdown.matchAll(mediaTagRe('https?:\\/\\/[^"]+'))];
     const notionXmlHttpMatches = xmlHttpMatches.filter((m) => m[1] && this.isNotionFileUrl(m[1]));
 
-    const xmlInternalRegex =
-      /<(?:file|video|audio|pdf)\s+src="(file:\/\/%7B.*?%7D%7D)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
-    const xmlInternalMatches = [...markdown.matchAll(xmlInternalRegex)];
+    const xmlInternalMatches = [...markdown.matchAll(mediaTagRe("file:\\/\\/%7B.*?%7D%7D"))];
 
     const totalMatches =
       notionHttpMatches.length +
