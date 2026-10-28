@@ -19,10 +19,15 @@ export function notionFileLocation(pageId: string, blockId?: string | null): str
   return blockId ? `${page}#${compactNotionId(blockId)}` : page;
 }
 
-/** 덧붙일 링크 — 크기를 MB 로 적는다. */
+/** 사람이 읽는 크기 — 1MB 아래는 KB 로. 상한은 낮출 수 있어(최소 1KB) MB 로만 적으면 5KB 가 「1MB」 였다. */
+export function fileSizeLabel(bytes: number): string {
+  const mb = bytes / 1024 / 1024;
+  return mb >= 1 ? `${Math.round(mb)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
+
+/** 덧붙일 링크. */
 export function largeFileLink(location: string, bytes: number): string {
-  const mb = Math.max(1, Math.round(bytes / 1024 / 1024));
-  return ` ${degradeLink(`↗ Notion 에서 열기 · ${mb}MB`, location, LARGE_FILE_MARKER)}`;
+  return ` ${degradeLink(`↗ Notion 에서 열기 · ${fileSizeLabel(bytes)}`, location, LARGE_FILE_MARKER)}`;
 }
 
 /**

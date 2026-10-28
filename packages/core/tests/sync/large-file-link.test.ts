@@ -9,7 +9,11 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { ImageHandler } from "../../src/sync/image-handler.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { obsidianToNotionEnhanced } from "../../src/converter/enhanced-md-converter.js";
-import { stripLargeFileLinks, withLargeFileLink } from "../../src/converter/large-file-link.js";
+import {
+  fileSizeLabel,
+  stripLargeFileLinks,
+  withLargeFileLink,
+} from "../../src/converter/large-file-link.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import type { NotionClient } from "../../src/notion/client.js";
 
@@ -107,5 +111,23 @@ describe("받지 않은 큰 파일의 «Notion 에서 열기» 링크", () => {
     const mine = `[내 링크](https://www.notion.so/${PAGE_ID.replace(/-/g, "")})`;
     expect(stripLargeFileLinks(`${mine} ${OPEN_PAGE}`)).toBe(mine);
     expect(withLargeFileLink("없음", "[📎 x](u)", ` ${OPEN_PAGE}`)).toBe("없음");
+  });
+
+  it("받은 뒤 변환(후처리)을 지나도 링크 그대로다 — 페이지 주소가 위키링크로 바뀌지 않는다", () => {
+    // 2026-10-28 실측: 블록을 모르는 서명 URL 의 링크는 페이지 주소만 갖는다. 후처리의 Notion 링크 복원이 그것을
+    // `[[↗ Notion 에서 열기 · 5KB]]` 로 바꿔 없는 노트를 가리켰고, push 가 그것을 새 문단으로 올렸다.
+    const note = `앞\n\n[📎 big.zip](${SIGNED}) ${OPEN_PAGE}\n\n뒤`;
+    const pulled = createDefaultPipeline().convertToMarkdown(
+      note,
+      { direction: "pull", path: "markdown-api", filePath: "a.md" },
+      { properties: {} },
+    );
+    expect(pulled).toBe(note);
+  });
+
+  it("크기는 1MB 아래면 KB 로 적는다 — 상한을 낮춘 볼트", () => {
+    expect(fileSizeLabel(5000)).toBe("5KB");
+    expect(fileSizeLabel(100)).toBe("1KB");
+    expect(fileSizeLabel(BIG)).toBe("150MB");
   });
 });
