@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Notion HTML 블록 ↔ 볼트 `.html` 첨부** — Notion 이 호스팅한 `.html` 은 읽으면 서명 URL 의 embed 라, 예전 pull 은
+  한 시간 뒤 끊기는 링크만 남기고 내용을 받지 않았다. 이제 pull 은 그 파일을 `.html` 첨부로 받아 `![[…html]]` 로 두고, push 는
+  볼트의 `.html` 첨부를 HTML 블록으로 올린다. 고쳐 다시 올려도 같은 블록이다(ADR-043).
+
+### Changed
+
+- `@notionhq/client` 5.23 → 5.28. 휴지통 판정은 `in_trash` 기준 한 곳(`isTrashedOrArchived`)으로 모았다 — `archived` 는 다음
+  API 버전에서 빠진다.
+- 워크스페이스 공용 rate limit(429)은 `Retry-After` 를 5분까지 기다린다. 블록 한도 초과(403)는 그 사유를 그대로 알린다(ADR-042).
+
 ### Fixed
 
 - **긴 한글 제목의 페이지 · 첨부 · DB 폴더를 만들지 못하던 것** — 파일 이름을 UTF-16 200자에서 잘라 한글이면 600 바이트까지
