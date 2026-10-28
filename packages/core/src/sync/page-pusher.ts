@@ -55,6 +55,7 @@ import {
 import { replacePageBody } from "./page-body.js";
 import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
 import { remotePresence } from "./remote-deletion.js";
+import { addPendingDatabases } from "./remote-scan.js";
 import {
   refuseUnpulledBody,
   refuseUnpulledDeletion,
@@ -140,6 +141,7 @@ export class PagePusher {
    * (ADR-017). relation 을 보내면 가리킨 행의 반대쪽 relation 이, 행을 만들면 그 행의 수식 · ID 가 바뀐다.
    */
   private markRemoteUnverified(pageIds: readonly string[]): void {
+    const databases: string[] = [];
     for (const pageId of new Set(pageIds)) {
       const target = this.stateDb.getByNotionId(pageId);
       if (!target?.notionLastEdited) continue;
@@ -148,7 +150,13 @@ export class PagePusher {
         lastEditedBy: null,
         seenAt: null,
       });
+      if (target.fileType === "db-row" && target.notionParentId) {
+        databases.push(target.notionParentId);
+      }
     }
+    // 바뀐 것만 찾는 pull 은 원격이 그대로인 DB 를 조회하지 않는다. 읽기 전용 속성만 고쳐 보낸 것이 없으면 행도 DB 도
+    // 그대로라, 대기에 올리지 않으면 이 표시를 다음 전체 대조까지 읽지 못한다(실측 2026-10-28).
+    addPendingDatabases(this.stateDb, databases);
   }
 
   /** 이번 실행에서 볼트의 값을 올리지 않은 읽기 전용 속성 — 노트 경로별. */

@@ -57,6 +57,7 @@ describe("읽기 전용 속성 편집 경고", () => {
   });
 
   afterEach(async () => {
+    vi.useRealTimers();
     setLogger(previous);
     db.close();
     await rm(tempDir, { recursive: true, force: true });
@@ -98,6 +99,32 @@ describe("읽기 전용 속성 편집 경고", () => {
     const quiet = await orchestrator.push();
     expect(quiet).toMatchObject({ updated: 0 });
     expect(quiet.readOnlySkipped ?? []).toEqual([]);
+    expect(await orchestrator.pull()).toMatchObject({ updated: 0 });
+  });
+
+  it("수식만 고친 행도 다음 pull 이 되돌린다 — Notion 이 그대로라 바뀐 것만 찾는 pull 이어도", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-28T10:00:00.000Z"));
+    const orchestrator = build();
+    const path = await pulledRow(orchestrator);
+    // 행이 바뀐 것만 찾는 pull 의 조회 창 밖으로 — 실측의 행은 오래전에 만들었다. 전체 대조는 아직 때가 아니다.
+    vi.setSystemTime(new Date("2026-10-28T10:50:00.000Z"));
+    // 실제 클라이언트처럼 `since` 뒤에 고친 것만 준다. 메모리 하네스는 다 주는데, 그러면 이 행의 DB 를 «바뀌었다» 로
+    // 보고 조회해 결함을 가린다(하네스의 수정 시각은 기기 시계와 따로 가 하네스를 고치면 다른 시험이 깨진다).
+    const search = notion.client.searchRecentPages.getMockImplementation()!;
+    notion.client.searchRecentPages.mockImplementation(async (since: string) =>
+      (await search(since)).filter((page) => Date.parse(page.last_edited_time) > Date.parse(since)),
+    );
+    vault.write(path, vault.read(path)!.replace("Score: 1", "Score: 99"));
+
+    const result = await orchestrator.push();
+    expect(result.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+
+    // 보낸 것이 없어 Notion 의 행도 DB 도 그대로다. 예전에는 바뀐 것만 찾는 pull 이 그 DB 를 «그대로» 로 건너뛰어,
+    // 알림과 달리 볼트에 고친 값이 남았다(실측 2026-10-28) — 강제 전체 대조만 되돌렸다.
+    const pulled = await orchestrator.pull();
+    expect(pulled).toMatchObject({ updated: 1, failed: [], remoteScan: { kind: "incremental" } });
+    expect(parseFrontmatter(vault.read(path)!).data).toMatchObject({ Score: 1 });
     expect(await orchestrator.pull()).toMatchObject({ updated: 0 });
   });
 
