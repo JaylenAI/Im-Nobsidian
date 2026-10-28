@@ -147,18 +147,14 @@ export function failedItem(path: string, error: string, direction?: string): voi
   console.log(`  ${icons.fail} ${where}: ${chalk.red(error)}`);
 }
 
-/**
- * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. 실패는 아니라 종료 코드는
- * 그대로지만, 고친 값이 사라지기 전에 알아야 한다. 없으면 빈 목록.
- */
-/** 경고가 늘어놓는 경로 수 — 넘으면 「외 N개」 로 줄인다. */
-export const LISTED_PATHS = 10;
+/** 화면에 늘어놓는 항목(경로 · id) 수 — 넘으면 나머지는 수로 줄인다. */
+export const LISTED_ITEMS = 10;
 
-/** 경로 목록 — {@link LISTED_PATHS} 개까지, 나머지는 수로. */
+/** 경로 목록 — {@link LISTED_ITEMS} 개까지, 나머지는 수로. */
 function pathLines(paths: readonly string[]): string[] {
-  const shown = paths.slice(0, LISTED_PATHS).map((path) => `  ${path}`);
-  return paths.length > LISTED_PATHS
-    ? [...shown, dimText(`  … 외 ${paths.length - LISTED_PATHS}개`)]
+  const shown = paths.slice(0, LISTED_ITEMS).map((path) => `  ${path}`);
+  return paths.length > LISTED_ITEMS
+    ? [...shown, dimText(`  … 외 ${paths.length - LISTED_ITEMS}개`)]
     : shown;
 }
 
@@ -192,6 +188,10 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
   ];
 }
 
+/**
+ * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. 실패는 아니라 종료 코드는
+ * 그대로지만, 고친 값이 사라지기 전에 알아야 한다. 없으면 빈 목록.
+ */
 export function readOnlySkipLines(
   skips: readonly ReadOnlySkip[] | undefined,
   dryRun = false,
