@@ -1,5 +1,5 @@
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
-import { sanitizeFileName } from "../utils/sanitize.js";
+import { legacySanitizeFileName, sanitizeFileName } from "../utils/sanitize.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { noteNameFromPath } from "../utils/markdown-path.js";
 
@@ -32,11 +32,16 @@ export function noteTitle(frontmatter: Frontmatter, path: string): string {
   return explicitTitle(frontmatter) ?? wikilinkTitleFromPath(path);
 }
 
-/** pull 이 이 제목으로 붙였을 파일 이름인가 — 자연 이름, 또는 동명 충돌을 가른 페이지 id 접미사. */
+/**
+ * pull 이 이 제목으로 붙였을 파일 이름인가 — 자연 이름, 또는 동명 충돌을 가른 페이지 id 접미사. 0.12 전의 규칙으로
+ * 붙인 이름도 그렇다고 본다 — 규칙이 바뀌었다고 받은 노트를 제목이 바뀐 것으로 보지 않게.
+ */
 function isFileNameOf(title: string, fileName: string): boolean {
-  const safe = sanitizeFileName(title);
-  if (fileName === safe) return true;
-  return fileName.startsWith(safe) && /^ \([0-9a-f]{8,32}\)$/i.test(fileName.slice(safe.length));
+  return [sanitizeFileName(title), legacySanitizeFileName(title)].some(
+    (safe) =>
+      fileName === safe ||
+      (fileName.startsWith(safe) && /^ \([0-9a-f]{8,32}\)$/i.test(fileName.slice(safe.length))),
+  );
 }
 
 /** 이 제목이 이 경로의 파일 이름을 따르는가 — pull 이 이 제목으로 그 파일 이름을 붙였을 경우. */

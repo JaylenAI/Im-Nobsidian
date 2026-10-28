@@ -10,6 +10,7 @@ import { decodeMarkerTarget } from "../converter/marker-url.js";
 import { getLogger } from "../utils/logger.js";
 import { getBlockType, getMimeType, isHtmlBlockFile, isNotionUploadable } from "../utils/mime.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
+import { FILE_SYSTEM_NAME_MAX_BYTES, truncateBytes, utf8Bytes } from "../utils/sanitize.js";
 import {
   fileUrlOfBlock,
   isNotionHostedFileUrl,
@@ -1541,10 +1542,14 @@ export class ImageHandler {
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const name = withoutOwnHash(caption, hash);
-        const safeName = name
-          .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
-          .replace(/\s+/g, "-")
-          .slice(0, 80);
+        // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
+        const safeName = truncateBytes(
+          name
+            .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
+            .replace(/\s+/g, "-")
+            .slice(0, 80),
+          FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
+        );
         const fileName = `${safeName}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 

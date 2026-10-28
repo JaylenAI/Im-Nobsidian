@@ -87,6 +87,17 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     expect(content).toBe(`앞\n\n![[attachments/차트.html-${SHA12}.html|차트.html]]\n\n뒤`);
   });
 
+  it("긴 한글 이름도 파일 시스템 상한(255 바이트) 안으로 자른다 — 넘으면 받지 못했다", async () => {
+    const caption = "가".repeat(90);
+    const content = await pull(`[📎 ${caption}](${signedUrl("a.pdf")})`);
+
+    const saved = (fs.writeBinary as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    const name = saved.slice("attachments/".length);
+    expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(255);
+    expect(name).toMatch(new RegExp(`^가+-${SHA12}\\.pdf$`));
+    expect(content).toBe(`![[${saved}|${caption}]]`);
+  });
+
   it("바깥 주소의 embed 는 받지 않는다 — 링크다", async () => {
     const markdown = `<embed src="https://www.youtube.com/watch?v=x"></embed>`;
 

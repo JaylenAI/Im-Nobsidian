@@ -121,4 +121,11 @@ describe("followsFileName — pull 이 이 제목으로 그 파일 이름을 붙
     // 접미사가 id 모양이 아니면 사람이 붙인 이름이다.
     expect(followsFileName("회의록", "notes/회의록 (초안).md")).toBe(false);
   });
+
+  it("0.12 전의 규칙으로 받은 이름도 따르는 것이다 — 규칙이 바뀌어도 제목 변경으로 보지 않는다", () => {
+    expect(followsFileName("C# 정리", "notes/C# 정리.md")).toBe(true);
+    expect(followsFileName("C# 정리", "notes/C_ 정리.md")).toBe(true);
+    expect(followsFileName("가".repeat(100), `notes/${"가".repeat(100)}.md`)).toBe(true);
+    expect(followsFileName("가".repeat(100), `notes/${"가".repeat(66)}.md`)).toBe(true);
+  });
 });
