@@ -16,6 +16,7 @@ import {
   localDateTime,
   lastFullScanText,
   remoteDeletionHint,
+  LISTED_ITEMS,
 } from "../utils/format.js";
 import { nestedConnections, openVaultFs } from "../utils/vault.js";
 
@@ -110,13 +111,13 @@ export const statusCommand = new Command("status")
       // Modified files
       if (modifiedChanges.length > 0) {
         console.log(`\n  ${header("Modified files:")}`);
-        for (const c of modifiedChanges.slice(0, 10)) {
+        for (const c of modifiedChanges.slice(0, LISTED_ITEMS)) {
           console.log(
             `    ${chalk.yellow("~")} ${c.path.padEnd(30)} ${dimText("(local changed)")}`,
           );
         }
-        if (modifiedChanges.length > 10) {
-          console.log(dimText(`    ... and ${modifiedChanges.length - 10} more`));
+        if (modifiedChanges.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${modifiedChanges.length - LISTED_ITEMS} more`));
         }
       }
 
@@ -126,11 +127,11 @@ export const statusCommand = new Command("status")
         for (const move of folderMoves) {
           console.log(`    ${icons.move} ${move.from}/ → ${move.to}/ ${dimText("(folder)")}`);
         }
-        for (const c of movedChanges.slice(0, 10)) {
+        for (const c of movedChanges.slice(0, LISTED_ITEMS)) {
           console.log(`    ${icons.move} ${c.movedFrom ?? "?"} → ${c.path}`);
         }
-        if (movedChanges.length > 10) {
-          console.log(dimText(`    ... and ${movedChanges.length - 10} more`));
+        if (movedChanges.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${movedChanges.length - LISTED_ITEMS} more`));
         }
       }
 
@@ -143,22 +144,22 @@ export const statusCommand = new Command("status")
             `    ${chalk.yellow("sync.deleteSync 꺼짐 — Notion 에서 지우지 않고 다음 pull 이 되살립니다")}`,
           );
         }
-        for (const c of deletedChanges.slice(0, 10)) {
+        for (const c of deletedChanges.slice(0, LISTED_ITEMS)) {
           console.log(`    ${chalk.red("-")} ${c.path}`);
         }
-        if (deletedChanges.length > 10) {
-          console.log(dimText(`    ... and ${deletedChanges.length - 10} more`));
+        if (deletedChanges.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${deletedChanges.length - LISTED_ITEMS} more`));
         }
       }
 
       // New files
       if (createdChanges.length > 0) {
         console.log(`\n  ${header("New files:")}`);
-        for (const c of createdChanges.slice(0, 10)) {
+        for (const c of createdChanges.slice(0, LISTED_ITEMS)) {
           console.log(`    ${chalk.cyan("+")} ${c.path.padEnd(30)} ${dimText("(untracked)")}`);
         }
-        if (createdChanges.length > 10) {
-          console.log(dimText(`    ... and ${createdChanges.length - 10} more`));
+        if (createdChanges.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${createdChanges.length - LISTED_ITEMS} more`));
         }
       }
 
@@ -179,7 +180,7 @@ export const statusCommand = new Command("status")
         if (remoteDeleted.length > 0) {
           console.log(`    ${chalk.red("-")} ${chalk.red("deleted")}    ${remoteDeleted.length}`);
         }
-        for (const c of status.remoteChanges.slice(0, 10)) {
+        for (const c of status.remoteChanges.slice(0, LISTED_ITEMS)) {
           const icon =
             c.type === "created"
               ? chalk.cyan("+")
@@ -194,8 +195,8 @@ export const statusCommand = new Command("status")
             `    ${icon} ${name ?? `${c.pageId.slice(0, 8)}...`} ${dimText(`(${c.type})`)}`,
           );
         }
-        if (status.remoteChanges.length > 10) {
-          console.log(dimText(`    ... and ${status.remoteChanges.length - 10} more`));
+        if (status.remoteChanges.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${status.remoteChanges.length - LISTED_ITEMS} more`));
         }
       }
 
@@ -204,13 +205,13 @@ export const statusCommand = new Command("status")
       const remoteMoveSkipped = status.remoteMoveSkipped ?? [];
       if (remoteMoves.length + remoteMoveSkipped.length > 0) {
         console.log(`\n  ${header("Moved in Notion (next pull):")}`);
-        for (const move of remoteMoves.slice(0, 10)) {
+        for (const move of remoteMoves.slice(0, LISTED_ITEMS)) {
           console.log(
             `    ${icons.move} ${move.from} → ${move.to} ${dimText(move.renamed ? "(will rename)" : "(will move)")}`,
           );
         }
-        if (remoteMoves.length > 10) {
-          console.log(dimText(`    ... and ${remoteMoves.length - 10} more`));
+        if (remoteMoves.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${remoteMoves.length - LISTED_ITEMS} more`));
         }
         for (const skip of remoteMoveSkipped) {
           console.log(
@@ -225,11 +226,11 @@ export const statusCommand = new Command("status")
         console.log(
           `\n  ${header(`New in Notion, not pulled (excluded by paths / ${IGNORE_FILE}): ${remoteExcluded.length}`)}`,
         );
-        for (const path of remoteExcluded.slice(0, 10)) {
+        for (const path of remoteExcluded.slice(0, LISTED_ITEMS)) {
           console.log(`    ${dimText("·")} ${path}`);
         }
-        if (remoteExcluded.length > 10) {
-          console.log(dimText(`    ... and ${remoteExcluded.length - 10} more`));
+        if (remoteExcluded.length > LISTED_ITEMS) {
+          console.log(dimText(`    ... and ${remoteExcluded.length - LISTED_ITEMS} more`));
         }
       }
 

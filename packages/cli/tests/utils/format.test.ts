@@ -25,7 +25,7 @@ vi.mock("chalk", () => {
 import {
   lastFullScanText,
   localDateTime,
-  LISTED_PATHS,
+  LISTED_ITEMS,
   readOnlySkipLines,
   remoteDeletionHint,
   restoredLines,
@@ -156,9 +156,9 @@ describe("거절한 로컬 삭제 (D8)", () => {
   });
 
   it("경로가 많으면 앞의 몇 개만 늘어놓고 나머지는 수로 — 없으면 아무 줄도 없다", () => {
-    const paths = Array.from({ length: LISTED_PATHS + 3 }, (_, i) => `노트 ${i}.md`);
+    const paths = Array.from({ length: LISTED_ITEMS + 3 }, (_, i) => `노트 ${i}.md`);
     const lines = restoredLines(paths);
-    expect(lines).toHaveLength(1 + LISTED_PATHS + 1);
+    expect(lines).toHaveLength(1 + LISTED_ITEMS + 1);
     expect(lines[lines.length - 1]).toBe("  … 외 3개");
     expect(restoredLines(undefined)).toEqual([]);
     expect(unsentDeletionLines([])).toEqual([]);

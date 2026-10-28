@@ -21,6 +21,7 @@ import {
   failedCountText,
   remoteScanLines,
   restoredLines,
+  LISTED_ITEMS,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 import { openVaultFs, vaultArgPath } from "../utils/vault.js";
@@ -121,8 +122,10 @@ export const pullCommand = new Command("pull")
         console.log(
           `  ${icons.conflict} ${dimText(`${excluded.length} new in Notion ${options.dryRun ? "would not be" : "not"} pulled — excluded by paths / ${IGNORE_FILE}:`)}`,
         );
-        for (const path of excluded.slice(0, 10)) console.log(`    ${dimText(`· ${path}`)}`);
-        if (excluded.length > 10) console.log(dimText(`    ... and ${excluded.length - 10} more`));
+        for (const path of excluded.slice(0, LISTED_ITEMS))
+          console.log(`    ${dimText(`· ${path}`)}`);
+        if (excluded.length > LISTED_ITEMS)
+          console.log(dimText(`    ... and ${excluded.length - LISTED_ITEMS} more`));
       }
       if ((result.relinked?.length ?? 0) > 0) {
         console.log(
