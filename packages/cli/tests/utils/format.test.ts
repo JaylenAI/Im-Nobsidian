@@ -125,6 +125,12 @@ describe("readOnlySkipLines", () => {
     ]);
   });
 
+  it("dry-run 은 올리지 않을 것으로 말한다", () => {
+    expect(readOnlySkipLines([{ path: "db/가.md", properties: ["합계"] }], true)[0]).toContain(
+      "읽기 전용 속성 1개는 올리지 않습니다",
+    );
+  });
+
   it("없으면 아무 줄도 없다", () => {
     expect(readOnlySkipLines(undefined)).toEqual([]);
     expect(readOnlySkipLines([])).toEqual([]);
