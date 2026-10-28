@@ -449,7 +449,8 @@ export class PagePusher {
     // 페이지는 속성이 제목뿐이다 — 나머지 frontmatter 는 본문 첫머리 YAML 블록으로 간다
     // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
     const newTitle = this.changedPageTitle(record, content, path);
-    const propsToUpdate = newTitle === null ? undefined : titleProperty(newTitle);
+    const propsToUpdate =
+      newTitle === null ? undefined : titleProperty(newTitle, pagePropertiesOf(remote));
     const decorated = await this.decorations.push(
       record.notionPageId,
       path,
@@ -1101,7 +1102,10 @@ export class PagePusher {
       const title = change.title ? change.title(this.notionClient.extractTitle(remote)) : null;
       if (newParent !== null) await this.notionClient.movePage(pageId, newParent);
       if (title !== null) {
-        written = await this.notionClient.updatePageProperties(pageId, titleProperty(title));
+        written = await this.notionClient.updatePageProperties(
+          pageId,
+          titleProperty(title, pagePropertiesOf(remote)),
+        );
       } else if (newParent !== null) {
         written = await this.notionClient.getPage(pageId);
       }
