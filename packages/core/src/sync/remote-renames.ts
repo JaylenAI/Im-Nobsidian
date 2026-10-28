@@ -1,5 +1,6 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import type { NotionClient } from "../notion/client.js";
+import { isTrashedOrArchived } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { DatabaseSyncConfig } from "../types/config.js";
 import type { RemoteChange, RemoteMove, RemoteMoveSkip, SyncRecord } from "../types/sync.js";
@@ -84,7 +85,7 @@ export class RemoteRenameFollower {
     dryRun: boolean,
   ): Promise<RemoteMoveSkip | { renamed: RemoteMove; moves: RemoteMove[] } | null> {
     const page = await this.pageOf(record.notionPageId!);
-    if (page.in_trash || page.archived) return null;
+    if (isTrashedOrArchived(page)) return null;
     const title = this.notionClient.extractTitle(page);
     if (!retitledInNotion(...(await this.frontmatters(record)), record.obsidianPath, title)) {
       return null;
