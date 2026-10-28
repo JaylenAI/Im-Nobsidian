@@ -10,6 +10,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Notion HTML 블록 ↔ 볼트 `.html` 첨부** — Notion 이 호스팅한 `.html` 은 읽으면 서명 URL 의 embed 라, 예전 pull 은
   한 시간 뒤 끊기는 링크만 남기고 내용을 받지 않았다. 이제 pull 은 그 파일을 `.html` 첨부로 받아 `![[…html]]` 로 두고, push 는
   볼트의 `.html` 첨부를 HTML 블록으로 올린다. 고쳐 다시 올려도 같은 블록이다(ADR-043).
+- **`nobsi verify` 가 예전 빌드의 두 겹 폴더 페이지를 알림** — v0.3.x · v0.4 개발 빌드는 폴더 페이지 아래 같은 이름의
+  폴더 노트를 만들었고, 그 뒤 pull 이 바깥 페이지를 `F/F (id).md` 로 받았다(ADR-012). 상태 DB 만 보고(API 호출 없음) 두 겹을
+  바깥 · 안쪽 경로와 정리법으로 알린다. 어느 쪽을 지울지는 사람이 정하므로 고치지 않고 실패로도 치지 않는다(`--json`
+  `nestedFolderPages`).
 
 ### Changed
 

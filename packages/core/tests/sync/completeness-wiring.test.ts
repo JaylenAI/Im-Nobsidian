@@ -139,6 +139,34 @@ describe("R12-C — verifyCompleteness 페이지 대조 배선", () => {
     expect(report.complete).toBe(false);
   });
 
+  it("예전 빌드가 남긴 두 겹 폴더 페이지를 싣되 판정에는 넣지 않는다 (ADR-012)", async () => {
+    notion.getPagesUnderRootViaSearch.mockResolvedValue([{ id: "outerpage" }, { id: "innerpage" }]);
+    stateDb.getAll.mockReturnValue([
+      {
+        obsidianPath: "F/F (0a2b0a2b).md",
+        notionPageId: "outerpage",
+        notionParentId: null,
+        fileType: "file",
+      },
+      {
+        obsidianPath: "F/F.md",
+        notionPageId: "innerpage",
+        notionParentId: "outerpage",
+        fileType: "folder-note",
+      },
+    ]);
+
+    const report = await makeOrchestrator(createConfig()).verifyCompleteness();
+
+    expect(report.nestedFolderPages).toEqual([
+      expect.objectContaining({
+        folder: "F",
+        inner: { path: "F/F.md", notionPageId: "innerpage" },
+      }),
+    ]);
+    expect(report.complete).toBe(true);
+  });
+
   it("페이지 대조는 설정된 root 를 대상으로 돈다", async () => {
     const base = createConfig();
     await makeOrchestrator(base).verifyCompleteness();

@@ -2,6 +2,7 @@ import { Command } from "commander";
 import { ConfigManager, StateDB, NotionClient, SyncOrchestrator } from "@im-nobsidian/core";
 import type {
   CompletenessReport,
+  NestedFolderPage,
   PageCompletenessReport,
   VaultCompletenessReport,
 } from "@im-nobsidian/core";
@@ -92,6 +93,33 @@ function printPageSection(report: PageCompletenessReport): void {
   }
 }
 
+/**
+ * 같은 이름의 두 겹 폴더 페이지 — 예전 빌드가 남긴 것(ADR-012). 어느 쪽을 지울지는 사람이 정하므로 알리고
+ * 정리법만 보인다. 실패로 치지 않는다.
+ */
+function printNestedFolderPages(nested: readonly NestedFolderPage[]): void {
+  if (nested.length === 0) return;
+  console.log(`\n  ${header(chalk.yellow(`Nested same-name folder pages: ${nested.length}`))}`);
+  console.log(
+    dimText(
+      "    같은 폴더를 나타내는 페이지가 Notion 에 두 겹입니다 — 예전 버전이 만들었을 수 있습니다.",
+    ),
+  );
+  console.log(
+    dimText(
+      "    의도한 구조가 아니면 Notion 에서 안쪽 페이지의 내용을 바깥으로 옮기고 안쪽을 지운 뒤 pull 하세요.",
+    ),
+  );
+  for (const pair of nested.slice(0, SAMPLE_LIMIT)) {
+    console.log(`    ${chalk.yellow("⚠")} ${pair.folder}`);
+    console.log(`        ${dimText(`outer ${pair.outer.path}  ${pair.outer.notionPageId}`)}`);
+    console.log(`        ${dimText(`inner ${pair.inner.path}  ${pair.inner.notionPageId}`)}`);
+  }
+  if (nested.length > SAMPLE_LIMIT) {
+    console.log(dimText(`    ... and ${nested.length - SAMPLE_LIMIT} more`));
+  }
+}
+
 function printReport(report: VaultCompletenessReport): void {
   printDatabaseSection(report.databases);
 
@@ -101,6 +129,8 @@ function printReport(report: VaultCompletenessReport): void {
     // DB 모드에는 root 서브트리가 없어 대조할 페이지 자체가 없다 — 생략을 명시한다.
     console.log(`\n  ${dimText("Page completeness: skipped (database mode)")}`);
   }
+
+  printNestedFolderPages(report.nestedFolderPages);
 
   if (!report.complete) {
     console.log(
