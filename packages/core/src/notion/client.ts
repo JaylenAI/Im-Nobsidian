@@ -292,8 +292,8 @@ export class NotionClient {
         // 전역 쿨다운 밖에서, 로그 없이 흐른다.
         retry: false,
         // SDK 5.27+ 는 브라우저 환경(Obsidian 렌더러)에서 토큰을 받으면 던진다 — 남이 여는 페이지에 토큰이 실리는
-        // 것을 막는 검사다. 플러그인의 토큰은 사용자 기기의 볼트 설정에 있다. 5.23 은 이 옵션을 모른다(무시).
-        ...({ dangerouslyAllowBrowser: true } as Record<string, unknown>),
+        // 것을 막는 검사다. 플러그인의 토큰은 사용자 기기의 볼트 설정에 있다.
+        dangerouslyAllowBrowser: true,
         ...(options.fetch ? { fetch: options.fetch } : {}),
       },
       options.notifications ?? DEFAULT_CONFIG.sync.notifications,
