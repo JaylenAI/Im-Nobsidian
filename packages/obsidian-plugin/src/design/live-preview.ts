@@ -11,6 +11,8 @@ import {
 import { editorLivePreviewField } from "obsidian";
 import {
   hasDesignMarker,
+  isHeadingLine,
+  isHeadingMarkerLine,
   readColumnLayout,
   readDesignLine,
   type ColumnPlace,
@@ -119,10 +121,14 @@ function buildDecorations(view: EditorView): DecorationSet {
       const reveal = selection.some((r) => r.from <= line.to && r.to >= line.from);
 
       if (design.blockColor && !TABLE_LINE_RE.test(line.text)) {
+        // 제목 아래로 내린 마커 줄의 색은 앞 제목의 것이다(core `heading-markers`).
+        const heading = line.number > 1 ? doc.line(line.number - 1) : null;
+        const owner =
+          heading && isHeadingMarkerLine(line.text) && isHeadingLine(heading.text) ? heading : line;
         ranges.push(
           Decoration.line({
             class: `${DESIGN_CLASS.block} ${colorClass(design.blockColor)}`,
-          }).range(line.from),
+          }).range(owner.from),
         );
       }
       for (const s of design.styled) {
