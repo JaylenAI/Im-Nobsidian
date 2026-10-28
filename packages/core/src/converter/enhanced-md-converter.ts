@@ -31,6 +31,7 @@ import {
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
 import { widenNestedCodeFences } from "./nested-code-fence.js";
+import { mediaLabel, mediaLinkRe } from "./media-labels.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
@@ -703,23 +704,19 @@ function convertMediaTags(content: string): string {
   let result = content;
 
   result = result.replace(NOTION_AUDIO_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[🔊 ${cap}](${src})` : `[🔊 audio](${src})`;
+    return `[${mediaLabel("audio", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_VIDEO_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[🎬 ${cap}](${src})` : `[🎬 video](${src})`;
+    return `[${mediaLabel("video", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_PDF_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[📄 ${cap}](${src})` : `[📄 pdf](${src})`;
+    return `[${mediaLabel("pdf", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_FILE_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[📎 ${cap}](${src})` : `[📎 file](${src})`;
+    return `[${mediaLabel("file", caption.trim())}](${src})`;
   });
 
   // HTML 블록(2026-07-03) — Notion 이 호스팅한 `.html` 을 붙인 embed. 다른 파일처럼 첨부로 받는다: 서명 URL 은 한 시간
@@ -727,8 +724,7 @@ function convertMediaTags(content: string): string {
   // 바깥 주소의 embed 는 링크다 — {@link preserveNfmOnlyBlocks} 가 다룬다.
   result = result.replace(NOTION_HOSTED_EMBED_RE, (match, src: string, caption: string) => {
     if (!isNotionHostedFileUrl(src)) return match;
-    const cap = caption.trim();
-    return cap ? `[🌐 ${cap}](${src})` : `[🌐 html](${src})`;
+    return `[${mediaLabel("html", caption.trim())}](${src})`;
   });
 
   return result;
@@ -1107,11 +1103,11 @@ function unescapeNotionChars(content: string): string {
 
 // ─── Push 방향: 보존 마커 → Enhanced MD 복원 ───
 
-const OBSIDIAN_MEDIA_AUDIO_RE = /\[🔊\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_VIDEO_RE = /\[🎬\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_PDF_RE = /\[📄\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_FILE_RE = /\[📎\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_HTML_RE = /\[🌐\s*([^\]]*)\]\(([^)]+)\)/g;
+const OBSIDIAN_MEDIA_AUDIO_RE = mediaLinkRe("audio");
+const OBSIDIAN_MEDIA_VIDEO_RE = mediaLinkRe("video");
+const OBSIDIAN_MEDIA_PDF_RE = mediaLinkRe("pdf");
+const OBSIDIAN_MEDIA_FILE_RE = mediaLinkRe("file");
+const OBSIDIAN_MEDIA_HTML_RE = mediaLinkRe("html");
 
 function restoreMediaTags(content: string): string {
   let result = content;
