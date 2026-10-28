@@ -105,6 +105,18 @@ export class ObsidianVaultAdapter implements VaultFS {
     }
   }
 
+  /**
+   * 비었으면 시스템 휴지통으로 — Obsidian 의 폴더 목록은 숨김 파일을 빼므로 디스크 목록도 본다. 하나라도 있으면 둔다.
+   */
+  async removeEmptyFolder(path: string): Promise<boolean> {
+    const folder = this.vault.getAbstractFileByPath(normalizePath(path));
+    if (!(folder instanceof TFolder) || folder.children.length > 0) return false;
+    const listed = await this.vault.adapter.list(folder.path);
+    if (listed.files.length + listed.folders.length > 0) return false;
+    await this.changingPaths([folder.path], () => this.vault.trash(folder, true));
+    return true;
+  }
+
   async moveFile(from: string, to: string): Promise<void> {
     const file = this.vault.getAbstractFileByPath(normalizePath(from));
     if (!file) {

@@ -886,6 +886,7 @@ export class SyncOrchestrator {
       deleted: number,
       restored = 0,
     ): Promise<PullResult> => {
+      await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
       const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);

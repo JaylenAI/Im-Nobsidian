@@ -69,6 +69,9 @@ export class PagePuller {
     { readonly previous: Promise<void>; readonly release: () => void }
   >();
 
+  // Notion 에서 사라져 볼트에서 지운 페이지의 하위 폴더 — pull 이 마칠 때 비었으면 지운다({@link removeVacatedFolders}).
+  private readonly vacatedFolders = new Set<string>();
+
   private decorationsCache?: PageDecorations;
   private get decorations(): PageDecorations {
     return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
@@ -100,6 +103,37 @@ export class PagePuller {
     this.claimTurns.clear();
     this._pullImageCount = 0;
     this._pullFileCount = 0;
+    this.vacatedFolders.clear();
+  }
+
+  /**
+   * 이번 pull 이 지운 페이지의 폴더가 비었으면 지운다 — 안쪽부터, 그래야 바깥이 빈다. 예전에는 노트만 지우고
+   * 폴더를 남겨 볼트에 빈 폴더가 쌓였다. 사용자 파일 · 숨김 파일이 하나라도 남은 폴더는 둔다
+   * ({@link VaultFS.removeEmptyFolder}).
+   */
+  async removeVacatedFolders(): Promise<void> {
+    const folders = [...this.vacatedFolders].sort(
+      (a, b) => b.split("/").length - a.split("/").length,
+    );
+    this.vacatedFolders.clear();
+    for (const folder of folders) {
+      try {
+        await this.vaultFs.removeEmptyFolder?.(folder);
+      } catch (error) {
+        getLogger().warn(`[Im-Nobsidian] 빈 폴더 ${folder} 를 지우지 못함:`, error);
+      }
+    }
+  }
+
+  /**
+   * 원격에서 사라진 페이지의 하위 폴더를 적어 둔다 — 그 아래 페이지도 함께 사라졌으면 pull 끝에 빈다. 볼트 맨 위와
+   * DB 폴더는 적지 않는다 — DB 는 페이지가 아니다.
+   */
+  private noteVacatedFolder(record: SyncRecord): void {
+    const lookup = this.placement.folderLookup();
+    if (isFolderRecord(record) && lookup.databaseAt(record.obsidianPath)) return;
+    const folder = childFolderOf(record, lookup);
+    if (folder !== "" && !lookup.databaseAt(folder)) this.vacatedFolders.add(folder);
   }
 
   /** 이번 pull 이 내려받은 이미지 수. */
@@ -456,6 +490,7 @@ export class PagePuller {
         this.stateDb.delete(record.id);
         this.stateDb.deleteWikilink(record.obsidianPath);
       });
+      if (this.config.sync.deleteSync) this.noteVacatedFolder(record);
       return { action: "untracked", path: record.obsidianPath };
     }
 
@@ -464,6 +499,7 @@ export class PagePuller {
       strategy: this.config.sync.conflictStrategy,
       remoteChange: change,
     });
+    if (outcome.action === "deleted" && this.config.sync.deleteSync) this.noteVacatedFolder(record);
     return { ...outcome, path: record.obsidianPath };
   }
 

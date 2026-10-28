@@ -29,6 +29,7 @@ export function createMockVaultFs(): VaultFS {
     listMarkdownFileStats: vi.fn().mockResolvedValue([]),
     getFileStat: vi.fn().mockResolvedValue(null),
     listNonMarkdownFiles: vi.fn().mockResolvedValue([]),
+    removeEmptyFolder: vi.fn().mockResolvedValue(false),
   };
 }
 

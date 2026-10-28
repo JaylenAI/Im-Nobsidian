@@ -91,6 +91,25 @@ describe("NodeVaultFS", () => {
     });
   });
 
+  describe("removeEmptyFolder", () => {
+    it("빈 폴더만 지운다 — 숨김 파일이 남은 폴더 · 없는 폴더 · 파일은 false", async () => {
+      await mkdir(join(tempDir, "빈/안쪽"), { recursive: true });
+      await mkdir(join(tempDir, "숨김"), { recursive: true });
+      await writeFile(join(tempDir, "숨김/.DS_Store"), "");
+      await writeFile(join(tempDir, "노트.md"), "본문");
+
+      await expect(vaultFs.removeEmptyFolder("빈")).resolves.toBe(false);
+      await expect(vaultFs.removeEmptyFolder("빈/안쪽")).resolves.toBe(true);
+      await expect(vaultFs.removeEmptyFolder("빈")).resolves.toBe(true);
+      await expect(vaultFs.exists("빈")).resolves.toBe(false);
+
+      await expect(vaultFs.removeEmptyFolder("숨김")).resolves.toBe(false);
+      await expect(vaultFs.exists("숨김/.DS_Store")).resolves.toBe(true);
+      await expect(vaultFs.removeEmptyFolder("없음")).resolves.toBe(false);
+      await expect(vaultFs.removeEmptyFolder("노트.md")).resolves.toBe(false);
+    });
+  });
+
   describe("listMarkdownFiles", () => {
     it("마크다운 파일만 리스트", async () => {
       await writeFile(join(tempDir, "note1.md"), "# Note 1");
