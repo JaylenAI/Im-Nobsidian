@@ -60,11 +60,15 @@ export function isNotionAccessDenied(error: unknown): boolean {
   return e.code === "restricted_resource" || e.status === 403;
 }
 
-/** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
-export function isTrashedOrArchived(page: PageObjectResponse): boolean {
-  // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
-  const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-  return inTrash || page.archived === true;
+/**
+ * 페이지가 휴지통에 있는가. `archived` 는 API 2026-03-11 에서 빠지고 `in_trash` 만 남는다 — 지금 버전(2025-09-03)은
+ * 둘 다 준다. 휴지통 판정을 이 함수 한 곳에 두어 버전을 올릴 때 여기만 고치게 한다.
+ */
+export function isTrashedOrArchived(page: {
+  readonly in_trash?: boolean;
+  readonly archived?: boolean;
+}): boolean {
+  return page.in_trash === true || page.archived === true;
 }
 
 /**
@@ -1062,7 +1066,8 @@ export class NotionClient {
   }
 
   async archivePage(pageId: string): Promise<void> {
-    await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
+    // `archived` 는 SDK 에서 deprecated · API 2026-03-11 에서 빠진다. `in_trash` 는 지금 버전에서도 받는다(실측 2026-10-28).
+    await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, in_trash: true }));
   }
 
   /**

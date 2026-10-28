@@ -1,7 +1,7 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { extractChildTags } from "../converter/child-tags.js";
 import type { NotionClient } from "../notion/client.js";
-import { DiscoveryTooLargeError } from "../notion/client.js";
+import { DiscoveryTooLargeError, isTrashedOrArchived } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { LocalChange, RemoteChange, SyncRecord } from "../types/sync.js";
@@ -129,7 +129,7 @@ export class RemoteDetector {
       throwIfAborted(signal);
       try {
         const page = await this.notionClient.getPage(childId);
-        if (page.in_trash || page.archived) continue;
+        if (isTrashedOrArchived(page)) continue;
         const actualParent = await extractParentId(this.notionClient, page);
         if (!actualParent || !notionIdsEqual(actualParent, parentId)) continue;
         this._childParentIds.add(normalizeNotionId(parentId));

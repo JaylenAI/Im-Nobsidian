@@ -1,6 +1,6 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import type { NotionClient } from "../notion/client.js";
-import { isNotionObjectNotFound } from "../notion/client.js";
+import { isNotionObjectNotFound, isTrashedOrArchived } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { SyncRecord } from "../types/sync.js";
 import { getLogger } from "../utils/logger.js";
@@ -158,8 +158,7 @@ export class InterruptedSyncRecovery {
         if (isNotionObjectNotFound(error)) continue;
         throw error;
       }
-      const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-      if (inTrash || page.archived) continue;
+      if (isTrashedOrArchived(page)) continue;
       return page;
     }
     return null;
@@ -182,8 +181,7 @@ export class InterruptedSyncRecovery {
     });
     for (const row of rows) {
       if (this.stateDb.getByNotionId(row.id)) continue;
-      const inTrash = (row as { in_trash?: boolean }).in_trash === true;
-      if (inTrash || row.archived) continue;
+      if (isTrashedOrArchived(row)) continue;
       return row;
     }
     return null;

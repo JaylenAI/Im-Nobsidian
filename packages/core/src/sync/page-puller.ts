@@ -10,7 +10,11 @@ import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import type { NotionClient } from "../notion/client.js";
-import { isNotionAccessDenied, isNotionObjectNotFound } from "../notion/client.js";
+import {
+  isNotionAccessDenied,
+  isNotionObjectNotFound,
+  isTrashedOrArchived,
+} from "../notion/client.js";
 import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
@@ -322,9 +326,7 @@ export class PagePuller {
     // 리모트가 휴지통/보관 상태인데 로컬 파일도 없다면 양쪽 다 없는 것이다 — 복원 스캔이
     // 올린 항목이라도 되살릴 원본이 없으므로 빈 껍데기를 만들지 않고 무동작으로 끝낸다.
     // (deleteSync 가 켜져 있으면 전체 스캔이 이 페이지를 deleted 로 따로 처리한다.)
-    const remoteGone =
-      (page as { in_trash?: boolean }).in_trash === true ||
-      (page as { archived?: boolean }).archived === true;
+    const remoteGone = isTrashedOrArchived(page);
     if (remoteGone && !(await this.vaultFs.exists(record.obsidianPath))) {
       return { action: "unchanged", path: record.obsidianPath };
     }
@@ -676,10 +678,7 @@ export class PagePuller {
     page: PageObjectResponse,
   ): Promise<SyncRecord | null> {
     const folder = record.obsidianPath;
-    const remoteGone =
-      (page as { in_trash?: boolean }).in_trash === true ||
-      (page as { archived?: boolean }).archived === true;
-    if (remoteGone) return null;
+    if (isTrashedOrArchived(page)) return null;
 
     const { markdown } = await this.notionClient.getPageMarkdown(page.id);
     if (!hasBodyBesidesChildren(markdown)) {
