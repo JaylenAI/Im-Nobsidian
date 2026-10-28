@@ -65,11 +65,15 @@ export function notionFileIdOf(url: string): string | null {
   return id && STORED_FILE_ID_RE.test(id) ? id.toLowerCase() : null;
 }
 
-/** 미디어 블록(image · file · pdf · video · audio)이 가리키는 파일 URL. 미디어 블록이 아니면 null. */
+/**
+ * 미디어 블록(image · file · pdf · video · audio)이 가리키는 파일 URL. 미디어 블록이 아니면 null.
+ * 파일을 붙인 embed(HTML 블록)는 파일 URL 을 `embed.url` 에 싣는다(2026-10-28 실측).
+ */
 export function fileUrlOfBlock(block: { readonly type?: string }): string | null {
   const media = block.type
     ? ((block as Record<string, unknown>)[block.type] as
-        { file?: { url?: string }; external?: { url?: string } } | undefined)
+        { file?: { url?: string }; external?: { url?: string }; url?: string } | undefined)
     : undefined;
+  if (block.type === "embed") return media?.url ?? null;
   return media?.file?.url ?? media?.external?.url ?? null;
 }

@@ -15,7 +15,8 @@ P6 ~ P7(그 밖의 구조 · 충돌 merge · 재개) · 0.16 P8 ~ P10(플러그�
       블록 삽입은 이미 `position` 을 쓴다. 보내는 API 버전은 2025-09-03 그대로(D12)
 - [x] 워크스페이스 공용 rate limit 대기 5분까지 · 재시도 로그에 `rate_limit_reason` · Free 워크스페이스 블록 한도(403)
       사유 보존 · 막힌 동안 만들기 요청 생략(ADR-042)
-- [ ] HTML 블록(2026-07-03) — embed + `.html` 파일 업로드 · Markdown API `truncated` 확인
+- [x] HTML 블록(2026-07-03) ↔ 볼트 `.html` 첨부(ADR-043) — 예전 pull 은 한 시간 뒤 끊기는 서명 URL 링크만 남겼다.
+      Markdown API `truncated` 는 이미 블록 id 로 다시 받아 채운다(S-06 · `markdown-completion.ts`)
 - [ ] 라이브 E2E · 게이트 · CI
 
 ## 남은 단계 (2026-10-23 확정 · 같은 날 갱신)

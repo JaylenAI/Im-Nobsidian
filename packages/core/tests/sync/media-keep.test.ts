@@ -125,6 +125,33 @@ describe("ImageHandler.keepUploadedMedia — 보낼 본문의 자리표시자를
     expect(result.kept.map((media) => media.fileId)).toEqual([fileId(1), fileId(2)]);
   });
 
+  it("HTML 블록은 embed 태그로 싣는다 — Notion 이 그 블록을 그대로 둔다(2026-10-28 실측)", async () => {
+    FILES["web/차트.html"] = "HTML";
+    rememberUploadedMedia(db, "page-1", [
+      {
+        fileId: fileId(3),
+        target: "web/차트.html",
+        localPath: "web/차트.html",
+        fileHash: sha256("HTML"),
+      },
+    ]);
+    getPageMarkdown.mockResolvedValue({
+      markdown: `앞 문단\n<embed src="${signedUrl(fileId(3), "차트.html")}"></embed>\n뒤 문단`,
+    });
+
+    const result = await handler.keepUploadedMedia(
+      "page-1",
+      body("앞 문단 — 고침", marker("file", "web/차트.html"), "뒤 문단"),
+      "Note.md",
+    );
+
+    const htmlUrl = signedUrl(fileId(3), "차트.html").split("?")[0];
+    expect(result.markdown).toBe(
+      body("앞 문단 — 고침", `<embed src="${htmlUrl}"></embed>`, "뒤 문단"),
+    );
+    delete FILES["web/차트.html"];
+  });
+
   it("콜아웃 · 목록 안 자리표시자는 들여쓰기를 지킨다", async () => {
     const markdown = body(
       "<callout>",

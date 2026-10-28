@@ -71,6 +71,12 @@ describe("fileUrlOfBlock", () => {
     ).toBe("u2");
   });
 
+  it("HTML 블록(파일을 붙인 embed)은 embed.url 에 싣는다", () => {
+    expect(fileUrlOfBlock({ type: "embed", embed: { caption: [], url: "u3" } } as never)).toBe(
+      "u3",
+    );
+  });
+
   it.each([
     ["URL 이 아직 없는 업로드", { type: "file", file: { type: "file_upload", file_upload: {} } }],
     ["미디어가 아닌 블록", { type: "paragraph", paragraph: { rich_text: [] } }],
