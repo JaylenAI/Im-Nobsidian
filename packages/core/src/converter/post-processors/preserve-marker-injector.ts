@@ -12,15 +12,15 @@ import { spacedMarker } from "../../constants/markers.js";
  * 핵심 전제(F28 교훈): DB 에 저장된 startIndex 는 **push 시점 문자열**의 절대
  * 오프셋이라 pull 산출물에서는 무의미하다 — 프론트매터 앞·단어 한가운데에
  * 마커를 박아 파일을 파손시켰다. 재삽입은 반드시
- *   1) 이미 의미적으로 복원된 마커는 건너뛰고(위키링크 → `[[...]]` 존재 등),
+ *   1) 다른 복원기가 맡는 마커는 건너뛰고(위키링크 · 미디어 · 표 정렬),
  *   2) 텍스트 앵커(__anchor)를 1차 위치 수단으로 쓰며,
  *   3) 프론트매터 뒤·줄 경계에만, 마커 단독 줄로 삽입한다.
  *
  * 이중 모드: `__anchor` 키가 없는 마커는 구버전 DB blob(수집기가 앵커를 안 남기던
  * 시절)이다. 이들은 구계약 — "변환이 마커만 제거했다면 startIndex 오프셋 원문 삽입이
  * 원본을 정확히 재구성한다" — 을 유지하되 프론트매터 앞 삽입만 금지한다. 위해한
- * 레거시 사례(빈 params 껍데기, 이미 복원된 위키링크)는 render-null 폐기와 의미
- * 복원 검사가 이미 걸러낸다.
+ * 레거시 사례(빈 params 껍데기, 위키링크)는 render-null 폐기와 다른 복원기 검사가
+ * 이미 걸러낸다.
  */
 export class PreserveMarkerInjector implements Processor {
   readonly name = "PreserveMarkerInjector";
@@ -45,7 +45,7 @@ export class PreserveMarkerInjector implements Processor {
       const rendered = this.renderMarker(m);
       if (rendered === null) return false;
       if (content.includes(rendered)) return false;
-      return !this.isSemanticallyRestored(m, content);
+      return !this.restoredElsewhere(m);
     });
 
     if (missing.length === 0) {
@@ -92,15 +92,14 @@ export class PreserveMarkerInjector implements Processor {
     return spacedMarker(`${marker.type}:${body}`);
   }
 
-  /** 마커가 이미 원래 문법으로 복원돼 있으면 재삽입은 중복·오염이다. */
-  private isSemanticallyRestored(marker: PreserveMarker, content: string): boolean {
-    const params = marker.params ?? {};
+  /** 다른 복원기가 맡는 마커 — 본문에 다시 끼우면 중복 · 오염이다. */
+  private restoredElsewhere(marker: PreserveMarker): boolean {
     switch (marker.type) {
-      case "wikilink": {
-        const text = params.text;
-        if (!text) return false;
-        return content.includes(`[[${text}]]`) || content.includes(`[[${text}|`);
-      }
+      case "wikilink":
+        // 링크(`im-nobsidian://wikilink/…`)가 대상을 싣고 링크 복원기가 `[[…]]` 로 되돌린다. 마커는 상태 DB 에서
+        // push 가 읽는 것이다(`notesWithResolvableWikilinks`) — 본문에 되살려도 링크는 돌아오지 않는다. 링크가
+        // 사라졌으면 Notion 에서 그 문단이나 링크를 지운 것이라, 예전에는 볼 수 없는 마커 줄만 남았다.
+        return true;
       case "local-image":
       case "local-file":
         // 미디어 자리표시자는 전용 복원기 소관이다 — 남은 자리표시자는 LocalImageRestorer 가,
