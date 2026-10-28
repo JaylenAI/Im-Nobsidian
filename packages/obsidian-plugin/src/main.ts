@@ -8,6 +8,7 @@ import {
   isMarkdownPath,
   normalizeVaultPath,
   notionIdFromInput,
+  sectionLinesWithHeadingMarkers,
 } from "@im-nobsidian/core";
 import type {
   Config,
@@ -696,7 +697,11 @@ export default class ImNobsidianPlugin extends Plugin {
     this.registerMarkdownPostProcessor((el, ctx) => {
       const info = ctx.getSectionInfo(el);
       if (!info) return;
-      const lines = info.text.split("\n").slice(info.lineStart, info.lineEnd + 1);
+      const lines = sectionLinesWithHeadingMarkers(
+        info.text.split("\n"),
+        info.lineStart,
+        info.lineEnd,
+      );
       decorateRendered(el, lines, options);
       decorateColumnSection(el, info.text, info.lineStart, info.lineEnd);
     });

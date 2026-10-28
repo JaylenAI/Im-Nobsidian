@@ -322,6 +322,12 @@ export { MARKER_BRAND } from "./constants/markers.js";
 
 // 디자인 마커 읽기(U-01) — 플러그인 렌더러가 마커가 칠하는 것을 읽는다. 마커 모양은 core 의 것이다.
 export { readDesignLine, hasDesignMarker, parseDesignColor } from "./converter/design-markers.js";
+// 제목 아래로 내린 블록 색 마커 — 플러그인이 그 마커 줄의 색을 앞 제목에 칠한다.
+export {
+  isHeadingLine,
+  isHeadingMarkerLine,
+  sectionLinesWithHeadingMarkers,
+} from "./converter/heading-markers.js";
 // 컬럼 경계 읽기(#74) — 플러그인이 펼친 Notion 컬럼의 열 경계를 칠한다.
 export { readColumnLayout, columnLabel, hasColumnLayout } from "./converter/column-layout.js";
 export type { ColumnPlace } from "./converter/column-layout.js";

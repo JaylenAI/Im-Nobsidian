@@ -51,6 +51,7 @@ import {
   restoreBodyIndent,
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
+import { liftHeadingMarkers } from "./heading-markers.js";
 import { mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
@@ -182,7 +183,8 @@ function unescapeBrackets(content: string): string {
 }
 
 export function obsidianToNotionEnhanced(obsidian: string): string {
-  let result = obsidian;
+  // 제목 아래로 내린 마커를 맨 먼저 제목 줄로 — 아래 변환은 제목 줄 끝의 마커만 안다.
+  let result = liftHeadingMarkers(obsidian);
 
   // 일반 인용 안 코드를 인용의 자식으로 맨 먼저 꺼낸다 — 아래 변환이 모두 코드로 알아보게(S-23).
   result = quotedCodeToChildren(result);
