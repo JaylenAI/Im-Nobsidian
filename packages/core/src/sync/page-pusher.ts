@@ -164,6 +164,46 @@ export class PagePusher {
   }
 
   /**
+   * dry-run 이 알릴 읽기 전용 속성 — 실제 push 처럼 볼트에서 바꾼 행 속성(새 행은 모든 속성) 가운데 Notion 이 값을
+   * 정하는 것. 원격은 읽지 않고 지난 동기화 사본과 견준다 — 원격도 바뀌었으면 실제 push 와 다를 수 있다. 사본이
+   * 없거나 frontmatter · 스키마를 읽지 못하면 그 노트는 건너뛴다(실제 push 가 이유와 함께 알린다).
+   */
+  async previewReadOnlySkips(changes: readonly LocalChange[]): Promise<ReadOnlySkip[]> {
+    const skips: ReadOnlySkip[] = [];
+    for (const change of changes) {
+      const row = this.previewRow(change);
+      if (!row) continue;
+      try {
+        const current = parseFrontmatter(await this.vaultFs.readFile(change.path));
+        const { changed, cleared } = diffRowProperties(row.base, current.data);
+        const mapper = await this.rowSchemas.mapperFor(row.databaseId);
+        const readOnly = mapper.readOnlyKeys(
+          withoutDecorations([...Object.keys(changed), ...cleared]),
+        );
+        if (readOnly.length > 0) skips.push({ path: change.path, properties: readOnly });
+      } catch {
+        continue;
+      }
+    }
+    return skips.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** dry-run 이 견줄 행 — 새 행은 기준 없이, 고친 행은 지난 동기화 사본과. 행이 아니거나 사본이 없으면 null. */
+  private previewRow(
+    change: LocalChange,
+  ): { databaseId: string; base: Readonly<Record<string, unknown>> | null } | null {
+    if (change.type === "created") {
+      const databaseId = this.placement.newRowDatabaseOf(change.path);
+      return databaseId ? { databaseId, base: null } : null;
+    }
+    if (change.type !== "modified") return null;
+    const record = this.stateDb.getByPath(change.path);
+    const databaseId = record ? rowDatabaseOf(this.config, record) : null;
+    const base = record && databaseId ? this.baseRowState(record) : null;
+    return databaseId && base ? { databaseId, base: base.properties } : null;
+  }
+
+  /**
    * 보내지 않은 속성을 알린다. 읽기 전용 속성은 경고로 따로 모은다 — 다음 pull 이 볼트의 값을 Notion 값으로 되돌리니
    * 고친 사람이 알아야 한다. 나머지(DB 에 없는 속성 · 변환 불가 …)는 예전처럼 정보 로그다.
    */

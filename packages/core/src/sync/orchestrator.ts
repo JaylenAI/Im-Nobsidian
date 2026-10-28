@@ -443,6 +443,7 @@ export class SyncOrchestrator {
       const unsentDeletions = applicable
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
+      const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
@@ -452,6 +453,7 @@ export class SyncOrchestrator {
         failed: refusedFailures,
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
+        ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
       };
     }
 

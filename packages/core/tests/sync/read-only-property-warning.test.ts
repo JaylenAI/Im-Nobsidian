@@ -112,4 +112,24 @@ describe("읽기 전용 속성 편집 경고", () => {
     expect(result.readOnlySkipped).toEqual([]);
     expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("읽기 전용"));
   });
+
+  it("dry-run 도 올리지 않을 읽기 전용 속성을 미리 알린다 — 보내지는 않는다", async () => {
+    const orchestrator = build();
+    const path = await pulledRow(orchestrator);
+    vault.write(
+      path,
+      vault.read(path)!.replace("Score: 1", "Score: 99").replace("Status: 할 일", "Status: 끝"),
+    );
+
+    const planned = await orchestrator.push({ dryRun: true });
+
+    expect(planned).toMatchObject({ updated: 1, failed: [] });
+    expect(planned.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+    const remote = notion.pages.get(db.getByPath(path)!.notionPageId!)!;
+    expect(remote.properties.Status).toMatchObject({ select: { name: "할 일" } });
+
+    // 읽기 전용을 건드리지 않았으면 알릴 것이 없다.
+    vault.write(path, vault.read(path)!.replace("Score: 99", "Score: 1"));
+    expect((await orchestrator.push({ dryRun: true })).readOnlySkipped ?? []).toEqual([]);
+  });
 });

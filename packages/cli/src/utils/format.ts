@@ -192,12 +192,15 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
   ];
 }
 
-export function readOnlySkipLines(skips: readonly ReadOnlySkip[] | undefined): string[] {
+export function readOnlySkipLines(
+  skips: readonly ReadOnlySkip[] | undefined,
+  dryRun = false,
+): string[] {
   if (!skips || skips.length === 0) return [];
   const count = skips.reduce((sum, skip) => sum + skip.properties.length, 0);
   return [
     chalk.yellow(
-      `⚠ 읽기 전용 속성 ${count}개는 올리지 않았습니다 — Notion 이 값을 정합니다(수식 · 롤업 · ID …). ` +
+      `⚠ 읽기 전용 속성 ${count}개는 ${dryRun ? "올리지 않습니다" : "올리지 않았습니다"} — Notion 이 값을 정합니다(수식 · 롤업 · ID …). ` +
         "다음 pull 이 Notion 값으로 되돌립니다:",
     ),
     ...skips.map((skip) => `  ${skip.path} — ${skip.properties.join(", ")}`),

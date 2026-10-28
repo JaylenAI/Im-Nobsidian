@@ -103,7 +103,8 @@ export const syncCommand = new Command("sync")
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);
-      for (const line of readOnlySkipLines(pushResult.readOnlySkipped)) console.log(`  ${line}`);
+      for (const line of readOnlySkipLines(pushResult.readOnlySkipped, options.dryRun))
+        console.log(`  ${line}`);
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
