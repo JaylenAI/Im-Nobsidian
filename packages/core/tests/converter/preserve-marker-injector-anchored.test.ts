@@ -27,10 +27,10 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
   it("F28: 앵커 마커는 프론트매터 앞에 절대 삽입되지 않음", () => {
     const content = "---\ntitle: 문서\n---\n\n본문 문단";
     const result = run(content, [
-      { type: "wikilink", params: { text: "없는링크", __anchor: "" }, startIndex: 0 },
+      { type: "callout", params: { type: "note", __anchor: "" }, startIndex: 0 },
     ]);
     expect(result.startsWith("---\ntitle: 문서\n---")).toBe(true);
-    const markerPos = result.indexOf("im-nobsidian:wikilink");
+    const markerPos = result.indexOf("im-nobsidian:callout");
     const fmClose = result.indexOf("\n---", 3);
     expect(markerPos).toBeGreaterThan(fmClose);
   });
@@ -130,7 +130,7 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
     const content = "앞 문단입니다.\n뒤 문단입니다.";
     const markers: PreserveMarker[] = [
       { type: "comment", params: { text: "옛 메모", __anchor: "앞 문단입니다." }, startIndex: 999 },
-      { type: "wikilink", params: { text: "링크", __anchor: "뒤 문단입니다." }, startIndex: 999 },
+      { type: "callout", params: { type: "note", __anchor: "뒤 문단입니다." }, startIndex: 999 },
     ];
     const result = injector.process({
       content,
@@ -139,7 +139,20 @@ describe("PreserveMarkerInjector — anchored (신규 계약)", () => {
       context: pullContext,
     }).content;
     expect(result).not.toContain("옛 메모");
-    expect(result).toContain("im-nobsidian:wikilink");
+    expect(result).toContain("im-nobsidian:callout");
+  });
+
+  it("링크가 사라진 위키링크 마커는 끼우지 않는다 — Notion 에서 그 문단이나 링크를 지웠다", () => {
+    const content = "남은 문단입니다.\n끝 문단입니다.";
+    const result = run(content, [
+      {
+        type: "wikilink",
+        params: { text: "볼트에 없는 노트", __anchor: "지운 문단 " },
+        startIndex: 12,
+      },
+      { type: "wikilink", params: { text: "다른 노트", __anchor: "남은 문단" }, startIndex: 0 },
+    ]);
+    expect(result).toBe(content);
   });
 
   it("앵커를 못 찾으면 줄 경계로 삽입하되 단어를 자르지 않음", () => {
