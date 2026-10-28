@@ -156,6 +156,23 @@ describe("--json 출력 계약", () => {
     expect(stdoutJson(write)).toMatchObject({ readOnlySkipped: [] });
   });
 
+  it("push · pull: 거절한 로컬 삭제를 경로로 싣는다 — 없으면 빈 목록 (D8)", async () => {
+    const unsentDeletions = ["가.md"];
+    mockPush.mockResolvedValueOnce({ ...pushResult, unsentDeletions });
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 3, unsentDeletions });
+
+    write.mockClear();
+    mockPull.mockResolvedValueOnce({ ...pullResult, restored: 1, restoredPaths: ["가.md"] });
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ restored: 1, restoredPaths: ["가.md"] });
+
+    write.mockClear();
+    mockPull.mockResolvedValueOnce(pullResult);
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ restoredPaths: [] });
+  });
+
   it("sync: Pull 이 무변경이어도 Push 변경을 churn 으로 센다", async () => {
     mockPull.mockResolvedValueOnce({ ...pullResult, restored: 0, writtenPaths: [] });
     await run(syncCommand, "sync", "--json");

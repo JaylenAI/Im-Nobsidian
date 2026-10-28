@@ -9,6 +9,8 @@ import {
   summary,
   duration,
   readOnlySkipLines,
+  restoredLines,
+  unsentDeletionLines,
   icons,
   dimText,
   completionHeader,
@@ -102,6 +104,12 @@ export const syncCommand = new Command("sync")
       );
       console.log(`  ${duration(result.duration)}`);
       for (const line of readOnlySkipLines(pushResult.readOnlySkipped)) console.log(`  ${line}`);
+      for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       if (pullResult.remoteScan) {
         for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
       }

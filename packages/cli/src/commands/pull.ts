@@ -20,6 +20,7 @@ import {
   completionHeader,
   failedCountText,
   remoteScanLines,
+  restoredLines,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 import { openVaultFs, vaultArgPath } from "../utils/vault.js";
@@ -104,6 +105,9 @@ export const pullCommand = new Command("pull")
       // 복원은 별도 줄로 알린다 — 볼트에서 파일이 사라졌었다는 사실은 조용히 넘길 일이 아니다.
       if (result.restored > 0) {
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
+      }
+      for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
+        console.log(`  ${line}`);
       }
       // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {

@@ -137,6 +137,12 @@ export const statusCommand = new Command("status")
       // Deleted files — 수만 보이면 무엇이 Notion 에서 지워질지 모른다.
       if (deletedChanges.length > 0) {
         console.log(`\n  ${header("Deleted files:")}`);
+        // deleteSync 가 꺼져 있으면 push 는 Notion 에서 지우지 않고 pull 이 되살린다 — 지우기 전에 알린다(D8).
+        if (!config.sync.deleteSync) {
+          console.log(
+            `    ${chalk.yellow("sync.deleteSync 꺼짐 — Notion 에서 지우지 않고 다음 pull 이 되살립니다")}`,
+          );
+        }
         for (const c of deletedChanges.slice(0, 10)) {
           console.log(`    ${chalk.red("-")} ${c.path}`);
         }
