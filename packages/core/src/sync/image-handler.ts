@@ -18,6 +18,11 @@ import {
   notionFileIdOf,
 } from "../utils/notion-file-url.js";
 import { fetchForDownload } from "../utils/download-fetch.js";
+import {
+  largeFileLink,
+  notionFileLocation,
+  withLargeFileLink,
+} from "../converter/large-file-link.js";
 import { DEFAULT_CONFIG } from "../types/config.js";
 import {
   recallUploadedMedia,
@@ -45,6 +50,8 @@ export interface ImageDownloadResult {
   readonly fileHash?: string;
   /** 임베드 별칭으로 쓸 이름 — 받은 이름에서 이 볼트가 붙인 내용 해시를 뗀 것({@link withoutOwnHash}). */
   readonly name?: string;
+  /** 크기 상한을 넘어 받지 않은 파일의 크기(바이트) — 받았거나 다른 이유로 못 받았으면 없다. */
+  readonly skippedBytes?: number;
 }
 
 /** 다운로드는 됐지만 아직 디스크에 쓰지 않은 이미지 — D6 dedup 판정 후 persist 한다. */
@@ -1369,7 +1376,10 @@ export class ImageHandler {
       try {
         const caption = fileNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), span.url);
         const download = await this.downloadFile(span.url, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, span.full, download, pageId);
+          continue;
+        }
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
@@ -1405,7 +1415,10 @@ export class ImageHandler {
 
         const caption = savedNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, span.full, download, pageId, blockId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(span.full, () => obsidianLink);
@@ -1429,7 +1442,10 @@ export class ImageHandler {
         const url = match[1]!;
         const caption = fileNameOf(match[2] ?? "", url);
         const download = await this.downloadFile(url, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, match[0]!, download, pageId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
@@ -1464,7 +1480,10 @@ export class ImageHandler {
 
         const caption = savedNameOf(match[2] ?? "", fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, match[0]!, download, pageId, blockId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
@@ -1527,13 +1546,15 @@ export class ImageHandler {
         const contentLength = response.headers.get("content-length");
         const MAX_FILE_SIZE = this.maxFileSizeBytes;
         if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
-          const sizeMB = Math.round(parseInt(contentLength, 10) / 1024 / 1024);
-          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다.
+          const bytes = parseInt(contentLength, 10);
+          const sizeMB = Math.round(bytes / 1024 / 1024);
+          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다. 그 링크는 한 시간쯤
+          // 뒤 끊기므로 호출측이 끊기지 않는 «Notion 에서 열기» 링크를 옆에 둔다(D4).
           // push 는 restoreMediaTags 가 태그로 복원해 Notion 블록을 보존한다(실측: 동일 블록 유지).
           getLogger().info(
-            `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${sizeMB}MB > ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB), Notion 원본 링크 유지: ${caption}`,
+            `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${sizeMB}MB > ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB), Notion 에서 열기 링크를 둠: ${caption}`,
           );
-          return { originalUrl: url, localPath: "", hash: "", size: 0 };
+          return { originalUrl: url, localPath: "", hash: "", size: 0, skippedBytes: bytes };
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
@@ -1619,4 +1640,20 @@ export class ImageHandler {
     if (contentType && mimeMap[contentType]) return mimeMap[contentType]!;
     return "";
   }
+}
+
+/**
+ * 크기 상한을 넘어 받지 않은 파일이면 그 링크 옆에 «Notion 에서 열기» 링크를 둔다 — 다른 이유로 못 받았거나 어느
+ * 페이지인지 모르면 그대로다.
+ */
+function keepLargeFile(
+  content: string,
+  fileLink: string,
+  download: ImageDownloadResult,
+  pageId: string | undefined,
+  blockId?: string,
+): string {
+  if (download.skippedBytes === undefined || !pageId) return content;
+  const link = largeFileLink(notionFileLocation(pageId, blockId), download.skippedBytes);
+  return withLargeFileLink(content, fileLink, link);
 }

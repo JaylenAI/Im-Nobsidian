@@ -14,6 +14,7 @@ import { TableAlignmentGuard } from "./pre-processors/table-alignment.js";
 import { CodeLanguageGuard } from "./pre-processors/code-language-guard.js";
 import { BlankLineCollapser } from "./pre-processors/blank-line-collapser.js";
 import { HeadingMarkerLifter } from "./pre-processors/heading-marker-lifter.js";
+import { LargeFileLinkStripper } from "./pre-processors/large-file-link-stripper.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { EscapeNormalizer } from "./post-processors/escape-normalizer.js";
 import { HighlightRestorer } from "./post-processors/highlight-restorer.js";
@@ -39,6 +40,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   const pipeline = new ConversionPipeline();
 
   pipeline.registerPreProcessor(new HeadingMarkerLifter());
+  pipeline.registerPreProcessor(new LargeFileLinkStripper());
   pipeline.registerPreProcessor(new InlineAnnotationPreserver());
   pipeline.registerPreProcessor(new UnsupportedBlockStripper());
   pipeline.registerPreProcessor(new CommentStripper());
