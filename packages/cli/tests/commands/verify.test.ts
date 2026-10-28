@@ -81,8 +81,18 @@ const PAGES_COMPLETE = {
   complete: true,
 };
 
-const COMPLETE = { databases: DB_COMPLETE, pages: PAGES_COMPLETE, complete: true };
-const INCOMPLETE = { databases: DB_INCOMPLETE, pages: PAGES_COMPLETE, complete: false };
+const COMPLETE = {
+  databases: DB_COMPLETE,
+  pages: PAGES_COMPLETE,
+  nestedFolderPages: [],
+  complete: true,
+};
+const INCOMPLETE = {
+  databases: DB_INCOMPLETE,
+  pages: PAGES_COMPLETE,
+  nestedFolderPages: [],
+  complete: false,
+};
 
 describe("verify command", () => {
   beforeEach(() => {
@@ -124,6 +134,7 @@ describe("verify command", () => {
         complete: false,
       },
       pages: PAGES_COMPLETE,
+      nestedFolderPages: [],
       complete: false,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -178,6 +189,7 @@ describe("verify command", () => {
         localOnlyIds: [],
         complete: false,
       },
+      nestedFolderPages: [],
       complete: false,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -199,6 +211,7 @@ describe("verify command", () => {
         localOnlyIds: ["draft-1"],
         complete: true,
       },
+      nestedFolderPages: [],
       complete: true,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -223,6 +236,7 @@ describe("verify command", () => {
         error: "search unavailable",
         complete: false,
       },
+      nestedFolderPages: [],
       complete: false,
     });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
@@ -235,13 +249,55 @@ describe("verify command", () => {
   });
 
   it("DB 모드(pages=null)에서는 페이지 대조 생략을 명시한다", async () => {
-    mockVerify.mockResolvedValue({ databases: DB_COMPLETE, pages: null, complete: true });
+    mockVerify.mockResolvedValue({
+      databases: DB_COMPLETE,
+      pages: null,
+      nestedFolderPages: [],
+      complete: true,
+    });
     const spy = vi.spyOn(console, "log").mockImplementation(() => {});
 
     await runVerify();
 
     expect(process.exitCode).toBeUndefined();
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("skipped (database mode)"));
+    spy.mockRestore();
+  });
+
+  // ── P2 — 예전 빌드가 남긴 두 겹 폴더 페이지(ADR-012) ─────────────────────────
+
+  it("두 겹 폴더 페이지는 정리법과 함께 알리되 실패로 치지 않는다", async () => {
+    mockVerify.mockResolvedValue({
+      ...COMPLETE,
+      nestedFolderPages: [
+        {
+          folder: "프로젝트",
+          outer: { path: "프로젝트/프로젝트 (3e813b18).md", notionPageId: "outer-id" },
+          inner: { path: "프로젝트/프로젝트.md", notionPageId: "inner-id" },
+        },
+      ],
+    });
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runVerify();
+
+    const printed = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(printed).toContain("Nested same-name folder pages: 1");
+    expect(printed).toContain("outer 프로젝트/프로젝트 (3e813b18).md  outer-id");
+    expect(printed).toContain("inner 프로젝트/프로젝트.md  inner-id");
+    expect(printed).toContain("안쪽을 지운 뒤 pull");
+    expect(process.exitCode).toBeUndefined();
+    spy.mockRestore();
+  });
+
+  it("두 겹이 없으면 그 절을 찍지 않는다", async () => {
+    mockVerify.mockResolvedValue(COMPLETE);
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await runVerify();
+
+    const printed = spy.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(printed).not.toContain("Nested same-name folder pages");
     spy.mockRestore();
   });
 });

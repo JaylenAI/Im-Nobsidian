@@ -245,6 +245,7 @@ export {
   summarizeFidelity,
   verifyDatabaseCompleteness,
   verifyPageCompleteness,
+  findNestedFolderPages,
   lintRenderedMarkdown,
   RENDER_LINE_RULES,
   SEPARATOR_BODY,
@@ -264,6 +265,8 @@ export type {
   PageCompletenessRemoteSource,
   PageCompletenessReport,
   VaultCompletenessReport,
+  NestedFolderPage,
+  NestedFolderRecord,
   RenderFinding,
   RenderLineRule,
 } from "./audit/index.js";

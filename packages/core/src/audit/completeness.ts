@@ -27,6 +27,7 @@
  * 열거 규칙을 갖게 돼, 게이트가 통과해도 실제 pull 은 놓치는 상황이 생긴다.
  */
 
+import type { NestedFolderPage } from "./nested-folder-pages.js";
 import { compactNotionId } from "../utils/id.js";
 
 /** 원격 행 열거 — {@link NotionClient} 가 그대로 만족한다(전 data source 순회 SSOT). */
@@ -214,6 +215,11 @@ export interface VaultCompletenessReport {
   readonly databases: CompletenessReport;
   /** 페이지 모드에서만 채워진다. DB 모드에는 root 서브트리가 없어 `null`. */
   readonly pages: PageCompletenessReport | null;
+  /**
+   * 같은 이름의 두 겹 폴더 페이지 — 예전 빌드가 남긴 것(ADR-012). 알리기만 한다: 사람이 정할 일이라
+   * `complete` 에 넣지 않는다.
+   */
+  readonly nestedFolderPages: readonly NestedFolderPage[];
   /** 두 대조가 모두 통과. */
   readonly complete: boolean;
 }

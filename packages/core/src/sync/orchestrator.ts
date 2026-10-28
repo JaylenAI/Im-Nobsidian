@@ -25,6 +25,7 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
+import { findNestedFolderPages } from "../audit/nested-folder-pages.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
@@ -1410,7 +1411,12 @@ export class SyncOrchestrator {
           this.config.notion.rootPageId,
         );
 
-    return { databases, pages, complete: databases.complete && (pages?.complete ?? true) };
+    return {
+      databases,
+      pages,
+      nestedFolderPages: findNestedFolderPages(this.stateDb.getAll()),
+      complete: databases.complete && (pages?.complete ?? true),
+    };
   }
 
   async fetch(): Promise<{
