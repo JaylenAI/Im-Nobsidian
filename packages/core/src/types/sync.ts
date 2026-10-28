@@ -158,6 +158,11 @@ export interface PushResult {
    * 값으로 되돌리므로 화면이 알린다. 예전에는 로그 한 줄만 남아 고친 값이 말없이 사라졌다. 없으면 빈 목록 · 생략.
    */
   readonly readOnlySkipped?: readonly ReadOnlySkip[];
+  /**
+   * 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(`sync.deleteSync` 꺼짐) — 다음 pull 이 Notion 에서 되살린다.
+   * 예전에는 아무 말 없이 대기로 적기만 해, 지운 파일이 다음 pull 에 말없이 돌아왔다(D8). 없으면 빈 목록 · 생략.
+   */
+  readonly unsentDeletions?: readonly string[];
 }
 
 /** 노트 하나에서 올리지 않은 읽기 전용 속성. */
@@ -211,6 +216,8 @@ export interface PullResult {
    * 파일이 없어졌다가 복구됐다는 사실 자체를 알 수 없다.
    */
   readonly restored: number;
+  /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
+  readonly restoredPaths?: readonly string[];
   readonly conflicts: Conflict[];
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];

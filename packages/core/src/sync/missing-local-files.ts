@@ -8,6 +8,21 @@ import type { VaultFS } from "./vault-fs.js";
 import { isMarkdownPath } from "../utils/markdown-path.js";
 
 /**
+ * deleteSync 가 꺼져 있을 때 볼트에서 지우면 pull 이 Notion 에서 되살리는 레코드인가 — 노트는
+ * {@link detectMissingLocalFiles} 가, 행은 그 DB 의 조회가 되살린다. push 가 «다음 pull 이 되살린다» 고
+ * 알릴 대상이다(D8). 폴더 페이지는 실체가 폴더라 되살리지 않는다.
+ */
+export function restoredWhenMissing(record: SyncRecord): boolean {
+  return (
+    record.notionPageId !== null &&
+    !isFolderRecord(record) &&
+    (record.fileType === "file" ||
+      record.fileType === "folder-note" ||
+      record.fileType === "db-row")
+  );
+}
+
+/**
  * 추적 중(sync_state)인데 디스크에서 사라진 파일을 찾는다.
  *
  * 원격 변경 감지(detectRemoteChanges*)는 "Notion 에서 바뀐 것"만 본다. 로컬에서 파일이

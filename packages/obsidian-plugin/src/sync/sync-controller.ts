@@ -297,7 +297,7 @@ export class SyncController {
       (result) => ({
         summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
-        warning: readOnlyText(result),
+        warning: warnings(readOnlyText(result), unsentDeletionText(result)),
       }),
     );
   }
@@ -326,6 +326,7 @@ export class SyncController {
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
+        warning: restoredText(result),
       }),
       (result) => this.dropPulled(result, paths),
     );
@@ -339,7 +340,11 @@ export class SyncController {
       (result) => ({
         summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
-        warning: readOnlyText(result.push),
+        warning: warnings(
+          restoredText(result.pull),
+          readOnlyText(result.push),
+          unsentDeletionText(result.push),
+        ),
       }),
       (result) => this.dropPulled(result.pull),
     );
@@ -777,6 +782,37 @@ function readOnlyText(result: PushResult): string | null {
     `읽기 전용 속성은 Notion 이 값을 정해 올리지 않았습니다 — 다음 Pull 이 Notion 값으로 되돌립니다: ` +
     `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""} (노트 ${skips.length}개)`
   );
+}
+
+/** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 Pull 이 되살린다(D8). */
+function unsentDeletionText(result: PushResult): string | null {
+  const paths = result.unsentDeletions ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `볼트에서 지운 노트 ${paths.length}개는 Notion 에서 지우지 않았습니다(삭제 동기화 꺼짐) — 다음 Pull 이 되살립니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** Pull 이 Notion 에서 되살린 노트 — 볼트에서 지웠지만 Notion 에 그대로 있던 것(D8). */
+function restoredText(result: PullResult): string | null {
+  const paths = result.restoredPaths ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** 알림에 늘어놓는 경로 — 셋까지, 나머지는 수로. */
+function listedPaths(paths: readonly string[]): string {
+  return `${paths.slice(0, 3).join(", ")}${paths.length > 3 ? ` 외 ${paths.length - 3}개` : ""}`;
+}
+
+/** 경고 여럿을 한 알림으로 — 없으면 null. */
+function warnings(...texts: (string | null)[]): string | null {
+  const present = texts.filter((text): text is string => text !== null);
+  return present.length > 0 ? present.join("\n") : null;
 }
 
 /**
