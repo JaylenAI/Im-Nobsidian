@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { TFile, type Vault } from "obsidian";
+import { TFile, TFolder, type Vault } from "obsidian";
 import { ObsidianVaultAdapter } from "../src/vault-adapter.js";
 
 function createFile(path: string, opts?: { size?: number; mtime?: number }): TFile {
@@ -146,6 +146,46 @@ describe("ObsidianVaultAdapter", () => {
 
     it("존재하지 않는 파일 삭제는 무시", async () => {
       await adapter.deleteFile("nonexistent.md");
+      expect(vault.trash).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("removeEmptyFolder", () => {
+    function folder(path: string, children: unknown[] = []): TFolder {
+      const f = new TFolder();
+      f.path = path;
+      f.name = path.split("/").pop()!;
+      f.children = children;
+      fileObjects.set(path, f as unknown as TFile);
+      return f;
+    }
+    const listed = (files: string[] = []) => {
+      vault.adapter = { list: vi.fn(async () => ({ files, folders: [] })) };
+    };
+
+    it("빈 폴더는 휴지통으로", async () => {
+      const empty = folder("빈");
+      listed();
+      await expect(adapter.removeEmptyFolder("빈")).resolves.toBe(true);
+      expect(vault.trash).toHaveBeenCalledWith(empty, true);
+    });
+
+    it("노트 · 숨김 파일이 남은 폴더는 둔다", async () => {
+      folder("노트 있음", [fileObjects.get("notes/hello.md")]);
+      listed();
+      await expect(adapter.removeEmptyFolder("노트 있음")).resolves.toBe(false);
+
+      // Obsidian 의 목록은 숨김 파일을 빼므로 디스크 목록으로 본다.
+      folder("숨김");
+      listed(["숨김/.DS_Store"]);
+      await expect(adapter.removeEmptyFolder("숨김")).resolves.toBe(false);
+      expect(vault.trash).not.toHaveBeenCalled();
+    });
+
+    it("없는 경로 · 파일은 false", async () => {
+      listed();
+      await expect(adapter.removeEmptyFolder("없음")).resolves.toBe(false);
+      await expect(adapter.removeEmptyFolder("notes/hello.md")).resolves.toBe(false);
       expect(vault.trash).not.toHaveBeenCalled();
     });
   });
