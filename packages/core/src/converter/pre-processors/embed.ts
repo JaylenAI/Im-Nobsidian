@@ -13,6 +13,7 @@ import {
   mapOutsideInlineCode,
 } from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
+import { mediaLabel } from "../media-labels.js";
 import { pushContainerKind } from "../container-head.js";
 
 /**
@@ -135,7 +136,7 @@ export class EmbedResolver implements Processor {
           // 볼트의 동영상 표기로 — push 가 Notion 의 동영상 블록(`<video>`)으로 보낸다(`restoreMediaTags`).
           // 예전에는 보존 마커를 붙였는데 읽는 곳이 없어 Notion 에 마커 글이 문단으로 올라갔다. 이미지
           // 링크 그대로 보내면 Notion 은 그림 블록을 만든다(2026-10-20 실측).
-          return `[🎬 ${alt || "video"}](${url})`;
+          return `[${mediaLabel("video", alt)}](${url})`;
         }
         if (isExternalUrl(url)) {
           images.push({ url, isExternal: true });
