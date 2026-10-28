@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-28
+
+> 동기화가 말없이 잃거나 다르게 두던 것을 막는다 — 긴 한글 이름 · 제목 색 마커 · 읽기 전용 속성 · 고친 `.base` · 큰 파일 ·
+> 제목 서식, 그리고 다른 볼트의 증분 pull 이 Notion 삭제를 알아챈다(ADR-042 ~ 044). 새로 받는 파일 이름 규칙이 바뀌어
+> 마이너를 올린다.
+
 ### Added
 
 - **Notion HTML 블록 ↔ 볼트 `.html` 첨부** — Notion 이 호스팅한 `.html` 은 읽으면 서명 URL 의 embed 라, 예전 pull 은
