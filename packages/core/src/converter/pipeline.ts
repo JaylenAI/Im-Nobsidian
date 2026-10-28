@@ -10,7 +10,6 @@ import { getLogger } from "../utils/logger.js";
 import { MARKER_BRAND_RE } from "../constants/markers.js";
 
 const INLINE_DB_PROBE = new RegExp(`%% ${MARKER_BRAND_RE}:inline-db`);
-const TOGGLE_HEADING_PROBE = new RegExp(`%% ${MARKER_BRAND_RE}:toggle-heading`);
 
 export class ConversionPipeline {
   private readonly preProcessors: Processor[] = [];
@@ -26,12 +25,15 @@ export class ConversionPipeline {
     this.postProcessors.sort((a, b) => a.order - b.order);
   }
 
+  /**
+   * 토글 헤딩은 Markdown API 경로가 변환한다(`toggle-heading.ts`) — 블록 경로로 보내면 콜아웃이 옛 이모지 꼴로
+   * 바뀐다(`CalloutTransformer`). 예전에 여기 있던 토글 헤딩 탐지는 띄어 쓴 마커를 찾아 한 번도 맞지 않았다.
+   */
   selectPath(content: string): ConversionPath {
     const hasInlineDb = INLINE_DB_PROBE.test(content);
     const hasColumnLayout = />\s*\[!col\]/.test(content);
-    const hasToggleHeading = TOGGLE_HEADING_PROBE.test(content);
 
-    if (hasInlineDb || hasColumnLayout || hasToggleHeading) {
+    if (hasInlineDb || hasColumnLayout) {
       return "block-api";
     }
 
