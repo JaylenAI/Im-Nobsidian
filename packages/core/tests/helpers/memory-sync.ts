@@ -100,6 +100,14 @@ export class MemoryVault {
       }
     });
     fs.ensureFolder.mockImplementation(async (folder: string) => this.addFolders(`${folder}/`));
+    // 파일 시스템의 rmdir 처럼 — 안에 파일 · 폴더가 하나라도 있으면 두고 false.
+    fs.removeEmptyFolder.mockImplementation(async (folder: string) => {
+      if (!this.folders.has(folder)) return false;
+      const inside = (path: string) => path.startsWith(`${folder}/`);
+      if ([...this.files.keys()].some(inside) || [...this.folders].some(inside)) return false;
+      this.folders.delete(folder);
+      return true;
+    });
     // 노트도 폴더도 옮긴다 — Obsidian 의 vault.rename 처럼.
     fs.moveFile.mockImplementation(async (from: string, to: string) => {
       if (this.files.has(from)) this.rename(from, to);

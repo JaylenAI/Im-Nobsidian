@@ -178,6 +178,10 @@ export class ScopedVaultFS implements VaultFS {
     return await this.base.ensureFolder(this.toBase(path, true));
   }
 
+  async removeEmptyFolder(path: string): Promise<boolean> {
+    return (await this.base.removeEmptyFolder?.(this.toBase(path, true))) ?? false;
+  }
+
   /** 맡은 노트만 읽는다 — 볼트 전체의 본문을 읽지 않는다. */
   async listMarkdownFiles(): Promise<FileInfo[]> {
     const stats = await this.listMarkdownFileStats();

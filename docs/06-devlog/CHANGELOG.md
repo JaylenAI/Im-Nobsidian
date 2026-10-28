@@ -47,6 +47,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`deleteSync` 가 꺼진 볼트에서 지운 노트가 다음 pull 에 말없이 돌아오던 것** — push 는 Notion 에서 지우지 않고 대기로
   적기만 했고, pull 은 「N restored」 수만 알렸다. 이제 push 는 되살아날 노트를(`--json` `unsentDeletions`), pull 은 되살린 ·
   되살릴(dry-run) 노트 · 행을 경로로 알린다(`restoredPaths`). `status` 의 지운 파일 목록도 알린다. 플러그인 알림도 같다(D8).
+- **Notion 에서 지운 폴더 페이지의 빈 폴더가 볼트에 남던 것** — pull 이 노트는 지웠지만 하위 페이지가 들던 폴더를 남겼다.
+  이제 pull 이 마칠 때 지운 페이지의 폴더가 완전히 비었으면 안쪽부터 지운다. 사용자 파일 · 숨김 파일이 남은 폴더와 DB 폴더는 둔다.
 
 ## [0.11.0] - 2026-10-26
 
