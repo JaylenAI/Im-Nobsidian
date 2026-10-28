@@ -44,6 +44,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   것만 search 로 찾는데, Notion 은 지운 것을 목록으로 주지 않는다(search · DB 조회 모두 휴지통을 빼고 `in_trash` 는 400, 실측).
   이제 pull 마다 추적 중인 페이지 · 행을 차례로 15개씩 원격에 묻는다 — 작은 볼트는 pull 마다 모두. 폴더 페이지를 지웠으면 그
   아래 노트도 같은 pull 이 지운다. 필터 DB 는 «필터 밖» 과 «지움» 을 물어서 가른다(ADR-044).
+- **`deleteSync` 가 꺼진 볼트에서 지운 노트가 다음 pull 에 말없이 돌아오던 것** — push 는 Notion 에서 지우지 않고 대기로
+  적기만 했고, pull 은 「N restored」 수만 알렸다. 이제 push 는 되살아날 노트를(`--json` `unsentDeletions`), pull 은 되살린 ·
+  되살릴(dry-run) 노트 · 행을 경로로 알린다(`restoredPaths`). `status` 의 지운 파일 목록도 알린다. 플러그인 알림도 같다(D8).
 
 ## [0.11.0] - 2026-10-26
 

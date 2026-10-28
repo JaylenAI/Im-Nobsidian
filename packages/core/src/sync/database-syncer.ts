@@ -154,6 +154,8 @@ export class DatabaseSyncer {
     renamed: [],
     applied: [],
   };
+  /** 볼트에서 사라져 되살린 행의 경로 — pull 마감이 가져가 화면에 알린다(D8). */
+  private restoredRows: string[] = [];
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -366,8 +368,10 @@ export class DatabaseSyncer {
           if (outcome.action === "written") writtenPaths.push(outcome.path);
         } else if (outcome.action === "written") {
           // 원격 무변경인데도 되살린 행은 updated 와 가른다.
-          if (action === "restore") restored++;
-          else updated++;
+          if (action === "restore") {
+            restored++;
+            this.restoredRows.push(outcome.path);
+          } else updated++;
           writtenPaths.push(outcome.path);
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
@@ -1181,6 +1185,13 @@ export class DatabaseSyncer {
     }
     return (path) =>
       this.stateDb.getByPath(path) ?? (untracked.has(path) ? { notionPageId: null } : null);
+  }
+
+  /** 되살린 행의 경로를 가져가고 비운다. */
+  takeRestoredRows(): string[] {
+    const rows = this.restoredRows;
+    this.restoredRows = [];
+    return rows;
   }
 
   /** 이름을 바꾼 행을 가져가고 비운다. */
