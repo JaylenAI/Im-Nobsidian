@@ -886,6 +886,7 @@ export class SyncOrchestrator {
           this.stateDb.setMeta(LAST_FULL_PULL_META_KEY, startedAt);
         }
         this.detector.savePendingDatabases(ledger);
+        this.detector.saveDeletionSweep();
       }
       this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
       this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "");
@@ -906,6 +907,7 @@ export class SyncOrchestrator {
             scan,
             this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
             this.config.sync.deleteSync,
+            this.detector.deletionsChecked(),
           ),
           skippedDatabases: ledger.skipped,
         },
@@ -979,6 +981,10 @@ export class SyncOrchestrator {
       );
       return {
         ...plan,
+        remoteScan: plan.remoteScan && {
+          ...plan.remoteScan,
+          deletionsDeferred: plan.remoteScan.deletionsDeferred && !this.detector.deletionsChecked(),
+        },
         moved: relocated.moved,
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],

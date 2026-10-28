@@ -18,6 +18,11 @@ import { extractParentId } from "./notion-parent.js";
 import { movedInNotion } from "./remote-moves.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { incrementalSearchSince } from "./pull-watermark.js";
+import {
+  DELETION_SWEEP_CURSOR_META_KEY,
+  sweepBatch,
+  trackedDescendants,
+} from "./deletion-sweep.js";
 import { remoteDeletionChange, remotePresence } from "./remote-deletion.js";
 import { remoteStampOf, type RemotePageStamp } from "./remote-observation.js";
 import {
@@ -76,6 +81,13 @@ export class RemoteDetector {
   // Notion 에서 부모가 바뀐 추적 페이지(정규화 id → 새 부모 페이지 id) — pull 이 볼트에서도 옮긴다(ADR-039).
   // 옮겨도 수정 시각이 바뀌지 않아(실측) 변경으로는 보이지 않는다. 감지마다 다시 채운다.
   private readonly _moved = new Map<string, string>();
+
+  // 증분 감지가 search 로 살아 있다고 본 페이지(압축 id) — 삭제 확인이 다시 묻지 않는다.
+  private readonly _seenAlive = new Set<string>();
+  // 이번 감지가 삭제를 물은 뒤의 커서 — pull 이 마칠 때 적는다({@link saveDeletionSweep}). undefined 면 묻지 않았다.
+  private _sweepCursor: string | null | undefined;
+  // 이번 감지가 추적 중인 것을 모두 물었나 — 그러면 증분이어도 미룬 삭제가 없다.
+  private _sweptAll = false;
 
   constructor(
     private readonly config: Config,
@@ -202,12 +214,97 @@ export class RemoteDetector {
     scan: RemoteScan,
     options: { readonly signal?: AbortLike; readonly databases: boolean },
   ): Promise<RemoteDetection> {
+    this._seenAlive.clear();
+    this._sweepCursor = undefined;
+    this._sweptAll = false;
     const detection =
       scan.kind === "full"
         ? { changes: await this.detectRemoteChanges(options.signal), databaseIds: null }
         : await this.detectRemoteChangesIncremental(scan.since, options);
+    // 상태 확인은 묻지 않는다 — 요청을 아끼는 자리다. pull · dry-run 만 묻는다.
+    if (options.databases) {
+      detection.changes.push(
+        ...(await this.sweepDeletions(scan, detection.changes, options.signal)),
+      );
+    }
     this.beginDetection(detection.changes);
     return detection;
+  }
+
+  /**
+   * 이번 감지가 보지 못하는 삭제를 차례로 몇 개씩 원격에 묻는다({@link sweepBatch}). Notion 은 지운 것을
+   * 목록으로 주지 않는다 — search · DB 조회 모두 휴지통을 돌려주지 않고 거르지도 못한다(ADR-044).
+   *
+   * - 증분 → 추적 중인 페이지 · 행 모두가 차례에 든다. search 가 살아 있다고 보인 것은 뺀다.
+   * - 전체 대조 → 조회 필터를 단 DB 의 행만. 나머지는 순회 · DB 조회가 가른다. 필터를 단 DB 는 조회에 없는
+   *   행이 필터 밖인지 지워진 것인지 몰라 가르지 않는다(DatabaseSyncer) — 여기서 하나씩 묻는다.
+   *
+   * 지워진 페이지 아래의 추적 페이지는 차례와 상관없이 함께 묻는다 — 부모를 휴지통에 넣으면 그 아래도 모두
+   * 휴지통이다(실측 2026-10-28). 삭제는 deleteSync 일 때만, 첫 pull 이 아닐 때만 가른다 — 전체 대조와 같다.
+   */
+  private async sweepDeletions(
+    scan: RemoteScan,
+    found: readonly RemoteChange[],
+    signal?: AbortLike,
+  ): Promise<RemoteChange[]> {
+    if (!this.config.sync.deleteSync || !this.stateDb.getMeta(LAST_PULL_META_KEY)) return [];
+    const records = this.stateDb.getAll();
+    const candidates =
+      scan.kind === "incremental" ? records : records.filter((r) => this.inFilteredDatabase(r));
+    const skip = new Set([...this._seenAlive, ...found.map((c) => compactNotionId(c.pageId))]);
+    const { batch, next, complete } = sweepBatch(
+      candidates,
+      this.stateDb.getMeta(DELETION_SWEEP_CURSOR_META_KEY) || null,
+      skip,
+    );
+    this._sweepCursor = next;
+    // 전체 대조는 나머지를 순회 · DB 조회가 가른다 — 여기서 «모두» 는 증분일 때만 뜻이 있다.
+    this._sweptAll = scan.kind === "incremental" && complete;
+
+    const deletions: RemoteChange[] = [];
+    const gone = new Set<string>();
+    const ask = async (record: SyncRecord): Promise<void> => {
+      throwIfAborted(signal);
+      const id = compactNotionId(record.notionPageId!);
+      try {
+        if ((await remotePresence(this.notionClient, record.notionPageId!)).kind !== "gone") return;
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] ${record.obsidianPath} — 원격을 확인하지 못해 이번에는 삭제를 가르지 않음:`,
+          error,
+        );
+        return;
+      }
+      gone.add(id);
+      deletions.push(remoteDeletionChange(record));
+    };
+    for (const record of batch) await ask(record);
+    const asked = new Set(batch.map((r) => compactNotionId(r.notionPageId!)));
+    for (const record of trackedDescendants(records, gone)) {
+      const id = compactNotionId(record.notionPageId!);
+      if (!asked.has(id) && !skip.has(id)) await ask(record);
+    }
+    return deletions;
+  }
+
+  /** 조회 필터(`pullFilter`)를 단 설정 DB 의 행인가. */
+  private inFilteredDatabase(record: SyncRecord): boolean {
+    if (record.fileType !== "db-row" || record.notionParentId === null) return false;
+    return (this.config.notion.databases ?? []).some(
+      (db) => db.pullFilter !== undefined && notionIdsEqual(db.databaseId, record.notionParentId!),
+    );
+  }
+
+  /** 이번 감지가 추적 중인 페이지 · 행을 모두 원격에 물었나 — 결과의 `deletionsDeferred` 를 가른다. */
+  deletionsChecked(): boolean {
+    return this._sweptAll;
+  }
+
+  /** 삭제를 물은 자리를 적는다 — 다음 pull 이 이어서 묻는다. 경로를 좁힌 pull · dry-run 은 부르지 않는다. */
+  saveDeletionSweep(): void {
+    if (this._sweepCursor !== undefined) {
+      this.stateDb.setMeta(DELETION_SWEEP_CURSOR_META_KEY, this._sweepCursor ?? "");
+    }
   }
 
   /**
@@ -415,9 +512,8 @@ export class RemoteDetector {
 
   /**
    * 증분 원격 변경 감지 — `since` 이후 수정된 페이지만 search 로 받아 created/modified 만
-   * 만든다. **삭제는 감지하지 않는다**: search API 는 in_trash/archived 페이지를 반환하지 않아
-   * (=사라진 것을 증분만으로는 구분 불가) 삭제는 전체 대조(`detectRemoteChanges`)가 가른다.
-   * 전체 대조는 주기마다 돈다(ADR-027 — 예전에는 deleteSync 가 켜져 있으면 매번 돌았다. I10).
+   * 만든다. search API 는 in_trash/archived 페이지를 반환하지 않아 삭제는 여기서 보이지 않는다 —
+   * 차례로 묻는 삭제 확인({@link sweepDeletions})과 주기마다 도는 전체 대조(ADR-027)가 가른다.
    *
    * 바뀐 행 · 새 행 · 스키마를 고친 DB 도 모은다 — pull 은 그 DB 만 조회한다. 새 행은 페이지로 받지
    * 않는다: DB 조회가 행 속성과 함께 받는다. 그래서 부모를 묻지 않는다(행마다 요청 1회 이상 아낀다).
@@ -445,6 +541,7 @@ export class RemoteDetector {
     }> = [];
 
     for (const page of recentPages) {
+      this._seenAlive.add(compactNotionId(page.id));
       const record = this.stateDb.getByNotionId(page.id);
       if (!record) {
         if (page.parentDatabaseId) {

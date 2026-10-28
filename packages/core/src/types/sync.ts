@@ -192,7 +192,8 @@ export interface RemoteScanInfo {
   readonly nextFullAt: string | null;
   /**
    * Notion 에서 지운 노트가 아직 볼트에 반영되지 않았을 수 있나 — 바뀐 것만 찾았고 원격 삭제를 볼트에
-   * 반영하는 설정(`sync.deleteSync`)일 때. 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
+   * 반영하는 설정(`sync.deleteSync`)일 때. pull 은 추적 중인 것을 차례로 몇 개씩 묻는다 — 이번에 모두
+   * 물었으면 false 다. 나머지는 다음 pull 들 · 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
    * 볼트에 반영하지 않으므로 늘 false 다.
    */
   readonly deletionsDeferred: boolean;

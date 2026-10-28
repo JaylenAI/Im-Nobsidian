@@ -158,8 +158,8 @@ describe.each([
         kind: "incremental",
         lastFullAt: time("10:05:00"),
         nextFullAt: time("11:05:00"),
-        // 원격 삭제를 반영하는 설정이다 — 바뀐 것만 찾았으니 지운 것은 다음 전체 대조가 반영한다.
-        deletionsDeferred: true,
+        // 원격 삭제를 반영하는 설정이다 — 작은 볼트라 추적 중인 것을 모두 물었다. 미룬 삭제가 없다.
+        deletionsDeferred: false,
         skippedDatabases: 2,
       },
     });
@@ -234,7 +234,7 @@ describe.each([
     expect(notion.client.searchRecentDataSources).toHaveBeenCalledWith(time("09:50:00"), undefined);
   });
 
-  it("원격에서 지운 행은 증분이 보지 못하고 다음 전체 대조가 지운다", async () => {
+  it("원격에서 지운 행은 다음 증분 pull 이 원격에 물어 지운다 — DB 를 조회하지 않고", async () => {
     const { orchestrator, r2 } = await synced();
     at("10:20:00");
     notion.edit(r2.id, (page) => {
@@ -242,21 +242,20 @@ describe.each([
     });
     at("10:21:00");
 
+    // search 는 휴지통을 돌려주지 않고, 행을 휴지통에 넣어도 DB 의 수정 시각은 그대로다 — 삭제 확인이 묻는다.
     const between = await orchestrator.pull();
-    expect(between).toMatchObject({ deleted: 0, remoteScan: { kind: "incremental" } });
-    expect(vault.read("Tasks/R2.md")).toBeDefined();
-
-    // 마지막 전체 대조(10:05)에서 주기(1시간)가 지났다.
-    at("11:05:00");
-    const due = await orchestrator.pull();
-
-    expect(due).toMatchObject({
+    expect(between).toMatchObject({
       deleted: 1,
       failed: [],
-      remoteScan: { kind: "full", reason: "due", lastFullAt: time("11:05:00") },
+      remoteScan: { kind: "incremental", deletionsDeferred: false },
     });
     expect(vault.read("Tasks/R2.md")).toBeUndefined();
-    expect(queried()).toEqual([TASKS, NOTES]);
+    expect(queried()).toEqual([]);
+
+    // 마지막 전체 대조(10:05)에서 주기(1시간)가 지났다 — 이미 지웠으니 더 지울 것이 없다.
+    at("11:05:00");
+    const due = await orchestrator.pull();
+    expect(due).toMatchObject({ deleted: 0, failed: [], remoteScan: { kind: "full" } });
   });
 
   it("--force 는 주기 안이어도 전체 대조해 원격 삭제를 반영한다", async () => {

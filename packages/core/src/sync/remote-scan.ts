@@ -96,11 +96,14 @@ function nextFullReconcileAt(lastFullPullAt: string | null, intervalSec: number)
  * 결과에 싣는 모양 — 화면이 「원격 삭제는 언제 반영되나」 를 알린다.
  *
  * @param deleteSync 원격 삭제를 볼트에 반영하는 설정인가 — 꺼져 있으면 미룰 삭제도 없다.
+ * @param deletionsChecked 이번에 추적 중인 것을 모두 원격에 물었나(삭제 확인 — `deletion-sweep`). 그러면
+ *   증분이어도 미룬 삭제가 없다.
  */
 export function remoteScanInfo(
   scan: RemoteScan,
   lastFullPullAt: string | null,
   deleteSync: boolean,
+  deletionsChecked = false,
 ): RemoteScanInfo {
   return scan.kind === "full"
     ? {
@@ -114,7 +117,7 @@ export function remoteScanInfo(
         kind: "incremental",
         lastFullAt: scan.lastFullAt,
         nextFullAt: scan.nextFullAt,
-        deletionsDeferred: deleteSync,
+        deletionsDeferred: deleteSync && !deletionsChecked,
       };
 }
 
