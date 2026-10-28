@@ -354,6 +354,14 @@ export class PropertyMapper {
     return keys.filter((key) => this.schema.get(key)?.type === "relation");
   }
 
+  /** 이 속성들 가운데 Notion 이 값을 정하는 것(수식 · 롤업 · ID · 생성일 …) — 볼트에서 고쳐도 보낼 수 없다. */
+  readOnlyKeys(keys: readonly string[]): string[] {
+    return keys.filter((key) => {
+      const type = this.schema.get(key)?.type;
+      return type !== undefined && READ_ONLY_TYPES.has(type);
+    });
+  }
+
   /**
    * 값을 보낼 수 있는 속성만, pull 이 적는 모양으로 — 원격 값과 로컬 값을 견줄 때 쓴다.
    *

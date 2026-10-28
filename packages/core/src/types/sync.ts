@@ -153,6 +153,17 @@ export interface PushResult {
   readonly moved: number;
   readonly failed: FailedOperation[];
   readonly duration: number;
+  /**
+   * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성(수식 · 롤업 · ID …) — Notion 이 값을 정한다. 다음 pull 이 Notion
+   * 값으로 되돌리므로 화면이 알린다. 예전에는 로그 한 줄만 남아 고친 값이 말없이 사라졌다. 없으면 빈 목록 · 생략.
+   */
+  readonly readOnlySkipped?: readonly ReadOnlySkip[];
+}
+
+/** 노트 하나에서 올리지 않은 읽기 전용 속성. */
+export interface ReadOnlySkip {
+  readonly path: string;
+  readonly properties: readonly string[];
 }
 
 /**

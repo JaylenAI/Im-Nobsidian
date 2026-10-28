@@ -363,6 +363,7 @@ export class SyncOrchestrator {
     this.rowSchemas.clear();
     this.placement.resetUnpreparedFolders();
     this.databaseCreator.reset();
+    this.pusher.takeReadOnlySkips(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -672,6 +673,7 @@ export class SyncOrchestrator {
       moved: counts.moved,
       failed,
       duration: Date.now() - startTime,
+      readOnlySkipped: this.pusher.takeReadOnlySkips(),
     };
   }
 
