@@ -25,6 +25,7 @@ vi.mock("chalk", () => {
 import {
   lastFullScanText,
   localDateTime,
+  readOnlySkipLines,
   remoteDeletionHint,
   remoteScanLines,
 } from "../../src/utils/format.js";
@@ -104,5 +105,25 @@ describe("lastFullScanText", () => {
   it("마지막 전체 대조 시각 — 한 번도 없으면 never", () => {
     expect(lastFullScanText(localIso(10, 5))).toBe("2026-09-28 10:05:00");
     expect(lastFullScanText(null)).toBe("never");
+  });
+});
+
+describe("readOnlySkipLines", () => {
+  it("올리지 않은 읽기 전용 속성을 노트별로 — 다음 pull 이 되돌린다고 말한다", () => {
+    expect(
+      readOnlySkipLines([
+        { path: "db/가.md", properties: ["합계", "ID"] },
+        { path: "db/나.md", properties: ["합계"] },
+      ]),
+    ).toEqual([
+      "⚠ 읽기 전용 속성 3개는 올리지 않았습니다 — Notion 이 값을 정합니다(수식 · 롤업 · ID …). 다음 pull 이 Notion 값으로 되돌립니다:",
+      "  db/가.md — 합계, ID",
+      "  db/나.md — 합계",
+    ]);
+  });
+
+  it("없으면 아무 줄도 없다", () => {
+    expect(readOnlySkipLines(undefined)).toEqual([]);
+    expect(readOnlySkipLines([])).toEqual([]);
   });
 });

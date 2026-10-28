@@ -144,6 +144,18 @@ describe("--json 출력 계약", () => {
     expect(log).not.toHaveBeenCalled();
   });
 
+  it("push: 올리지 않은 읽기 전용 속성을 싣는다 — churn 에는 들지 않는다", async () => {
+    const readOnlySkipped = [{ path: "db/가.md", properties: ["합계"] }];
+    mockPush.mockResolvedValueOnce({ ...pushResult, readOnlySkipped });
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 3, readOnlySkipped });
+
+    mockPush.mockResolvedValueOnce(pushResult);
+    write.mockClear();
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ readOnlySkipped: [] });
+  });
+
   it("sync: Pull 이 무변경이어도 Push 변경을 churn 으로 센다", async () => {
     mockPull.mockResolvedValueOnce({ ...pullResult, restored: 0, writtenPaths: [] });
     await run(syncCommand, "sync", "--json");

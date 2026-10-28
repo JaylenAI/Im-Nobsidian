@@ -18,6 +18,7 @@ import type {
   RemoteChange,
   Conflict,
   PullResult,
+  PushResult,
   RenameKind,
   ResolutionChoice,
   StatusResult,
@@ -254,7 +255,7 @@ export class SyncController {
     operation: SyncOperation,
     label: string,
     call: (options: { onProgress: ProgressCallback; signal: AbortSignal }) => Promise<R>,
-    report: (result: R) => { summary: string; phase: SyncPhase },
+    report: (result: R) => { summary: string; phase: SyncPhase; warning?: string | null },
     completed?: (result: R) => void,
   ): Promise<void> {
     if (!this.admit(operation)) return;
@@ -265,10 +266,11 @@ export class SyncController {
         if (signal.aborted) {
           this.cancelled();
         } else {
-          const { summary, phase } = report(result);
+          const { summary, phase, warning } = report(result);
           this.hooks.onNotice?.(
             `${NOTICE_PREFIX}: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
           );
+          if (warning) this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${warning}`, ACTIONABLE_NOTICE_MS);
           this.hooks.onStatusBar?.(phase);
           // 패널도 상태바와 같은 단계로 둔다 — 아래 새로고침이 실패해도 「동기화 중」 에 남지 않는다.
           this.emitState({
@@ -295,6 +297,7 @@ export class SyncController {
       (result) => ({
         summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
+        warning: readOnlyText(result),
       }),
     );
   }
@@ -336,6 +339,7 @@ export class SyncController {
       (result) => ({
         summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
+        warning: readOnlyText(result.push),
       }),
       (result) => this.dropPulled(result.pull),
     );
@@ -758,6 +762,20 @@ function movedText(result: PullResult): string {
     (renamed > 0 ? ` / 이름 변경 ${renamed}` : "") +
     (result.relinked?.length ? ` / 링크 고침 ${result.relinked.length}` : "") +
     (result.excluded?.length ? ` / 받지 않음 ${result.excluded.length}(동기화 범위 밖)` : "")
+  );
+}
+
+/**
+ * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성(수식 · 롤업 · ID …) — 다음 Pull 이 Notion 값으로 되돌린다. 예전에는
+ * 로그에만 남아 고친 값이 말없이 사라졌다.
+ */
+function readOnlyText(result: PushResult): string | null {
+  const skips = result.readOnlySkipped ?? [];
+  if (skips.length === 0) return null;
+  const names = [...new Set(skips.flatMap((skip) => skip.properties))];
+  return (
+    `읽기 전용 속성은 Notion 이 값을 정해 올리지 않았습니다 — 다음 Pull 이 Notion 값으로 되돌립니다: ` +
+    `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""} (노트 ${skips.length}개)`
   );
 }
 

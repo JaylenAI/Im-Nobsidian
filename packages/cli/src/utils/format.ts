@@ -1,5 +1,10 @@
 import chalk from "chalk";
-import type { FullScanReason, ProgressItem, RemoteScanInfo } from "@im-nobsidian/core";
+import type {
+  FullScanReason,
+  ProgressItem,
+  ReadOnlySkip,
+  RemoteScanInfo,
+} from "@im-nobsidian/core";
 
 export const icons = {
   create: chalk.green("+"),
@@ -140,4 +145,20 @@ export function dimText(text: string): string {
 export function failedItem(path: string, error: string, direction?: string): void {
   const where = `${direction ? `${direction} ` : ""}${path || "/"}`;
   console.log(`  ${icons.fail} ${where}: ${chalk.red(error)}`);
+}
+
+/**
+ * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. 실패는 아니라 종료 코드는
+ * 그대로지만, 고친 값이 사라지기 전에 알아야 한다. 없으면 빈 목록.
+ */
+export function readOnlySkipLines(skips: readonly ReadOnlySkip[] | undefined): string[] {
+  if (!skips || skips.length === 0) return [];
+  const count = skips.reduce((sum, skip) => sum + skip.properties.length, 0);
+  return [
+    chalk.yellow(
+      `⚠ 읽기 전용 속성 ${count}개는 올리지 않았습니다 — Notion 이 값을 정합니다(수식 · 롤업 · ID …). ` +
+        "다음 pull 이 Notion 값으로 되돌립니다:",
+    ),
+    ...skips.map((skip) => `  ${skip.path} — ${skip.properties.join(", ")}`),
+  ];
 }

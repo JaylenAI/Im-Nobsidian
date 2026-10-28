@@ -179,6 +179,27 @@ describe("SyncController", () => {
       );
     });
 
+    it("올리지 않은 읽기 전용 속성은 오래 남는 알림으로 따로 알린다 — 다음 Pull 이 되돌린다", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        deleted: 0,
+        failed: [],
+        duration: 0,
+        readOnlySkipped: [{ path: "db/행.md", properties: ["합계", "ID"] }],
+      });
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).push();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Push 완료 — 생성 0 / 수정 1 / 삭제 0 (0.0s)",
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 읽기 전용 속성은 Notion 이 값을 정해 올리지 않았습니다 — 다음 Pull 이 Notion 값으로 되돌립니다: 합계, ID (노트 1개)",
+        expect.any(Number),
+      );
+    });
+
     it("옮긴 노트 · 폴더는 수정과 따로 「이동」 으로 요약한다", async () => {
       mock.push.mockResolvedValue({
         created: 0,

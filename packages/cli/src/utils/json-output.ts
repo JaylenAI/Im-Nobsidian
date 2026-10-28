@@ -1,5 +1,11 @@
 import { setLogger } from "@im-nobsidian/core";
-import type { FailedOperation, PullResult, PushResult, RemoteScanInfo } from "@im-nobsidian/core";
+import type {
+  FailedOperation,
+  PullResult,
+  PushResult,
+  ReadOnlySkip,
+  RemoteScanInfo,
+} from "@im-nobsidian/core";
 
 /**
  * `--json` 모드 — 자동화(E2E 하니스 · CI)가 사람용 문구를 grep 하지 않고 결과를 읽게 한다.
@@ -25,6 +31,8 @@ export interface PushJson {
   /** 사이드카로 만든(dry-run 은 만들) Notion DB 수 — churn 에도 든다. */
   readonly createdDatabases: number;
   readonly failed: readonly FailedOperation[];
+  /** 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. churn 에 들지 않는다. */
+  readonly readOnlySkipped: readonly ReadOnlySkip[];
   readonly durationMs: number;
 }
 
@@ -68,6 +76,7 @@ export function pushJson(result: PushResult): PushJson {
       (result.createdDatabases ?? 0),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
+    readOnlySkipped: result.readOnlySkipped ?? [],
     durationMs: result.duration,
   };
 }
