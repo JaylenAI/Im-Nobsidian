@@ -222,7 +222,7 @@ export class PagePusher {
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
 
@@ -406,7 +406,7 @@ export class PagePusher {
     const updatePath = this.pipeline.selectPath(content);
     if (updatePath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
 
@@ -678,7 +678,7 @@ export class PagePusher {
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
     const conversionResult = this.pipeline.convertToNotion(content, {
@@ -941,7 +941,7 @@ export class PagePusher {
       const selectedPath = this.pipeline.selectPath(content);
       if (selectedPath === "block-api") {
         getLogger().warn(
-          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
         );
       }
       conversionResult = this.pipeline.convertToNotion(content, {
