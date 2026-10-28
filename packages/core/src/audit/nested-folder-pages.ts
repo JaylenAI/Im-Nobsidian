@@ -11,6 +11,7 @@
  * `F/F (id).md`)다.
  */
 import { isFolderRecord } from "../sync/folder-container.js";
+import { PAGE_ID_SUFFIX_LENGTHS } from "../utils/db-row-path.js";
 import { compactNotionId } from "../utils/id.js";
 import { stripMarkdownExtension } from "../utils/markdown-path.js";
 
@@ -30,8 +31,10 @@ export interface NestedFolderPage {
   readonly inner: { readonly path: string; readonly notionPageId: string };
 }
 
-/** pull 이 같은 이름 페이지에 붙이는 id 꼬리 — `pagePathCandidates` 의 ` (8 · 16 · 32 자)`. */
-const ID_SUFFIX = / \((?:[0-9a-f]{8}|[0-9a-f]{16}|[0-9a-f]{32})\)$/;
+/** pull 이 같은 이름 페이지에 붙이는 id 꼬리 — `pagePathCandidates` 와 같은 길이. */
+const ID_SUFFIX = new RegExp(
+  ` \\((?:${PAGE_ID_SUFFIX_LENGTHS.map((len) => `[0-9a-f]{${len}}`).join("|")})\\)$`,
+);
 
 /** 이 레코드가 나타내는 폴더 — 폴더 레코드거나 폴더 노트 꼴(꼬리 무시)이면 그 폴더, 아니면 null. */
 function folderOf(record: NestedFolderRecord): string | null {

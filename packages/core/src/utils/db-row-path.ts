@@ -41,6 +41,9 @@ export function selectDbRowFiles<T extends VaultPathRef>(
   });
 }
 
+/** 동명 페이지를 가르는 id 접미사의 길이 — 앞에서부터 넓혀 본다. */
+export const PAGE_ID_SUFFIX_LENGTHS = [8, 16, 32] as const;
+
 /**
  * 동명 충돌을 풀 때 시도할 경로 후보를 **결정적 순서**로 만든다.
  *
@@ -60,7 +63,10 @@ export function selectDbRowFiles<T extends VaultPathRef>(
 export function pagePathCandidates(dir: string, safeName: string, pageId: string): string[] {
   const base = dir ? `${dir}/${safeName}` : safeName;
   const raw = pageId.replace(/-/g, "");
-  return [`${base}.md`, ...[8, 16, 32].map((len) => `${base} (${raw.slice(0, len)}).md`)];
+  return [
+    `${base}.md`,
+    ...PAGE_ID_SUFFIX_LENGTHS.map((len) => `${base} (${raw.slice(0, len)}).md`),
+  ];
 }
 
 /**
