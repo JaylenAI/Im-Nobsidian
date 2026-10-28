@@ -16,6 +16,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `빨간 제목 %%im-nobsidian:block-color:red%%` 를 제목으로 읽었고(격리 Obsidian 1.12.4 실측), `[[노트#빨간 제목]]` 이 그 제목을
   찾지 못했다. 이제 pull 은 마커를 제목 바로 아래 줄에 둔다. push 는 두 꼴 모두 같은 Notion 제목 색으로 올리고, 플러그인은
   아래 줄의 색으로 제목을 칠한다.
+- **볼트에서 고친 읽기 전용 속성(수식 · 롤업 · ID …)이 말없이 Notion 과 영영 달랐던 것** — push 는 그 값을 보낼 수
+  없어 정보 로그만 남겼고, 사본에는 볼트의 값이 남아 다음 pull 도 «우리가 쓴 그대로» 로 보고 받지 않았다. Notion 이 그
+  행을 바꿀 때까지 볼트와 Notion 이 달랐다. 이제 push 가 경고하고(CLI 요약 · `--json` 의 `readOnlySkipped` · 플러그인
+  알림), 다음 pull 이 Notion 값으로 되돌린다.
 
 ## [0.11.0] - 2026-10-26
 

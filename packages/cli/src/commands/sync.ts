@@ -8,6 +8,7 @@ import {
   operationLabel,
   summary,
   duration,
+  readOnlySkipLines,
   icons,
   dimText,
   completionHeader,
@@ -100,6 +101,7 @@ export const syncCommand = new Command("sync")
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);
+      for (const line of readOnlySkipLines(pushResult.readOnlySkipped)) console.log(`  ${line}`);
       if (pullResult.remoteScan) {
         for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
       }

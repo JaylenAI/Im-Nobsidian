@@ -12,6 +12,7 @@ export type {
   PullOptions,
   SyncOptions,
   PushResult,
+  ReadOnlySkip,
   PullResult,
   RemoteMove,
   RemoteMoveSkip,

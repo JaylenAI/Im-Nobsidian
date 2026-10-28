@@ -15,7 +15,13 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import { BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult, DeferredCode } from "../types/convert.js";
-import type { FailedOperation, FileType, LocalChange, SyncRecord } from "../types/sync.js";
+import type {
+  FailedOperation,
+  FileType,
+  LocalChange,
+  ReadOnlySkip,
+  SyncRecord,
+} from "../types/sync.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import { computeHash } from "../utils/hash.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
@@ -142,6 +148,48 @@ export class PagePusher {
         lastEditedBy: null,
         seenAt: null,
       });
+    }
+  }
+
+  /** 이번 실행에서 볼트의 값을 올리지 않은 읽기 전용 속성 — 노트 경로별. */
+  private readonly readOnlySkips = new Map<string, string[]>();
+
+  /** 올리지 않은 읽기 전용 속성을 꺼낸다(목록은 비운다). */
+  takeReadOnlySkips(): ReadOnlySkip[] {
+    const skips = [...this.readOnlySkips]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, properties]) => ({ path, properties }));
+    this.readOnlySkips.clear();
+    return skips;
+  }
+
+  /**
+   * 보내지 않은 속성을 알린다. 읽기 전용 속성은 경고로 따로 모은다 — 다음 pull 이 볼트의 값을 Notion 값으로 되돌리니
+   * 고친 사람이 알아야 한다. 나머지(DB 에 없는 속성 · 변환 불가 …)는 예전처럼 정보 로그다.
+   */
+  private reportUnsent(
+    path: string,
+    mapper: PropertyMapper,
+    skipped: readonly string[],
+    what: string,
+  ): void {
+    const unsent = withoutDecorations(skipped);
+    const readOnly = mapper.readOnlyKeys(unsent);
+    if (readOnly.length > 0) {
+      this.readOnlySkips.set(path, readOnly);
+      getLogger().warn(
+        `[Im-Nobsidian] 읽기 전용 속성 ${readOnly.length}개는 Notion 이 값을 정해 올리지 않음 — 다음 pull 이 ` +
+          `Notion 값으로 되돌린다: ${path} — ${readOnly.join(", ")}`,
+      );
+    } else {
+      this.readOnlySkips.delete(path);
+    }
+    const others = unsent.filter((key) => !readOnly.includes(key));
+    if (others.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] ${what} ${others.length}개는 보내지 않음(DB 에 없는 속성 · 비울 수 없는 속성 · ` +
+          `변환 불가): ${path} — ${others.join(", ")}`,
+      );
     }
   }
 
@@ -625,13 +673,7 @@ export class PagePusher {
       current: current.data,
       uploads: await this.uploadsFor(mapper, changes.changed, path),
     });
-    const unsentProperties = withoutDecorations(skipped);
-    if (unsentProperties.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 새 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `변환 불가): ${path} — ${unsentProperties.join(", ")}`,
-      );
-    }
+    this.reportUnsent(path, mapper, skipped, "새 행 속성");
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
@@ -884,13 +926,7 @@ export class PagePusher {
           : { uploads: await this.uploadsFor(mapper, changes.changed, path) }),
       },
     );
-    const unsentProperties = withoutDecorations(skipped);
-    if (unsentProperties.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `비울 수 없는 속성 · 변환 불가): ${path} — ${unsentProperties.join(", ")}`,
-      );
-    }
+    this.reportUnsent(path, mapper, skipped, "행 속성");
 
     const bodyChanged = against?.body == null || against.body !== current.body;
     // 수정 시각을 올려도 되는가 — 원격의 변경을 모두 로컬이 덮었거나 원격이 그대로일 때만.
@@ -998,6 +1034,10 @@ export class PagePusher {
         aliases: extractAliases(current.data),
       });
     });
+    // 볼트에서 고친 읽기 전용 속성은 보내지 못했다 — 사본에는 볼트의 값이 남고 Notion 은 그대로라, 우리가 쓴 그대로라
+    // 보고 받지 않으면 둘이 영영 다르다. 다음 pull 이 내용으로 견주어 Notion 값으로 되돌리게 한다(알림과 같은 말).
+    if (mapper.readOnlyKeys(withoutDecorations(skipped)).length > 0)
+      this.markRemoteUnverified([pageId]);
   }
 
   /**
