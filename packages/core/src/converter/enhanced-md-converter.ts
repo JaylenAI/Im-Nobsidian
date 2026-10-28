@@ -31,6 +31,7 @@ import {
 import { decodeMarkerTarget, MARKER_URL_CAPTURE, MARKER_LABEL_CAPTURE } from "./marker-url.js";
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "./child-tags.js";
 import { widenNestedCodeFences } from "./nested-code-fence.js";
+import { mediaLabel, mediaLinkRe } from "./media-labels.js";
 import { databaseTagId } from "../utils/inline-db-refs.js";
 import {
   CONTAINER_PREFIX_SOURCE,
@@ -51,6 +52,8 @@ import {
   restoreBodyIndent,
 } from "./callout-indent.js";
 import { convertToggleHeadings, restoreToggleHeadings } from "./toggle-heading.js";
+import { liftHeadingMarkers } from "./heading-markers.js";
+import { stripLargeFileLinks } from "./large-file-link.js";
 import { mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import { formatWikilink } from "../utils/wikilink-title.js";
@@ -68,6 +71,7 @@ import { startsWithParagraph } from "./nfm-to-blocks.js";
 import { quotedCodeToChildren } from "./quote-code.js";
 import { unescapeSafeLiteralDollars } from "./literal-dollar.js";
 import { unescapeAngleBrackets } from "./literal-angles.js";
+import { isNotionHostedFileUrl } from "../utils/notion-file-url.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -78,6 +82,8 @@ const NOTION_AUDIO_RE = /<audio src="([^"]*)">([\s\S]*?)<\/audio>/g;
 const NOTION_VIDEO_RE = /<video src="([^"]*)">([\s\S]*?)<\/video>/g;
 const NOTION_PDF_RE = /<pdf src="([^"]*)">([\s\S]*?)<\/pdf>/g;
 const NOTION_FILE_RE = /<file src="([^"]*)">([\s\S]*?)<\/file>/g;
+/** {@link NOTION_EMBED_RE} 와 같은 태그 — 파일을 붙인 embed(HTML 블록)를 미디어로 가를 때 쓴다. */
+const NOTION_HOSTED_EMBED_RE = /<embed\s+src="([^"]*)"[^>]*>([^\n]*?)\s*<\/embed>/g;
 const NOTION_TAB_RE = /<tab title="([^"]*)">([\s\S]*?)<\/tab>/g;
 /** 라벨 달린 Notion 페이지 링크. id 는 하이픈 유무 양쪽으로 온다(실측). */
 const NOTION_LABELED_PAGE_LINK_RE = new RegExp(
@@ -179,7 +185,8 @@ function unescapeBrackets(content: string): string {
 }
 
 export function obsidianToNotionEnhanced(obsidian: string): string {
-  let result = obsidian;
+  // 제목 아래로 내린 마커를 맨 먼저 제목 줄로 — 아래 변환은 제목 줄 끝의 마커만 안다.
+  let result = liftHeadingMarkers(stripLargeFileLinks(obsidian));
 
   // 일반 인용 안 코드를 인용의 자식으로 맨 먼저 꺼낸다 — 아래 변환이 모두 코드로 알아보게(S-23).
   result = quotedCodeToChildren(result);
@@ -697,23 +704,27 @@ function convertMediaTags(content: string): string {
   let result = content;
 
   result = result.replace(NOTION_AUDIO_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[🔊 ${cap}](${src})` : `[🔊 audio](${src})`;
+    return `[${mediaLabel("audio", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_VIDEO_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[🎬 ${cap}](${src})` : `[🎬 video](${src})`;
+    return `[${mediaLabel("video", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_PDF_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[📄 ${cap}](${src})` : `[📄 pdf](${src})`;
+    return `[${mediaLabel("pdf", caption.trim())}](${src})`;
   });
 
   result = result.replace(NOTION_FILE_RE, (_match, src: string, caption: string) => {
-    const cap = caption.trim();
-    return cap ? `[📎 ${cap}](${src})` : `[📎 file](${src})`;
+    return `[${mediaLabel("file", caption.trim())}](${src})`;
+  });
+
+  // HTML 블록(2026-07-03) — Notion 이 호스팅한 `.html` 을 붙인 embed. 다른 파일처럼 첨부로 받는다: 서명 URL 은 한 시간
+  // 뒤 끊긴다. 받지 못하면 이 링크가 남고, push 는 embed 태그로 되돌려 Notion 이 그 블록을 둔다(2026-10-28 실측).
+  // 바깥 주소의 embed 는 링크다 — {@link preserveNfmOnlyBlocks} 가 다룬다.
+  result = result.replace(NOTION_HOSTED_EMBED_RE, (match, src: string, caption: string) => {
+    if (!isNotionHostedFileUrl(src)) return match;
+    return `[${mediaLabel("html", caption.trim())}](${src})`;
   });
 
   return result;
@@ -1092,10 +1103,11 @@ function unescapeNotionChars(content: string): string {
 
 // ─── Push 방향: 보존 마커 → Enhanced MD 복원 ───
 
-const OBSIDIAN_MEDIA_AUDIO_RE = /\[🔊\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_VIDEO_RE = /\[🎬\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_PDF_RE = /\[📄\s*([^\]]*)\]\(([^)]+)\)/g;
-const OBSIDIAN_MEDIA_FILE_RE = /\[📎\s*([^\]]*)\]\(([^)]+)\)/g;
+const OBSIDIAN_MEDIA_AUDIO_RE = mediaLinkRe("audio");
+const OBSIDIAN_MEDIA_VIDEO_RE = mediaLinkRe("video");
+const OBSIDIAN_MEDIA_PDF_RE = mediaLinkRe("pdf");
+const OBSIDIAN_MEDIA_FILE_RE = mediaLinkRe("file");
+const OBSIDIAN_MEDIA_HTML_RE = mediaLinkRe("html");
 
 function restoreMediaTags(content: string): string {
   let result = content;
@@ -1111,6 +1123,11 @@ function restoreMediaTags(content: string): string {
   result = result.replace(OBSIDIAN_MEDIA_VIDEO_RE, restore("video"));
   result = result.replace(OBSIDIAN_MEDIA_PDF_RE, restore("pdf"));
   result = result.replace(OBSIDIAN_MEDIA_FILE_RE, restore("file"));
+  // HTML 블록 — 자리 이름은 `html` 이다(태그 이름 `embed` 와 다르다).
+  result = result.replace(OBSIDIAN_MEDIA_HTML_RE, (_match, caption: string, src: string) => {
+    const cap = caption.trim() === "html" ? "" : caption;
+    return `<embed src="${src}">${cap}</embed>`;
+  });
 
   return result;
 }

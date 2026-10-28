@@ -20,6 +20,8 @@ import {
   completionHeader,
   failedCountText,
   remoteScanLines,
+  restoredLines,
+  LISTED_ITEMS,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
 import { openVaultFs, vaultArgPath } from "../utils/vault.js";
@@ -105,6 +107,9 @@ export const pullCommand = new Command("pull")
       if (result.restored > 0) {
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
       }
+      for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {
         const verb = move.renamed ? "rename" : "move";
@@ -117,8 +122,10 @@ export const pullCommand = new Command("pull")
         console.log(
           `  ${icons.conflict} ${dimText(`${excluded.length} new in Notion ${options.dryRun ? "would not be" : "not"} pulled — excluded by paths / ${IGNORE_FILE}:`)}`,
         );
-        for (const path of excluded.slice(0, 10)) console.log(`    ${dimText(`· ${path}`)}`);
-        if (excluded.length > 10) console.log(dimText(`    ... and ${excluded.length - 10} more`));
+        for (const path of excluded.slice(0, LISTED_ITEMS))
+          console.log(`    ${dimText(`· ${path}`)}`);
+        if (excluded.length > LISTED_ITEMS)
+          console.log(dimText(`    ... and ${excluded.length - LISTED_ITEMS} more`));
       }
       if ((result.relinked?.length ?? 0) > 0) {
         console.log(

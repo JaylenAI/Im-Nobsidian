@@ -1,5 +1,6 @@
+import { patchRichText, titleRunsOf } from "../notion/rich-text.js";
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
-import { sanitizeFileName } from "../utils/sanitize.js";
+import { legacySanitizeFileName, sanitizeFileName } from "../utils/sanitize.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { noteNameFromPath } from "../utils/markdown-path.js";
 
@@ -32,11 +33,16 @@ export function noteTitle(frontmatter: Frontmatter, path: string): string {
   return explicitTitle(frontmatter) ?? wikilinkTitleFromPath(path);
 }
 
-/** pull 이 이 제목으로 붙였을 파일 이름인가 — 자연 이름, 또는 동명 충돌을 가른 페이지 id 접미사. */
+/**
+ * pull 이 이 제목으로 붙였을 파일 이름인가 — 자연 이름, 또는 동명 충돌을 가른 페이지 id 접미사. 0.12 전의 규칙으로
+ * 붙인 이름도 그렇다고 본다 — 규칙이 바뀌었다고 받은 노트를 제목이 바뀐 것으로 보지 않게.
+ */
 function isFileNameOf(title: string, fileName: string): boolean {
-  const safe = sanitizeFileName(title);
-  if (fileName === safe) return true;
-  return fileName.startsWith(safe) && /^ \([0-9a-f]{8,32}\)$/i.test(fileName.slice(safe.length));
+  return [sanitizeFileName(title), legacySanitizeFileName(title)].some(
+    (safe) =>
+      fileName === safe ||
+      (fileName.startsWith(safe) && /^ \([0-9a-f]{8,32}\)$/i.test(fileName.slice(safe.length))),
+  );
 }
 
 /** 이 제목이 이 경로의 파일 이름을 따르는가 — pull 이 이 제목으로 그 파일 이름을 붙였을 경우. */
@@ -115,8 +121,17 @@ export function extractTitle(filePath: string): string {
 }
 
 /** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
-export function titleProperty(title: string): Record<string, unknown> {
-  return { title: { title: [{ text: { content: title } }] } };
+export function titleProperty(
+  title: string,
+  /** 방금 읽은 원격 페이지의 속성 — 주면 그 제목의 서식 위에 바뀐 글자만 고친다. */
+  remote?: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  // 볼트는 제목을 평문으로만 안다 — 평문을 그대로 보내면 한 글자만 고쳐도 Notion 제목의 굵게 · 색 · 링크가 모두
+  // 지워진다(D9). DB 행 제목은 이미 이렇게 보낸다(F-08).
+  const runs = remote ? titleRunsOf(remote) : null;
+  return {
+    title: { title: (runs && patchRichText(runs, title)) ?? [{ text: { content: title } }] },
+  };
 }
 
 /**

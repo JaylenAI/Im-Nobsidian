@@ -5,8 +5,9 @@
  * 그 사이에는 바뀐 것이 보인 DB 와 지난번에 받지 못한 DB(대기)만 조회한다. 대기를 잘못 비우면 그 DB
  * 는 원격이 다시 바뀌거나 전체 대조가 돌 때까지 받지 못한 채로 남는다 — 오류는 나지 않는다.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
+  addPendingDatabases,
   ALL_DATABASES,
   chooseRemoteScan,
   DatabasePullLedger,
@@ -202,6 +203,24 @@ describe("대기 DB 의 저장 모양", () => {
     expect(parsePendingDatabases(JSON.stringify([DB_A, 7, null, { id: DB_B }]))).toEqual(
       new Set([compact(DB_A)]),
     );
+  });
+
+  it("대기에 더하면 있던 것은 두고 새 것만 붙인다 — 바뀐 것이 없으면 다시 적지 않는다", () => {
+    const meta = new Map<string, string>([["db_pull_pending", JSON.stringify([compact(DB_A)])]]);
+    const stateDb = {
+      getMeta: (key: string) => meta.get(key) ?? null,
+      setMeta: vi.fn((key: string, value: string) => void meta.set(key, value)),
+    };
+
+    addPendingDatabases(stateDb, [DB_B, DB_A]);
+    expect(parsePendingDatabases(meta.get("db_pull_pending")!)).toEqual(
+      new Set([compact(DB_A), compact(DB_B)]),
+    );
+
+    stateDb.setMeta.mockClear();
+    addPendingDatabases(stateDb, [DB_A]);
+    addPendingDatabases(stateDb, []);
+    expect(stateDb.setMeta).not.toHaveBeenCalled();
   });
 });
 

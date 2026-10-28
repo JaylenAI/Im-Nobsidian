@@ -886,6 +886,33 @@ describe("컨테이너 태그 변형 내성 (P3 — 실측 누수 회귀가드)"
   });
 });
 
+describe("HTML 블록 — 파일을 붙인 embed (2026-07-03)", () => {
+  const hosted =
+    "https://prod-files-secure.s3.us-west-2.amazonaws.com/space/file/chart.html?X-Amz-Signature=sig";
+
+  it("Notion 이 호스팅한 파일이면 첨부 링크로 — 받는 쪽이 .html 로 내려받는다", () => {
+    expect(notionEnhancedToObsidian(`<embed src="${hosted}"></embed>`)).toBe(
+      `[🌐 html](${hosted})`,
+    );
+    expect(notionEnhancedToObsidian(`<embed src="${hosted}">차트</embed>`)).toBe(
+      `[🌐 차트](${hosted})`,
+    );
+  });
+
+  it("바깥 주소의 embed 는 예전처럼 링크 · 보존 마커로 둔다", () => {
+    const pulled = notionEnhancedToObsidian(`<embed src="https://youtu.be/abc"></embed>`);
+    expect(pulled).toContain("[🔗 Embed](https://youtu.be/abc)");
+    expect(pulled).not.toContain("🌐");
+  });
+
+  it("받지 못한 링크는 embed 태그로 돌아간다 — 자리 이름은 캡션이 아니다(왕복 fixpoint)", () => {
+    const notion = `<embed src="${hosted}"></embed>`;
+    expect(obsidianToNotionEnhanced(notionEnhancedToObsidian(notion))).toBe(notion);
+    const captioned = `<embed src="${hosted}">차트</embed>`;
+    expect(obsidianToNotionEnhanced(notionEnhancedToObsidian(captioned))).toBe(captioned);
+  });
+});
+
 describe("미디어 플레이스홀더 캡션 왕복 (P3)", () => {
   it("[🎬 video](url) 플레이스홀더는 빈 캡션으로 복원 (Notion drift 방지)", () => {
     const pushed = obsidianToNotionEnhanced("[🎬 video](https://youtu.be/abc)");

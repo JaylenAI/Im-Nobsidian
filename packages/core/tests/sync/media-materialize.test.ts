@@ -188,6 +188,9 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
     ["docs/계약서.pdf", "pdf"],
     ["media/발표.MP4", "video"],
     ["media/녹음.m4a", "audio"],
+    // HTML 블록 — 파일을 붙인 embed(2026-07-03 changelog · 실측 2026-10-28)
+    ["web/차트.html", "embed"],
+    ["web/옛.HTM", "embed"],
   ])("%s 는 %s 블록으로 올린다 — 이름 칸 없이(B12)", async (path, type) => {
     const line = marker("file", path);
     const { client, appendChildBlocks } = createTreeClient({ "page-1": [quote("blk-ph", line)] });

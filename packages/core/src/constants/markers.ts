@@ -59,6 +59,12 @@ export const TOGGLE_START = compactMarker("toggle:start");
 export const TOGGLE_END = compactMarker("toggle:end");
 
 /**
+ * 크기 상한을 넘어 받지 않은 Notion 파일 옆의 «Notion 에서 열기» 링크 마커 — push 가 링크와 함께 뗀다
+ * (`converter/large-file-link.ts`).
+ */
+export const LARGE_FILE_MARKER = compactMarker("large-file");
+
+/**
  * 토글 헤딩(`### 제목 {toggle="true"}`) 보존 마커 쌍.
  *
  * NFM 은 토글 헤딩을 "속성 붙은 제목 + 탭 한 단계 들여쓴 자식"으로 내보낸다. Obsidian 에

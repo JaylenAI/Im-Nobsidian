@@ -255,3 +255,12 @@ function normalizeAnnotations(annotations: Annotations | undefined): Required<An
 }
 
 const DEFAULT_STYLE = JSON.stringify(normalizeAnnotations(undefined));
+
+/** 원격 페이지 · 행의 제목 조각들 — 제목 타입 속성. 없으면 null. */
+export function titleRunsOf(properties: Readonly<Record<string, unknown>>): RichTextItem[] | null {
+  for (const prop of Object.values(properties)) {
+    const value = prop as { type?: string; title?: unknown } | null;
+    if (value?.type === "title") return Array.isArray(value.title) ? value.title : null;
+  }
+  return null;
+}

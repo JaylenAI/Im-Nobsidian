@@ -25,7 +25,11 @@ vi.mock("chalk", () => {
 import {
   lastFullScanText,
   localDateTime,
+  LISTED_ITEMS,
+  readOnlySkipLines,
   remoteDeletionHint,
+  restoredLines,
+  unsentDeletionLines,
   remoteScanLines,
 } from "../../src/utils/format.js";
 
@@ -104,5 +108,59 @@ describe("lastFullScanText", () => {
   it("마지막 전체 대조 시각 — 한 번도 없으면 never", () => {
     expect(lastFullScanText(localIso(10, 5))).toBe("2026-09-28 10:05:00");
     expect(lastFullScanText(null)).toBe("never");
+  });
+});
+
+describe("readOnlySkipLines", () => {
+  it("올리지 않은 읽기 전용 속성을 노트별로 — 다음 pull 이 되돌린다고 말한다", () => {
+    expect(
+      readOnlySkipLines([
+        { path: "db/가.md", properties: ["합계", "ID"] },
+        { path: "db/나.md", properties: ["합계"] },
+      ]),
+    ).toEqual([
+      "⚠ 읽기 전용 속성 3개는 올리지 않았습니다 — Notion 이 값을 정합니다(수식 · 롤업 · ID …). 다음 pull 이 Notion 값으로 되돌립니다:",
+      "  db/가.md — 합계, ID",
+      "  db/나.md — 합계",
+    ]);
+  });
+
+  it("dry-run 은 올리지 않을 것으로 말한다", () => {
+    expect(readOnlySkipLines([{ path: "db/가.md", properties: ["합계"] }], true)[0]).toContain(
+      "읽기 전용 속성 1개는 올리지 않습니다",
+    );
+  });
+
+  it("없으면 아무 줄도 없다", () => {
+    expect(readOnlySkipLines(undefined)).toEqual([]);
+    expect(readOnlySkipLines([])).toEqual([]);
+  });
+});
+
+describe("거절한 로컬 삭제 (D8)", () => {
+  it("push — Notion 에서 지우지 않은 노트를 경로로, 다음 pull 이 되살린다고 말한다", () => {
+    expect(unsentDeletionLines(["가.md", "db/나.md"])).toEqual([
+      "⚠ 볼트에서 지운 노트 2개는 Notion 에서 지우지 않았습니다 (sync.deleteSync 꺼짐) — 다음 pull 이 Notion 에서 되살립니다. 지우려면 Notion 에서도 지우거나 deleteSync 를 켜세요:",
+      "  가.md",
+      "  db/나.md",
+    ]);
+    expect(unsentDeletionLines(["가.md"], true)[0]).toContain("Notion 에서 지우지 않습니다 ");
+  });
+
+  it("pull — 되살린 노트를 경로로 알린다", () => {
+    expect(restoredLines(["가.md"])).toEqual([
+      "⚠ 볼트에서 지운 노트 1개를 Notion 에서 되살렸습니다 — sync.deleteSync 가 꺼져 있어 볼트의 삭제는 Notion 에 보내지 않습니다:",
+      "  가.md",
+    ]);
+    expect(restoredLines(["가.md"], true)[0]).toContain("되살립니다");
+  });
+
+  it("경로가 많으면 앞의 몇 개만 늘어놓고 나머지는 수로 — 없으면 아무 줄도 없다", () => {
+    const paths = Array.from({ length: LISTED_ITEMS + 3 }, (_, i) => `노트 ${i}.md`);
+    const lines = restoredLines(paths);
+    expect(lines).toHaveLength(1 + LISTED_ITEMS + 1);
+    expect(lines[lines.length - 1]).toBe("  … 외 3개");
+    expect(restoredLines(undefined)).toEqual([]);
+    expect(unsentDeletionLines([])).toEqual([]);
   });
 });

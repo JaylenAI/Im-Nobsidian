@@ -1,5 +1,6 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { restoreComments } from "../comments.js";
+import { liftHeadingMarkers } from "../heading-markers.js";
 
 /**
  * 받기 직전의 로컬 노트(`localContent`)에서 주석을 되살린다 — 주석은 Notion 에 없는 로컬 글이다(S-29).
@@ -20,6 +21,10 @@ export class CommentRestorer implements Processor {
     if (input.context.direction !== "pull" || local === undefined) {
       return { content: input.content, metadata: input.metadata };
     }
-    return { content: restoreComments(input.content, local), metadata: input.metadata };
+    // 받은 글은 아직 제목 줄 끝에 마커가 있다(내리기는 140) — 로컬 노트도 같은 꼴로 맞춰 줄을 견준다.
+    return {
+      content: restoreComments(input.content, liftHeadingMarkers(local)),
+      metadata: input.metadata,
+    };
   }
 }

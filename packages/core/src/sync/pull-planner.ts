@@ -102,6 +102,16 @@ export class PullPlanner {
     const restoredModified = planned.filter(
       (c) => c.type === "modified" && restoreIds.has(c.pageId),
     ).length;
+    // 되살릴 노트 · 행 — 화면이 경로로 미리 알린다(D8).
+    const restoredPaths = [
+      ...[
+        ...restoreChanges,
+        ...planned.filter((c) => c.type === "modified" && restoreIds.has(c.pageId)),
+      ]
+        .map((change) => this.stateDb.getByNotionId(change.pageId)?.obsidianPath)
+        .filter((path): path is string => path !== undefined),
+      ...rows.filter((row) => row.operation === "update" && row.restore).map((row) => row.path),
+    ];
     const rowCount = (operation: PlannedRow["operation"], restore = false) =>
       rows.filter((row) => row.operation === operation && (row.restore ?? false) === restore)
         .length;
@@ -112,6 +122,7 @@ export class PullPlanner {
       // 복원은 updated 에 섞지 않는다 — dry-run 이 "수정 N건" 이라고만 말하면
       // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
       restored: restoreChanges.length + restoredModified + rowCount("update", true),
+      ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
       conflicts: [],
       writtenPaths: [],
       failed,

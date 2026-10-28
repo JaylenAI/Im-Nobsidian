@@ -1,5 +1,10 @@
 import chalk from "chalk";
-import type { FullScanReason, ProgressItem, RemoteScanInfo } from "@im-nobsidian/core";
+import type {
+  FullScanReason,
+  ProgressItem,
+  ReadOnlySkip,
+  RemoteScanInfo,
+} from "@im-nobsidian/core";
 
 export const icons = {
   create: chalk.green("+"),
@@ -140,4 +145,64 @@ export function dimText(text: string): string {
 export function failedItem(path: string, error: string, direction?: string): void {
   const where = `${direction ? `${direction} ` : ""}${path || "/"}`;
   console.log(`  ${icons.fail} ${where}: ${chalk.red(error)}`);
+}
+
+/** 화면에 늘어놓는 항목(경로 · id) 수 — 넘으면 나머지는 수로 줄인다. */
+export const LISTED_ITEMS = 10;
+
+/** 경로 목록 — {@link LISTED_ITEMS} 개까지, 나머지는 수로. */
+function pathLines(paths: readonly string[]): string[] {
+  const shown = paths.slice(0, LISTED_ITEMS).map((path) => `  ${path}`);
+  return paths.length > LISTED_ITEMS
+    ? [...shown, dimText(`  … 외 ${paths.length - LISTED_ITEMS}개`)]
+    : shown;
+}
+
+/**
+ * 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(`sync.deleteSync` 꺼짐) — 다음 pull 이 되살린다(D8). 예전에는 말없이
+ * 대기로 적기만 해, 지운 파일이 다음 pull 에 돌아왔다.
+ */
+export function unsentDeletionLines(
+  paths: readonly string[] | undefined,
+  dryRun = false,
+): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 볼트에서 지운 노트 ${paths.length}개는 Notion 에서 ${dryRun ? "지우지 않습니다" : "지우지 않았습니다"} ` +
+        "(sync.deleteSync 꺼짐) — 다음 pull 이 Notion 에서 되살립니다. 지우려면 Notion 에서도 지우거나 deleteSync 를 켜세요:",
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/** pull 이 Notion 에서 되살린(dry-run 은 되살릴) 노트 — 볼트에서 지웠지만 Notion 에 그대로 있던 것(D8). */
+export function restoredLines(paths: readonly string[] | undefined, dryRun = false): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 볼트에서 지운 노트 ${paths.length}개를 Notion 에서 ${dryRun ? "되살립니다" : "되살렸습니다"} ` +
+        "— sync.deleteSync 가 꺼져 있어 볼트의 삭제는 Notion 에 보내지 않습니다:",
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
+ * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. 실패는 아니라 종료 코드는
+ * 그대로지만, 고친 값이 사라지기 전에 알아야 한다. 없으면 빈 목록.
+ */
+export function readOnlySkipLines(
+  skips: readonly ReadOnlySkip[] | undefined,
+  dryRun = false,
+): string[] {
+  if (!skips || skips.length === 0) return [];
+  const count = skips.reduce((sum, skip) => sum + skip.properties.length, 0);
+  return [
+    chalk.yellow(
+      `⚠ 읽기 전용 속성 ${count}개는 ${dryRun ? "올리지 않습니다" : "올리지 않았습니다"} — Notion 이 값을 정합니다(수식 · 롤업 · ID …). ` +
+        "다음 pull 이 Notion 값으로 되돌립니다:",
+    ),
+    ...skips.map((skip) => `  ${skip.path} — ${skip.properties.join(", ")}`),
+  ];
 }

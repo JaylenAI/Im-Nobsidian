@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { sanitizeFileName } from "../../src/utils/sanitize.js";
+import {
+  FILE_NAME_MAX_BYTES,
+  legacySanitizeFileName,
+  sanitizeFileName,
+} from "../../src/utils/sanitize.js";
+
+const bytesOf = (text: string): number => new TextEncoder().encode(text).length;
 
 describe("sanitizeFileName", () => {
   it("정상 파일명은 그대로 반환", () => {
@@ -16,9 +22,38 @@ describe("sanitizeFileName", () => {
     expect(sanitizeFileName("file...")).toBe("file");
   });
 
-  it("200자 제한", () => {
+  it("영문은 200자에서 자른다 — 예전과 같다", () => {
     const long = "a".repeat(300);
     expect(sanitizeFileName(long)).toHaveLength(200);
+  });
+
+  it("한글은 바이트로 센다 — 255 바이트를 넘는 이름은 ext4 · APFS 에 만들 수 없다", () => {
+    const name = sanitizeFileName("가".repeat(150));
+    expect(bytesOf(name)).toBeLessThanOrEqual(FILE_NAME_MAX_BYTES);
+    expect(name).toBe("가".repeat(66));
+    // 붙는 것 중 가장 긴 것을 붙여도 255 안쪽.
+    expect(bytesOf(`${name} (${"0".repeat(32)}).notion.json`)).toBeLessThanOrEqual(255);
+  });
+
+  it("이모지 · 조합 이모지를 가운데서 자르지 않는다", () => {
+    const family = "👨‍👩‍👧"; // ZWJ 로 이은 한 글자(18 바이트)
+    const name = sanitizeFileName(family.repeat(20));
+    expect(name).toBe(family.repeat(11));
+    expect(sanitizeFileName("😀".repeat(60))).toBe("😀".repeat(50));
+  });
+
+  it("자른 자리의 끝 공백 · 마침표를 지운다", () => {
+    expect(sanitizeFileName(`${"a".repeat(198)}. b`)).toBe("a".repeat(198));
+  });
+
+  it("링크에서 뜻이 있는 # ^ 를 _ 로 — [[a#b]] 는 노트 a 의 제목 b 를 가리킨다", () => {
+    expect(sanitizeFileName("C# 정리")).toBe("C_ 정리");
+    expect(sanitizeFileName("x^2 풀이")).toBe("x_2 풀이");
+  });
+
+  it("예전 규칙(0.12 전)은 # 를 두고 UTF-16 200자에서 잘랐다", () => {
+    expect(legacySanitizeFileName("C# 정리")).toBe("C# 정리");
+    expect(legacySanitizeFileName("가".repeat(250))).toBe("가".repeat(200));
   });
 
   it("위키링크 문법을 깨는 대괄호를 _로 치환 (M5)", () => {

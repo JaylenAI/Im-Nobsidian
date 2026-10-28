@@ -100,6 +100,14 @@ export class MemoryVault {
       }
     });
     fs.ensureFolder.mockImplementation(async (folder: string) => this.addFolders(`${folder}/`));
+    // 파일 시스템의 rmdir 처럼 — 안에 파일 · 폴더가 하나라도 있으면 두고 false.
+    fs.removeEmptyFolder.mockImplementation(async (folder: string) => {
+      if (!this.folders.has(folder)) return false;
+      const inside = (path: string) => path.startsWith(`${folder}/`);
+      if ([...this.files.keys()].some(inside) || [...this.folders].some(inside)) return false;
+      this.folders.delete(folder);
+      return true;
+    });
     // 노트도 폴더도 옮긴다 — Obsidian 의 vault.rename 처럼.
     fs.moveFile.mockImplementation(async (from: string, to: string) => {
       if (this.files.has(from)) this.rename(from, to);
@@ -388,7 +396,10 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     parent: view(page).parent,
     title: page.title,
   });
-  client.searchRecentPages.mockImplementation(async () => [...pages.values()].map(recent));
+  // search 는 휴지통 페이지를 돌려주지 않는다(실측 2026-10-28) — 지운 것은 목록에서 빠질 뿐이다.
+  client.searchRecentPages.mockImplementation(async () =>
+    [...pages.values()].filter((page) => !page.archived).map(recent),
+  );
   // 전체 대조(deleteSync)의 순회 — 루트 아래의 휴지통이 아닌 페이지. Notion 은 부모를 휴지통에
   // 넣으면 그 아래도 함께 넣는다 — 시험이 둘 다 표시한다.
   client.getChildPagesRecursive.mockImplementation(async (rootId: string) => {

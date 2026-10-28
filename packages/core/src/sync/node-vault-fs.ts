@@ -1,4 +1,4 @@
-import { readFile, writeFile, unlink, rename, mkdir, readdir, stat } from "node:fs/promises";
+import { readFile, writeFile, unlink, rename, mkdir, readdir, rmdir, stat } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { join, relative, dirname, sep } from "node:path";
 import type { VaultFS, NonMdFileInfo, FileStatInfo } from "./vault-fs.js";
@@ -64,6 +64,20 @@ export class NodeVaultFS implements VaultFS {
   async deleteFile(path: string): Promise<void> {
     const fullPath = join(this.rootPath, path);
     await unlink(fullPath);
+  }
+
+  /** `rmdir` 는 비지 않은 폴더를 지우지 않는다(ENOTEMPTY) — 숨김 파일도 그대로 둔다. */
+  async removeEmptyFolder(path: string): Promise<boolean> {
+    try {
+      await rmdir(join(this.rootPath, path));
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "ENOTEMPTY" || code === "EEXIST" || code === "ENOENT" || code === "ENOTDIR") {
+        return false;
+      }
+      throw error;
+    }
   }
 
   async moveFile(from: string, to: string): Promise<void> {

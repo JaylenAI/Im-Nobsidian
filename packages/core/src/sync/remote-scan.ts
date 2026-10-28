@@ -9,6 +9,7 @@
  * 그래서 전체 대조는 주기(`sync.fullReconcileInterval`)마다만 하고, 그 사이에는 지난 pull 뒤에 바뀐
  * 페이지 · 행 · DB 스키마만 search 로 찾아 그 DB 만 조회한다. 원격 삭제는 다음 전체 대조가 반영한다.
  */
+import type { IStateDB } from "../state/state-db-interface.js";
 import type { FullScanReason, RemoteScanInfo } from "../types/sync.js";
 import { compactNotionId } from "../utils/id.js";
 
@@ -96,11 +97,14 @@ function nextFullReconcileAt(lastFullPullAt: string | null, intervalSec: number)
  * 결과에 싣는 모양 — 화면이 「원격 삭제는 언제 반영되나」 를 알린다.
  *
  * @param deleteSync 원격 삭제를 볼트에 반영하는 설정인가 — 꺼져 있으면 미룰 삭제도 없다.
+ * @param deletionsChecked 이번에 추적 중인 것을 모두 원격에 물었나(삭제 확인 — `deletion-sweep`). 그러면
+ *   증분이어도 미룬 삭제가 없다.
  */
 export function remoteScanInfo(
   scan: RemoteScan,
   lastFullPullAt: string | null,
   deleteSync: boolean,
+  deletionsChecked = false,
 ): RemoteScanInfo {
   return scan.kind === "full"
     ? {
@@ -114,7 +118,7 @@ export function remoteScanInfo(
         kind: "incremental",
         lastFullAt: scan.lastFullAt,
         nextFullAt: scan.nextFullAt,
-        deletionsDeferred: deleteSync,
+        deletionsDeferred: deleteSync && !deletionsChecked,
       };
 }
 
@@ -147,6 +151,19 @@ export function parsePendingDatabases(raw: string | null): Set<string> {
 
 export function serializePendingDatabases(ids: ReadonlySet<string>): string {
   return JSON.stringify([...ids].sort());
+}
+
+/** 다음 pull 이 바뀐 것이 없어도 조회하게 DB 를 대기에 더한다. 이미 있으면 그대로. */
+export function addPendingDatabases(
+  stateDb: Pick<IStateDB, "getMeta" | "setMeta">,
+  databaseIds: Iterable<string>,
+): void {
+  const pending = parsePendingDatabases(stateDb.getMeta(PENDING_DATABASES_META_KEY));
+  const before = pending.size;
+  for (const id of databaseIds) pending.add(compactNotionId(id));
+  if (pending.size !== before) {
+    stateDb.setMeta(PENDING_DATABASES_META_KEY, serializePendingDatabases(pending));
+  }
 }
 
 /**

@@ -231,7 +231,8 @@ function sameLines(a: readonly string[], b: readonly string[]): boolean {
 /**
  * 다른 줄 묶음을 조각으로 — 고친 줄로 볼 만큼 비슷한 줄끼리 짝짓고({@link alignNoteLines}), 그 사이는 앞에서부터
  * 한 줄씩 짝짓는다. 남는 줄은 한쪽만의 조각이다 — 콜아웃 속 문단 경계(`>`)처럼 로컬에만 있는 줄도 Notion 에서
- * 고친 이웃 줄과 따로 넣어 본다.
+ * 고친 이웃 줄과 따로 넣어 본다. 다만 로컬에만 남는 줄이 여럿이면 한 조각으로 묶는다 — Notion 에서 함께 지운
+ * 줄(문단과 그 앞 빈 줄)을 따로 넣어 보면 보낼 꼴을 바꾸지 않는 빈 줄만 되살아나 빈 줄이 는다.
  */
 function pieces(
   local: readonly string[],
@@ -243,9 +244,10 @@ function pieces(
   let j = 0;
   const zip = (to: number) => {
     const theirs = pulled.slice(j, to);
-    for (let k = 0; k < Math.max(pending.length, theirs.length); k++) {
-      out.push([pending.slice(k, k + 1), theirs.slice(k, k + 1)]);
-    }
+    const paired = Math.min(pending.length, theirs.length);
+    for (let k = 0; k < paired; k++) out.push([[pending[k]!], [theirs[k]!]]);
+    if (pending.length > paired) out.push([pending.slice(paired), []]);
+    for (let k = paired; k < theirs.length; k++) out.push([[], [theirs[k]!]]);
     pending = [];
     j = to;
   };

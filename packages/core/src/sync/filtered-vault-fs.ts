@@ -80,6 +80,10 @@ export class FilteredVaultFS implements VaultFS {
     return this.inner.ensureFolder(path);
   }
 
+  async removeEmptyFolder(path: string): Promise<boolean> {
+    return (await this.inner.removeEmptyFolder?.(path)) ?? false;
+  }
+
   getFileStat(path: string): Promise<FileStatInfo | null> {
     return this.inner.getFileStat(path);
   }

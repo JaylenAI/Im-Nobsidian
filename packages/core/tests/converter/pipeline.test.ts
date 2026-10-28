@@ -9,6 +9,7 @@ import { PropertiesTableRestorer } from "../../src/converter/post-processors/pro
 import { FrontmatterGenerator } from "../../src/converter/post-processors/frontmatter-generator.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import type { ConversionContext } from "../../src/types/convert.js";
+import { TOGGLE_HEADING_END, TOGGLE_HEADING_START } from "../../src/constants/markers.js";
 
 const pushContext: ConversionContext = {
   direction: "push",
@@ -59,6 +60,18 @@ title: Test
   it("경로 선택: 인라인 DB 포함 시 block-api", () => {
     const pipeline = new ConversionPipeline();
     expect(pipeline.selectPath("%% im-nobsidian:inline-db:id=abc %%")).toBe("block-api");
+  });
+
+  it("경로 선택: 토글 헤딩은 markdown-api — 블록 경로는 콜아웃을 옛 이모지 꼴로 바꾼다", () => {
+    const pipeline = createDefaultPipeline();
+    const note = `### 접힌 제목 ${TOGGLE_HEADING_START}\n\n> [!note] 메모\n> 본문\n\n${TOGGLE_HEADING_END}\n`;
+    expect(pipeline.selectPath(note)).toBe("markdown-api");
+    expect(
+      pipeline.selectPath(note.replace(TOGGLE_HEADING_START, "%% im-nobsidian:toggle-heading %%")),
+    ).toBe("markdown-api");
+
+    const sent = pipeline.convertToNotion(note, { direction: "push", path: "markdown-api" });
+    expect(sent.content).toContain("> [!note] 메모");
   });
 });
 

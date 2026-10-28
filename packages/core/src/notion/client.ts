@@ -60,11 +60,15 @@ export function isNotionAccessDenied(error: unknown): boolean {
   return e.code === "restricted_resource" || e.status === 403;
 }
 
-/** 페이지가 휴지통(in_trash)이거나 보관(archived) 상태인지 판정한다. */
-export function isTrashedOrArchived(page: PageObjectResponse): boolean {
-  // in_trash는 런타임 응답에는 존재하나 SDK 타입에 미선언 → 안전 캐스트로 접근
-  const inTrash = (page as { in_trash?: boolean }).in_trash === true;
-  return inTrash || page.archived === true;
+/**
+ * 페이지가 휴지통에 있는가. `archived` 는 API 2026-03-11 에서 빠지고 `in_trash` 만 남는다 — 지금 버전(2025-09-03)은
+ * 둘 다 준다. 휴지통 판정을 이 함수 한 곳에 두어 버전을 올릴 때 여기만 고치게 한다.
+ */
+export function isTrashedOrArchived(page: {
+  readonly in_trash?: boolean;
+  readonly archived?: boolean;
+}): boolean {
+  return page.in_trash === true || page.archived === true;
 }
 
 /**
@@ -150,6 +154,8 @@ export class DiscoveryTooLargeError extends Error {
  * 판정 기준은 {@link NotionClient} 의 `withRateLimit` 주석에 있다.
  */
 const NOT_IDEMPOTENT = { idempotent: false } as const;
+/** 블록을 새로 만드는 쓰기 — Free 워크스페이스 블록 한도에 막힌 동안은 보내지 않는다({@link NotionBlockLimitError}). */
+const CREATES_BLOCKS = { idempotent: false, createsBlocks: true } as const;
 
 /** {@link NotionClient.searchRecentPages} 의 한 줄. */
 export interface RecentPage {
@@ -292,8 +298,8 @@ export class NotionClient {
         // 전역 쿨다운 밖에서, 로그 없이 흐른다.
         retry: false,
         // SDK 5.27+ 는 브라우저 환경(Obsidian 렌더러)에서 토큰을 받으면 던진다 — 남이 여는 페이지에 토큰이 실리는
-        // 것을 막는 검사다. 플러그인의 토큰은 사용자 기기의 볼트 설정에 있다. 5.23 은 이 옵션을 모른다(무시).
-        ...({ dangerouslyAllowBrowser: true } as Record<string, unknown>),
+        // 것을 막는 검사다. 플러그인의 토큰은 사용자 기기의 볼트 설정에 있다.
+        dangerouslyAllowBrowser: true,
         ...(options.fetch ? { fetch: options.fetch } : {}),
       },
       options.notifications ?? DEFAULT_CONFIG.sync.notifications,
@@ -430,7 +436,7 @@ export class NotionClient {
           properties: properties as never,
           children: params.children as never,
         }) as Promise<PageObjectResponse>,
-      NOT_IDEMPOTENT,
+      CREATES_BLOCKS,
     );
   }
 
@@ -462,7 +468,7 @@ export class NotionClient {
             ...params.appearance,
           },
         }),
-      NOT_IDEMPOTENT,
+      CREATES_BLOCKS,
     )) as unknown as { id: string; data_sources?: Array<{ id: string }> };
     const dataSourceId = db.data_sources?.[0]?.id ?? (await this.primaryDataSourceId(db.id));
     if (!dataSourceId) throw new Error(`만든 DB(${db.id})의 data source 를 알 수 없음`);
@@ -531,7 +537,7 @@ export class NotionClient {
           properties: properties as never,
           markdown: params.markdown,
         }) as Promise<PageObjectResponse>,
-      NOT_IDEMPOTENT,
+      CREATES_BLOCKS,
     );
   }
 
@@ -1062,7 +1068,8 @@ export class NotionClient {
   }
 
   async archivePage(pageId: string): Promise<void> {
-    await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, archived: true }));
+    // `archived` 는 SDK 에서 deprecated · API 2026-03-11 에서 빠진다. `in_trash` 는 지금 버전에서도 받는다(실측 2026-10-28).
+    await this.withRateLimit(() => this.client.pages.update({ page_id: pageId, in_trash: true }));
   }
 
   /**
@@ -1240,7 +1247,7 @@ export class NotionClient {
             children: batch as never,
             ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
           }),
-        NOT_IDEMPOTENT,
+        CREATES_BLOCKS,
       );
       const blocks = response.results.slice(0, batch.length);
       created.push(...blocks);
@@ -1883,6 +1890,13 @@ export class NotionClient {
   private cooldownUntil = 0;
 
   /**
+   * Free 워크스페이스 블록 한도에 막힌 거절과 그 시각. 막힌 동안 블록을 만드는 요청은 보내지 않고 이 거절을 그대로
+   * 돌려준다 — 플랜을 올리기 전에는 풀리지 않으므로 노트마다 같은 거절을 받으러 가지 않는다. 그 사이 플랜을
+   * 올렸을 수 있어 {@link BLOCK_LIMIT_RECHECK_MS} 가 지나면 다시 보내 본다.
+   */
+  private blockLimit: { readonly error: NotionBlockLimitError; readonly at: number } | null = null;
+
+  /**
    * 요청 1건을 rate limit 슬롯 안에서 실행하고, 재시도 가능한 실패는 백오프 후 다시 시도한다.
    *
    * 백오프 대기는 **슬롯을 놓은 뒤** 한다. 예전 구현은 `sema.acquire()` 안에서 재시도
@@ -1902,9 +1916,13 @@ export class NotionClient {
    */
   private async withRateLimit<T>(
     fn: () => Promise<T>,
-    options?: { readonly idempotent?: boolean },
+    options?: { readonly idempotent?: boolean; readonly createsBlocks?: boolean },
   ): Promise<T> {
     const idempotent = options?.idempotent ?? true;
+    if (options?.createsBlocks && this.blockLimit) {
+      if (Date.now() - this.blockLimit.at < BLOCK_LIMIT_RECHECK_MS) throw this.blockLimit.error;
+      this.blockLimit = null;
+    }
     this.requestsSent++;
     // 슬롯을 놓은 뒤에 기다리므로 대기값은 루프 밖에서 이어받는다(0 = 첫 시도).
     let backoffMs = 0;
@@ -1916,6 +1934,12 @@ export class NotionClient {
         this.lastRequestTime = Date.now();
         return await fn();
       } catch (error: unknown) {
+        if (isWorkspaceBlockLimit(error)) {
+          const limited = new NotionBlockLimitError(error);
+          this.blockLimit = { error: limited, at: Date.now() };
+          getLogger().warn(`[Im-Nobsidian] ${limited.message}`);
+          throw limited;
+        }
         if (!isRetryable(error, idempotent) || attempt >= this.maxRetries) throw error;
 
         // Retry-After 는 서버가 정한 **최소** 대기다. 예전처럼 0.5~1.0 배 지터로 깎으면
@@ -2038,9 +2062,49 @@ function isAmbiguousFailure(error: unknown): boolean {
  * 다시 보내면 요청마다 대기를 다 채운 뒤에야 실패해 멈춘 것처럼 보인다.
  */
 export function isRequestBlocked(error: unknown): boolean {
-  if (notionStatusOf(error) !== 429) return false;
+  return rateLimitReasonOf(error) === "public_api_request_blocked";
+}
+
+/**
+ * 429 가 어느 한도에 걸렸는지(`additional_data.rate_limit_reason`). 연결 하나 · 워크스페이스 공용 · 엔드포인트 ·
+ * 막힌 연결을 가른다 — 할 일이 다르다. 429 가 아니거나 실리지 않았으면 null.
+ */
+function rateLimitReasonOf(error: unknown): string | null {
+  if (notionStatusOf(error) !== 429) return null;
   const data = (error as { additional_data?: { rate_limit_reason?: unknown } }).additional_data;
-  return data?.rate_limit_reason === "public_api_request_blocked";
+  return typeof data?.rate_limit_reason === "string" ? data.rate_limit_reason : null;
+}
+
+/**
+ * Free 워크스페이스의 블록 한도에 막힌 거절인가(workspace-block-limits 문서, 2026-09-01) — 403
+ * `restricted_resource` 에 `additional_data.block_limit` 이 실린다. 문서는 메시지 글자가 아니라 이 칸으로
+ * 가르라고 한다. 권한이 없는 403 과 달리 플랜을 올리면 풀린다.
+ */
+export function isWorkspaceBlockLimit(error: unknown): boolean {
+  if (notionStatusOf(error) !== 403) return false;
+  const data = (error as { additional_data?: { block_limit?: unknown } }).additional_data;
+  return data?.block_limit !== undefined && data.block_limit !== null;
+}
+
+/** 블록 한도에 막힌 동안 블록을 만드는 요청을 다시 보내 보기까지의 시간. */
+const BLOCK_LIMIT_RECHECK_MS = 5 * 60_000;
+
+/**
+ * Free 워크스페이스 블록 한도에 막혀 새 내용을 만들 수 없다. Notion 이 준 사유를 그대로 싣고, 할 일을 앞에 붙인다.
+ * 상태 코드(403)와 코드(`restricted_resource`)를 지켜 403 으로 판정하는 호출처가 그대로 알아본다.
+ */
+export class NotionBlockLimitError extends Error {
+  readonly status = 403;
+  readonly code = "restricted_resource";
+
+  constructor(cause: unknown) {
+    const reason = cause instanceof Error ? cause.message : String(cause);
+    super(
+      `Notion 워크스페이스가 무료 블록 한도를 다 써서 새 내용을 만들 수 없음 — Notion 에서 플랜을 올리면 풀린다 (Notion: ${reason})`,
+      { cause },
+    );
+    this.name = "NotionBlockLimitError";
+  }
 }
 
 function isRetryable(error: unknown, idempotent: boolean): boolean {
@@ -2061,6 +2125,8 @@ export function describeRetryCause(error: unknown): string {
   const parts: string[] = [];
   if (typeof e.status === "number") parts.push(`status ${e.status}`);
   if (typeof e.code === "string") parts.push(e.code);
+  const reason = rateLimitReasonOf(error);
+  if (reason) parts.push(reason);
   if (typeof e.message === "string" && e.message) parts.push(e.message.slice(0, 120));
   return parts.length > 0 ? parts.join(" · ") : "알 수 없는 오류";
 }
@@ -2070,6 +2136,13 @@ export function describeRetryCause(error: unknown): string {
  * 아무 말 없이 한 시간 멈춘다 — 그 위는 지수 백오프에 맡기고 재시도는 계속 이어간다.
  */
 const MAX_RETRY_AFTER_MS = 60_000;
+
+/**
+ * 워크스페이스의 연결들이 함께 쓰는 한도(`public_api_space_request_rate_limit`)의 대기 상한. 문서는 이 대기가
+ * 1분을 넘을 수 있다고 적는다 — 1분에서 자르면 서버가 말한 시각보다 먼저 두드려 429 를 다시 맞고 재시도만 버린다.
+ * 그래도 한 시간씩 말없이 멈추지 않게 위는 막는다. 대기마다 재시도 로그가 남는다.
+ */
+const MAX_SHARED_RETRY_AFTER_MS = 5 * 60_000;
 
 /**
  * 응답 헤더 컨테이너에서 헤더 하나를 꺼낸다 — **모양을 가정하지 않는다.**
@@ -2129,7 +2202,11 @@ export function extractRetryAfter(error: unknown): number | null {
   }
 
   if (!Number.isFinite(ms) || ms <= 0) return null;
-  return Math.min(ms, MAX_RETRY_AFTER_MS);
+  const cap =
+    rateLimitReasonOf(error) === "public_api_space_request_rate_limit"
+      ? MAX_SHARED_RETRY_AFTER_MS
+      : MAX_RETRY_AFTER_MS;
+  return Math.min(ms, cap);
 }
 
 function sleep(ms: number): Promise<void> {

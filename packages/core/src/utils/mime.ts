@@ -134,6 +134,18 @@ export function isNotionUploadable(path: string): boolean {
   return ext !== undefined && NOTION_UPLOADABLE_EXTENSIONS.has(ext);
 }
 
+/**
+ * Notion 의 HTML 블록으로 올리는 형식(2026-07-03 changelog). `.html` 파일을 올려 embed 블록에 붙이면 Notion 이 격리된
+ * iframe 으로 그린다. 노트의 임베드(`![[a.html]]`)만 이 블록으로 올린다 — 노트 밖 첨부(`file-handler`)는 파일 블록 그대로다.
+ */
+const HTML_BLOCK_EXTENSIONS: ReadonlySet<string> = new Set([".html", ".htm"]);
+
+/** Notion 의 HTML 블록(파일을 붙인 embed)으로 올릴 파일인가 — 경로를 줘도 파일 이름의 확장자만 본다. */
+export function isHtmlBlockFile(path: string): boolean {
+  const ext = /\.[^./]+$/.exec(path)?.[0].toLowerCase();
+  return ext !== undefined && HTML_BLOCK_EXTENSIONS.has(ext);
+}
+
 export function getBlockType(filename: string): NotionBlockType {
   const ext = filename.match(/\.[^.]+$/)?.[0]?.toLowerCase();
   if (!ext) return "file";

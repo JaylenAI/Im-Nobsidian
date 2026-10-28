@@ -5,6 +5,7 @@ import type { NotionClient } from "../notion/client.js";
 import { isNotionAccessDenied, isNotionObjectNotFound } from "../notion/client.js";
 import type { DatabaseSyncer, RowProgress } from "./database-syncer.js";
 import { computeHash } from "../utils/hash.js";
+import { FILE_SYSTEM_NAME_MAX_BYTES, truncateBytes } from "../utils/sanitize.js";
 import { getLogger } from "../utils/logger.js";
 import { compactNotionId, notionIdsEqual, normalizeNotionId } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
@@ -569,7 +570,7 @@ export class DatabaseDiscovery {
     }
     let safeName: string;
     if (dbTitle) {
-      safeName = dbTitle.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-");
+      safeName = databaseFolderName(dbTitle);
     } else {
       const parentName = parentFolder.split("/").pop() || "";
       safeName = parentName ? `${parentName}-DB` : `db-${dbId.replace(/-/g, "").slice(0, 8)}`;
@@ -682,4 +683,15 @@ export class DatabaseDiscovery {
     }
     return refs;
   }
+}
+
+/**
+ * DB 제목 → 볼트 폴더 이름 — 영숫자 · 한글 · 공백 · `_` `-` 만 남기고 공백은 `-` 로. 파일 시스템 상한(255 바이트)을
+ * 넘으면 만들 수 없으므로 넘을 때만 자른다(예전에 만든 이름은 그대로다).
+ */
+export function databaseFolderName(title: string): string {
+  return truncateBytes(
+    title.replace(/[^a-zA-Z0-9가-힣\s_-]/g, "").replace(/\s+/g, "-"),
+    FILE_SYSTEM_NAME_MAX_BYTES,
+  );
 }

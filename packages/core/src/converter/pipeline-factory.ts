@@ -13,6 +13,8 @@ import { FootnoteGuard } from "./pre-processors/footnote-guard.js";
 import { TableAlignmentGuard } from "./pre-processors/table-alignment.js";
 import { CodeLanguageGuard } from "./pre-processors/code-language-guard.js";
 import { BlankLineCollapser } from "./pre-processors/blank-line-collapser.js";
+import { HeadingMarkerLifter } from "./pre-processors/heading-marker-lifter.js";
+import { LargeFileLinkStripper } from "./pre-processors/large-file-link-stripper.js";
 import { MentionToWikilink } from "./post-processors/mention-to-wikilink.js";
 import { EscapeNormalizer } from "./post-processors/escape-normalizer.js";
 import { HighlightRestorer } from "./post-processors/highlight-restorer.js";
@@ -27,6 +29,7 @@ import { PropertiesTableRestorer } from "./post-processors/properties-table-rest
 import { BlockSpacer } from "./post-processors/block-spacer.js";
 import { CommentRestorer } from "./post-processors/comment-restorer.js";
 import { LocalFormRestorer } from "./post-processors/local-form-restorer.js";
+import { HeadingMarkerPlacer } from "./post-processors/heading-marker-placer.js";
 import { sentForm } from "./sent-form.js";
 
 export interface PipelineOptions {
@@ -36,6 +39,8 @@ export interface PipelineOptions {
 export function createDefaultPipeline(options?: PipelineOptions): ConversionPipeline {
   const pipeline = new ConversionPipeline();
 
+  pipeline.registerPreProcessor(new HeadingMarkerLifter());
+  pipeline.registerPreProcessor(new LargeFileLinkStripper());
   pipeline.registerPreProcessor(new InlineAnnotationPreserver());
   pipeline.registerPreProcessor(new UnsupportedBlockStripper());
   pipeline.registerPreProcessor(new CommentStripper());
@@ -67,6 +72,7 @@ export function createDefaultPipeline(options?: PipelineOptions): ConversionPipe
   pipeline.registerPostProcessor(
     new LocalFormRestorer((note, context, children) => sentForm(pipeline, note, context, children)),
   );
+  pipeline.registerPostProcessor(new HeadingMarkerPlacer());
 
   return pipeline;
 }

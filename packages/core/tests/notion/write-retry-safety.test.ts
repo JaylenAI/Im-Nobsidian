@@ -163,6 +163,8 @@ describe("두 번 적용해도 같은 요청 — 모호한 실패도 다시 보�
 
     await client.archivePage("page");
     expect(update).toHaveBeenCalledTimes(2);
+    // `archived` 는 API 2026-03-11 에서 빠진다 — 휴지통 이동은 `in_trash` 로만 보낸다.
+    expect(update).toHaveBeenLastCalledWith({ page_id: "page", in_trash: true });
   });
 
   it("페이지 옮기기: 504 → 다시 보낸다 (같은 부모로 두 번 옮겨도 결과가 같다)", async () => {

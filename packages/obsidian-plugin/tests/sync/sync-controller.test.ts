@@ -179,6 +179,62 @@ describe("SyncController", () => {
       );
     });
 
+    it("올리지 않은 읽기 전용 속성은 오래 남는 알림으로 따로 알린다 — 다음 Pull 이 되돌린다", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        deleted: 0,
+        failed: [],
+        duration: 0,
+        readOnlySkipped: [{ path: "db/행.md", properties: ["합계", "ID"] }],
+      });
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).push();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Push 완료 — 생성 0 / 수정 1 / 삭제 0 (0.0s)",
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 읽기 전용 속성은 Notion 이 값을 정해 올리지 않았습니다 — 다음 Pull 이 Notion 값으로 되돌립니다: 합계, ID (노트 1개)",
+        expect.any(Number),
+      );
+    });
+
+    it("거절한 로컬 삭제는 Push 때 되살아날 것을, Pull 때 되살린 것을 알린다 (D8)", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        failed: [],
+        duration: 0,
+        unsentDeletions: ["가.md", "나.md", "다.md", "라.md"],
+      });
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        restored: 1,
+        restoredPaths: ["가.md"],
+        conflicts: [],
+        writtenPaths: ["가.md"],
+        failed: [],
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.push();
+      await controller.pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 볼트에서 지운 노트 4개는 Notion 에서 지우지 않았습니다(삭제 동기화 꺼짐) — 다음 Pull 이 되살립니다: 가.md, 나.md, 다.md 외 1개",
+        expect.any(Number),
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 볼트에서 지운 노트 1개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: 가.md",
+        expect.any(Number),
+      );
+    });
+
     it("옮긴 노트 · 폴더는 수정과 따로 「이동」 으로 요약한다", async () => {
       mock.push.mockResolvedValue({
         created: 0,

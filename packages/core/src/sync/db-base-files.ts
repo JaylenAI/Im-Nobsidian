@@ -7,6 +7,11 @@ export const DB_BASE_FILES_META_KEY = "db_base_files";
 export interface DbBaseFile {
   readonly basePath: string;
   readonly title: string;
+  /**
+   * pull 이 그 경로에 마지막으로 쓴 내용의 해시 — 파일이 이것과 다르면 볼트에서 고친 것이라 덮어쓰지 않는다. 예전 버전이
+   * 적은 기록에는 없다 — 그때는 가를 수 없어 예전처럼 쓰고, 쓴 해시부터 적는다.
+   */
+  readonly hash?: string;
 }
 
 /**
@@ -33,8 +38,18 @@ export class DbBaseFiles {
     const entries = this.load();
     const key = compactNotionId(databaseId);
     const known = entries.get(key);
-    if (known?.basePath === info.basePath && known.title === info.title) return;
-    entries.set(key, { basePath: info.basePath, title: info.title });
+    if (
+      known?.basePath === info.basePath &&
+      known.title === info.title &&
+      known.hash === info.hash
+    ) {
+      return;
+    }
+    entries.set(key, {
+      basePath: info.basePath,
+      title: info.title,
+      ...(info.hash ? { hash: info.hash } : {}),
+    });
     this.loadedRaw = JSON.stringify(Object.fromEntries(entries));
     this.stateDb.setMeta(DB_BASE_FILES_META_KEY, this.loadedRaw);
   }
@@ -53,7 +68,11 @@ export class DbBaseFiles {
       for (const [key, value] of Object.entries(parsed)) {
         const entry = value as Partial<DbBaseFile> | null;
         if (typeof entry?.basePath === "string" && typeof entry.title === "string") {
-          this.entries.set(compactNotionId(key), { basePath: entry.basePath, title: entry.title });
+          this.entries.set(compactNotionId(key), {
+            basePath: entry.basePath,
+            title: entry.title,
+            ...(typeof entry.hash === "string" ? { hash: entry.hash } : {}),
+          });
         }
       }
     } catch {

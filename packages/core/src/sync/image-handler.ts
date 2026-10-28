@@ -7,9 +7,11 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import type { ImageReference } from "../types/convert.js";
 import { MARKER_BRAND_RE, MARKER_PAYLOAD_CHAR } from "../constants/markers.js";
 import { decodeMarkerTarget } from "../converter/marker-url.js";
+import { MEDIA_LABEL_PREFIX_RE, MEDIA_PLACEHOLDER_CAPTIONS } from "../converter/media-labels.js";
 import { getLogger } from "../utils/logger.js";
-import { getBlockType, getMimeType, isNotionUploadable } from "../utils/mime.js";
+import { getBlockType, getMimeType, isHtmlBlockFile, isNotionUploadable } from "../utils/mime.js";
 import { mapOutsideCodeFences } from "../utils/md-regions.js";
+import { FILE_SYSTEM_NAME_MAX_BYTES, truncateBytes, utf8Bytes } from "../utils/sanitize.js";
 import {
   fileUrlOfBlock,
   isNotionHostedFileUrl,
@@ -17,6 +19,12 @@ import {
   notionFileIdOf,
 } from "../utils/notion-file-url.js";
 import { fetchForDownload } from "../utils/download-fetch.js";
+import {
+  fileSizeLabel,
+  largeFileLink,
+  notionFileLocation,
+  withLargeFileLink,
+} from "../converter/large-file-link.js";
 import { DEFAULT_CONFIG } from "../types/config.js";
 import {
   recallUploadedMedia,
@@ -44,6 +52,8 @@ export interface ImageDownloadResult {
   readonly fileHash?: string;
   /** 임베드 별칭으로 쓸 이름 — 받은 이름에서 이 볼트가 붙인 내용 해시를 뗀 것({@link withoutOwnHash}). */
   readonly name?: string;
+  /** 크기 상한을 넘어 받지 않은 파일의 크기(바이트) — 받았거나 다른 이유로 못 받았으면 없다. */
+  readonly skippedBytes?: number;
 }
 
 /** 다운로드는 됐지만 아직 디스크에 쓰지 않은 이미지 — D6 dedup 판정 후 persist 한다. */
@@ -169,17 +179,26 @@ export function toWikilinkAlias(label: string): string {
 }
 
 const INTERNAL_FILE_URL_RE = /^file:\/\/%7B.*%7D%7D$/;
-const FILE_LABEL_PREFIX_RE = /^(?:📎|🎬|🎞|📄|🔊)\s*/u;
 
-/** 미디어 태그 `<file|pdf|video|audio src="…">캡션</…>` — markdown API 가 파일 블록을 이렇게 준다. */
-const MEDIA_TAG_RE =
-  /<(?:file|video|audio|pdf)\s+src="([^"]+)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
+/**
+ * 파일을 싣는 미디어 태그의 이름 — markdown API 가 파일 블록을 `<file|pdf|video|audio src="…">캡션</…>` 로 준다.
+ * HTML 블록(파일을 붙인 embed)은 `<embed src="…">캡션</embed>` 로 온다 — 주소가 Notion 이 호스팅한 파일일 때만
+ * 미디어로 본다(바깥 주소의 embed 는 링크다).
+ */
+const MEDIA_TAG_NAMES = "file|video|audio|pdf|embed";
+
+/** 미디어 태그 `<이름 src="주소">캡션</이름>`. 주소 모양은 `src` 로 고른다. */
+function mediaTagRe(src: string): RegExp {
+  return new RegExp(
+    `<(?:${MEDIA_TAG_NAMES})\\s+src="(${src})">([\\s\\S]*?)<\\/(?:${MEDIA_TAG_NAMES})>`,
+    "g",
+  );
+}
+
+const MEDIA_TAG_RE = mediaTagRe('[^"]+');
 
 /** 미디어 태그의 이름 — 그대로 둘 미디어를 같은 종류의 태그로 다시 싣는다. */
-const MEDIA_TAG_NAME_RE = /^<(file|video|audio|pdf)\s/;
-
-/** 캡션 없는 미디어에 pull 변환이 붙이는 자리 이름(`[📎 file](…)`) — 사람이 적은 캡션이 아니다. */
-const MEDIA_PLACEHOLDER_CAPTIONS = new Set(["file", "pdf", "video", "audio"]);
+const MEDIA_TAG_NAME_RE = new RegExp(`^<(${MEDIA_TAG_NAMES})\\s`);
 
 /** Notion 이 붙여 넣은 이미지에 주는 자리 이름 — 이것으로 지으면 받은 이미지가 모두 `image-<해시>` 가 된다. */
 const PLACEHOLDER_IMAGE_STEMS = new Set(["image", "untitled"]);
@@ -245,8 +264,10 @@ export function embedTargetFromCaption(
 
 /** 받은 본문의 미디어 라벨을 캡션 평문으로 — 앞의 표시 이모지와 NFM 이스케이프(`\|`)를 뗀다. */
 function captionOfLabel(label: string): string {
-  const caption = label.replace(FILE_LABEL_PREFIX_RE, "").replace(/\\(.)/g, "$1").trim();
-  return FILE_LABEL_PREFIX_RE.test(label) && MEDIA_PLACEHOLDER_CAPTIONS.has(caption) ? "" : caption;
+  const caption = label.replace(MEDIA_LABEL_PREFIX_RE, "").replace(/\\(.)/g, "$1").trim();
+  return MEDIA_LABEL_PREFIX_RE.test(label) && MEDIA_PLACEHOLDER_CAPTIONS.has(caption)
+    ? ""
+    : caption;
 }
 
 /**
@@ -329,7 +350,7 @@ interface NotionMediaSpan {
 function notionMediaSpans(markdown: string): NotionMediaSpan[] {
   const spans: NotionMediaSpan[] = [];
   for (const link of scanMarkdownLinks(markdown)) {
-    if (!link.isEmbed && !FILE_LABEL_PREFIX_RE.test(link.label)) continue;
+    if (!link.isEmbed && !MEDIA_LABEL_PREFIX_RE.test(link.label)) continue;
     if (isNotionMediaUrl(link.url)) spans.push(link);
   }
   for (const tag of markdown.matchAll(MEDIA_TAG_RE)) {
@@ -503,6 +524,7 @@ function mediaBlock(
   const description = captionOfEmbed(target);
   const caption = description ? [{ type: "text", text: { content: description } }] : [];
   const file = { type: "file_upload", file_upload: { id: fileUploadId }, caption };
+  if (kind !== "image" && isHtmlBlockFile(vaultTarget)) return { type: "embed", embed: file };
   const type = kind === "image" ? "image" : getBlockType(baseName(vaultTarget));
   return type === "file"
     ? { type, file: { ...file, name: baseName(vaultTarget) } }
@@ -1322,21 +1344,17 @@ export class ImageHandler {
   ): Promise<{ content: string; downloads: ImageDownloadResult[] }> {
     // F14: 캡션 중첩 링크 대응 — 괄호 균형 스캔 후 파일 라벨(이모지 프리픽스)만 취한다.
     const fileLinks = scanMarkdownLinks(markdown).filter(
-      (s) => !s.isEmbed && FILE_LABEL_PREFIX_RE.test(s.label),
+      (s) => !s.isEmbed && MEDIA_LABEL_PREFIX_RE.test(s.label),
     );
     const notionHttpMatches = fileLinks.filter(
       (s) => /^https?:\/\//.test(s.url) && this.isNotionFileUrl(s.url),
     );
     const mdInternalMatches = fileLinks.filter((s) => INTERNAL_FILE_URL_RE.test(s.url));
 
-    const xmlHttpRegex =
-      /<(?:file|video|audio|pdf)\s+src="(https?:\/\/[^"]+)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
-    const xmlHttpMatches = [...markdown.matchAll(xmlHttpRegex)];
+    const xmlHttpMatches = [...markdown.matchAll(mediaTagRe('https?:\\/\\/[^"]+'))];
     const notionXmlHttpMatches = xmlHttpMatches.filter((m) => m[1] && this.isNotionFileUrl(m[1]));
 
-    const xmlInternalRegex =
-      /<(?:file|video|audio|pdf)\s+src="(file:\/\/%7B.*?%7D%7D)">([\s\S]*?)<\/(?:file|video|audio|pdf)>/g;
-    const xmlInternalMatches = [...markdown.matchAll(xmlInternalRegex)];
+    const xmlInternalMatches = [...markdown.matchAll(mediaTagRe("file:\\/\\/%7B.*?%7D%7D"))];
 
     const totalMatches =
       notionHttpMatches.length +
@@ -1356,9 +1374,12 @@ export class ImageHandler {
     for (const span of notionHttpMatches) {
       await sema.acquire();
       try {
-        const caption = fileNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), span.url);
+        const caption = fileNameOf(span.label.replace(MEDIA_LABEL_PREFIX_RE, ""), span.url);
         const download = await this.downloadFile(span.url, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, span.full, download, pageId);
+          continue;
+        }
         downloads.push(download);
         // F19: 다운로드한 미디어는 링크가 아니라 임베드(![[..]])로 복원해야 인라인 렌더된다.
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
@@ -1392,9 +1413,12 @@ export class ImageHandler {
           continue;
         }
 
-        const caption = savedNameOf(span.label.replace(FILE_LABEL_PREFIX_RE, ""), fileName);
+        const caption = savedNameOf(span.label.replace(MEDIA_LABEL_PREFIX_RE, ""), fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, span.full, download, pageId, blockId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(span.full, () => obsidianLink);
@@ -1418,7 +1442,10 @@ export class ImageHandler {
         const url = match[1]!;
         const caption = fileNameOf(match[2] ?? "", url);
         const download = await this.downloadFile(url, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, match[0]!, download, pageId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
@@ -1453,7 +1480,10 @@ export class ImageHandler {
 
         const caption = savedNameOf(match[2] ?? "", fileName);
         const download = await this.downloadFile(realUrl, pageTitle, caption);
-        if (!download.localPath) continue;
+        if (!download.localPath) {
+          result = keepLargeFile(result, match[0]!, download, pageId, blockId);
+          continue;
+        }
         downloads.push(download);
         const obsidianLink = fileEmbedOf(download.localPath, download.name ?? caption);
         result = result.replace(match[0]!, () => obsidianLink);
@@ -1516,13 +1546,14 @@ export class ImageHandler {
         const contentLength = response.headers.get("content-length");
         const MAX_FILE_SIZE = this.maxFileSizeBytes;
         if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
-          const sizeMB = Math.round(parseInt(contentLength, 10) / 1024 / 1024);
-          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다.
+          const bytes = parseInt(contentLength, 10);
+          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다. 그 링크는 한 시간쯤
+          // 뒤 끊기므로 호출측이 끊기지 않는 «Notion 에서 열기» 링크를 옆에 둔다(D4).
           // push 는 restoreMediaTags 가 태그로 복원해 Notion 블록을 보존한다(실측: 동일 블록 유지).
           getLogger().info(
-            `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${sizeMB}MB > ${Math.round(MAX_FILE_SIZE / 1024 / 1024)}MB), Notion 원본 링크 유지: ${caption}`,
+            `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${fileSizeLabel(bytes)} > ${fileSizeLabel(MAX_FILE_SIZE)}), Notion 에서 열기 링크를 둠: ${caption}`,
           );
-          return { originalUrl: url, localPath: "", hash: "", size: 0 };
+          return { originalUrl: url, localPath: "", hash: "", size: 0, skippedBytes: bytes };
         }
 
         const buffer = Buffer.from(await response.arrayBuffer());
@@ -1531,10 +1562,14 @@ export class ImageHandler {
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const name = withoutOwnHash(caption, hash);
-        const safeName = name
-          .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
-          .replace(/\s+/g, "-")
-          .slice(0, 80);
+        // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
+        const safeName = truncateBytes(
+          name
+            .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
+            .replace(/\s+/g, "-")
+            .slice(0, 80),
+          FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
+        );
         const fileName = `${safeName}-${hash}${extension}`;
         const localPath = `${this.attachmentFolder}/${fileName}`;
 
@@ -1604,4 +1639,20 @@ export class ImageHandler {
     if (contentType && mimeMap[contentType]) return mimeMap[contentType]!;
     return "";
   }
+}
+
+/**
+ * 크기 상한을 넘어 받지 않은 파일이면 그 링크 옆에 «Notion 에서 열기» 링크를 둔다 — 다른 이유로 못 받았거나 어느
+ * 페이지인지 모르면 그대로다.
+ */
+function keepLargeFile(
+  content: string,
+  fileLink: string,
+  download: ImageDownloadResult,
+  pageId: string | undefined,
+  blockId?: string,
+): string {
+  if (download.skippedBytes === undefined || !pageId) return content;
+  const link = largeFileLink(notionFileLocation(pageId, blockId), download.skippedBytes);
+  return withLargeFileLink(content, fileLink, link);
 }

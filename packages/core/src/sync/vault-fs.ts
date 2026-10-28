@@ -22,6 +22,11 @@ export interface VaultFS {
   moveFile(from: string, to: string): Promise<void>;
   exists(path: string): Promise<boolean>;
   ensureFolder(path: string): Promise<void>;
+  /**
+   * 폴더가 완전히 비었으면 지운다 — 파일 · 폴더 · 숨김 파일이 하나라도 있으면 두고 false. 없거나 폴더가 아니어도
+   * false. Notion 에서 지운 폴더 페이지의 폴더를 치울 때 쓴다. 없으면 폴더를 지우지 않는다.
+   */
+  removeEmptyFolder?(path: string): Promise<boolean>;
   listMarkdownFiles(): Promise<FileInfo[]>;
   listMarkdownFileStats(): Promise<FileStatInfo[]>;
   listNonMarkdownFiles(): Promise<NonMdFileInfo[]>;

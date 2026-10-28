@@ -25,6 +25,7 @@ import { ImageHandler } from "./image-handler.js";
 import { FileHandler } from "./file-handler.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
+import { findNestedFolderPages } from "../audit/nested-folder-pages.js";
 import type { VaultCompletenessReport } from "../audit/completeness.js";
 import { ConflictResolver, choiceForStrategy } from "../conflict/resolver.js";
 import type { ResolutionChoice, ResolutionResult } from "../conflict/resolver.js";
@@ -75,7 +76,7 @@ import { notesWithResolvableWikilinks } from "./push-link-pass.js";
 import { PullPlanner } from "./pull-planner.js";
 import { RemoteDetector, type RemoteDetection } from "./remote-detector.js";
 import { rerenderTargets } from "./rerender-targets.js";
-import { detectMissingLocalFiles } from "./missing-local-files.js";
+import { detectMissingLocalFiles, restoredWhenMissing } from "./missing-local-files.js";
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { randomUUID } from "node:crypto";
 import { DatabaseCreator } from "./database-creator.js";
@@ -363,6 +364,7 @@ export class SyncOrchestrator {
     this.rowSchemas.clear();
     this.placement.resetUnpreparedFolders();
     this.databaseCreator.reset();
+    this.pusher.takeReadOnlySkips(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -438,6 +440,10 @@ export class SyncOrchestrator {
         view.lookup,
         !options?.paths,
       );
+      const unsentDeletions = applicable
+        .filter((change) => this.unsentDeletion(change))
+        .map((change) => change.path);
+      const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
@@ -446,6 +452,8 @@ export class SyncOrchestrator {
         moved: count("move"),
         failed: refusedFailures,
         duration: Date.now() - startTime,
+        ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
+        ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
       };
     }
 
@@ -454,6 +462,8 @@ export class SyncOrchestrator {
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
+    // 볼트에서 지웠지만 Notion 에서 지우지 않은 노트 — 다음 pull 이 되살린다고 알린다(D8).
+    const unsentDeletions: string[] = [];
 
     let completed = 0;
     const total = movableFolders.length + applicable.length;
@@ -485,6 +495,7 @@ export class SyncOrchestrator {
         case "deleted": {
           const propagated = await this.pusher.pushDelete(change.path);
           if (propagated) counts.deleted++;
+          else if (this.unsentDeletion(change)) unsentDeletions.push(change.path);
           break;
         }
       }
@@ -672,7 +683,19 @@ export class SyncOrchestrator {
       moved: counts.moved,
       failed,
       duration: Date.now() - startTime,
+      readOnlySkipped: this.pusher.takeReadOnlySkips(),
+      ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
     };
+  }
+
+  /**
+   * 볼트에서 지운 이 노트를 Notion 에서 지우지 않아 다음 pull 이 되살리나 — deleteSync 가 꺼져 있고 pull 이
+   * 되살리는 레코드일 때. 예전에는 대기로 적기만 하고 알리지 않아, 지운 파일이 말없이 돌아왔다(D8).
+   */
+  private unsentDeletion(change: LocalChange): boolean {
+    if (change.type !== "deleted" || this.config.sync.deleteSync) return false;
+    const record = this.stateDb.getByPath(change.path);
+    return !!record && restoredWhenMissing(record);
   }
 
   /**
@@ -760,6 +783,7 @@ export class SyncOrchestrator {
     this.assertConnectionScope();
     this.puller.beginPull();
     this.rowSchemas.clear();
+    this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -802,6 +826,8 @@ export class SyncOrchestrator {
     this.discovery.clearInlineRefs();
     const conflicts: Conflict[] = [];
     const writtenPaths: string[] = [];
+    // 볼트에서 사라져 Notion 에서 되살린 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다(D8).
+    const restoredPaths: string[] = [];
     // 동기화에서 뺀 자리에 놓일 새 원격 페이지 — 받지 않고 알린다.
     const excluded: string[] = [];
     const failed: FailedOperation[] = [];
@@ -863,7 +889,9 @@ export class SyncOrchestrator {
       deleted: number,
       restored = 0,
     ): Promise<PullResult> => {
+      await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
+      restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
       const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
@@ -884,6 +912,7 @@ export class SyncOrchestrator {
           this.stateDb.setMeta(LAST_FULL_PULL_META_KEY, startedAt);
         }
         this.detector.savePendingDatabases(ledger);
+        this.detector.saveDeletionSweep();
       }
       this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
       this.stateDb.setMeta(PULL_IN_PROGRESS_META_KEY, "");
@@ -892,6 +921,7 @@ export class SyncOrchestrator {
         updated,
         deleted,
         restored,
+        ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
         conflicts,
         writtenPaths,
         failed,
@@ -904,6 +934,7 @@ export class SyncOrchestrator {
             scan,
             this.stateDb.getMeta(LAST_FULL_PULL_META_KEY),
             this.config.sync.deleteSync,
+            this.detector.deletionsChecked(),
           ),
           skippedDatabases: ledger.skipped,
         },
@@ -977,6 +1008,10 @@ export class SyncOrchestrator {
       );
       return {
         ...plan,
+        remoteScan: plan.remoteScan && {
+          ...plan.remoteScan,
+          deletionsDeferred: plan.remoteScan.deletionsDeferred && !this.detector.deletionsChecked(),
+        },
         moved: relocated.moved,
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
@@ -1099,8 +1134,10 @@ export class SyncOrchestrator {
             conflicts.push(outcome.conflict);
           } else if (outcome.action === "written") {
             writtenPaths.push(outcome.path);
-            if (restoreIds.has(change.pageId)) counts.restored++;
-            else counts.updated++;
+            if (restoreIds.has(change.pageId)) {
+              counts.restored++;
+              restoredPaths.push(outcome.path);
+            } else counts.updated++;
           }
           // unchanged(받을 것이 없음 — I5) · skipped(local-first 가 로컬을 지킴)는 받은 것이 아니다.
           // 세지 않고, sync 의 이어지는 push 에서도 빼지 않는다(F-h).
@@ -1376,7 +1413,12 @@ export class SyncOrchestrator {
           this.config.notion.rootPageId,
         );
 
-    return { databases, pages, complete: databases.complete && (pages?.complete ?? true) };
+    return {
+      databases,
+      pages,
+      nestedFolderPages: findNestedFolderPages(this.stateDb.getAll()),
+      complete: databases.complete && (pages?.complete ?? true),
+    };
   }
 
   async fetch(): Promise<{

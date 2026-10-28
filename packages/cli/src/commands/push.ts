@@ -7,6 +7,8 @@ import {
   progress,
   summary,
   duration,
+  readOnlySkipLines,
+  unsentDeletionLines,
   failedItem,
   dimText,
   completionHeader,
@@ -67,6 +69,11 @@ export const pushCommand = new Command("push")
         console.log(`  ${options.dryRun ? "만들 DB" : "만든 DB"} ${result.createdDatabases}`);
       }
       console.log(`  ${duration(result.duration)}`);
+      for (const line of readOnlySkipLines(result.readOnlySkipped, options.dryRun))
+        console.log(`  ${line}`);
+      for (const line of unsentDeletionLines(result.unsentDeletions, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
 
       if (failedCount > 0) {
         console.log("");

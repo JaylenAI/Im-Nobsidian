@@ -153,6 +153,22 @@ export interface PushResult {
   readonly moved: number;
   readonly failed: FailedOperation[];
   readonly duration: number;
+  /**
+   * 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성(수식 · 롤업 · ID …) — Notion 이 값을 정한다. 다음 pull 이 Notion
+   * 값으로 되돌리므로 화면이 알린다. 예전에는 로그 한 줄만 남아 고친 값이 말없이 사라졌다. 없으면 빈 목록 · 생략.
+   */
+  readonly readOnlySkipped?: readonly ReadOnlySkip[];
+  /**
+   * 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(`sync.deleteSync` 꺼짐) — 다음 pull 이 Notion 에서 되살린다.
+   * 예전에는 아무 말 없이 대기로 적기만 해, 지운 파일이 다음 pull 에 말없이 돌아왔다(D8). 없으면 빈 목록 · 생략.
+   */
+  readonly unsentDeletions?: readonly string[];
+}
+
+/** 노트 하나에서 올리지 않은 읽기 전용 속성. */
+export interface ReadOnlySkip {
+  readonly path: string;
+  readonly properties: readonly string[];
 }
 
 /**
@@ -181,7 +197,8 @@ export interface RemoteScanInfo {
   readonly nextFullAt: string | null;
   /**
    * Notion 에서 지운 노트가 아직 볼트에 반영되지 않았을 수 있나 — 바뀐 것만 찾았고 원격 삭제를 볼트에
-   * 반영하는 설정(`sync.deleteSync`)일 때. 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
+   * 반영하는 설정(`sync.deleteSync`)일 때. pull 은 추적 중인 것을 차례로 몇 개씩 묻는다 — 이번에 모두
+   * 물었으면 false 다. 나머지는 다음 pull 들 · 다음 전체 대조가 반영한다. 설정이 꺼져 있으면 원격 삭제는
    * 볼트에 반영하지 않으므로 늘 false 다.
    */
   readonly deletionsDeferred: boolean;
@@ -199,6 +216,8 @@ export interface PullResult {
    * 파일이 없어졌다가 복구됐다는 사실 자체를 알 수 없다.
    */
   readonly restored: number;
+  /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
+  readonly restoredPaths?: readonly string[];
   readonly conflicts: Conflict[];
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];

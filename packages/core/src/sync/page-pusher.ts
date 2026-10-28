@@ -15,7 +15,13 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import { BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { ConversionResult, DeferredCode } from "../types/convert.js";
-import type { FailedOperation, FileType, LocalChange, SyncRecord } from "../types/sync.js";
+import type {
+  FailedOperation,
+  FileType,
+  LocalChange,
+  ReadOnlySkip,
+  SyncRecord,
+} from "../types/sync.js";
 import { parseFrontmatter, snapshotFrontmatter } from "../utils/frontmatter.js";
 import { computeHash } from "../utils/hash.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
@@ -49,6 +55,7 @@ import {
 import { replacePageBody } from "./page-body.js";
 import { isDatabaseMode, rowDatabaseOf } from "./parent-mode.js";
 import { remotePresence } from "./remote-deletion.js";
+import { addPendingDatabases } from "./remote-scan.js";
 import {
   refuseUnpulledBody,
   refuseUnpulledDeletion,
@@ -134,6 +141,7 @@ export class PagePusher {
    * (ADR-017). relation 을 보내면 가리킨 행의 반대쪽 relation 이, 행을 만들면 그 행의 수식 · ID 가 바뀐다.
    */
   private markRemoteUnverified(pageIds: readonly string[]): void {
+    const databases: string[] = [];
     for (const pageId of new Set(pageIds)) {
       const target = this.stateDb.getByNotionId(pageId);
       if (!target?.notionLastEdited) continue;
@@ -142,6 +150,94 @@ export class PagePusher {
         lastEditedBy: null,
         seenAt: null,
       });
+      if (target.fileType === "db-row" && target.notionParentId) {
+        databases.push(target.notionParentId);
+      }
+    }
+    // 바뀐 것만 찾는 pull 은 원격이 그대로인 DB 를 조회하지 않는다. 읽기 전용 속성만 고쳐 보낸 것이 없으면 행도 DB 도
+    // 그대로라, 대기에 올리지 않으면 이 표시를 다음 전체 대조까지 읽지 못한다(실측 2026-10-28).
+    addPendingDatabases(this.stateDb, databases);
+  }
+
+  /** 이번 실행에서 볼트의 값을 올리지 않은 읽기 전용 속성 — 노트 경로별. */
+  private readonly readOnlySkips = new Map<string, string[]>();
+
+  /** 올리지 않은 읽기 전용 속성을 꺼낸다(목록은 비운다). */
+  takeReadOnlySkips(): ReadOnlySkip[] {
+    const skips = [...this.readOnlySkips]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([path, properties]) => ({ path, properties }));
+    this.readOnlySkips.clear();
+    return skips;
+  }
+
+  /**
+   * dry-run 이 알릴 읽기 전용 속성 — 실제 push 처럼 볼트에서 바꾼 행 속성(새 행은 모든 속성) 가운데 Notion 이 값을
+   * 정하는 것. 원격은 읽지 않고 지난 동기화 사본과 견준다 — 원격도 바뀌었으면 실제 push 와 다를 수 있다. 사본이
+   * 없거나 frontmatter · 스키마를 읽지 못하면 그 노트는 건너뛴다(실제 push 가 이유와 함께 알린다).
+   */
+  async previewReadOnlySkips(changes: readonly LocalChange[]): Promise<ReadOnlySkip[]> {
+    const skips: ReadOnlySkip[] = [];
+    for (const change of changes) {
+      const row = this.previewRow(change);
+      if (!row) continue;
+      try {
+        const current = parseFrontmatter(await this.vaultFs.readFile(change.path));
+        const { changed, cleared } = diffRowProperties(row.base, current.data);
+        const mapper = await this.rowSchemas.mapperFor(row.databaseId);
+        const readOnly = mapper.readOnlyKeys(
+          withoutDecorations([...Object.keys(changed), ...cleared]),
+        );
+        if (readOnly.length > 0) skips.push({ path: change.path, properties: readOnly });
+      } catch {
+        continue;
+      }
+    }
+    return skips.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** dry-run 이 견줄 행 — 새 행은 기준 없이, 고친 행은 지난 동기화 사본과. 행이 아니거나 사본이 없으면 null. */
+  private previewRow(
+    change: LocalChange,
+  ): { databaseId: string; base: Readonly<Record<string, unknown>> | null } | null {
+    if (change.type === "created") {
+      const databaseId = this.placement.newRowDatabaseOf(change.path);
+      return databaseId ? { databaseId, base: null } : null;
+    }
+    if (change.type !== "modified") return null;
+    const record = this.stateDb.getByPath(change.path);
+    const databaseId = record ? rowDatabaseOf(this.config, record) : null;
+    const base = record && databaseId ? this.baseRowState(record) : null;
+    return databaseId && base ? { databaseId, base: base.properties } : null;
+  }
+
+  /**
+   * 보내지 않은 속성을 알린다. 읽기 전용 속성은 경고로 따로 모은다 — 다음 pull 이 볼트의 값을 Notion 값으로 되돌리니
+   * 고친 사람이 알아야 한다. 나머지(DB 에 없는 속성 · 변환 불가 …)는 예전처럼 정보 로그다.
+   */
+  private reportUnsent(
+    path: string,
+    mapper: PropertyMapper,
+    skipped: readonly string[],
+    what: string,
+  ): void {
+    const unsent = withoutDecorations(skipped);
+    const readOnly = mapper.readOnlyKeys(unsent);
+    if (readOnly.length > 0) {
+      this.readOnlySkips.set(path, readOnly);
+      getLogger().warn(
+        `[Im-Nobsidian] 읽기 전용 속성 ${readOnly.length}개는 Notion 이 값을 정해 올리지 않음 — 다음 pull 이 ` +
+          `Notion 값으로 되돌린다: ${path} — ${readOnly.join(", ")}`,
+      );
+    } else {
+      this.readOnlySkips.delete(path);
+    }
+    const others = unsent.filter((key) => !readOnly.includes(key));
+    if (others.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] ${what} ${others.length}개는 보내지 않음(DB 에 없는 속성 · 비울 수 없는 속성 · ` +
+          `변환 불가): ${path} — ${others.join(", ")}`,
+      );
     }
   }
 
@@ -174,7 +270,7 @@ export class PagePusher {
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
 
@@ -358,7 +454,7 @@ export class PagePusher {
     const updatePath = this.pipeline.selectPath(content);
     if (updatePath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
 
@@ -401,7 +497,8 @@ export class PagePusher {
     // 페이지는 속성이 제목뿐이다 — 나머지 frontmatter 는 본문 첫머리 YAML 블록으로 간다
     // (PropertiesTableInjector). DB 행은 여기 오지 않는다(pushRowUpdate).
     const newTitle = this.changedPageTitle(record, content, path);
-    const propsToUpdate = newTitle === null ? undefined : titleProperty(newTitle);
+    const propsToUpdate =
+      newTitle === null ? undefined : titleProperty(newTitle, pagePropertiesOf(remote));
     const decorated = await this.decorations.push(
       record.notionPageId,
       path,
@@ -625,17 +722,11 @@ export class PagePusher {
       current: current.data,
       uploads: await this.uploadsFor(mapper, changes.changed, path),
     });
-    const unsentProperties = withoutDecorations(skipped);
-    if (unsentProperties.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 새 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `변환 불가): ${path} — ${unsentProperties.join(", ")}`,
-      );
-    }
+    this.reportUnsent(path, mapper, skipped, "새 행 속성");
     const selectedPath = this.pipeline.selectPath(content);
     if (selectedPath === "block-api") {
       getLogger().warn(
-        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+        `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
       );
     }
     const conversionResult = this.pipeline.convertToNotion(content, {
@@ -884,13 +975,7 @@ export class PagePusher {
           : { uploads: await this.uploadsFor(mapper, changes.changed, path) }),
       },
     );
-    const unsentProperties = withoutDecorations(skipped);
-    if (unsentProperties.length > 0) {
-      getLogger().info(
-        `[Im-Nobsidian] 행 속성 ${unsentProperties.length}개는 보내지 않음(DB 에 없는 속성 · 읽기 전용 · ` +
-          `비울 수 없는 속성 · 변환 불가): ${path} — ${unsentProperties.join(", ")}`,
-      );
-    }
+    this.reportUnsent(path, mapper, skipped, "행 속성");
 
     const bodyChanged = against?.body == null || against.body !== current.body;
     // 수정 시각을 올려도 되는가 — 원격의 변경을 모두 로컬이 덮었거나 원격이 그대로일 때만.
@@ -904,7 +989,7 @@ export class PagePusher {
       const selectedPath = this.pipeline.selectPath(content);
       if (selectedPath === "block-api") {
         getLogger().warn(
-          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column/toggle) — converted with reduced fidelity in v0.1.0`,
+          `[Im-Nobsidian] "${path}" contains block-api features (inline-db/column) — converted with reduced fidelity in v0.1.0`,
         );
       }
       conversionResult = this.pipeline.convertToNotion(content, {
@@ -998,6 +1083,10 @@ export class PagePusher {
         aliases: extractAliases(current.data),
       });
     });
+    // 볼트에서 고친 읽기 전용 속성은 보내지 못했다 — 사본에는 볼트의 값이 남고 Notion 은 그대로라, 우리가 쓴 그대로라
+    // 보고 받지 않으면 둘이 영영 다르다. 다음 pull 이 내용으로 견주어 Notion 값으로 되돌리게 한다(알림과 같은 말).
+    if (mapper.readOnlyKeys(withoutDecorations(skipped)).length > 0)
+      this.markRemoteUnverified([pageId]);
   }
 
   /**
@@ -1061,7 +1150,10 @@ export class PagePusher {
       const title = change.title ? change.title(this.notionClient.extractTitle(remote)) : null;
       if (newParent !== null) await this.notionClient.movePage(pageId, newParent);
       if (title !== null) {
-        written = await this.notionClient.updatePageProperties(pageId, titleProperty(title));
+        written = await this.notionClient.updatePageProperties(
+          pageId,
+          titleProperty(title, pagePropertiesOf(remote)),
+        );
       } else if (newParent !== null) {
         written = await this.notionClient.getPage(pageId);
       }

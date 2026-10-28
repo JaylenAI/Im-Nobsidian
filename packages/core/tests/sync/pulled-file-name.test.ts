@@ -74,6 +74,37 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     return (await handler.downloadAllFiles(markdown, "행")).content;
   }
 
+  it("HTML 블록(파일을 붙인 embed)은 .html 첨부로 받는다 — 서명 URL 은 한 시간 뒤 끊긴다", async () => {
+    const content = await pull(`앞\n\n<embed src="${signedUrl("차트.html")}"></embed>\n\n뒤`);
+
+    expect(content).toBe(`앞\n\n![[attachments/차트.html-${SHA12}.html|차트.html]]\n\n뒤`);
+    expect(fs.writeBinary).toHaveBeenCalledWith(`attachments/차트.html-${SHA12}.html`, BYTES);
+  });
+
+  it("변환을 거친 HTML 블록 링크(`[🌐 html](…)`)도 올라간 이름으로 받는다", async () => {
+    const content = await pull(`앞\n\n[🌐 html](${signedUrl("차트.html")})\n\n뒤`);
+
+    expect(content).toBe(`앞\n\n![[attachments/차트.html-${SHA12}.html|차트.html]]\n\n뒤`);
+  });
+
+  it("긴 한글 이름도 파일 시스템 상한(255 바이트) 안으로 자른다 — 넘으면 받지 못했다", async () => {
+    const caption = "가".repeat(90);
+    const content = await pull(`[📎 ${caption}](${signedUrl("a.pdf")})`);
+
+    const saved = (fs.writeBinary as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+    const name = saved.slice("attachments/".length);
+    expect(new TextEncoder().encode(name).length).toBeLessThanOrEqual(255);
+    expect(name).toMatch(new RegExp(`^가+-${SHA12}\\.pdf$`));
+    expect(content).toBe(`![[${saved}|${caption}]]`);
+  });
+
+  it("바깥 주소의 embed 는 받지 않는다 — 링크다", async () => {
+    const markdown = `<embed src="https://www.youtube.com/watch?v=x"></embed>`;
+
+    expect(await pull(markdown)).toBe(markdown);
+    expect(fs.writeBinary).not.toHaveBeenCalled();
+  });
+
   it("캡션이 없으면 올라간 이름으로 저장하고 별칭에도 쓴다", async () => {
     const content = await pull(`앞\n\n[📎 file](${signedUrl("분석 노트.ipynb")})\n\n뒤`);
 

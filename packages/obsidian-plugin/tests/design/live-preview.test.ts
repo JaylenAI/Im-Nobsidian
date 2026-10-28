@@ -65,6 +65,15 @@ describe("designLivePreview", () => {
     expect(lineText(view, 2)).toBe("A2 보라 배경 문단 ");
   });
 
+  it("제목 아래로 내린 색 마커 줄은 앞 제목을 칠한다 — 마커 줄은 칠하지 않는다", () => {
+    const view = editor("## 파란 제목\n%%im-nobsidian:block-color:blue%%\n\n끝");
+    const lines = view.contentDOM.querySelectorAll(".cm-line");
+
+    expect(lines[0]!.className).toContain("im-nobsidian-block im-nobsidian-color-blue");
+    expect(lines[1]!.className).not.toContain("im-nobsidian-block");
+    expect(lineText(view, 1)).toBe("");
+  });
+
   it("커서가 옮겨 가면 다시 숨긴다", () => {
     const view = editor(DOC, 3);
     view.dispatch({ selection: { anchor: view.state.doc.length } });

@@ -1,5 +1,11 @@
 import { setLogger } from "@im-nobsidian/core";
-import type { FailedOperation, PullResult, PushResult, RemoteScanInfo } from "@im-nobsidian/core";
+import type {
+  FailedOperation,
+  PullResult,
+  PushResult,
+  ReadOnlySkip,
+  RemoteScanInfo,
+} from "@im-nobsidian/core";
 
 /**
  * `--json` 모드 — 자동화(E2E 하니스 · CI)가 사람용 문구를 grep 하지 않고 결과를 읽게 한다.
@@ -25,6 +31,10 @@ export interface PushJson {
   /** 사이드카로 만든(dry-run 은 만들) Notion DB 수 — churn 에도 든다. */
   readonly createdDatabases: number;
   readonly failed: readonly FailedOperation[];
+  /** 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. churn 에 들지 않는다. */
+  readonly readOnlySkipped: readonly ReadOnlySkip[];
+  /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 pull 이 되살린다. churn 에 들지 않는다. */
+  readonly unsentDeletions: readonly string[];
   readonly durationMs: number;
 }
 
@@ -33,6 +43,8 @@ export interface PullJson {
   readonly updated: number;
   readonly deleted: number;
   readonly restored: number;
+  /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — `restored` 의 목록. */
+  readonly restoredPaths: readonly string[];
   /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
   readonly moved: number;
   readonly moveSkipped: number;
@@ -68,6 +80,8 @@ export function pushJson(result: PushResult): PushJson {
       (result.createdDatabases ?? 0),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
+    readOnlySkipped: result.readOnlySkipped ?? [],
+    unsentDeletions: result.unsentDeletions ?? [],
     durationMs: result.duration,
   };
 }
@@ -78,6 +92,7 @@ export function pullJson(result: PullResult): PullJson {
     updated: result.updated,
     deleted: result.deleted,
     restored: result.restored,
+    restoredPaths: result.restoredPaths ?? [],
     moved: result.moved?.length ?? 0,
     moveSkipped: result.moveSkipped?.length ?? 0,
     renamed: result.moved?.filter((move) => move.renamed).length ?? 0,

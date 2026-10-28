@@ -38,11 +38,7 @@ import {
   type FolderLookup,
 } from "./folder-container.js";
 import { isDatabaseMode } from "./parent-mode.js";
-import {
-  PENDING_DATABASES_META_KEY,
-  parsePendingDatabases,
-  serializePendingDatabases,
-} from "./remote-scan.js";
+import { addPendingDatabases } from "./remote-scan.js";
 import type { VaultFS } from "./vault-fs.js";
 
 /** 사이드카 파일인가 — 확장자 대소문자는 가리지 않는다. */
@@ -710,9 +706,7 @@ export class DatabaseCreator {
       discovered.push({ databaseId, localFolder: folder, titleProperty });
       this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(discovered));
     }
-    const pending = parsePendingDatabases(this.stateDb.getMeta(PENDING_DATABASES_META_KEY));
-    pending.add(compactNotionId(databaseId));
-    this.stateDb.setMeta(PENDING_DATABASES_META_KEY, serializePendingDatabases(pending));
+    addPendingDatabases(this.stateDb, [databaseId]);
   }
 
   private async readSidecar(path: string): Promise<SidecarSchema | null> {

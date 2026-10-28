@@ -1,4 +1,4 @@
-import { patchRichText, richTextChunks, type RichTextItem } from "./rich-text.js";
+import { patchRichText, richTextChunks, titleRunsOf, type RichTextItem } from "./rich-text.js";
 import { FILE_NAME_MAX } from "../constants/notion-limits.js";
 import type { Config } from "../types/config.js";
 import type { RowPropertyChanges } from "../types/sync.js";
@@ -352,6 +352,14 @@ export class PropertyMapper {
    */
   relationKeys(keys: readonly string[]): string[] {
     return keys.filter((key) => this.schema.get(key)?.type === "relation");
+  }
+
+  /** 이 속성들 가운데 Notion 이 값을 정하는 것(수식 · 롤업 · ID · 생성일 …) — 볼트에서 고쳐도 보낼 수 없다. */
+  readOnlyKeys(keys: readonly string[]): string[] {
+    return keys.filter((key) => {
+      const type = this.schema.get(key)?.type;
+      return type !== undefined && READ_ONLY_TYPES.has(type);
+    });
   }
 
   /**
@@ -917,15 +925,6 @@ function dateText(value: unknown, zone: string): string | null {
   const text = String(plainFrontmatterValue(value));
   if (!DATE_REGEX.test(text)) return null;
   return isWallTime(text) ? toZonedIso(text, zone) : text;
-}
-
-/** 원격 행의 제목 조각들 — 제목 타입 속성. */
-function titleRunsOf(remote: Readonly<Record<string, unknown>>): RichTextItem[] | null {
-  for (const prop of Object.values(remote)) {
-    const value = prop as { type?: string; title?: unknown } | null;
-    if (value?.type === "title") return Array.isArray(value.title) ? value.title : null;
-  }
-  return null;
 }
 
 /** 원격 행의 글 속성 조각들. 그 속성이 글 속성이 아니거나 없으면 null. */
