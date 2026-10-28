@@ -1,3 +1,4 @@
+import { patchRichText, titleRunsOf } from "../notion/rich-text.js";
 import { plainFrontmatterValue } from "../utils/frontmatter.js";
 import { legacySanitizeFileName, sanitizeFileName } from "../utils/sanitize.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
@@ -120,8 +121,17 @@ export function extractTitle(filePath: string): string {
 }
 
 /** 페이지 · 행 제목만 바꾸는 속성 — 제목 속성의 id 는 페이지 · 행 모두 `title` 이다. */
-export function titleProperty(title: string): Record<string, unknown> {
-  return { title: { title: [{ text: { content: title } }] } };
+export function titleProperty(
+  title: string,
+  /** 방금 읽은 원격 페이지의 속성 — 주면 그 제목의 서식 위에 바뀐 글자만 고친다. */
+  remote?: Readonly<Record<string, unknown>>,
+): Record<string, unknown> {
+  // 볼트는 제목을 평문으로만 안다 — 평문을 그대로 보내면 한 글자만 고쳐도 Notion 제목의 굵게 · 색 · 링크가 모두
+  // 지워진다(D9). DB 행 제목은 이미 이렇게 보낸다(F-08).
+  const runs = remote ? titleRunsOf(remote) : null;
+  return {
+    title: { title: (runs && patchRichText(runs, title)) ?? [{ text: { content: title } }] },
+  };
 }
 
 /**
