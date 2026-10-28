@@ -22,6 +22,7 @@ import type { Config, DatabaseSyncConfig } from "../../src/types/config.js";
 import { createConfig } from "../helpers/mock-orchestrator.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
+import { DELETION_SWEEP_BUDGET } from "../../src/sync/deletion-sweep.js";
 
 const DAY = "2026-09-04";
 const ROW_DB_ID = "db000000-0000-4000-8000-0000000000a1";
@@ -239,7 +240,7 @@ describe("S-12 deleteSync 는 목록에 없는 것을 원격에 물어보고 지
       expect(vault.files.has(row.path)).toBe(false);
     });
 
-    it("조회 필터가 있는 DB 는 조회에 없는 행을 묻지도 지우지도 않는다 — 필터 밖일 수 있다", async () => {
+    it("조회 필터가 있는 DB 는 조회에 없는 살아 있는 행을 지우지 않는다 — 필터 밖일 수 있다", async () => {
       const row = await pulledRow(build());
 
       const filtered = build(
@@ -254,8 +255,8 @@ describe("S-12 deleteSync 는 목록에 없는 것을 원격에 물어보고 지
       expect(result).toMatchObject({ deleted: 0, failed: [] });
       expect(vault.files.has(row.path)).toBe(true);
       expect(db.getByNotionId(row.id)).not.toBeNull();
-      // 필터 밖으로 나간 행을 pull 마다 물으면 요청이 끝없이 는다.
-      expect(notion.client.getPage).not.toHaveBeenCalledWith(row.id);
+      // 필터 밖으로 나간 행은 삭제 확인이 차례로 물을 뿐이다 — pull 마다 예산 안에서만 묻는다.
+      expect(notion.client.getPage.mock.calls.length).toBeLessThanOrEqual(DELETION_SWEEP_BUDGET);
     });
 
     it("`--path` 범위 밖의 행은 지우지 않는다", async () => {
