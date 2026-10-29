@@ -27,6 +27,7 @@ import type {
   BasePropertyOption,
   BaseStatusGroup,
   ViewRequest,
+  ViewUpdateRequest,
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import type { BookmarkTarget } from "../types/convert.js";
@@ -1811,6 +1812,16 @@ export class NotionClient {
   /** 보기를 지운다. DB 의 마지막 보기는 지우지 못한다(400). */
   async deleteView(viewId: string): Promise<void> {
     await this.withRateLimit(() => this.client.views.delete({ view_id: viewId }));
+  }
+
+  /**
+   * 보기를 고친다(ADR-046). 보내지 않은 항목은 그대로 두고 null 은 지운다. `configuration.properties` 는 통째로 바뀐다 —
+   * 목록에 없는 속성은 숨겨지고 목록 차례가 열 차례다(2026-10-29 실측).
+   */
+  async updateView(viewId: string, request: ViewUpdateRequest): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.views.update({ ...request, view_id: viewId } as never),
+    );
   }
 
   async getView(viewId: string): Promise<ViewConfig | null> {

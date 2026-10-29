@@ -1,4 +1,5 @@
 import type { IStateDB } from "../state/state-db-interface.js";
+import type { BaseViewRecord } from "./base-view-record.js";
 import { compactNotionId } from "../utils/id.js";
 
 /** DB 마다 실제로 기록한 `.base` 를 두는 상태 메타 키. */
@@ -12,6 +13,13 @@ export interface DbBaseFile {
    * 적은 기록에는 없다 — 그때는 가를 수 없어 예전처럼 쓰고, 쓴 해시부터 적는다.
    */
   readonly hash?: string;
+  /**
+   * pull 이 쓴 보기들 — 볼트에서 고친 보기를 push 가 Notion 보기에 올릴 때 견준다(ADR-046). pull 이 이 경로에 쓴
+   * 파일에만 있다(직접 만든 `.base` 에는 없다).
+   */
+  readonly views?: readonly BaseViewRecord[];
+  /** 올리지 않는 나머지의 지문(`restSignature`) — 같아야 고친 것을 모두 올린 것이다. */
+  readonly rest?: string;
 }
 
 /**
@@ -34,22 +42,18 @@ export class DbBaseFiles {
     return this.load().get(compactNotionId(databaseId));
   }
 
+  /** 기록한 DB 모두 — 키는 줄인 DB id. */
+  all(): Array<[string, DbBaseFile]> {
+    return [...this.load().entries()];
+  }
+
   set(databaseId: string, info: DbBaseFile): void {
     const entries = this.load();
     const key = compactNotionId(databaseId);
     const known = entries.get(key);
-    if (
-      known?.basePath === info.basePath &&
-      known.title === info.title &&
-      known.hash === info.hash
-    ) {
-      return;
-    }
-    entries.set(key, {
-      basePath: info.basePath,
-      title: info.title,
-      ...(info.hash ? { hash: info.hash } : {}),
-    });
+    const next = normalize(info);
+    if (known && JSON.stringify(known) === JSON.stringify(next)) return;
+    entries.set(key, next);
     this.loadedRaw = JSON.stringify(Object.fromEntries(entries));
     this.stateDb.setMeta(DB_BASE_FILES_META_KEY, this.loadedRaw);
   }
@@ -68,11 +72,16 @@ export class DbBaseFiles {
       for (const [key, value] of Object.entries(parsed)) {
         const entry = value as Partial<DbBaseFile> | null;
         if (typeof entry?.basePath === "string" && typeof entry.title === "string") {
-          this.entries.set(compactNotionId(key), {
-            basePath: entry.basePath,
-            title: entry.title,
-            ...(typeof entry.hash === "string" ? { hash: entry.hash } : {}),
-          });
+          this.entries.set(
+            compactNotionId(key),
+            normalize({
+              basePath: entry.basePath,
+              title: entry.title,
+              ...(typeof entry.hash === "string" ? { hash: entry.hash } : {}),
+              ...(Array.isArray(entry.views) ? { views: entry.views } : {}),
+              ...(typeof entry.rest === "string" ? { rest: entry.rest } : {}),
+            }),
+          );
         }
       }
     } catch {
@@ -80,4 +89,15 @@ export class DbBaseFiles {
     }
     return this.entries;
   }
+}
+
+/** 키 차례를 고정한 기록 — 같은 값이면 같은 글자라 바뀐 것만 쓴다. */
+function normalize(info: DbBaseFile): DbBaseFile {
+  return {
+    basePath: info.basePath,
+    title: info.title,
+    ...(info.hash ? { hash: info.hash } : {}),
+    ...(info.views && info.views.length > 0 ? { views: info.views } : {}),
+    ...(info.views && info.views.length > 0 && info.rest ? { rest: info.rest } : {}),
+  };
 }

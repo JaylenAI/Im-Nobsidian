@@ -1,6 +1,7 @@
 import type { BasePropertySchema, DatabaseViewsConfig, ViewConfig } from "../types/view.js";
 import { translateNotionFilter, type BasesFilterNode } from "./notion-filter-translator.js";
 import { resolvePropertyName } from "./property-resolver.js";
+import { BASES_TIMESTAMPS, BASES_TITLE } from "./bases-file-properties.js";
 
 export interface BaseFileOptions {
   readonly databaseId: string;
@@ -18,6 +19,19 @@ export interface BaseFileOptions {
 
 export type BasesViewType = "table" | "cards" | "list";
 
+/** `.base` 에 쓴 보기 하나가 어느 Notion 보기에서 왔나 — `views[]` 와 같은 차례(push 가 고친 보기를 올린다, ADR-046). */
+export interface WrittenBasesView {
+  readonly viewId: string;
+  /** Notion 필터 가운데 `.base` 로 옮기지 못한 조건이 있다 — 볼트의 필터로 Notion 필터를 덮으면 그 조건이 사라진다. */
+  readonly lossyFilter: boolean;
+}
+
+/** `.base` 내용과 그 안의 보기들의 출처. */
+export interface GeneratedBaseFile {
+  readonly content: string;
+  readonly views: readonly WrittenBasesView[];
+}
+
 /** Notion 뷰 하나를 Bases 로 옮길 때의 판정. */
 export interface BasesViewMapping {
   /** Bases 뷰 타입. `null` = 대응이 없어 `.base` 에 실을 수 없음. */
@@ -32,9 +46,9 @@ export interface BasesViewMapping {
 /**
  * Notion 뷰 타입 → Obsidian Bases 뷰 매핑(SSOT).
  *
- * 뷰는 현재 pull-authoritative — Notion API 가 2026-03-19 뷰 생성/수정/삭제를 열었지만
- * 본 프로젝트는 아직 뷰 write-back 을 구현하지 않았다(로드맵 항목). push 로 되돌릴 수
- * 없는 동안 "조용한 유실 금지"는 곧 "보존 + 정직한 degrade 리포트"를 의미한다.
+ * 볼트에서 고친 보기의 이름 · 열 · 정렬 · 필터는 push 가 Notion 보기에 올린다(ADR-046). 보기 타입은 옮기지
+ * 않는다 — 대응이 없는 것은 "보존 + 정직한 degrade 리포트"다. 칸반(Bases 1.14)은 최소 지원 버전(1.12.4)에
+ * 없어 보드를 카드로 둔다.
  *
  * 달력·타임라인은 예전에 `null` 이었다 — 즉 `.base` 에서 **통째로 사라졌다**. 사이드카에는
  * 남지만 Obsidian 을 여는 사람 눈에는 그 뷰가 애초에 없었던 것처럼 보인다. 격자·축은
@@ -106,6 +120,11 @@ export const IN_FOLDER_FILTER_RE = /file\.inFolder\("([^"\n]*)"\)/g;
 
 export class BaseFileGenerator {
   generate(options: BaseFileOptions): string {
+    return this.generateWithViews(options).content;
+  }
+
+  /** `.base` 내용과 함께 쓴 보기마다 어느 Notion 보기에서 왔는지 돌려준다 — pull 이 기록해 push 가 견준다. */
+  generateWithViews(options: BaseFileOptions): GeneratedBaseFile {
     const lines: string[] = [];
 
     lines.push(`${BASE_FILE_HEADER} from Notion DB: ${options.databaseName}`);
@@ -115,10 +134,15 @@ export class BaseFileGenerator {
     this.writeFilters(lines, options.folderPath);
     this.writeFormulas(lines, options.viewsConfig.views);
     this.writePropertyDisplayNames(lines, options.schema);
-    this.writeViews(lines, options.viewsConfig.views, options.schema, options.rangeEnds);
+    const views = this.writeViews(
+      lines,
+      options.viewsConfig.views,
+      options.schema,
+      options.rangeEnds,
+    );
 
     // YAML 파일은 말미 개행으로 끝낸다(POSIX 텍스트 관례·diff 안정성).
-    return lines.join("\n") + "\n";
+    return { content: lines.join("\n") + "\n", views };
   }
 
   private writeFilters(lines: string[], folderPath: string): void {
@@ -167,16 +191,17 @@ export class BaseFileGenerator {
     views: ViewConfig[],
     schema: Record<string, BasePropertySchema>,
     rangeEnds: ReadonlyMap<string, string> = new Map(),
-  ): void {
-    const basesViews = views
+  ): WrittenBasesView[] {
+    const converted = views
       .map((v) => this.convertView(v, schema, rangeEnds))
       .filter((v): v is NonNullable<typeof v> => v !== null);
+    const basesViews = converted.map((c) => c.view);
 
     if (basesViews.length === 0) {
       lines.push("views:");
       lines.push("  - type: table");
       lines.push("    name: Table");
-      return;
+      return [];
     }
 
     // Obsidian Bases 는 뷰 이름 유일성을 요구한다. Notion 은 이름 없는 뷰를 'Untitled'로
@@ -220,6 +245,7 @@ export class BaseFileGenerator {
         this.writeFilterValue(lines, view.filters, "    ");
       }
     }
+    return converted.map(({ viewId, lossyFilter }) => ({ viewId, lossyFilter }));
   }
 
   /** `filters:` 키와 그 값을 쓴다. 단일 식이면 한 줄, 그룹이면 블록. */
@@ -290,9 +316,10 @@ export class BaseFileGenerator {
     view: ViewConfig,
     schema: Record<string, BasePropertySchema>,
     rangeEnds: ReadonlyMap<string, string>,
-  ): BasesView | null {
+  ): { readonly view: BasesView; readonly viewId: string; readonly lossyFilter: boolean } | null {
     const basesType = basesViewMappingOf(view.type).type;
     if (!basesType) return null;
+    let lossyFilter = false;
 
     const result: BasesView = {
       type: basesType,
@@ -315,7 +342,7 @@ export class BaseFileGenerator {
         });
 
       if (visible.length > 0) {
-        result.order = ["file.name", ...visible];
+        result.order = [BASES_TITLE, ...visible];
       }
     }
 
@@ -327,7 +354,7 @@ export class BaseFileGenerator {
             const propName = this.resolvePropertyName(s.property, schema) ?? s.property;
             property = this.toNoteRef(propName);
           } else if (s.timestamp) {
-            property = s.timestamp === "created_time" ? "file.ctime" : "file.mtime";
+            property = BASES_TIMESTAMPS[s.timestamp];
           } else {
             return null;
           }
@@ -378,13 +405,14 @@ export class BaseFileGenerator {
     // Notion 뷰 필터를 Bases 식으로 옮긴다. 옮기지 못한 조건은 여기서 조용히 빠지지만,
     // 사이드카가 같은 번역기를 돌려 무엇이 빠졌는지 degrade 리포트에 남긴다.
     if (view.filter !== undefined && view.filter !== null) {
-      const { node } = translateNotionFilter(view.filter, schema, (id) =>
+      const { node, untranslated } = translateNotionFilter(view.filter, schema, (id) =>
         this.resolvePropertyName(id, schema),
       );
       if (node) result.filters = node;
+      lossyFilter = untranslated.length > 0 || node === null;
     }
 
-    return result;
+    return { view: result, viewId: view.id, lossyFilter };
   }
 
   private toNoteRef(propertyName: string): string {
