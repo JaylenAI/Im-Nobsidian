@@ -6,6 +6,7 @@ import {
   SyncOrchestrator,
   IGNORE_FILE,
   isRemoteDeletion,
+  shortNotionId,
 } from "@im-nobsidian/core";
 import chalk from "chalk";
 import {
@@ -41,7 +42,7 @@ export const statusCommand = new Command("status")
 
       const rootId = config.notion.rootPageId;
       const direction = config.sync.direction === "both" ? "bidirectional" : config.sync.direction;
-      console.log(`  ${dimText("Root page:")}  ${rootId.slice(0, 8)}...`);
+      console.log(`  ${dimText("Root page:")}  ${shortNotionId(rootId)}...`);
       console.log(`  ${dimText("Direction:")}  ${direction}`);
       if (status.lastSyncAt) {
         console.log(`  ${dimText("Last sync:")}  ${localDateTime(status.lastSyncAt)}`);
@@ -192,7 +193,7 @@ export const statusCommand = new Command("status")
           // 볼트에 있는 노트는 경로, 아직 없는 새 페이지는 Notion 제목 — 내부 id 는 둘 다 없을 때만.
           const name = c.path ?? (c.title ? `${c.title} ${dimText("(new page)")}` : undefined);
           console.log(
-            `    ${icon} ${name ?? `${c.pageId.slice(0, 8)}...`} ${dimText(`(${c.type})`)}`,
+            `    ${icon} ${name ?? `${shortNotionId(c.pageId)}...`} ${dimText(`(${c.type})`)}`,
           );
         }
         if (status.remoteChanges.length > LISTED_ITEMS) {

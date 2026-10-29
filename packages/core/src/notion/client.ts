@@ -31,7 +31,7 @@ import type {
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
-import { compactNotionId, normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual, shortNotionId } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
 import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
@@ -1055,7 +1055,7 @@ export class NotionClient {
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
-        `[Notion] DB ${compactNotionId(databaseId).slice(0, 8)} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
+        `[Notion] DB ${shortNotionId(databaseId)} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
       );
     }
 

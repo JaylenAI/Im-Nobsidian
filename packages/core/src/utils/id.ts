@@ -60,3 +60,10 @@ export function notionIdsEqual(a: string, b: string): boolean {
 export function compactNotionId(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
 }
+
+/** 로그 · 화면에 보일 id — 앞 8자만. 전체 id 는 페이지를 가리키므로 남기지 않는다. */
+export const SHORT_NOTION_ID_LENGTH = 8;
+
+export function shortNotionId(id: string): string {
+  return compactNotionId(id).slice(0, SHORT_NOTION_ID_LENGTH);
+}

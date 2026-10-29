@@ -281,6 +281,7 @@ export {
   normalizeNotionId,
   notionIdsEqual,
   compactNotionId,
+  shortNotionId,
   notionIdFromInput,
 } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";

@@ -7,7 +7,7 @@ import type { DatabaseSyncer, RowProgress } from "./database-syncer.js";
 import { computeHash } from "../utils/hash.js";
 import { FILE_SYSTEM_NAME_MAX_BYTES, truncateBytes } from "../utils/sanitize.js";
 import { getLogger } from "../utils/logger.js";
-import { compactNotionId, notionIdsEqual, normalizeNotionId } from "../utils/id.js";
+import { notionIdsEqual, normalizeNotionId, shortNotionId } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
 import { resolveDbFolderPath, repairDbFolderCollisions } from "../utils/db-folder-path.js";
@@ -228,7 +228,7 @@ export class DatabaseDiscovery {
         failed.push({
           path: pathOf(parentPageId),
           operation: "create",
-          error: `DB ${compactNotionId(dbId).slice(0, 8)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
+          error: `DB ${shortNotionId(dbId)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
         });
       };
 

@@ -5,6 +5,7 @@ import {
   normalizeNotionId,
   notionIdFromInput,
   notionIdsEqual,
+  shortNotionId,
 } from "../../src/utils/id.js";
 
 describe("generateId", () => {
@@ -101,5 +102,12 @@ describe("notionIdFromInput — 설정에 넣은 루트 페이지 (D1)", () => {
     ["연 페이지 자리가 ID 가 아님", `https://www.notion.so/${RAW}?p=abc`],
   ])("%s → 못 찾음", (_name, input) => {
     expect(notionIdFromInput(input)).toBeNull();
+  });
+});
+
+describe("shortNotionId", () => {
+  it("대시 · 대문자와 상관없이 앞 8자", () => {
+    expect(shortNotionId("ABCDEF12-3456-7890-abcd-ef1234567890")).toBe("abcdef12");
+    expect(shortNotionId("abcdef1234567890abcdef1234567890")).toBe("abcdef12");
   });
 });
