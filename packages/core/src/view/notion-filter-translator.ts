@@ -5,6 +5,7 @@ import {
   dateOnly,
   relativeRangeExprs,
 } from "./relative-dates.js";
+import { BASES_TIMESTAMPS } from "./bases-file-properties.js";
 
 /**
  * Notion 뷰 필터식 → Obsidian Bases 필터식 번역기.
@@ -123,7 +124,8 @@ function translateNode(node: unknown, ctx: Ctx): BasesFilterNode | null {
 function translateLeaf(leaf: Record<string, unknown>, ctx: Ctx): BasesFilterNode | null {
   const timestamp = leaf["timestamp"];
   if (typeof timestamp === "string") {
-    const ref = timestamp === "created_time" ? "file.ctime" : "file.mtime";
+    const ref =
+      BASES_TIMESTAMPS[timestamp === "created_time" ? "created_time" : "last_edited_time"];
     const cond = leaf[timestamp];
     if (!isRecord(cond)) return unsupported(ctx, `timestamp '${timestamp}' 필터`);
     return translateDate(ref, cond, ctx, `timestamp '${timestamp}'`);

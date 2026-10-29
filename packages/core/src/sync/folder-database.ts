@@ -31,6 +31,7 @@ import {
   type SidecarView,
 } from "../view/sidecar-generator.js";
 import type { VaultFS } from "./vault-fs.js";
+import { BASES_TITLE } from "../view/bases-file-properties.js";
 
 /** 폴더의 노트 하나 — 볼트 경로와 읽은 frontmatter. */
 export interface FolderNote {
@@ -366,7 +367,7 @@ function viewsOf(
     return [];
   }
   const idOf = new Map<string, string>();
-  for (const p of properties) idOf.set(p.type === "title" ? "file.name" : p.name, p.id);
+  for (const p of properties) idOf.set(p.type === "title" ? BASES_TITLE : p.name, p.id);
   const columnId = (raw: unknown): string | undefined => {
     if (typeof raw !== "string") return undefined;
     return idOf.get(raw) ?? idOf.get(raw.replace(/^note\./, ""));
