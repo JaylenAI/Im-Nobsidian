@@ -6,6 +6,7 @@ import type {
   ReadOnlySkip,
   RemoteScanInfo,
   SchemaFollowed,
+  PropertyRename,
 } from "@im-nobsidian/core";
 
 /**
@@ -36,6 +37,8 @@ export interface PushJson {
   readonly readOnlySkipped: readonly ReadOnlySkip[];
   /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 pull 이 되살린다. churn 에 들지 않는다. */
   readonly unsentDeletions: readonly string[];
+  /** 볼트에서 바꾼 DB 속성 이름을 Notion 열 이름으로 바꾼 것(ADR-045) — churn 에 든다. */
+  readonly renamedProperties: readonly PropertyRename[];
   readonly durationMs: number;
 }
 
@@ -80,11 +83,13 @@ export function pushJson(result: PushResult): PushJson {
       result.updated +
       result.deleted +
       result.moved +
-      (result.createdDatabases ?? 0),
+      (result.createdDatabases ?? 0) +
+      (result.renamedProperties?.length ?? 0),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
     readOnlySkipped: result.readOnlySkipped ?? [],
     unsentDeletions: result.unsentDeletions ?? [],
+    renamedProperties: result.renamedProperties ?? [],
     durationMs: result.duration,
   };
 }

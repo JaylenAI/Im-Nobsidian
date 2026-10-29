@@ -297,7 +297,11 @@ export class SyncController {
       (result) => ({
         summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
-        warning: warnings(readOnlyText(result), unsentDeletionText(result)),
+        warning: warnings(
+          renamedPropertyText(result),
+          readOnlyText(result),
+          unsentDeletionText(result),
+        ),
       }),
     );
   }
@@ -343,6 +347,7 @@ export class SyncController {
         warning: warnings(
           schemaFollowedText(result.pull),
           restoredText(result.pull),
+          renamedPropertyText(result.push),
           readOnlyText(result.push),
           unsentDeletionText(result.push),
         ),
@@ -783,6 +788,15 @@ function readOnlyText(result: PushResult): string | null {
     `읽기 전용 속성은 Notion 이 값을 정해 올리지 않았습니다 — 다음 Pull 이 Notion 값으로 되돌립니다: ` +
     `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""} (노트 ${skips.length}개)`
   );
+}
+
+/** 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로 바꾼 것(ADR-045) — 행 값은 그대로라 수정 수에 들지 않는다. */
+function renamedPropertyText(result: PushResult): string | null {
+  const renames = result.renamedProperties ?? [];
+  if (renames.length === 0) return null;
+  return `볼트에서 바꾼 속성 이름을 Notion 열에 옮겼습니다: ${renames
+    .map(({ from, to }) => `${from} → ${to}`)
+    .join(", ")}`;
 }
 
 /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 Pull 이 되살린다(D8). */

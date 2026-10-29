@@ -12,6 +12,7 @@ import {
   restoredLines,
   schemaFollowedLines,
   unsentDeletionLines,
+  renamedPropertyLines,
   icons,
   dimText,
   completionHeader,
@@ -111,6 +112,9 @@ export const syncCommand = new Command("sync")
         console.log(`  ${line}`);
       }
       for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of renamedPropertyLines(pushResult.renamedProperties, options.dryRun)) {
         console.log(`  ${line}`);
       }
       if (pullResult.remoteScan) {
