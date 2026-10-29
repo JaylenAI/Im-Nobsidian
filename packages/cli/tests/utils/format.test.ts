@@ -30,6 +30,7 @@ import {
   remoteDeletionHint,
   restoredLines,
   schemaFollowedLines,
+  renamedPropertyLines,
   unsentDeletionLines,
   remoteScanLines,
 } from "../../src/utils/format.js";
@@ -163,6 +164,19 @@ describe("거절한 로컬 삭제 (D8)", () => {
     expect(lines[lines.length - 1]).toBe("  … 외 3개");
     expect(restoredLines(undefined)).toEqual([]);
     expect(unsentDeletionLines([])).toEqual([]);
+  });
+});
+
+describe("renamedPropertyLines — 볼트에서 바꾼 속성 이름을 Notion 열에 옮긴 것 (ADR-045)", () => {
+  it("DB 폴더와 바꾼 이름을 한 줄씩, dry-run 은 옮길 것으로", () => {
+    const renames = [{ folder: "databases/할 일", from: "점수", to: "점수표" }];
+    expect(renamedPropertyLines(renames)).toEqual([
+      "✓ 볼트에서 바꾼 속성 이름을 Notion 열에 옮겼습니다 — databases/할 일: 점수 → 점수표",
+    ]);
+    expect(renamedPropertyLines(renames, true)).toEqual([
+      "✓ 볼트에서 바꾼 속성 이름을 Notion 열에 옮깁니다 — databases/할 일: 점수 → 점수표",
+    ]);
+    expect(renamedPropertyLines(undefined)).toEqual([]);
   });
 });
 

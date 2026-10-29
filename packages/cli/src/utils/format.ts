@@ -5,6 +5,7 @@ import type {
   ReadOnlySkip,
   RemoteScanInfo,
   SchemaFollowed,
+  PropertyRename,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -216,6 +217,20 @@ export function schemaFollowedLines(followed: readonly SchemaFollowed[] | undefi
     );
   }
   return lines;
+}
+
+/**
+ * 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로 바꾼 것(ADR-045) — 행 값은 그대로라 행 수로 세지 않는다. 바꾼 것이
+ * 보이지 않으면 Notion 에서 열 이름이 바뀐 까닭을 모른다.
+ */
+export function renamedPropertyLines(
+  renames: readonly PropertyRename[] | undefined,
+  dryRun = false,
+): string[] {
+  return (renames ?? []).map(
+    ({ folder, from, to }) =>
+      `${icons.success} 볼트에서 바꾼 속성 이름을 Notion 열에 ${dryRun ? "옮깁니다" : "옮겼습니다"} — ${folder}: ${from} → ${to}`,
+  );
 }
 
 /**
