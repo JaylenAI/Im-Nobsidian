@@ -31,7 +31,7 @@ import type {
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
-import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { compactNotionId, normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
 import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
@@ -228,6 +228,21 @@ export interface DatabaseAppearance {
 }
 
 /** 페이지가 DB 행이면 그 DB 의 id. */
+/** 새 페이지의 부모 — 행은 data source 를 주면 그곳에, 아니면 DB 에. */
+function rowParentOf(params: {
+  readonly parentId: string;
+  readonly parentType: "page" | "database";
+  readonly dataSourceId?: string;
+}):
+  | { page_id: string }
+  | { database_id: string }
+  | { type: "data_source_id"; data_source_id: string } {
+  if (params.parentType === "page") return { page_id: params.parentId };
+  return params.dataSourceId
+    ? { type: "data_source_id", data_source_id: params.dataSourceId }
+    : { database_id: params.parentId };
+}
+
 function parentDatabaseIdOf(page: { readonly parent?: unknown }): string | null {
   const parent = page.parent as { type?: string; database_id?: string } | undefined;
   if (parent?.type !== "data_source_id" && parent?.type !== "database_id") return null;
@@ -423,11 +438,10 @@ export class NotionClient {
     title: string;
     properties?: Record<string, unknown>;
     children?: BlockObjectResponse[];
+    /** 행을 둘 data source — 데이터 소스가 여럿인 DB 는 이것이 있어야 만든다. */
+    dataSourceId?: string;
   }): Promise<PageObjectResponse> {
-    const parent =
-      params.parentType === "database"
-        ? { database_id: params.parentId }
-        : { page_id: params.parentId };
+    const parent = rowParentOf(params);
 
     const properties =
       params.parentType === "page"
@@ -524,11 +538,10 @@ export class NotionClient {
     title: string;
     markdown: string;
     properties?: Record<string, unknown>;
+    /** 행을 둘 data source — 데이터 소스가 여럿인 DB 는 이것이 있어야 만든다. */
+    dataSourceId?: string;
   }): Promise<PageObjectResponse> {
-    const parent =
-      params.parentType === "database"
-        ? { database_id: params.parentId }
-        : { page_id: params.parentId };
+    const parent = rowParentOf(params);
 
     const properties =
       params.parentType === "page"
@@ -1042,7 +1055,7 @@ export class NotionClient {
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
-        `[Notion] DB ${databaseId} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
+        `[Notion] DB ${compactNotionId(databaseId).slice(0, 8)} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
       );
     }
 

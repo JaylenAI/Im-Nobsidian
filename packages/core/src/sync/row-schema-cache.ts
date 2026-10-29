@@ -7,7 +7,17 @@ import {
 import { compactNotionId } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 
-type SchemaLoader = (databaseId: string) => Promise<Record<string, DatabasePropertySchema>>;
+/**
+ * DB 의 스키마 — `dataSourceId` 를 주면 그 data source 의 것. 데이터 소스가 여럿인 DB 는 소스마다 속성이 따로라, 합친
+ * 스키마로 행을 옮기면 그 행의 소스에 없는 속성까지 보내 Notion 이 행 전체를 거절한다.
+ */
+type SchemaLoader = (
+  databaseId: string,
+  dataSourceId?: string,
+) => Promise<Record<string, DatabasePropertySchema>>;
+
+/** 새 행을 둘 data source — 데이터 소스가 여럿인 DB 면 그 id, 하나뿐이면 null(DB 를 부모로 둔다). */
+type RowSourceLoader = (databaseId: string) => Promise<string | null>;
 
 /**
  * DB 마다 스키마를 읽은 {@link PropertyMapper} 를 한 번만 만든다.
@@ -20,6 +30,7 @@ type SchemaLoader = (databaseId: string) => Promise<Record<string, DatabasePrope
  */
 export class RowSchemaCache {
   private readonly mappers = new Map<string, Promise<PropertyMapper>>();
+  private readonly rowSources = new Map<string, Promise<string | null>>();
   private people: Promise<PeopleResolver> | null = null;
 
   constructor(
@@ -29,14 +40,16 @@ export class RowSchemaCache {
     private readonly createMapper: () => PropertyMapper = () => new PropertyMapper(),
     /** 사람 이름을 사용자 id 로 — 사람 속성이 있는 DB 를 처음 만날 때 한 번 읽는다. */
     private readonly loadPeople?: () => Promise<PeopleResolver>,
+    private readonly loadRowSource: RowSourceLoader = async () => null,
   ) {}
 
-  mapperFor(databaseId: string): Promise<PropertyMapper> {
-    const key = compactNotionId(databaseId);
+  /** @param dataSourceId 행이 사는 data source — 주면 그 소스의 스키마로 옮긴다. */
+  mapperFor(databaseId: string, dataSourceId?: string | null): Promise<PropertyMapper> {
+    const key = `${compactNotionId(databaseId)}:${dataSourceId ? compactNotionId(dataSourceId) : ""}`;
     const cached = this.mappers.get(key);
     if (cached) return cached;
 
-    const created = this.loadSchema(databaseId).then(async (schema) => {
+    const created = this.loadSchema(databaseId, dataSourceId ?? undefined).then(async (schema) => {
       const mapper = this.createMapper();
       mapper.setWikilinkResolver(this.wikilinkResolver);
       mapper.loadSchema(schema);
@@ -50,8 +63,25 @@ export class RowSchemaCache {
     return created;
   }
 
+  /**
+   * 새 행을 둘 data source — 데이터 소스가 여럿인 DB 는 첫 소스. 그런 DB 에 DB 를 부모로 행을 만들면 Notion 이 400 으로
+   * 거절한다(2026-10-29 실측: «Databases with multiple data sources are not supported in this API version»).
+   */
+  rowSourceFor(databaseId: string): Promise<string | null> {
+    const key = compactNotionId(databaseId);
+    const cached = this.rowSources.get(key);
+    if (cached) return cached;
+    const loaded = this.loadRowSource(databaseId);
+    this.rowSources.set(key, loaded);
+    loaded.catch(() => {
+      if (this.rowSources.get(key) === loaded) this.rowSources.delete(key);
+    });
+    return loaded;
+  }
+
   clear(): void {
     this.mappers.clear();
+    this.rowSources.clear();
     this.people = null;
   }
 
