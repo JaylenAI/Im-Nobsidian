@@ -10,6 +10,7 @@ import {
   readOnlySkipLines,
   unsentDeletionLines,
   renamedPropertyLines,
+  schemaEditLines,
   failedItem,
   dimText,
   completionHeader,
@@ -71,6 +72,9 @@ export const pushCommand = new Command("push")
       }
       console.log(`  ${duration(result.duration)}`);
       for (const line of renamedPropertyLines(result.renamedProperties, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of schemaEditLines(result.schemaEdits, options.dryRun)) {
         console.log(`  ${line}`);
       }
       for (const line of readOnlySkipLines(result.readOnlySkipped, options.dryRun))

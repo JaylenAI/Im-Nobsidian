@@ -31,6 +31,8 @@ import {
   restoredLines,
   schemaFollowedLines,
   renamedPropertyLines,
+  schemaEditLines,
+  heldSidecarLines,
   unsentDeletionLines,
   remoteScanLines,
 } from "../../src/utils/format.js";
@@ -177,6 +179,30 @@ describe("renamedPropertyLines — 볼트에서 바꾼 속성 이름을 Notion �
       "✓ 볼트에서 바꾼 속성 이름을 Notion 열에 옮깁니다 — databases/할 일: 점수 → 점수표",
     ]);
     expect(renamedPropertyLines(undefined)).toEqual([]);
+  });
+});
+
+describe("schemaEditLines · heldSidecarLines — 사이드카에서 고친 속성 (ADR-045)", () => {
+  it("사이드카마다 한 일을 한 줄로, 덮어쓰지 않은 것은 경고와 경로로", () => {
+    expect(
+      schemaEditLines([
+        {
+          path: "할 일/할 일.notion.json",
+          added: ["마감"],
+          removed: ["메모"],
+          renamed: [["점수", "점수표"]],
+          retyped: [["상태", "select"]],
+          redefined: ["두배"],
+        },
+      ]),
+    ).toEqual([
+      "✓ 사이드카에서 고친 속성을 Notion 에 올렸습니다 — 할 일/할 일.notion.json: 더함 마감 · 지움 메모 · 이름 점수 → 점수표 · 타입 상태 → select · 설정 두배",
+    ]);
+    expect(heldSidecarLines(["할 일/할 일.notion.json"])).toEqual([
+      "⚠ 고친 사이드카 1개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:",
+      "  할 일/할 일.notion.json",
+    ]);
+    expect(heldSidecarLines(undefined)).toEqual([]);
   });
 });
 

@@ -53,6 +53,7 @@ import {
 } from "./remote-scan.js";
 import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
 import { VaultSchemaRenames } from "./schema-push.js";
+import { SidecarSchemaEdits } from "./sidecar-schema-edit.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -102,6 +103,8 @@ export class SyncOrchestrator {
   private readonly rowSchemas: RowSchemaCache;
   /** 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로(ADR-045). */
   private readonly vaultRenames: VaultSchemaRenames;
+  /** 볼트에서 고친 사이드카의 속성을 Notion DB 의 열로(ADR-045). */
+  private readonly sidecarEdits: SidecarSchemaEdits;
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
@@ -231,6 +234,7 @@ export class SyncOrchestrator {
       async () => peopleResolverOf(await notionClient.listUsers()),
     );
     this.vaultRenames = new VaultSchemaRenames(stateDb, vaultFs, notionClient);
+    this.sidecarEdits = new SidecarSchemaEdits(stateDb, vaultFs, notionClient);
 
     this.drift = new RemoteDriftChecker(
       config,
@@ -391,16 +395,26 @@ export class SyncOrchestrator {
       .pendingFolderMoves(plan)
       .filter((move) => inAnyPathScope(move.to, options?.paths));
 
+    // 고친 사이드카 — 노트가 아니라 변경 목록에 없다. 행보다 먼저 Notion 의 열을 바꾼다(ADR-045).
+    const sidecarPlan = await this.sidecarEdits.plan(
+      (path) => inAnyPathScope(path, options?.paths) && !excludeSet?.has(path),
+    );
+    const plannedEdits = sidecarPlan.planned.map((edit) => edit.edit);
+
     if (filtered.length === 0 && folderMoves.length === 0) {
       // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
       if (!options?.dryRun) await this.completeDatabaseSchemas();
+      const edited = options?.dryRun
+        ? { applied: plannedEdits, failed: [] }
+        : await this.sidecarEdits.apply(sidecarPlan.planned);
       return {
         created: 0,
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [],
+        failed: [...sidecarPlan.refused, ...edited.failed],
         duration: Date.now() - startTime,
+        ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
       };
     }
 
@@ -409,6 +423,7 @@ export class SyncOrchestrator {
     const refusedCreates = this.placement.refusedCreates(filtered, view.lookup);
     const refusedMoves = this.placement.refusedMoves(filtered, view);
     const refusedFailures: FailedOperation[] = [
+      ...sidecarPlan.refused,
       ...[...refusedCreates].map(([path, error]) => ({
         path,
         operation: "create" as const,
@@ -466,6 +481,7 @@ export class SyncOrchestrator {
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
         ...(plannedRenames.length > 0 ? { renamedProperties: plannedRenames } : {}),
+        ...(plannedEdits.length > 0 ? { schemaEdits: plannedEdits } : {}),
       };
     }
 
@@ -474,9 +490,11 @@ export class SyncOrchestrator {
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
+    const edited = await this.sidecarEdits.apply(sidecarPlan.planned);
+    failed.push(...edited.failed);
     const renamed = await this.vaultRenames.apply(renames.planned);
     failed.push(...renamed.failed);
-    if (renamed.applied.length > 0) this.rowSchemas.clear();
+    if (renamed.applied.length > 0 || edited.applied.length > 0) this.rowSchemas.clear();
     const renameFailed = new Set(renamed.failed.map((f) => f.path));
     // 이름 바꾸기 말고는 바뀐 것이 없는 행은 올릴 것이 없다.
     const pushing = applicable.filter(
@@ -702,6 +720,7 @@ export class SyncOrchestrator {
       readOnlySkipped: this.pusher.takeReadOnlySkips(),
       ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
       ...(renamed.applied.length > 0 ? { renamedProperties: renamed.applied } : {}),
+      ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
     };
   }
 
@@ -802,6 +821,7 @@ export class SyncOrchestrator {
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
     this.databaseSyncer.takeSchemaFollowed();
+    this.databaseSyncer.takeHeldSidecars();
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -911,6 +931,7 @@ export class SyncOrchestrator {
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
       const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
+      const heldSidecars = this.databaseSyncer.takeHeldSidecars();
       const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
@@ -942,6 +963,7 @@ export class SyncOrchestrator {
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
         ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
+        ...(heldSidecars.length > 0 ? { heldSidecars } : {}),
         conflicts,
         writtenPaths,
         failed,

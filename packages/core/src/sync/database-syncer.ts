@@ -53,6 +53,8 @@ import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-genera
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles, type DbBaseFile } from "./db-base-files.js";
+import { SidecarBases } from "./sidecar-bases.js";
+import { sidecarPropertiesEdited } from "./sidecar-schema-edit.js";
 import {
   SchemaLedger,
   diffSourceSchema,
@@ -169,6 +171,10 @@ export class DatabaseSyncer {
   private restoredRows: string[] = [];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
   private schemaFollowed: SchemaFollowed[] = [];
+  /** pull 이 마지막으로 쓴 사이드카 — 볼트에서 고친 것은 덮어쓰지 않는다(ADR-045). */
+  private readonly sidecarBases: SidecarBases;
+  /** 이번 pull 이 고쳐 둔 것이라 덮어쓰지 않은 사이드카 경로. */
+  private heldSidecars = new Set<string>();
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -201,6 +207,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.sidecarBases = new SidecarBases(stateDb);
     this.schemaLedger = new SchemaLedger(stateDb);
     this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
     this.propertyMapper = PropertyMapper.fromConfig(config);
@@ -792,6 +799,13 @@ export class DatabaseSyncer {
   }
 
   /** 이번 pull 이 행 노트에 옮긴 Notion 속성 변경 — 가져가면 비운다(ADR-045). */
+  /** 고쳐 둔 것이라 덮어쓰지 않은 사이드카 — 가져가면 비운다. */
+  takeHeldSidecars(): string[] {
+    const held = [...this.heldSidecars];
+    this.heldSidecars = new Set();
+    return held;
+  }
+
   takeSchemaFollowed(): SchemaFollowed[] {
     const followed = this.schemaFollowed;
     this.schemaFollowed = [];
@@ -1070,6 +1084,7 @@ export class DatabaseSyncer {
       for (const path of stale) {
         const content = await this.vaultFs.readFile(path).catch(() => null);
         if (content === null || !isGeneratedDbArtifact(path, content)) continue;
+        if (this.heldSidecars.has(path)) continue;
         if (editedSince(previous, path, content)) {
           this.warnEditedBase(path);
           continue;
@@ -1111,8 +1126,38 @@ export class DatabaseSyncer {
       // 결정적 직렬화라 동일 바이트면 쓰기·degrade 로그 모두 생략 — 로그 노이즈와
       // 불필요한 IO 를 없애고, 내용이 실제로 바뀔 때만 알린다.
       const existing = await this.vaultFs.readFile(sidecarPath).catch(() => null);
+      if (
+        existing !== null &&
+        existing !== serialized &&
+        !isGeneratedDbArtifact(sidecarPath, existing)
+      ) {
+        return;
+      }
+      // pull 이 쓴 뒤 볼트에서 고친 사이드카 — push 가 고친 속성을 Notion 에 올린다. 덮어쓰거나(제목이 바뀌어 옛
+      // 이름이 된 것은) 지우면 고친 것이 사라진다. 올린 뒤의 pull 이 새로 쓴다.
+      const previous = this.sidecarBases.get(dbConfig.databaseId);
+      if (previous) {
+        const written =
+          previous.path === sidecarPath
+            ? existing
+            : await this.vaultFs.readFile(previous.path).catch(() => null);
+        if (
+          written !== null &&
+          written !== serialized &&
+          computeHash(written) !== previous.hash &&
+          isGeneratedDbArtifact(previous.path, written) &&
+          sidecarPropertiesEdited(written, previous)
+        ) {
+          this.heldSidecars.add(previous.path);
+          return;
+        }
+      }
+      this.sidecarBases.set(dbConfig.databaseId, {
+        path: sidecarPath,
+        hash: computeHash(serialized),
+        properties: sidecar.properties,
+      });
       if (existing === serialized) return;
-      if (existing !== null && !isGeneratedDbArtifact(sidecarPath, existing)) return;
       await this.vaultFs.writeFile(sidecarPath, serialized);
 
       if (sidecar.degraded.length > 0) {

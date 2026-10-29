@@ -218,6 +218,50 @@ describe("SyncController", () => {
       );
     });
 
+    it("사이드카에서 고친 속성은 Push 때 올린 것을, Pull 때 덮어쓰지 않은 것을 알린다 (ADR-045)", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        failed: [],
+        duration: 0,
+        schemaEdits: [
+          {
+            path: "a.notion.json",
+            added: ["마감"],
+            removed: [],
+            renamed: [],
+            retyped: [],
+            redefined: [],
+          },
+        ],
+      });
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        restored: 0,
+        heldSidecars: ["a.notion.json"],
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.push();
+      await controller.pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 사이드카에서 고친 속성을 Notion 에 올렸습니다: 마감 더함",
+        expect.any(Number),
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 고친 사이드카는 덮어쓰지 않았습니다 — Push 하면 고친 속성을 Notion 에 올립니다: a.notion.json",
+        expect.any(Number),
+      );
+    });
+
     it("거절한 로컬 삭제는 Push 때 되살아날 것을, Pull 때 되살린 것을 알린다 (D8)", async () => {
       mock.push.mockResolvedValue({
         created: 0,

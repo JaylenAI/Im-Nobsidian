@@ -168,6 +168,22 @@ export interface PushResult {
    * (ADR-045). 없으면 생략.
    */
   readonly renamedProperties?: readonly PropertyRename[];
+  /** 볼트에서 고친 사이드카의 속성을 Notion DB 에 올린 것 — dry-run 은 올릴 것(ADR-045). 없으면 생략. */
+  readonly schemaEdits?: readonly SchemaEdit[];
+}
+
+/** 고친 사이드카 하나가 Notion DB 에 한 일 — {@link PushResult.schemaEdits}. */
+export interface SchemaEdit {
+  /** 사이드카 경로. */
+  readonly path: string;
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  /** 옛 이름 → 새 이름. */
+  readonly renamed: ReadonlyArray<readonly [string, string]>;
+  /** 속성 이름 → 새 타입. */
+  readonly retyped: ReadonlyArray<readonly [string, string]>;
+  /** 설정(수식 · 숫자 형식 · 옵션)을 바꾼 속성. */
+  readonly redefined: readonly string[];
 }
 
 /** 볼트에서 바꾼 DB 속성 이름 하나 — {@link PushResult.renamedProperties}. */
@@ -245,6 +261,10 @@ export interface PullResult {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
   readonly restoredPaths?: readonly string[];
+  /**
+   * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
+   */
+  readonly heldSidecars?: readonly string[];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). 없으면 생략. */
   readonly schemaFollowed?: readonly SchemaFollowed[];
   readonly conflicts: Conflict[];

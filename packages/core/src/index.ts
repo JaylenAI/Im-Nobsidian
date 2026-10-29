@@ -16,6 +16,7 @@ export type {
   PullResult,
   SchemaFollowed,
   PropertyRename,
+  SchemaEdit,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

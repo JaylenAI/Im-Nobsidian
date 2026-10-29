@@ -6,6 +6,7 @@ import type {
   RemoteScanInfo,
   SchemaFollowed,
   PropertyRename,
+  SchemaEdit,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -231,6 +232,38 @@ export function renamedPropertyLines(
     ({ folder, from, to }) =>
       `${icons.success} 볼트에서 바꾼 속성 이름을 Notion 열에 ${dryRun ? "옮깁니다" : "옮겼습니다"} — ${folder}: ${from} → ${to}`,
   );
+}
+
+/** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045) — 사이드카마다 한 줄. */
+export function schemaEditLines(
+  edits: readonly SchemaEdit[] | undefined,
+  dryRun = false,
+): string[] {
+  return (edits ?? []).map((edit) => {
+    const parts = [
+      ...(edit.added.length > 0 ? [`더함 ${edit.added.join(", ")}`] : []),
+      ...(edit.removed.length > 0 ? [`지움 ${edit.removed.join(", ")}`] : []),
+      ...(edit.renamed.length > 0
+        ? [`이름 ${edit.renamed.map(([from, to]) => `${from} → ${to}`).join(", ")}`]
+        : []),
+      ...(edit.retyped.length > 0
+        ? [`타입 ${edit.retyped.map(([name, type]) => `${name} → ${type}`).join(", ")}`]
+        : []),
+      ...(edit.redefined.length > 0 ? [`설정 ${edit.redefined.join(", ")}`] : []),
+    ];
+    return `${icons.success} 사이드카에서 고친 속성을 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${parts.join(" · ")}`;
+  });
+}
+
+/** 볼트에서 고쳐 pull 이 덮어쓰지 않은 사이드카(ADR-045) — push 해야 Notion 에 간다. */
+export function heldSidecarLines(paths: readonly string[] | undefined): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 고친 사이드카 ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:`,
+    ),
+    ...pathLines(paths),
+  ];
 }
 
 /**
