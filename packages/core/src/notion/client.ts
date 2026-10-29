@@ -198,8 +198,15 @@ export interface DatabaseMeta {
   readonly databaseId: string;
   /** DB 제목. 없으면 "". */
   readonly title: string;
-  /** 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. */
-  readonly dataSources: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /**
+   * 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. `properties` 는 그 소스만의 속성
+   * 스키마(읽지 못했으면 없다) — 속성 id 는 소스마다 따로 붙는다.
+   */
+  readonly dataSources: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly properties?: Readonly<Record<string, unknown>>;
+  }>;
   /**
    * 속성 스키마 — 읽을 수 있는 모든 data source 의 속성을 합친 것(이름이 겹치면 앞의 것). 읽을 수 있는 data
    * source 가 없으면 DB 객체의 속성.
@@ -733,6 +740,7 @@ export class NotionClient {
     const dataSources = db.data_sources ?? [];
     const merged: Record<string, unknown> = {};
     const owners: Array<string | undefined> = [];
+    const own = new Map<string, Record<string, unknown>>();
     let anyAccessible = false;
     for (const ds of dataSources) {
       try {
@@ -745,6 +753,7 @@ export class NotionClient {
         owners.push(dsObj.parent?.database_id);
         if (dsObj.properties && Object.keys(dsObj.properties).length > 0) {
           anyAccessible = true;
+          own.set(ds.id, dsObj.properties);
           for (const [name, prop] of Object.entries(dsObj.properties)) {
             if (!(name in merged)) merged[name] = prop;
           }
@@ -758,7 +767,11 @@ export class NotionClient {
     const meta: DatabaseMeta = {
       databaseId,
       title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
-      dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+      dataSources: dataSources.map((ds) => ({
+        id: ds.id,
+        name: ds.name ?? "",
+        ...(own.has(ds.id) ? { properties: own.get(ds.id) } : {}),
+      })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
       isInline: db.is_inline === true,
       appearance: {

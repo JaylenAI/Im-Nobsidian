@@ -49,6 +49,11 @@ export const RANGE_END_SUFFIX = "_end";
 /** 날짜 값을 낼 수 있는 속성 타입 — 기간이면 짝 키에 끝을 적는다. */
 const DATE_VALUED_TYPES: ReadonlySet<string> = new Set(["date", "formula", "rollup"]);
 
+/** 이 타입의 속성은 frontmatter 에 범위 끝 키(`…_end`)를 함께 적을 수 있는가. */
+export function mayHaveRangeEnd(type: string): boolean {
+  return DATE_VALUED_TYPES.has(type);
+}
+
 /** 시각만 내는 속성 타입 — 기간이 없다. */
 const TIMESTAMP_TYPES: ReadonlySet<string> = new Set(["created_time", "last_edited_time"]);
 
