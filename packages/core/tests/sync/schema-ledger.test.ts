@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { diffSourceSchema, seenSchemaOf, SchemaLedger } from "../../src/sync/schema-ledger.js";
+import {
+  diffSourceSchema,
+  isEmptySchemaChange,
+  seenSchemaOf,
+  SchemaLedger,
+} from "../../src/sync/schema-ledger.js";
 import { rekeyRowFrontmatter } from "../../src/converter/frontmatter-merge.js";
 
 describe("diffSourceSchema — 속성 id 로 견준다 (ADR-045)", () => {
@@ -22,6 +27,64 @@ describe("diffSourceSchema — 속성 id 로 견준다 (ADR-045)", () => {
     ]);
     expect([...change.removed]).toEqual(["메모"]);
     expect([...change.refreshed].sort()).toEqual(["두배", "두배_end", "점수"].sort());
+  });
+
+  it("값을 정하는 설정(옵션 이름 · 수식 · 롤업)이 바뀌면 다시 받는다 — 색 · 숫자 형식은 아니다", () => {
+    const seen = (props: Record<string, unknown>) =>
+      seenSchemaOf({
+        databaseId: "db",
+        title: "",
+        dataSources: [{ id: "ds-1", name: "", properties: props }],
+        properties: {},
+        isInline: false,
+      })!["ds1"]!;
+    const before = seen({
+      상태: {
+        id: "s",
+        type: "select",
+        select: { options: [{ name: "가", color: "red" }, { name: "나" }] },
+      },
+      두배: { id: "f", type: "formula", formula: { expression: "1" } },
+      점수: { id: "n", type: "number", number: { format: "number" } },
+      합: {
+        id: "r",
+        type: "rollup",
+        rollup: { relation_property_id: "x", rollup_property_id: "y", function: "sum" },
+      },
+    });
+    const same = seen({
+      상태: {
+        id: "s",
+        type: "select",
+        select: { options: [{ name: "나" }, { name: "가", color: "blue" }] },
+      },
+      두배: { id: "f", type: "formula", formula: { expression: "1" } },
+      점수: { id: "n", type: "number", number: { format: "percent" } },
+      합: {
+        id: "r",
+        type: "rollup",
+        rollup: { relation_property_id: "x", rollup_property_id: "y", function: "sum" },
+      },
+    });
+    expect(isEmptySchemaChange(diffSourceSchema(before, same))).toBe(true);
+    const changed = seen({
+      상태: { id: "s", type: "select", select: { options: [{ name: "가" }] } },
+      두배: { id: "f", type: "formula", formula: { expression: "2" } },
+      점수: { id: "n", type: "number", number: { format: "number" } },
+      합: {
+        id: "r",
+        type: "rollup",
+        rollup: { relation_property_id: "x", rollup_property_id: "y", function: "max" },
+      },
+    });
+    expect([...diffSourceSchema(before, changed).refreshed].sort()).toEqual(
+      ["상태", "두배", "두배_end", "합", "합_end"].sort(),
+    );
+    // 지문이 없는 옛 기록과는 견주지 않는다.
+    const legacy = Object.fromEntries(
+      Object.entries(before).map(([id, { name, type }]) => [id, { name, type }]),
+    );
+    expect(isEmptySchemaChange(diffSourceSchema(legacy, changed))).toBe(true);
   });
 
   it("제목 속성은 보지 않는다 — 행 노트에서는 title 키다", () => {

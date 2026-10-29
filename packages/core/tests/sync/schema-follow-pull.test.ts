@@ -20,7 +20,7 @@ const DS2 = "ds-bbb";
 const FOLDER = "databases/tasks";
 const EDITED = "2026-10-29T01:00:00.000Z";
 
-type Schema = Record<string, { id: string; type: string }>;
+type Schema = Record<string, { id: string; type: string; [config: string]: unknown }>;
 
 function meta(sources: Array<{ id: string; properties: Schema }>) {
   const merged: Record<string, unknown> = {};
@@ -296,6 +296,45 @@ describe("Notion 스키마 변경을 행 노트에 옮긴다 (ADR-045)", () => {
     await t.pull();
 
     expect(t.files.get(path)).toBe("---\ntitle: r1\nScore: '3'\nDouble: 6\n---\n본문\n");
+  });
+
+  it("옵션을 지우거나 수식을 바꾸면 행이 그대로여도 값을 다시 받는다 — 지문 없는 옛 기록은 견주지 않는다", async () => {
+    // Notion 은 지운 옵션을 가진 행의 값을 비우고 수식을 바꾸면 값을 다시 센다 — 행의 수정 시각은 그대로다(2026-10-29 실측).
+    const schema = (options: string[], expression: string): Schema => ({
+      Status: { id: "s1", type: "select", select: { options: options.map((name) => ({ name })) } },
+      Double: { id: "f1", type: "formula", formula: { expression } },
+    });
+    const formula = (n: number) => ({
+      id: "f1",
+      type: "formula",
+      formula: { type: "number", number: n },
+    });
+    const status = (name: string | null) => ({
+      id: "s1",
+      type: "select",
+      select: name ? { name } : null,
+    });
+    t.setSchema([{ id: DS1, properties: schema(["할 일", "끝"], "a") }]);
+    const path = t.tracked("r1", "---\ntitle: r1\nStatus: 끝\nDouble: 2\n---\n본문\n");
+    t.setPages([row("r1", { Status: status("끝"), Double: formula(2) })]);
+    await t.pull();
+
+    t.setSchema([{ id: DS1, properties: schema(["할 일"], "b") }]);
+    t.setPages([row("r1", { Status: status(null), Double: formula(4) })]);
+    await t.pull();
+    expect(t.files.get(path)).toBe("---\ntitle: r1\nDouble: 4\n---\n본문\n");
+
+    // 0.13 이전 pull 이 적은 기록(지문 없음) — 옵션이 바뀌어도 견주지 않고, 이번 지문을 적는다.
+    const old = JSON.parse(t.stateDb.getMeta("db_schemas")!) as Record<string, any>;
+    for (const db of Object.values(old))
+      for (const source of Object.values(db as Record<string, any>))
+        for (const prop of Object.values(source as Record<string, any>)) delete prop.values;
+    t.stateDb.setMeta("db_schemas", JSON.stringify(old));
+    t.setSchema([{ id: DS1, properties: schema(["할 일", "다시"], "c") }]);
+    t.setPages([row("r1", { Status: status(null), Double: formula(8) })]);
+    await t.pull();
+    expect(t.files.get(path)).toBe("---\ntitle: r1\nDouble: 4\n---\n본문\n");
+    expect(t.stateDb.getMeta("db_schemas")).toContain('"values"');
   });
 
   it("처음 보는 DB 는 적기만 하고 노트를 바꾸지 않는다", async () => {

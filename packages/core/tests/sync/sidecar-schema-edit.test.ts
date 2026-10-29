@@ -95,6 +95,16 @@ describe("diffSidecarProperties — 지난 기록과 id 로 견준다", () => {
     expect(diff.edit.redefined).toEqual(["점수", "두배", "태그"]);
   });
 
+  it("지운 옵션을 알린다 — Notion 이 그 값을 가진 행의 값을 비운다", () => {
+    const tags = { ...TAG, options: ["가", "나", "다"] };
+    const diff = diffSidecarProperties([TITLE, tags], [TITLE, { ...tags, options: ["나", "라"] }]);
+    if (!diff.ok) throw new Error(diff.error);
+    expect(diff.edit.droppedOptions).toEqual([["태그", ["가", "다"]]]);
+    expect(
+      ok([TITLE, SCORE, MEMO, TWICE, { ...TAG, options: ["가", "나"] }]).edit,
+    ).not.toHaveProperty("droppedOptions");
+  });
+
   it("제목은 지우거나 타입을 바꿀 수 없다 — 이름은 바꾼다", () => {
     expect(error([SCORE, MEMO, TWICE, TAG])).toContain("제목");
     expect(error([{ ...TITLE, type: "rich_text" }, SCORE, MEMO, TWICE, TAG])).toContain("제목");

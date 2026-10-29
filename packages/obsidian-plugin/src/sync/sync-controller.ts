@@ -828,6 +828,9 @@ function schemaEditText(result: PushResult): string | null {
     ...edit.renamed.map(([from, to]) => `${from} → ${to}`),
     ...edit.retyped.map(([name, type]) => `${name} 타입 ${type}`),
     ...edit.redefined.map((name) => `${name} 설정`),
+    ...(edit.droppedOptions ?? []).map(
+      ([name, options]) => `${name} 옵션 ${options.join(", ")} 지움(그 값의 행은 빈 값)`,
+    ),
   ]);
   return (
     `사이드카에서 고친 속성을 Notion 에 올렸습니다: ` +

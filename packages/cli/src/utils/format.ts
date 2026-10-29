@@ -261,6 +261,10 @@ export function schemaEditLines(
         ? [`타입 ${edit.retyped.map(([name, type]) => `${name} → ${type}`).join(", ")}`]
         : []),
       ...(edit.redefined.length > 0 ? [`설정 ${edit.redefined.join(", ")}`] : []),
+      ...(edit.droppedOptions ?? []).map(
+        ([name, options]) =>
+          `${name} 옵션 지움 ${options.join(", ")}(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)`,
+      ),
     ];
     return `${icons.success} 사이드카에서 고친 속성을 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${parts.join(" · ")}`;
   });
