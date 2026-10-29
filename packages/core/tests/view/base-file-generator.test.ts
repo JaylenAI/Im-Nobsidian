@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { BaseFileGenerator } from "../../src/view/base-file-generator.js";
 import type { BaseFileOptions } from "../../src/view/base-file-generator.js";
+import { parseFrontmatter } from "../../src/utils/frontmatter.js";
 
 function makeOptions(overrides?: Partial<BaseFileOptions>): BaseFileOptions {
   return {
@@ -1047,6 +1048,37 @@ describe("BaseFileGenerator — 결정론·dedupe 유일성 (rank18)", () => {
 
       // `: ` 가 평문 스칼라에 들어가면 YAML 이 매핑으로 오해한다 — 작은따옴표로 감싼다.
       expect(result).toContain(`    filters: 'note["메모: 비고"] == "가"'`);
+    });
+
+    it("상대 날짜는 today() 식으로 나가고 YAML 로 다시 읽어도 같은 식이다", () => {
+      const result = withFilter({
+        and: [
+          { property: "d1", date: { past_week: {} } },
+          { property: "d1", date: { on_or_before: "today" } },
+        ],
+      });
+
+      expect(result).toContain(
+        [
+          "    filters:",
+          "      and:",
+          "        - and:",
+          '            - note["Due"].date() >= today() - "7d"',
+          '            - note["Due"].date() <= today()',
+          '        - note["Due"].date() <= today()',
+        ].join("\n"),
+      );
+      const parsed = parseFrontmatter(`---\n${result}\n---\n`).data as {
+        views: Array<{ filters: unknown }>;
+      };
+      expect(parsed.views[0]!.filters).toEqual({
+        and: [
+          {
+            and: ['note["Due"].date() >= today() - "7d"', 'note["Due"].date() <= today()'],
+          },
+          'note["Due"].date() <= today()',
+        ],
+      });
     });
 
     it("멱등 — 같은 입력은 바이트 동일", () => {

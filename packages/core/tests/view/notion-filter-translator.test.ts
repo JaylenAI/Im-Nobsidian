@@ -202,19 +202,75 @@ describe("translateNotionFilter — 연산자 문법", () => {
     expect(node).toEqual({ and: ['note["분류"] != "업무"', 'note["분류"] != "개인"'] });
   });
 
-  it("절대 날짜만 옮기고 상대 날짜는 생략한다", () => {
+  it("절대 날짜는 그대로 견준다", () => {
     expect(translate({ property: "마감", date: { before: "2026-07-27" } }).node).toBe(
       'note["마감"] < "2026-07-27"',
     );
     expect(translate({ property: "마감", date: { on_or_after: "2026-07-27" } }).node).toBe(
       'note["마감"] >= "2026-07-27"',
     );
+    expect(
+      translate({ property: "마감", date: { after: "2026-07-27T09:00:00.000+09:00" } }).node,
+    ).toBe('note["마감"] > "2026-07-27T09:00:00.000+09:00"');
+  });
 
-    const relative = translate({ property: "마감", date: { past_week: {} } });
-    expect(relative.node).toBeNull();
-    expect(relative.untranslated).toEqual([
-      "속성 '마감': 상대 날짜 조건 'past_week' 은 옮기지 않음",
-    ]);
+  it("상대 날짜 값(today · one_week_ago …)은 today() 식으로 — 날짜 글자로 견주지 않는다", () => {
+    // 예전에는 `note["마감"] == "today"` 를 썼다 — 아무 행도 고르지 않는 보기였다.
+    expect(translate({ property: "마감", date: { equals: "today" } }).node).toBe(
+      'note["마감"].date() == today()',
+    );
+    expect(translate({ property: "마감", date: { on_or_after: "one_week_ago" } }).node).toBe(
+      'note["마감"].date() >= today() - "7d"',
+    );
+    expect(translate({ property: "마감", date: { before: "one_month_from_now" } }).node).toBe(
+      'note["마감"].date() < today() + "1M"',
+    );
+    expect(translate({ property: "마감", date: { after: "tomorrow" } }).node).toBe(
+      'note["마감"].date() > today() + "1d"',
+    );
+    expect(translate({ property: "마감", date: { on_or_before: "yesterday" } }).node).toBe(
+      'note["마감"].date() <= today() - "1d"',
+    );
+  });
+
+  it("상대 기간(past_week · next_month …)은 오늘을 낀 두 끝으로 — 양 끝을 포함한다", () => {
+    expect(translate({ property: "마감", date: { past_week: {} } }).node).toEqual({
+      and: ['note["마감"].date() >= today() - "7d"', 'note["마감"].date() <= today()'],
+    });
+    expect(translate({ property: "마감", date: { next_month: {} } }).node).toEqual({
+      and: ['note["마감"].date() >= today()', 'note["마감"].date() <= today() + "1M"'],
+    });
+    expect(translate({ property: "마감", date: { past_year: {} } }).node).toEqual({
+      and: ['note["마감"].date() >= today() - "1y"', 'note["마감"].date() <= today()'],
+    });
+    expect(
+      translate({ timestamp: "last_edited_time", last_edited_time: { past_week: {} } }).node,
+    ).toEqual({ and: ['file.mtime.date() >= today() - "7d"', "file.mtime.date() <= today()"] });
+  });
+
+  it("이번 주(this_week)와 모르는 날짜 값은 옮기지 않는다", () => {
+    const week = translate({ property: "마감", date: { this_week: {} } });
+    expect(week.node).toBeNull();
+    expect(week.untranslated).toEqual(["속성 '마감': 상대 날짜 조건 'this_week' 은 옮기지 않음"]);
+
+    const unknown = translate({ property: "마감", date: { equals: "next_monday" } });
+    expect(unknown.node).toBeNull();
+    expect(unknown.untranslated).toEqual(["속성 '마감': 날짜 값 'next_monday' 을 해석하지 못함"]);
+  });
+
+  it("상대 기간을 and 안에 두면 다른 조건과 함께 남는다", () => {
+    const { node } = translate({
+      and: [
+        { property: "마감", date: { next_week: {} } },
+        { property: "마감", date: { is_not_empty: true } },
+      ],
+    });
+    expect(node).toEqual({
+      and: [
+        { and: ['note["마감"].date() >= today()', 'note["마감"].date() <= today() + "7d"'] },
+        '!note["마감"].isEmpty()',
+      ],
+    });
   });
 
   it("timestamp 필터는 파일 시각으로 옮긴다", () => {
