@@ -7,6 +7,7 @@ import type {
   SchemaFollowed,
   PropertyRename,
   SchemaEdit,
+  ViewEdit,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -253,6 +254,33 @@ export function schemaEditLines(
     ];
     return `${icons.success} 사이드카에서 고친 속성을 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${parts.join(" · ")}`;
   });
+}
+
+/** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046). */
+export function viewEditLines(edits: readonly ViewEdit[] | undefined, dryRun = false): string[] {
+  return (edits ?? []).map((edit) => {
+    const name = edit.from ? `${edit.from} → ${edit.view}` : edit.view;
+    return `${icons.success} .base 에서 고친 보기를 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${name} (${edit.changed.map((field) => VIEW_FIELD_LABELS[field]).join(" · ")})`;
+  });
+}
+
+/** 보기에서 올린 것의 이름 — 화면에 내부 키를 내보내지 않는다. */
+export const VIEW_FIELD_LABELS: Readonly<Record<ViewEdit["changed"][number], string>> = {
+  name: "이름",
+  columns: "열",
+  sort: "정렬",
+  filter: "필터",
+};
+
+/** 볼트에서 보기를 고쳐 pull 이 덮어쓰지 않은 `.base`(ADR-046) — push 해야 Notion 에 간다. */
+export function heldBaseLines(paths: readonly string[] | undefined): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:`,
+    ),
+    ...pathLines(paths),
+  ];
 }
 
 /** 볼트에서 고쳐 pull 이 덮어쓰지 않은 사이드카(ADR-045) — push 해야 Notion 에 간다. */
