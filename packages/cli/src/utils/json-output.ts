@@ -7,6 +7,7 @@ import type {
   RemoteScanInfo,
   SchemaFollowed,
   PropertyRename,
+  SchemaEdit,
 } from "@im-nobsidian/core";
 
 /**
@@ -39,6 +40,8 @@ export interface PushJson {
   readonly unsentDeletions: readonly string[];
   /** 볼트에서 바꾼 DB 속성 이름을 Notion 열 이름으로 바꾼 것(ADR-045) — churn 에 든다. */
   readonly renamedProperties: readonly PropertyRename[];
+  /** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045) — churn 에 든다. */
+  readonly schemaEdits: readonly SchemaEdit[];
   readonly durationMs: number;
 }
 
@@ -51,6 +54,8 @@ export interface PullJson {
   readonly restoredPaths: readonly string[];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). */
   readonly schemaFollowed: readonly SchemaFollowed[];
+  /** 볼트에서 고쳐 덮어쓰지 않은 사이드카(ADR-045). */
+  readonly heldSidecars: readonly string[];
   /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
   readonly moved: number;
   readonly moveSkipped: number;
@@ -84,12 +89,14 @@ export function pushJson(result: PushResult): PushJson {
       result.deleted +
       result.moved +
       (result.createdDatabases ?? 0) +
-      (result.renamedProperties?.length ?? 0),
+      (result.renamedProperties?.length ?? 0) +
+      (result.schemaEdits?.length ?? 0),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
     readOnlySkipped: result.readOnlySkipped ?? [],
     unsentDeletions: result.unsentDeletions ?? [],
     renamedProperties: result.renamedProperties ?? [],
+    schemaEdits: result.schemaEdits ?? [],
     durationMs: result.duration,
   };
 }
@@ -102,6 +109,7 @@ export function pullJson(result: PullResult): PullJson {
     restored: result.restored,
     restoredPaths: result.restoredPaths ?? [],
     schemaFollowed: result.schemaFollowed ?? [],
+    heldSidecars: result.heldSidecars ?? [],
     moved: result.moved?.length ?? 0,
     moveSkipped: result.moveSkipped?.length ?? 0,
     renamed: result.moved?.filter((move) => move.renamed).length ?? 0,

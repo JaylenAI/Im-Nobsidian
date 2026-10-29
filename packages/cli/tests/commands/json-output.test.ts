@@ -166,6 +166,14 @@ describe("--json 출력 계약", () => {
     write.mockClear();
     await run(pushCommand, "push", "--json");
     expect(stdoutJson(write)).toMatchObject({ churn: 3, renamedProperties: [] });
+
+    const schemaEdits = [
+      { path: "a.notion.json", added: ["x"], removed: [], renamed: [], retyped: [], redefined: [] },
+    ];
+    mockPush.mockResolvedValueOnce({ ...pushResult, schemaEdits });
+    write.mockClear();
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 4, schemaEdits });
   });
 
   it("push · pull: 거절한 로컬 삭제를 경로로 싣는다 — 없으면 빈 목록 (D8)", async () => {

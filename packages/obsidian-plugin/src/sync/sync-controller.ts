@@ -299,6 +299,7 @@ export class SyncController {
         phase: "ready",
         warning: warnings(
           renamedPropertyText(result),
+          schemaEditText(result),
           readOnlyText(result),
           unsentDeletionText(result),
         ),
@@ -330,7 +331,11 @@ export class SyncController {
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
-        warning: warnings(schemaFollowedText(result), restoredText(result)),
+        warning: warnings(
+          schemaFollowedText(result),
+          heldSidecarText(result.heldSidecars ?? []),
+          restoredText(result),
+        ),
       }),
       (result) => this.dropPulled(result, paths),
     );
@@ -348,6 +353,12 @@ export class SyncController {
           schemaFollowedText(result.pull),
           restoredText(result.pull),
           renamedPropertyText(result.push),
+          schemaEditText(result.push),
+          heldSidecarText(
+            (result.pull.heldSidecars ?? []).filter(
+              (path) => !(result.push.schemaEdits ?? []).some((edit) => edit.path === path),
+            ),
+          ),
           readOnlyText(result.push),
           unsentDeletionText(result.push),
         ),
@@ -797,6 +808,29 @@ function renamedPropertyText(result: PushResult): string | null {
   return `볼트에서 바꾼 속성 이름을 Notion 열에 옮겼습니다: ${renames
     .map(({ from, to }) => `${from} → ${to}`)
     .join(", ")}`;
+}
+
+/** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045). */
+function schemaEditText(result: PushResult): string | null {
+  const edits = result.schemaEdits ?? [];
+  if (edits.length === 0) return null;
+  const changes = edits.flatMap((edit) => [
+    ...edit.added.map((name) => `${name} 더함`),
+    ...edit.removed.map((name) => `${name} 지움`),
+    ...edit.renamed.map(([from, to]) => `${from} → ${to}`),
+    ...edit.retyped.map(([name, type]) => `${name} 타입 ${type}`),
+    ...edit.redefined.map((name) => `${name} 설정`),
+  ]);
+  return (
+    `사이드카에서 고친 속성을 Notion 에 올렸습니다: ` +
+    `${changes.slice(0, 3).join(", ")}${changes.length > 3 ? " …" : ""}`
+  );
+}
+
+/** 볼트에서 고쳐 Pull 이 덮어쓰지 않은 사이드카(ADR-045) — Push 해야 Notion 에 간다. */
+function heldSidecarText(paths: readonly string[]): string | null {
+  if (paths.length === 0) return null;
+  return `고친 사이드카는 덮어쓰지 않았습니다 — Push 하면 고친 속성을 Notion 에 올립니다: ${listedPaths(paths)}`;
 }
 
 /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 Pull 이 되살린다(D8). */
