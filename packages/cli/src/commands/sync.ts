@@ -23,7 +23,13 @@ import {
   failedItem,
   remoteScanLines,
 } from "../utils/format.js";
-import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
+import {
+  enableJsonMode,
+  printJson,
+  pullJson,
+  pushDbChangeCount,
+  pushJson,
+} from "../utils/json-output.js";
 import { openVaultFs } from "../utils/vault.js";
 
 export const syncCommand = new Command("sync")
@@ -105,7 +111,7 @@ export const syncCommand = new Command("sync")
         console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
       }
       console.log(
-        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved)}` +
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved, pushDbChangeCount(pushResult))}` +
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);

@@ -37,6 +37,7 @@ import {
   heldBaseLines,
   unsentDeletionLines,
   remoteScanLines,
+  summary,
 } from "../../src/utils/format.js";
 
 /** 로컬 시각으로 만든 ISO — 시험을 도는 기계의 시간대와 무관하게 같은 글이 나온다. */
@@ -248,5 +249,13 @@ describe("viewEditLines · heldBaseLines — .base 에서 고친 보기 (ADR-046
       "  할 일/할 일.base",
     ]);
     expect(heldBaseLines([])).toEqual([]);
+  });
+});
+
+describe("summary — Notion DB 에 올린 것", () => {
+  it("보기 · 속성만 올린 push 를 「no changes」 로 적지 않는다", () => {
+    expect(summary(0, 0, 0, 0, 2)).toBe("2 DB changes");
+    expect(summary(1, 0, 0, 0, 1)).toBe("1 created  1 DB changes");
+    expect(summary(0, 0, 0)).toBe("no changes");
   });
 });

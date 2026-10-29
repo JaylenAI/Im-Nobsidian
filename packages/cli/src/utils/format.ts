@@ -49,13 +49,23 @@ export function operationLabel(op: ProgressItem["operation"]): string {
   }
 }
 
-/** 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). */
-export function summary(created: number, updated: number, deleted: number, moved = 0): string {
+/**
+ * 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). `dbChanges` 도 push 만 —
+ * Notion DB 에 올린 것(`pushDbChangeCount`). 무엇인지는 아래 줄들이 하나씩 적는다.
+ */
+export function summary(
+  created: number,
+  updated: number,
+  deleted: number,
+  moved = 0,
+  dbChanges = 0,
+): string {
   const parts: string[] = [];
   if (created > 0) parts.push(chalk.green(`${created} created`));
   if (updated > 0) parts.push(chalk.yellow(`${updated} updated`));
   if (moved > 0) parts.push(chalk.cyan(`${moved} moved`));
   if (deleted > 0) parts.push(chalk.red(`${deleted} deleted`));
+  if (dbChanges > 0) parts.push(chalk.yellow(`${dbChanges} DB changes`));
   if (parts.length === 0) parts.push(chalk.dim("no changes"));
   return parts.join("  ");
 }
