@@ -77,7 +77,7 @@ describe("SidecarGenerator", () => {
         filter: {
           and: [
             { property: "상태", status: { equals: "완료" } },
-            { property: "마감", date: { past_week: {} } },
+            { property: "마감", date: { this_week: {} } },
           ],
         },
       },
@@ -85,7 +85,7 @@ describe("SidecarGenerator", () => {
 
     const dropped = s.degraded.filter((d) => d.kind === "setting-dropped");
     expect(dropped).toHaveLength(1);
-    expect(dropped[0]!.detail).toContain("past_week");
+    expect(dropped[0]!.detail).toContain("this_week");
   });
 
   it("해석 자체가 안 되는 필터는 통째로 누락됐다고 보고한다", () => {
