@@ -125,6 +125,8 @@ export class DatabaseDiscovery {
     conflicts: Conflict[],
     options: {
       readonly forceRediscovery?: boolean;
+      /** 루트의 자식이 바뀌었을 수 있다(`RemoteDetector.rootChanged`) — 다 훑지 않을 때도 루트는 훑는다. */
+      readonly rescanRoot?: boolean;
       readonly paths?: readonly string[];
       readonly progress?: RowProgress;
       readonly ledger?: DatabasePullLedger;
@@ -298,15 +300,18 @@ export class DatabaseDiscovery {
       } else {
         // 이번 pull 에서 본문을 받은 페이지는 훑지 않는다 — 그 본문이 자식 DB 를 모두 실었고 아래 (2) 가
         // 등록한다. 첫 pull 은 모든 페이지의 본문을 받으므로 페이지마다 1회이던 조회가 거의 사라진다.
+        const root = this.config.notion.rootPageId;
         const scanIds = scanAll
           ? [
-              this.config.notion.rootPageId,
+              root,
               ...this.stateDb
                 .getAll()
                 .filter((r) => r.notionPageId)
                 .map((r) => r.notionPageId!),
             ].filter((id) => !this._bodyReadPages.has(normalizeNotionId(id)))
-          : retry.parents;
+          : options.rescanRoot && !retry.parents.some((id) => notionIdsEqual(id, root))
+            ? [root, ...retry.parents]
+            : retry.parents;
         if (scanIds.length > 0) {
           const { found, unread } = await this.discoverChildDatabases(scanIds);
           for (const { dbId, parentPageId } of found) {

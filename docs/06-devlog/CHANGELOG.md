@@ -26,6 +26,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **Obsidian 이 다시 저장한 `.base` 를 사용자 파일로 보던 것** — 보기를 고치면 Obsidian 이 머리 주석을 지운다. 그 뒤 pull 은 그
   `.base` 를 다시는 쓰지 않았다. 이제 pull 이 쓴 보기 기록이 있으면 주석이 없어도 pull 이 쓴 파일로 본다.
 - **보기 · 사이드카 속성만 올린 push 가 요약 줄에 `no changes` 로 나오던 것** — 노트 수만 셌다. DB 에 올린 것을 함께 센다.
+- **증분 pull 이 루트 바로 아래 새로 만든 DB 를 찾지 못하던 것** — 루트는 본문을 읽지 않아 `pull --force` 만 찾았다. 루트가 바뀐
+  pull 은 루트의 자식을 한 번 훑는다.
 
 ## [0.12.0] - 2026-10-28
 
