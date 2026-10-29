@@ -65,6 +65,7 @@ import {
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
 import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
+import { dataSourceIdOf } from "./schema-ledger.js";
 import type { RunObservation } from "./run-observation.js";
 import type { VaultFS } from "./vault-fs.js";
 
@@ -952,7 +953,7 @@ export class PagePusher {
 
     const remote = await this.livePage(record);
     // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
-    const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceOfPage(remote));
+    const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));
     const drift: RemoteDrift = options.overwriteRemote
       ? "none"
       : await this.drift.remoteDrift(record, remote);
@@ -1444,10 +1445,4 @@ function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock
 /** 보내지 않은 행 속성 가운데 아이콘 · 커버는 뺀다 — 속성이 아니라 페이지의 아이콘 · 커버로 따로 보낸다. */
 function withoutDecorations(skipped: readonly string[]): string[] {
   return skipped.filter((key) => key !== "icon" && key !== "cover");
-}
-
-/** 행이 사는 data source — 부모가 data source 가 아니면(옛 DB) null. */
-function dataSourceOfPage(page: { readonly parent?: unknown }): string | null {
-  const parent = page.parent as { type?: string; data_source_id?: string } | undefined;
-  return parent?.type === "data_source_id" && parent.data_source_id ? parent.data_source_id : null;
 }
