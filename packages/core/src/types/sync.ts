@@ -206,6 +206,20 @@ export interface RemoteScanInfo {
   readonly skippedDatabases?: number;
 }
 
+/** Notion 에서 바뀐 DB 속성을 행 노트의 키에 옮긴 것(ADR-045). */
+export interface SchemaFollowed {
+  /** DB 폴더. */
+  readonly folder: string;
+  /** 옛 이름 → 새 이름. */
+  readonly renamed: ReadonlyArray<readonly [string, string]>;
+  /** Notion 에서 지운 속성. */
+  readonly removed: readonly string[];
+  /** 키를 바꾼 행 노트 수. */
+  readonly rows: number;
+  /** 지운 속성이지만 올리지 않은 로컬 값이 있어 노트에 남긴 키. */
+  readonly kept: ReadonlyArray<{ readonly path: string; readonly key: string }>;
+}
+
 export interface PullResult {
   readonly created: number;
   readonly updated: number;
@@ -218,6 +232,8 @@ export interface PullResult {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
   readonly restoredPaths?: readonly string[];
+  /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). 없으면 생략. */
+  readonly schemaFollowed?: readonly SchemaFollowed[];
   readonly conflicts: Conflict[];
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];

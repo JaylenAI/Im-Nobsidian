@@ -14,6 +14,7 @@ export type {
   PushResult,
   ReadOnlySkip,
   PullResult,
+  SchemaFollowed,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

@@ -9,11 +9,12 @@ import type {
   FailedOperation,
   ProgressItem,
   RemoteMove,
+  SchemaFollowed,
   SyncRecord,
 } from "../types/sync.js";
 import type { BasePropertySchema, DatabaseViewsConfig } from "../types/view.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
-import { PropertyMapper } from "../notion/property-mapper.js";
+import { PropertyMapper, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
@@ -42,6 +43,7 @@ import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
 import {
   replaceFrontmatterLines,
+  sameFrontmatterValue,
   snapshotFrontmatter,
   splitFrontmatter,
 } from "../utils/frontmatter.js";
@@ -51,6 +53,15 @@ import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-genera
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles, type DbBaseFile } from "./db-base-files.js";
+import {
+  SchemaLedger,
+  diffSourceSchema,
+  isEmptySchemaChange,
+  seenSchemaOf,
+  sourceKeyOf,
+  type SchemaChange,
+} from "./schema-ledger.js";
+import { rekeyTrackedRows } from "./schema-follow.js";
 import { NoteRelocator, within } from "./note-relocation.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
@@ -156,12 +167,16 @@ export class DatabaseSyncer {
   };
   /** 볼트에서 사라져 되살린 행의 경로 — pull 마감이 가져가 화면에 알린다(D8). */
   private restoredRows: string[] = [];
+  /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
+  private schemaFollowed: SchemaFollowed[] = [];
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
    * 않은 DB 의 것도 남아 있다({@link DbBaseFiles}).
    */
   readonly baseFileInfo: DbBaseFiles;
+  /** DB 마다 지난 pull 이 본 속성 — Notion 에서 바꾼 속성 이름을 행 노트에 옮기는 근거(ADR-045). */
+  private readonly schemaLedger: SchemaLedger;
 
   private get decorations(): PageDecorations {
     return (this.decorationsCache ??= new PageDecorations(this.notionClient, this.imageHandler));
@@ -186,6 +201,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.schemaLedger = new SchemaLedger(stateDb);
     this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
     this.propertyMapper = PropertyMapper.fromConfig(config);
     this.propertyMapper.setWikilinkResolver({
@@ -301,6 +317,13 @@ export class DatabaseSyncer {
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
 
+    // Notion 에서 바꾼 속성을 행 노트에 먼저 옮긴다 — DB 전체를 받을 때만(ADR-045).
+    const followed = wholeDbInScope
+      ? await this.followSchema(dbConfig, meta, pages)
+      : { changes: new Map<string, SchemaChange>(), rekeyed: new Set<string>() };
+    const refreshedKeys = (page: PageObjectResponse) =>
+      followed.changes.get(sourceKeyOf(page, dbConfig.databaseId))?.refreshed;
+
     // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
     if (wholeDbInScope) {
       const viewsConfig = await this.pullDatabaseViews(dbConfig);
@@ -308,7 +331,8 @@ export class DatabaseSyncer {
     }
 
     let created = 0;
-    let updated = 0;
+    // 키만 바꾼 행 노트도 바뀐 파일이다 — 그 행을 이어서 받으면 한 번만 센다.
+    let updated = followed.rekeyed.size;
     let restored = 0;
     const conflicts: Conflict[] = [];
     const failed: FailedOperation[] = [];
@@ -328,7 +352,14 @@ export class DatabaseSyncer {
     for (const page of pages) {
       try {
         const record = this.stateDb.getByNotionId(page.id);
-        const action = await this.rowAction(dbConfig, page, record, wholeDbInScope, scope);
+        const action = await this.rowAction(
+          dbConfig,
+          page,
+          record,
+          wholeDbInScope,
+          scope,
+          refreshedKeys(page),
+        );
         if (action !== "skip") pending.push({ page, action });
         else if (record && (wholeDbInScope || inAnyPathScope(record.obsidianPath, scope))) {
           unchanged.push(page);
@@ -357,7 +388,7 @@ export class DatabaseSyncer {
         const outcome = await withDeadline(
           () =>
             action === "reform" && record
-              ? this.rewriteDateForms(page, record)
+              ? this.rewriteStaleKeys(page, record, refreshedKeys(page))
               : this.pullDatabasePage(page, dbConfig),
           this.config.advanced.itemTimeoutMs,
           `pull ${dbConfig.localFolder}/${page.id}`,
@@ -371,7 +402,7 @@ export class DatabaseSyncer {
           if (action === "restore") {
             restored++;
             this.restoredRows.push(outcome.path);
-          } else updated++;
+          } else if (!followed.rekeyed.has(record.id)) updated++;
           writtenPaths.push(outcome.path);
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
@@ -577,8 +608,10 @@ export class DatabaseSyncer {
    *    (틀린) 전제로 db-row 를 제외해 두었기에 양쪽 어디에도 복원 경로가 없는 상태였다.
    *    deleteSync 가 켜져 있으면 되살리지 않는다 — 지운 것은 Notion 에서도 지우라는 뜻이고, sync 는
    *    pull 을 먼저 돌려 되살리면 뒤이은 push 가 지울 것을 잃는다(detectMissingLocalFiles 와 같다).
-   *  · 예전 버전이 적은 날짜 모양이 남은 행은 그 줄만 새 모양으로 고쳐 쓴다({@link outdatedDateForm},
-   *    F-08).
+   *  · 예전 버전이 적은 날짜 모양이 남은 행, Notion 이 새로 만들거나 타입을 바꾼 속성의 값이 다른 행은 그 줄만
+   *    고쳐 쓴다({@link staleKeysToRewrite}, F-08 · ADR-045).
+   *
+   * @param refreshed 이 행의 data source 에서 새로 생기거나 타입이 바뀐 속성의 키(ADR-045).
    */
   private async rowAction(
     dbConfig: DatabaseSyncConfig,
@@ -586,13 +619,14 @@ export class DatabaseSyncer {
     record: SyncRecord | null,
     wholeDbInScope: boolean,
     scope: readonly string[] | undefined,
+    refreshed?: ReadonlySet<string>,
   ): Promise<RowAction> {
     if (!wholeDbInScope && !(record && inAnyPathScope(record.obsidianPath, scope))) return "skip";
     if (record && this.vaultFs.excludesPath?.(record.obsidianPath)) return "skip";
     if (!record) return "pull";
     const misplaced = !isDirectDbRowPath(dbConfig.localFolder, record.obsidianPath);
     const changed = misplaced || this.remoteVerdict(record, page) !== "unchanged";
-    if (!changed && (await this.outdatedDateForm(record, page))) return "reform";
+    if (!changed && (await this.staleKeysToRewrite(record, page, refreshed))) return "reform";
     // 원격도 바뀐 행이라도 볼트에서 사라진 것이면 되살린 것이다 — 받는 일은 같고 세는 칸만 다르다.
     // 예전에는 «업데이트» 로 세어, 지운 파일이 돌아온다는 것을 결과가 말하지 않았다.
     if (this.config.sync.deleteSync || (await this.vaultFs.exists(record.obsidianPath))) {
@@ -602,19 +636,21 @@ export class DatabaseSyncer {
   }
 
   /**
-   * 원격이 그대로인 행이지만 예전 버전이 적은 날짜 모양(`…Z` · `…+09:00` · `{start, end}`)이 남아 새
-   * 모양으로 고쳐 쓸 행인가(F-08, {@link PropertyMapper.outdatedDateKeys}). 고쳐 쓰면 사본도 새 모양이
-   * 되어 다음 pull 은 건너뛴다.
+   * 원격이 그대로인 행이지만 그 줄만 고쳐 쓸 키가 있는가 — 예전 버전이 적은 날짜 모양(`…Z` · `…+09:00` ·
+   * `{start, end}`, F-08, {@link PropertyMapper.outdatedDateKeys}), 또는 Notion 이 새로 만들거나 타입을 바꾼
+   * 속성의 값이 적힌 것과 다른 키(ADR-045 — 수식 열을 더하면 행마다 값이 생기지만 행의 수정 시각은 그대로다).
+   * 고쳐 쓰면 사본도 새 값이 되어 다음 pull 은 건너뛴다.
    *
    * 지난 동기화 뒤 로컬을 고친 행은 고르지 않는다 — 로컬 편집을 지키느라 쓰지 않으니 pull 마다 고르기만
    * 한다. 그 편집을 올린 뒤의 pull 이 고른다. 로컬 파일을 읽지 못하면 고르지 않는다.
    */
-  private async outdatedDateForm(record: SyncRecord, page: PageObjectResponse): Promise<boolean> {
+  private async staleKeysToRewrite(
+    record: SyncRecord,
+    page: PageObjectResponse,
+    refreshed: ReadonlySet<string> | undefined,
+  ): Promise<boolean> {
     const base = snapshotFrontmatter(record.baseSnapshot);
-    if (
-      base === null ||
-      this.propertyMapper.outdatedDateKeys(base, rowProperties(page)).length === 0
-    ) {
+    if (base === null || this.staleKeys(base, rowProperties(page), refreshed).length === 0) {
       return false;
     }
     try {
@@ -624,26 +660,45 @@ export class DatabaseSyncer {
     }
   }
 
+  /** 적힌 frontmatter 에서 받은 값으로 고쳐 쓸 키 — {@link staleKeysToRewrite}. */
+  private staleKeys(
+    written: Readonly<Record<string, unknown>>,
+    raw: Record<string, unknown>,
+    refreshed: ReadonlySet<string> | undefined,
+  ): string[] {
+    const keys = new Set(this.propertyMapper.outdatedDateKeys(written, raw));
+    if (refreshed && refreshed.size > 0) {
+      const fresh = this.propertyMapper.fromNotionProperties(raw);
+      for (const key of refreshed) {
+        // 파일 속성은 받은 값이 서명 URL 이다 — 첨부로 내려받는 것은 행을 받을 때다.
+        if ((raw[key] as { type?: string } | undefined)?.type === "files") continue;
+        if (!sameFrontmatterValue(written[key] ?? null, fresh[key] ?? null)) keys.add(key);
+      }
+    }
+    return [...keys];
+  }
+
   /**
-   * 예전 버전이 적은 날짜 모양이 남은 행에서 그 키들만 새 모양으로 고쳐 쓴다(F-08) — 원격이 그대로라 본문 ·
-   * 첨부는 다시 받지 않는다. 본문은 한 글자도 바꾸지 않고, 다른 키의 줄은 그대로 둔다(키 단위로 나눠 읽을
-   * 수 없는 frontmatter 는 값만 지킨다 — {@link mergeRowFrontmatter}).
+   * 원격이 그대로인 행에서 {@link staleKeys} 의 키만 받은 값으로 고쳐 쓴다 — 본문 · 첨부는 다시 받지 않는다. 본문은
+   * 한 글자도 바꾸지 않고, 다른 키의 줄은 그대로 둔다(키 단위로 나눠 읽을 수 없는 frontmatter 는 값만 지킨다 —
+   * {@link mergeRowFrontmatter}).
    *
    * 예전에는 행을 통째로 다시 받았다. 행마다 본문을 읽어 요청이 늘고, 다시 그릴 때마다 달라지는 본문(빈
    * 블록 · 첨부 이름)까지 바뀌었다 — 실볼트 사본에서 다시 받은 149행 중 99행.
    *
    * 고른 뒤 로컬을 고쳤으면 쓰지 않는다(`skipped`) — 이어지는 push 가 올린다.
    */
-  private async rewriteDateForms(
+  private async rewriteStaleKeys(
     page: PageObjectResponse,
     record: SyncRecord,
+    refreshed: ReadonlySet<string> | undefined,
   ): Promise<PullOutcome> {
     const path = record.obsidianPath;
     const local = await this.vaultFs.readFile(path);
     if (computeHash(local) !== record.contentHash) return { action: "skipped", path };
 
     const raw = rowProperties(page);
-    const keys = this.propertyMapper.outdatedDateKeys(splitFrontmatter(local).data, raw);
+    const keys = this.staleKeys(splitFrontmatter(local).data, raw, refreshed);
     // 고를 때 견준 값 그대로 적는다 — 다음 pull 이 같은 값으로 견줘 다시 고르지 않는다.
     const fresh = this.propertyMapper.fromNotionProperties(raw);
     const pulled = Object.fromEntries(
@@ -661,6 +716,86 @@ export class DatabaseSyncer {
       if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
     });
     return { action: "written", path };
+  }
+
+  /**
+   * Notion 에서 바뀐 속성을 지난 pull 이 본 스키마와 id 로 견줘 행 노트에 옮긴다(ADR-045) — 이름을 바꾼 속성은 키
+   * 이름을, 지운 속성은 키를. 새로 생기거나 타입이 바뀐 속성은 돌려준다 — 그대로인 행도 그 값을 고쳐 쓴다.
+   *
+   * 처음 보는 DB 는 견줄 것이 없어 적기만 한다. 행 하나라도 옮기지 못하면 본 스키마를 적지 않는다 — 다음 pull 이 다시
+   * 옮긴다(이미 옮긴 행은 바꿀 것이 없다).
+   *
+   * @returns 바뀐 속성(data source → 바뀐 것, 바뀐 소스만)과 키를 바꾼 행의 레코드 id.
+   */
+  private async followSchema(
+    dbConfig: DatabaseSyncConfig,
+    meta: DatabaseMeta,
+    pages: readonly PageObjectResponse[],
+  ): Promise<{ changes: Map<string, SchemaChange>; rekeyed: ReadonlySet<string> }> {
+    const changes = new Map<string, SchemaChange>();
+    const seen = seenSchemaOf(meta);
+    if (seen === null) return { changes, rekeyed: new Set() };
+    const before = this.schemaLedger.get(dbConfig.databaseId);
+    for (const [source, after] of Object.entries(seen)) {
+      const prev = before?.[source];
+      if (!prev) continue;
+      const change = diffSourceSchema(prev, after);
+      if (!isEmptySchemaChange(change)) changes.set(source, change);
+    }
+    let rekeyed: ReadonlySet<string> = new Set();
+    if (changes.size > 0) {
+      const sources = Object.keys(seen);
+      const soleSource = meta.dataSources.length <= 1 && sources.length === 1 ? sources[0]! : null;
+      const outcome = await rekeyTrackedRows(
+        this.stateDb,
+        this.vaultFs,
+        dbConfig.databaseId,
+        pages,
+        changes,
+        soleSource,
+      );
+      rekeyed = new Set(outcome.rewritten);
+      this.noteSchemaFollowed(dbConfig, changes, outcome);
+      if (outcome.failed > 0) {
+        getLogger().warn(
+          `[DB Sync] ${dbConfig.localFolder}: 바뀐 속성을 행 노트 ${outcome.failed}개에 옮기지 못함 — 다음 pull 이 다시 합니다`,
+        );
+        return { changes, rekeyed };
+      }
+    }
+    this.schemaLedger.set(dbConfig.databaseId, seen);
+    return { changes, rekeyed };
+  }
+
+  /** 옮긴 것을 pull 마감이 알리게 적는다 — 이름 바꿈 · 지움이 있었던 DB 만. 날짜 범위 끝 키는 따로 세지 않는다. */
+  private noteSchemaFollowed(
+    dbConfig: DatabaseSyncConfig,
+    changes: ReadonlyMap<string, SchemaChange>,
+    outcome: Awaited<ReturnType<typeof rekeyTrackedRows>>,
+  ): void {
+    const derived = (key: string, keys: ReadonlySet<string> | ReadonlyMap<string, string>) =>
+      key.endsWith(RANGE_END_SUFFIX) && keys.has(key.slice(0, -RANGE_END_SUFFIX.length));
+    const renamed = [...changes.values()].flatMap((c) =>
+      [...c.renamed].filter(([from]) => !derived(from, c.renamed)),
+    );
+    const removed = [...changes.values()].flatMap((c) =>
+      [...c.removed].filter((key) => !derived(key, c.removed)),
+    );
+    if (renamed.length === 0 && removed.length === 0) return;
+    this.schemaFollowed.push({
+      folder: dbConfig.localFolder,
+      renamed,
+      removed,
+      rows: outcome.rewritten.length,
+      kept: outcome.kept,
+    });
+  }
+
+  /** 이번 pull 이 행 노트에 옮긴 Notion 속성 변경 — 가져가면 비운다(ADR-045). */
+  takeSchemaFollowed(): SchemaFollowed[] {
+    const followed = this.schemaFollowed;
+    this.schemaFollowed = [];
+    return followed;
   }
 
   /** 이 DB 의 추적 행 가운데 이번 조회에 없던 것 — 지워졌는지는 아직 모른다. */

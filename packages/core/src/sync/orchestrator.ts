@@ -784,6 +784,7 @@ export class SyncOrchestrator {
     this.puller.beginPull();
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.databaseSyncer.takeSchemaFollowed();
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -892,6 +893,7 @@ export class SyncOrchestrator {
       await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
+      const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
       const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
@@ -922,6 +924,7 @@ export class SyncOrchestrator {
         deleted,
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+        ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
         conflicts,
         writtenPaths,
         failed,

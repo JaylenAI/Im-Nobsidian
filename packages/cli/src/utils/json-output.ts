@@ -5,6 +5,7 @@ import type {
   PushResult,
   ReadOnlySkip,
   RemoteScanInfo,
+  SchemaFollowed,
 } from "@im-nobsidian/core";
 
 /**
@@ -45,6 +46,8 @@ export interface PullJson {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — `restored` 의 목록. */
   readonly restoredPaths: readonly string[];
+  /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). */
+  readonly schemaFollowed: readonly SchemaFollowed[];
   /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
   readonly moved: number;
   readonly moveSkipped: number;
@@ -93,6 +96,7 @@ export function pullJson(result: PullResult): PullJson {
     deleted: result.deleted,
     restored: result.restored,
     restoredPaths: result.restoredPaths ?? [],
+    schemaFollowed: result.schemaFollowed ?? [],
     moved: result.moved?.length ?? 0,
     moveSkipped: result.moveSkipped?.length ?? 0,
     renamed: result.moved?.filter((move) => move.renamed).length ?? 0,
