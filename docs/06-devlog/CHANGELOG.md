@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-10-29
+
+> DB 의 속성과 보기가 양쪽으로 간다 — Notion 에서 바꾼 속성 이름을 행 노트가 따라가고, 볼트에서 고친 행 키 · 사이드카 ·
+> `.base` 보기가 Notion 에 올라간다(ADR-045 · 046). 예전엔 무시되던 볼트 편집이 Notion 을 바꾸는 동작 변경이라 마이너를 올린다.
+
 ### Added
 
 - **DB 속성을 양쪽에서 고친다**(ADR-045) — Notion 에서 바꾼 속성 이름 · 지운 속성을 pull 이 속성 id 로 따라가 행 노트의 키를
@@ -28,6 +33,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **보기 · 사이드카 속성만 올린 push 가 요약 줄에 `no changes` 로 나오던 것** — 노트 수만 셌다. DB 에 올린 것을 함께 센다.
 - **증분 pull 이 루트 바로 아래 새로 만든 DB 를 찾지 못하던 것** — 루트는 본문을 읽지 않아 `pull --force` 만 찾았다. 루트가 바뀐
   pull 은 루트의 자식을 한 번 훑는다.
+- **Notion 에서 선택 옵션을 지우거나 수식 · 롤업을 바꾸면 볼트 행에 옛 값이 남던 것** — Notion 은 행 값을 바꾸지만 행의 수정
+  시각은 그대로라 pull 이 그 행을 받지 않았다. pull 이 옵션 이름 · 수식 · 롤업의 지문을 기억해 바뀌면 그 열만 다시 쓴다. 사이드카로
+  쓰는 옵션을 지우면 push(dry-run 포함)가 「그 값을 가진 행은 Notion 에서 빈 값이 됩니다」 를 미리 알린다. 이전 버전에서 이미
+  갈라진 행은 `nobsi pull --rerender` 가 맞춘다.
 
 ## [0.12.0] - 2026-10-28
 
