@@ -27,11 +27,12 @@ import type {
   BasePropertyOption,
   BaseStatusGroup,
   ViewRequest,
+  ViewUpdateRequest,
 } from "../types/view.js";
 import { DEFAULT_CONFIG, type Config } from "../types/config.js";
 import type { BookmarkTarget } from "../types/convert.js";
 import { getLogger } from "../utils/logger.js";
-import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { normalizeNotionId, notionIdsEqual, shortNotionId } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
 import { throwIfAborted } from "../utils/abort.js";
 import { fileUrlOfBlock } from "../utils/notion-file-url.js";
@@ -198,8 +199,15 @@ export interface DatabaseMeta {
   readonly databaseId: string;
   /** DB 제목. 없으면 "". */
   readonly title: string;
-  /** 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. */
-  readonly dataSources: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /**
+   * 행을 조회할 data source. 비었으면 옛 단일 소스 DB 다 — DB id 로 조회한다. `properties` 는 그 소스만의 속성
+   * 스키마(읽지 못했으면 없다) — 속성 id 는 소스마다 따로 붙는다.
+   */
+  readonly dataSources: ReadonlyArray<{
+    readonly id: string;
+    readonly name: string;
+    readonly properties?: Readonly<Record<string, unknown>>;
+  }>;
   /**
    * 속성 스키마 — 읽을 수 있는 모든 data source 의 속성을 합친 것(이름이 겹치면 앞의 것). 읽을 수 있는 data
    * source 가 없으면 DB 객체의 속성.
@@ -221,6 +229,21 @@ export interface DatabaseAppearance {
 }
 
 /** 페이지가 DB 행이면 그 DB 의 id. */
+/** 새 페이지의 부모 — 행은 data source 를 주면 그곳에, 아니면 DB 에. */
+function rowParentOf(params: {
+  readonly parentId: string;
+  readonly parentType: "page" | "database";
+  readonly dataSourceId?: string;
+}):
+  | { page_id: string }
+  | { database_id: string }
+  | { type: "data_source_id"; data_source_id: string } {
+  if (params.parentType === "page") return { page_id: params.parentId };
+  return params.dataSourceId
+    ? { type: "data_source_id", data_source_id: params.dataSourceId }
+    : { database_id: params.parentId };
+}
+
 function parentDatabaseIdOf(page: { readonly parent?: unknown }): string | null {
   const parent = page.parent as { type?: string; database_id?: string } | undefined;
   if (parent?.type !== "data_source_id" && parent?.type !== "database_id") return null;
@@ -416,11 +439,10 @@ export class NotionClient {
     title: string;
     properties?: Record<string, unknown>;
     children?: BlockObjectResponse[];
+    /** 행을 둘 data source — 데이터 소스가 여럿인 DB 는 이것이 있어야 만든다. */
+    dataSourceId?: string;
   }): Promise<PageObjectResponse> {
-    const parent =
-      params.parentType === "database"
-        ? { database_id: params.parentId }
-        : { page_id: params.parentId };
+    const parent = rowParentOf(params);
 
     const properties =
       params.parentType === "page"
@@ -517,11 +539,10 @@ export class NotionClient {
     title: string;
     markdown: string;
     properties?: Record<string, unknown>;
+    /** 행을 둘 data source — 데이터 소스가 여럿인 DB 는 이것이 있어야 만든다. */
+    dataSourceId?: string;
   }): Promise<PageObjectResponse> {
-    const parent =
-      params.parentType === "database"
-        ? { database_id: params.parentId }
-        : { page_id: params.parentId };
+    const parent = rowParentOf(params);
 
     const properties =
       params.parentType === "page"
@@ -733,6 +754,7 @@ export class NotionClient {
     const dataSources = db.data_sources ?? [];
     const merged: Record<string, unknown> = {};
     const owners: Array<string | undefined> = [];
+    const own = new Map<string, Record<string, unknown>>();
     let anyAccessible = false;
     for (const ds of dataSources) {
       try {
@@ -745,6 +767,7 @@ export class NotionClient {
         owners.push(dsObj.parent?.database_id);
         if (dsObj.properties && Object.keys(dsObj.properties).length > 0) {
           anyAccessible = true;
+          own.set(ds.id, dsObj.properties);
           for (const [name, prop] of Object.entries(dsObj.properties)) {
             if (!(name in merged)) merged[name] = prop;
           }
@@ -758,7 +781,11 @@ export class NotionClient {
     const meta: DatabaseMeta = {
       databaseId,
       title: Array.isArray(db.title) ? (db.title[0]?.plain_text ?? "") : "",
-      dataSources: dataSources.map((ds) => ({ id: ds.id, name: ds.name ?? "" })),
+      dataSources: dataSources.map((ds) => ({
+        id: ds.id,
+        name: ds.name ?? "",
+        ...(own.has(ds.id) ? { properties: own.get(ds.id) } : {}),
+      })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
       isInline: db.is_inline === true,
       appearance: {
@@ -1029,7 +1056,7 @@ export class NotionClient {
     if (metas.length > 1) {
       const label = metas.map((m) => m.name || m.id).join(", ");
       getLogger().warn(
-        `[Notion] DB ${databaseId} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
+        `[Notion] DB ${shortNotionId(databaseId)} 에 data source ${metas.length}개 발견 — 전 소스 행을 한 폴더로 병합 동기화합니다 (${label}). 소스별 탭 구분은 .base 뷰에 보존되지 않습니다.`,
       );
     }
 
@@ -1785,6 +1812,16 @@ export class NotionClient {
   /** 보기를 지운다. DB 의 마지막 보기는 지우지 못한다(400). */
   async deleteView(viewId: string): Promise<void> {
     await this.withRateLimit(() => this.client.views.delete({ view_id: viewId }));
+  }
+
+  /**
+   * 보기를 고친다(ADR-046). 보내지 않은 항목은 그대로 두고 null 은 지운다. `configuration.properties` 는 통째로 바뀐다 —
+   * 목록에 없는 속성은 숨겨지고 목록 차례가 열 차례다(2026-10-29 실측).
+   */
+  async updateView(viewId: string, request: ViewUpdateRequest): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.views.update({ ...request, view_id: viewId } as never),
+    );
   }
 
   async getView(viewId: string): Promise<ViewConfig | null> {

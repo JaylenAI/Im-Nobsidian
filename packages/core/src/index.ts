@@ -14,6 +14,10 @@ export type {
   PushResult,
   ReadOnlySkip,
   PullResult,
+  SchemaFollowed,
+  PropertyRename,
+  SchemaEdit,
+  ViewEdit,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,
@@ -278,6 +282,7 @@ export {
   normalizeNotionId,
   notionIdsEqual,
   compactNotionId,
+  shortNotionId,
   notionIdFromInput,
 } from "./utils/id.js";
 export { sanitizeFileName } from "./utils/sanitize.js";

@@ -10,14 +10,26 @@ import {
   duration,
   readOnlySkipLines,
   restoredLines,
+  schemaFollowedLines,
   unsentDeletionLines,
+  renamedPropertyLines,
+  schemaEditLines,
+  viewEditLines,
+  heldSidecarLines,
+  heldBaseLines,
   icons,
   dimText,
   completionHeader,
   failedItem,
   remoteScanLines,
 } from "../utils/format.js";
-import { enableJsonMode, printJson, pullJson, pushJson } from "../utils/json-output.js";
+import {
+  enableJsonMode,
+  printJson,
+  pullJson,
+  pushDbChangeCount,
+  pushJson,
+} from "../utils/json-output.js";
 import { openVaultFs } from "../utils/vault.js";
 
 export const syncCommand = new Command("sync")
@@ -99,16 +111,41 @@ export const syncCommand = new Command("sync")
         console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
       }
       console.log(
-        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved)}` +
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved, pushDbChangeCount(pushResult))}` +
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);
       for (const line of readOnlySkipLines(pushResult.readOnlySkipped, options.dryRun))
         console.log(`  ${line}`);
+      for (const line of schemaFollowedLines(pullResult.schemaFollowed)) console.log(`  ${line}`);
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
       for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of renamedPropertyLines(pushResult.renamedProperties, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of schemaEditLines(pushResult.schemaEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of viewEditLines(pushResult.viewEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      // sync 의 push 가 올렸으면 붙잡아 둔 사이드카는 이제 다음 pull 이 새로 쓴다 — 올리지 못한 것만 알린다.
+      for (const line of heldSidecarLines(
+        (pullResult.heldSidecars ?? []).filter(
+          (path) => !(pushResult.schemaEdits ?? []).some((edit) => edit.path === path),
+        ),
+      )) {
+        console.log(`  ${line}`);
+      }
+      for (const line of heldBaseLines(
+        (pullResult.heldBases ?? []).filter(
+          (path) => !(pushResult.viewEdits ?? []).some((edit) => edit.path === path),
+        ),
+      )) {
         console.log(`  ${line}`);
       }
       if (pullResult.remoteScan) {

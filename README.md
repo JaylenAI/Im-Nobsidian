@@ -349,6 +349,33 @@ Enable it:
 }
 ```
 
+### Editing a database's properties
+
+Property changes travel both ways (since v0.13.0, [ADR-045](docs/02-architecture/adr/045-schema-bidirectional.md)):
+
+- **Renamed or deleted in Notion** — the next pull follows the property by its id: row notes get the new key with their
+  values, and a deleted property's key is removed. A property added in Notion appears in the rows on the next pull.
+- **Renamed in a row note** — rename the key the same way in the database's rows (Obsidian's property rename does this)
+  and push: the Notion property is renamed instead of a new one being created. Don't change a value in the same push if
+  the database has a single row — there is nothing to tell the rename from a new key; push again afterwards.
+- **Edited in the sidecar** — `<db>.notion.json` next to the rows lists the properties. Rename, retype, add or delete one
+  there, or change a formula, number format or select options, and push. Pull keeps an edited sidecar until that push.
+  The title property can't be deleted, retyped or added, and databases with several data sources aren't edited this way.
+  Only sidecars this vault pulled are applied — one copied from another vault still makes a new database (ADR-036).
+
+### Editing a database's views
+
+Edit a view in Obsidian — rename it, reorder or hide columns, change its sort or filter — and push: the matching Notion view
+is updated (since v0.13.0, [ADR-046](docs/02-architecture/adr/046-base-view-push.md)). Pull keeps the edited `.base` until
+everything in it has gone up, then rewrites it.
+
+- Filters are translated only when every condition has a Notion equivalent (text, number, checkbox, select, status,
+  multi-select, date, and the relative dates Notion has — `today()` ± `"1d"` · `"7d"` · `"1M"`, past / next week, month or
+  year — empty / not empty, and / or / not up to two levels). Otherwise the
+  filter is left as it is in Notion and push tells you why.
+- A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time, and views added
+  or removed in the vault, aren't sent — change those in Notion.
+
 ## Several Notion Workspaces in One Vault
 
 Each connection owns one folder of the vault and keeps its own settings and state in that folder's
@@ -425,6 +452,7 @@ loses more; see [Configuration](docs/05-guides/CONFIGURATION.md#prefermarkdownap
 | Note embeds (`![[note]]`)                          | Notion has no note-transclusion concept, and drops custom-scheme links                                                                                  | Kept **verbatim as text**, so the embed still renders in Obsidian after a sync                                                                                                                                                                                                                                 |
 | First-push wikilinks                               | Notion needs the target page to exist before a link can point at it                                                                                     | The same push sends the linking note again once its targets exist (since v0.4.0) — except notes outside a narrowed push or with unpushed edits, which resolve on a later push                                                                                                                                  |
 | Links to pages outside the vault                   | The target isn't shared with your integration, or isn't part of what you pull                                                                           | Kept as a **clickable `https://www.notion.so/…` link** labelled with the page title (since v0.4.1) instead of a broken wikilink — the page id survives, so it becomes a real wikilink once that page enters the vault. Footnote anchors (`#<blockId>`) survive too, so the link still lands on the right block |
+| Several data sources in one database               | The API reports each data source's properties separately                                                                                                | Rows sync with their own source's properties and new rows go to the first source. Property edits through the sidecar are refused for such databases — rename or delete those properties in Notion                                                                                                              |
 | Deletions/DB renames arrive late                   | Search skips trash, and a DB rename keeps its edit time                                                                                                 | Each pull checks 15 tracked pages for deletion in turn, so a large vault catches up over several pulls. `nobsi pull --force`, or **Pull from Notion (전체 확인)** in the plugin, runs a full scan now. Set the interval to `0` to scan fully on every pull                                                     |
 | A block deleted alone in Notion                    | Deleting a block doesn't change the page's edit time (measured through the API), so neither scan sees it                                                | The note catches up when the page is next edited in Notion, or now with `nobsi pull --rerender`                                                                                                                                                                                                                |
 | Bot mentions                                       | Notion's Markdown API does not export mentions of bots or integrations                                                                                  | They are missing from pulled notes, and pushing that note removes them in Notion too — re-add them in Notion                                                                                                                                                                                                   |

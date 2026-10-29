@@ -5,6 +5,10 @@ import type {
   PushResult,
   ReadOnlySkip,
   RemoteScanInfo,
+  SchemaFollowed,
+  PropertyRename,
+  SchemaEdit,
+  ViewEdit,
 } from "@im-nobsidian/core";
 
 /**
@@ -35,6 +39,12 @@ export interface PushJson {
   readonly readOnlySkipped: readonly ReadOnlySkip[];
   /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 pull 이 되살린다. churn 에 들지 않는다. */
   readonly unsentDeletions: readonly string[];
+  /** 볼트에서 바꾼 DB 속성 이름을 Notion 열 이름으로 바꾼 것(ADR-045) — churn 에 든다. */
+  readonly renamedProperties: readonly PropertyRename[];
+  /** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045) — churn 에 든다. */
+  readonly schemaEdits: readonly SchemaEdit[];
+  /** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046) — churn 에 든다. */
+  readonly viewEdits: readonly ViewEdit[];
   readonly durationMs: number;
 }
 
@@ -45,6 +55,12 @@ export interface PullJson {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — `restored` 의 목록. */
   readonly restoredPaths: readonly string[];
+  /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). */
+  readonly schemaFollowed: readonly SchemaFollowed[];
+  /** 볼트에서 고쳐 덮어쓰지 않은 사이드카(ADR-045). */
+  readonly heldSidecars: readonly string[];
+  /** 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base`(ADR-046). */
+  readonly heldBases: readonly string[];
   /** Notion 에서 옮긴 페이지를 볼트에서 옮긴 수(ADR-039) · 옮기지 않고 둔 수. */
   readonly moved: number;
   readonly moveSkipped: number;
@@ -66,6 +82,19 @@ export interface PullJson {
   readonly remoteScan: RemoteScanInfo | null;
 }
 
+/**
+ * 노트가 아니라 Notion DB 에 올린 것 — 만든 DB · 바꾼 열 이름 · 사이드카 속성 · `.base` 보기. 보기만 고친 push 가
+ * 요약 줄에 「no changes」 로 나왔다(2026-10-29 실측) — 노트 수만 셌다.
+ */
+export function pushDbChangeCount(result: PushResult): number {
+  return (
+    (result.createdDatabases ?? 0) +
+    (result.renamedProperties?.length ?? 0) +
+    (result.schemaEdits?.length ?? 0) +
+    (result.viewEdits?.length ?? 0)
+  );
+}
+
 export function pushJson(result: PushResult): PushJson {
   return {
     created: result.created,
@@ -73,15 +102,14 @@ export function pushJson(result: PushResult): PushJson {
     deleted: result.deleted,
     moved: result.moved,
     churn:
-      result.created +
-      result.updated +
-      result.deleted +
-      result.moved +
-      (result.createdDatabases ?? 0),
+      result.created + result.updated + result.deleted + result.moved + pushDbChangeCount(result),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
     readOnlySkipped: result.readOnlySkipped ?? [],
     unsentDeletions: result.unsentDeletions ?? [],
+    renamedProperties: result.renamedProperties ?? [],
+    schemaEdits: result.schemaEdits ?? [],
+    viewEdits: result.viewEdits ?? [],
     durationMs: result.duration,
   };
 }
@@ -93,6 +121,9 @@ export function pullJson(result: PullResult): PullJson {
     deleted: result.deleted,
     restored: result.restored,
     restoredPaths: result.restoredPaths ?? [],
+    schemaFollowed: result.schemaFollowed ?? [],
+    heldSidecars: result.heldSidecars ?? [],
+    heldBases: result.heldBases ?? [],
     moved: result.moved?.length ?? 0,
     moveSkipped: result.moveSkipped?.length ?? 0,
     renamed: result.moved?.filter((move) => move.renamed).length ?? 0,

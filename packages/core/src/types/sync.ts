@@ -163,6 +163,54 @@ export interface PushResult {
    * 예전에는 아무 말 없이 대기로 적기만 해, 지운 파일이 다음 pull 에 말없이 돌아왔다(D8). 없으면 빈 목록 · 생략.
    */
   readonly unsentDeletions?: readonly string[];
+  /**
+   * 볼트에서 바꾼 DB 속성 이름(Obsidian 의 속성 이름 바꾸기)을 Notion 의 열 이름으로 바꾼 것 — dry-run 은 바꿀 것
+   * (ADR-045). 없으면 생략.
+   */
+  readonly renamedProperties?: readonly PropertyRename[];
+  /** 볼트에서 고친 사이드카의 속성을 Notion DB 에 올린 것 — dry-run 은 올릴 것(ADR-045). 없으면 생략. */
+  readonly schemaEdits?: readonly SchemaEdit[];
+  /** 볼트에서 고친 `.base` 보기를 Notion 보기에 올린 것(ADR-046) — dry-run 이면 올릴 것. */
+  readonly viewEdits?: readonly ViewEdit[];
+}
+
+/** 고친 `.base` 의 보기 하나가 Notion 보기에 한 일 — {@link PushResult.viewEdits}. */
+export interface ViewEdit {
+  /** `.base` 경로. */
+  readonly path: string;
+  /** 보기 이름(바꿨으면 새 이름). */
+  readonly view: string;
+  /** 이름을 바꿨으면 옛 이름. */
+  readonly from?: string;
+  /** 올린 것 — 이름 · 열 · 정렬 · 필터. */
+  readonly changed: readonly ("name" | "columns" | "sort" | "filter")[];
+}
+
+/** 고친 사이드카 하나가 Notion DB 에 한 일 — {@link PushResult.schemaEdits}. */
+export interface SchemaEdit {
+  /** 사이드카 경로. */
+  readonly path: string;
+  readonly added: readonly string[];
+  readonly removed: readonly string[];
+  /** 옛 이름 → 새 이름. */
+  readonly renamed: ReadonlyArray<readonly [string, string]>;
+  /** 속성 이름 → 새 타입. */
+  readonly retyped: ReadonlyArray<readonly [string, string]>;
+  /** 설정(수식 · 숫자 형식 · 옵션)을 바꾼 속성. */
+  readonly redefined: readonly string[];
+  /**
+   * 지운 선택 옵션 — 속성 이름 → 옵션 이름. Notion 은 그 옵션을 가진 행의 값을 비운다(옵션 이름을 바꾼 것도 지우고
+   * 새로 만든 것이다). 없으면 지운 옵션이 없다.
+   */
+  readonly droppedOptions?: ReadonlyArray<readonly [string, readonly string[]]>;
+}
+
+/** 볼트에서 바꾼 DB 속성 이름 하나 — {@link PushResult.renamedProperties}. */
+export interface PropertyRename {
+  /** DB 폴더. */
+  readonly folder: string;
+  readonly from: string;
+  readonly to: string;
 }
 
 /** 노트 하나에서 올리지 않은 읽기 전용 속성. */
@@ -206,6 +254,20 @@ export interface RemoteScanInfo {
   readonly skippedDatabases?: number;
 }
 
+/** Notion 에서 바뀐 DB 속성을 행 노트의 키에 옮긴 것(ADR-045). */
+export interface SchemaFollowed {
+  /** DB 폴더. */
+  readonly folder: string;
+  /** 옛 이름 → 새 이름. */
+  readonly renamed: ReadonlyArray<readonly [string, string]>;
+  /** Notion 에서 지운 속성. */
+  readonly removed: readonly string[];
+  /** 키를 바꾼 행 노트 수. */
+  readonly rows: number;
+  /** 지운 속성이지만 올리지 않은 로컬 값이 있어 노트에 남긴 키. */
+  readonly kept: ReadonlyArray<{ readonly path: string; readonly key: string }>;
+}
+
 export interface PullResult {
   readonly created: number;
   readonly updated: number;
@@ -218,6 +280,17 @@ export interface PullResult {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
   readonly restoredPaths?: readonly string[];
+  /**
+   * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
+   */
+  readonly heldSidecars?: readonly string[];
+  /**
+   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올린다(ADR-046).
+   * 없으면 생략.
+   */
+  readonly heldBases?: readonly string[];
+  /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). 없으면 생략. */
+  readonly schemaFollowed?: readonly SchemaFollowed[];
   readonly conflicts: Conflict[];
   readonly writtenPaths: string[];
   readonly failed: FailedOperation[];

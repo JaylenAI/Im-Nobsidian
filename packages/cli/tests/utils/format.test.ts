@@ -29,8 +29,15 @@ import {
   readOnlySkipLines,
   remoteDeletionHint,
   restoredLines,
+  schemaFollowedLines,
+  renamedPropertyLines,
+  schemaEditLines,
+  heldSidecarLines,
+  viewEditLines,
+  heldBaseLines,
   unsentDeletionLines,
   remoteScanLines,
+  summary,
 } from "../../src/utils/format.js";
 
 /** 로컬 시각으로 만든 ISO — 시험을 도는 기계의 시간대와 무관하게 같은 글이 나온다. */
@@ -162,5 +169,111 @@ describe("거절한 로컬 삭제 (D8)", () => {
     expect(lines[lines.length - 1]).toBe("  … 외 3개");
     expect(restoredLines(undefined)).toEqual([]);
     expect(unsentDeletionLines([])).toEqual([]);
+  });
+});
+
+describe("renamedPropertyLines — 볼트에서 바꾼 속성 이름을 Notion 열에 옮긴 것 (ADR-045)", () => {
+  it("DB 폴더와 바꾼 이름을 한 줄씩, dry-run 은 옮길 것으로", () => {
+    const renames = [{ folder: "databases/할 일", from: "점수", to: "점수표" }];
+    expect(renamedPropertyLines(renames)).toEqual([
+      "✓ 볼트에서 바꾼 속성 이름을 Notion 열에 옮겼습니다 — databases/할 일: 점수 → 점수표",
+    ]);
+    expect(renamedPropertyLines(renames, true)).toEqual([
+      "✓ 볼트에서 바꾼 속성 이름을 Notion 열에 옮깁니다 — databases/할 일: 점수 → 점수표",
+    ]);
+    expect(renamedPropertyLines(undefined)).toEqual([]);
+  });
+});
+
+describe("schemaEditLines · heldSidecarLines — 사이드카에서 고친 속성 (ADR-045)", () => {
+  it("사이드카마다 한 일을 한 줄로, 덮어쓰지 않은 것은 경고와 경로로", () => {
+    expect(
+      schemaEditLines([
+        {
+          path: "할 일/할 일.notion.json",
+          added: ["마감"],
+          removed: ["메모"],
+          renamed: [["점수", "점수표"]],
+          retyped: [["상태", "select"]],
+          redefined: ["두배"],
+        },
+      ]),
+    ).toEqual([
+      "✓ 사이드카에서 고친 속성을 Notion 에 올렸습니다 — 할 일/할 일.notion.json: 더함 마감 · 지움 메모 · 이름 점수 → 점수표 · 타입 상태 → select · 설정 두배",
+    ]);
+    expect(
+      schemaEditLines(
+        [
+          {
+            path: "a.notion.json",
+            added: [],
+            removed: [],
+            renamed: [],
+            retyped: [],
+            redefined: ["상태"],
+            droppedOptions: [["상태", ["끝"]]],
+          },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "✓ 사이드카에서 고친 속성을 Notion 에 올립니다 — a.notion.json: 설정 상태 · 상태 옵션 지움 끝(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)",
+    ]);
+    expect(heldSidecarLines(["할 일/할 일.notion.json"])).toEqual([
+      "⚠ 고친 사이드카 1개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:",
+      "  할 일/할 일.notion.json",
+    ]);
+    expect(heldSidecarLines(undefined)).toEqual([]);
+  });
+});
+
+describe("schemaFollowedLines — Notion 에서 바뀐 속성을 행 노트에 옮긴 것 (ADR-045)", () => {
+  it("DB 마다 바꾼 이름 · 지운 속성과 노트 수, 남긴 값은 경고와 경로로", () => {
+    expect(
+      schemaFollowedLines([
+        {
+          folder: "databases/할 일",
+          renamed: [["점수", "점수표"]],
+          removed: ["메모"],
+          rows: 2,
+          kept: [{ path: "databases/할 일/가.md", key: "메모" }],
+        },
+      ]),
+    ).toEqual([
+      "✓ Notion 에서 바뀐 속성을 행 노트 2개에 옮겼습니다 — databases/할 일: 이름 점수 → 점수표 · 지움 메모",
+      "⚠ Notion 에서 지운 속성에 올리지 않은 값이 있어 노트에 남겼습니다 — Notion 에는 그 열이 없습니다:",
+      "  databases/할 일/가.md (메모)",
+    ]);
+    expect(schemaFollowedLines(undefined)).toEqual([]);
+  });
+});
+
+describe("viewEditLines · heldBaseLines — .base 에서 고친 보기 (ADR-046)", () => {
+  it("보기마다 한 일을 내부 키 없이 한 줄로, 덮어쓰지 않은 것은 경고와 경로로", () => {
+    expect(
+      viewEditLines(
+        [
+          { path: "할 일/할 일.base", view: "점수표", from: "표", changed: ["name", "columns"] },
+          { path: "할 일/할 일.base", view: "보드", changed: ["sort", "filter"] },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 표 → 점수표 (이름 · 열)",
+      "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 보드 (정렬 · 필터)",
+    ]);
+    expect(heldBaseLines(["할 일/할 일.base"])).toEqual([
+      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:",
+      "  할 일/할 일.base",
+    ]);
+    expect(heldBaseLines([])).toEqual([]);
+  });
+});
+
+describe("summary — Notion DB 에 올린 것", () => {
+  it("보기 · 속성만 올린 push 를 「no changes」 로 적지 않는다", () => {
+    expect(summary(0, 0, 0, 0, 2)).toBe("2 DB changes");
+    expect(summary(1, 0, 0, 0, 1)).toBe("1 created  1 DB changes");
+    expect(summary(0, 0, 0)).toBe("no changes");
   });
 });

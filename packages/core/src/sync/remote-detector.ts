@@ -84,6 +84,9 @@ export class RemoteDetector {
 
   // 증분 감지가 search 로 살아 있다고 본 페이지(압축 id) — 삭제 확인이 다시 묻지 않는다.
   private readonly _seenAlive = new Set<string>();
+
+  // 이번 감지에서 루트의 자식이 바뀌었을 수 있나 — {@link rootChanged}.
+  private _rootChanged = false;
   // 이번 감지가 삭제를 물은 뒤의 커서 — pull 이 마칠 때 적는다({@link saveDeletionSweep}). undefined 면 묻지 않았다.
   private _sweepCursor: string | null | undefined;
   // 이번 감지가 추적 중인 것을 모두 물었나 — 그러면 증분이어도 미룬 삭제가 없다.
@@ -97,6 +100,15 @@ export class RemoteDetector {
   ) {}
 
   /** 이번 감지에서 자식 페이지를 가진 것으로 본 페이지인가 — 폴더노트 판정의 1차 근거. */
+  /**
+   * 루트 바로 아래에 새 DB 가 생겼을 수 있나 — 증분 search 에 루트가 들었거나 전체 대조다. 루트는 받는 노트가 아니라
+   * 본문을 읽지 않아, 루트 바로 아래 새 DB 는 `pull --force` 만 찾았다(2026-10-29 실측 — DB 를 만들면 루트의 수정
+   * 시각이 바뀐다). 이때 DB 발견이 루트의 자식을 한 번 훑는다.
+   */
+  rootChanged(): boolean {
+    return this._rootChanged;
+  }
+
   hasChildPages(pageId: string): boolean {
     return this._childParentIds.has(normalizeNotionId(pageId));
   }
@@ -215,6 +227,7 @@ export class RemoteDetector {
     options: { readonly signal?: AbortLike; readonly databases: boolean },
   ): Promise<RemoteDetection> {
     this._seenAlive.clear();
+    this._rootChanged = scan.kind === "full";
     this._sweepCursor = undefined;
     this._sweptAll = false;
     const detection =
@@ -550,7 +563,10 @@ export class RemoteDetector {
         }
         // 루트는 받을 페이지가 아니라 동기화의 바탕이다 — 그 아래 페이지를 만들 때마다 수정 시각이 바뀌어
         // 조회 창에 자주 든다. 예전에는 그때마다 루트를 한 번 더 읽고 부모를 물었다.
-        if (notionIdsEqual(page.id, this.config.notion.rootPageId)) continue;
+        if (notionIdsEqual(page.id, this.config.notion.rootPageId)) {
+          this._rootChanged = true;
+          continue;
+        }
         throwIfAborted(options.signal);
         try {
           // search 가 준 부모를 쓴다 — 부모가 블록(콜아웃 · 컬럼)일 때만 그 블록을 거슬러 읽는다.

@@ -65,6 +65,7 @@ import {
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
 import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
+import { dataSourceIdOf } from "./schema-ledger.js";
 import type { RunObservation } from "./run-observation.js";
 import type { VaultFS } from "./vault-fs.js";
 
@@ -716,7 +717,9 @@ export class PagePusher {
 
     // 보낼 것을 먼저 다 만든다 — WAL 은 생성 요청 바로 앞에 적어야, 스키마를 읽지 못해 요청을
     // 보내지도 않은 실행이 «적용됐는지 모름» 기록을 남기지 않는다.
-    const mapper = await this.rowSchemas.mapperFor(databaseId);
+    // 데이터 소스가 여럿인 DB 의 새 행은 첫 소스에 둔다 — 그 소스의 스키마로 옮긴다.
+    const source = await this.rowSchemas.rowSourceFor(databaseId);
+    const mapper = await this.rowSchemas.mapperFor(databaseId, source);
     const changes = diffRowProperties(null, current.data);
     const { properties, skipped } = mapper.toNotionPropertyChanges(changes, title, {
       current: current.data,
@@ -780,6 +783,7 @@ export class PagePusher {
       conversionResult.content,
       properties,
       { path, frontmatter: current.data },
+      source,
     );
     const { page } = created;
 
@@ -947,8 +951,9 @@ export class PagePusher {
       );
     }
 
-    const mapper = await this.rowSchemas.mapperFor(databaseId);
     const remote = await this.livePage(record);
+    // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
+    const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));
     const drift: RemoteDrift = options.overwriteRemote
       ? "none"
       : await this.drift.remoteDrift(record, remote);
@@ -1180,7 +1185,10 @@ export class PagePusher {
     markdownContent: string,
     properties: Record<string, unknown> | undefined,
     note: { readonly path: string; readonly frontmatter: Readonly<Record<string, unknown>> },
+    /** 행을 둘 data source — 데이터 소스가 여럿인 DB 의 행만. */
+    dataSourceId?: string | null,
   ): Promise<CreatedPage> {
+    const parentSource = dataSourceId ? { dataSourceId } : {};
     // 아이콘 · 커버는 만든 뒤 따로 보낸다 — 모르는 아이콘 이름이면 Notion 이 요청 전체를 거절한다.
     const decorate = async (page: PageObjectResponse): Promise<PageObjectResponse> =>
       (await this.decorations.push(page.id, note.path, note.frontmatter, {})) ?? page;
@@ -1199,6 +1207,7 @@ export class PagePusher {
           title,
           markdown,
           properties,
+          ...parentSource,
         }),
       );
       return { page, markdown, syncedRefs: deferred.refs, syncedRefText: deferred.removed };
@@ -1211,6 +1220,7 @@ export class PagePusher {
         parentType,
         title,
         properties,
+        ...parentSource,
       }),
     );
     if (blocks.length > 0) {

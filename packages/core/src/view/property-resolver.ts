@@ -21,7 +21,8 @@ export function resolvePropertyName(
   return schema[propertyId] ? propertyId : undefined;
 }
 
-function decodePropertyId(id: string): string {
+/** 스키마의 속성 id 는 URL 인코딩돼 온다 — 보기 · 필터에는 풀어서 보낸다(2026-10-29 실측: 푼 id 를 받는다). */
+export function decodePropertyId(id: string): string {
   try {
     return decodeURIComponent(id);
   } catch {

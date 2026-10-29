@@ -4,6 +4,10 @@ import type {
   ProgressItem,
   ReadOnlySkip,
   RemoteScanInfo,
+  SchemaFollowed,
+  PropertyRename,
+  SchemaEdit,
+  ViewEdit,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -45,13 +49,23 @@ export function operationLabel(op: ProgressItem["operation"]): string {
   }
 }
 
-/** 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). */
-export function summary(created: number, updated: number, deleted: number, moved = 0): string {
+/**
+ * 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). `dbChanges` 도 push 만 —
+ * Notion DB 에 올린 것(`pushDbChangeCount`). 무엇인지는 아래 줄들이 하나씩 적는다.
+ */
+export function summary(
+  created: number,
+  updated: number,
+  deleted: number,
+  moved = 0,
+  dbChanges = 0,
+): string {
   const parts: string[] = [];
   if (created > 0) parts.push(chalk.green(`${created} created`));
   if (updated > 0) parts.push(chalk.yellow(`${updated} updated`));
   if (moved > 0) parts.push(chalk.cyan(`${moved} moved`));
   if (deleted > 0) parts.push(chalk.red(`${deleted} deleted`));
+  if (dbChanges > 0) parts.push(chalk.yellow(`${dbChanges} DB changes`));
   if (parts.length === 0) parts.push(chalk.dim("no changes"));
   return parts.join("  ");
 }
@@ -183,6 +197,112 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
     chalk.yellow(
       `⚠ 볼트에서 지운 노트 ${paths.length}개를 Notion 에서 ${dryRun ? "되살립니다" : "되살렸습니다"} ` +
         "— sync.deleteSync 가 꺼져 있어 볼트의 삭제는 Notion 에 보내지 않습니다:",
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
+ * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
+ * 올리지 않은 값이 있어 남긴 키는 경고로 — 그 값을 받을 열이 Notion 에 없다.
+ */
+export function schemaFollowedLines(followed: readonly SchemaFollowed[] | undefined): string[] {
+  const lines: string[] = [];
+  for (const db of followed ?? []) {
+    const parts = [
+      ...(db.renamed.length > 0
+        ? [`이름 ${db.renamed.map(([from, to]) => `${from} → ${to}`).join(", ")}`]
+        : []),
+      ...(db.removed.length > 0 ? [`지움 ${db.removed.join(", ")}`] : []),
+    ];
+    lines.push(
+      `${icons.success} Notion 에서 바뀐 속성을 행 노트 ${db.rows}개에 옮겼습니다 — ${db.folder}: ${parts.join(" · ")}`,
+    );
+  }
+  const kept = (followed ?? []).flatMap((db) => db.kept);
+  if (kept.length > 0) {
+    lines.push(
+      chalk.yellow(
+        "⚠ Notion 에서 지운 속성에 올리지 않은 값이 있어 노트에 남겼습니다 — Notion 에는 그 열이 없습니다:",
+      ),
+      ...pathLines(kept.map(({ path, key }) => `${path} (${key})`)),
+    );
+  }
+  return lines;
+}
+
+/**
+ * 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로 바꾼 것(ADR-045) — 행 값은 그대로라 행 수로 세지 않는다. 바꾼 것이
+ * 보이지 않으면 Notion 에서 열 이름이 바뀐 까닭을 모른다.
+ */
+export function renamedPropertyLines(
+  renames: readonly PropertyRename[] | undefined,
+  dryRun = false,
+): string[] {
+  return (renames ?? []).map(
+    ({ folder, from, to }) =>
+      `${icons.success} 볼트에서 바꾼 속성 이름을 Notion 열에 ${dryRun ? "옮깁니다" : "옮겼습니다"} — ${folder}: ${from} → ${to}`,
+  );
+}
+
+/** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045) — 사이드카마다 한 줄. */
+export function schemaEditLines(
+  edits: readonly SchemaEdit[] | undefined,
+  dryRun = false,
+): string[] {
+  return (edits ?? []).map((edit) => {
+    const parts = [
+      ...(edit.added.length > 0 ? [`더함 ${edit.added.join(", ")}`] : []),
+      ...(edit.removed.length > 0 ? [`지움 ${edit.removed.join(", ")}`] : []),
+      ...(edit.renamed.length > 0
+        ? [`이름 ${edit.renamed.map(([from, to]) => `${from} → ${to}`).join(", ")}`]
+        : []),
+      ...(edit.retyped.length > 0
+        ? [`타입 ${edit.retyped.map(([name, type]) => `${name} → ${type}`).join(", ")}`]
+        : []),
+      ...(edit.redefined.length > 0 ? [`설정 ${edit.redefined.join(", ")}`] : []),
+      ...(edit.droppedOptions ?? []).map(
+        ([name, options]) =>
+          `${name} 옵션 지움 ${options.join(", ")}(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)`,
+      ),
+    ];
+    return `${icons.success} 사이드카에서 고친 속성을 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${parts.join(" · ")}`;
+  });
+}
+
+/** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046). */
+export function viewEditLines(edits: readonly ViewEdit[] | undefined, dryRun = false): string[] {
+  return (edits ?? []).map((edit) => {
+    const name = edit.from ? `${edit.from} → ${edit.view}` : edit.view;
+    return `${icons.success} .base 에서 고친 보기를 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${name} (${edit.changed.map((field) => VIEW_FIELD_LABELS[field]).join(" · ")})`;
+  });
+}
+
+/** 보기에서 올린 것의 이름 — 화면에 내부 키를 내보내지 않는다. */
+export const VIEW_FIELD_LABELS: Readonly<Record<ViewEdit["changed"][number], string>> = {
+  name: "이름",
+  columns: "열",
+  sort: "정렬",
+  filter: "필터",
+};
+
+/** 볼트에서 보기를 고쳐 pull 이 덮어쓰지 않은 `.base`(ADR-046) — push 해야 Notion 에 간다. */
+export function heldBaseLines(paths: readonly string[] | undefined): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:`,
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/** 볼트에서 고쳐 pull 이 덮어쓰지 않은 사이드카(ADR-045) — push 해야 Notion 에 간다. */
+export function heldSidecarLines(paths: readonly string[] | undefined): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.yellow(
+      `⚠ 고친 사이드카 ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:`,
     ),
     ...pathLines(paths),
   ];

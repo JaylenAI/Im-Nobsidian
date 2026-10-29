@@ -156,6 +156,35 @@ describe("--json 출력 계약", () => {
     expect(stdoutJson(write)).toMatchObject({ readOnlySkipped: [] });
   });
 
+  it("push: 볼트에서 바꾼 속성 이름을 싣고 churn 에 센다 — 없으면 빈 목록 (ADR-045)", async () => {
+    const renamedProperties = [{ folder: "할 일", from: "점수", to: "점수표" }];
+    mockPush.mockResolvedValueOnce({ ...pushResult, renamedProperties });
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 4, renamedProperties });
+
+    mockPush.mockResolvedValueOnce(pushResult);
+    write.mockClear();
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 3, renamedProperties: [] });
+
+    const schemaEdits = [
+      { path: "a.notion.json", added: ["x"], removed: [], renamed: [], retyped: [], redefined: [] },
+    ];
+    mockPush.mockResolvedValueOnce({ ...pushResult, schemaEdits });
+    write.mockClear();
+    await run(pushCommand, "push", "--json");
+    expect(stdoutJson(write)).toMatchObject({ churn: 4, schemaEdits });
+  });
+
+  it("push: 보기만 올린 결과를 사람용 요약에 「no changes」 로 적지 않는다", async () => {
+    const viewEdits = [{ path: "db/표.base", view: "표", changed: ["sort"] }];
+    mockPush.mockResolvedValueOnce({ ...pushResult, updated: 0, viewEdits });
+    await run(pushCommand, "push");
+    const printed = log.mock.calls.map((c) => String(c[0])).join("\n");
+    expect(printed).toContain("1 DB changes");
+    expect(printed).not.toContain("no changes");
+  });
+
   it("push · pull: 거절한 로컬 삭제를 경로로 싣는다 — 없으면 빈 목록 (D8)", async () => {
     const unsentDeletions = ["가.md"];
     mockPush.mockResolvedValueOnce({ ...pushResult, unsentDeletions });

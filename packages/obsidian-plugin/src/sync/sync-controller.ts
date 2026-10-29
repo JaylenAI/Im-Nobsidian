@@ -297,7 +297,13 @@ export class SyncController {
       (result) => ({
         summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: "ready",
-        warning: warnings(readOnlyText(result), unsentDeletionText(result)),
+        warning: warnings(
+          renamedPropertyText(result),
+          schemaEditText(result),
+          viewEditText(result),
+          readOnlyText(result),
+          unsentDeletionText(result),
+        ),
       }),
     );
   }
@@ -326,7 +332,12 @@ export class SyncController {
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
-        warning: restoredText(result),
+        warning: warnings(
+          schemaFollowedText(result),
+          heldSidecarText(result.heldSidecars ?? []),
+          heldBaseText(result.heldBases ?? []),
+          restoredText(result),
+        ),
       }),
       (result) => this.dropPulled(result, paths),
     );
@@ -341,7 +352,21 @@ export class SyncController {
         summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
         warning: warnings(
+          schemaFollowedText(result.pull),
           restoredText(result.pull),
+          renamedPropertyText(result.push),
+          schemaEditText(result.push),
+          viewEditText(result.push),
+          heldSidecarText(
+            (result.pull.heldSidecars ?? []).filter(
+              (path) => !(result.push.schemaEdits ?? []).some((edit) => edit.path === path),
+            ),
+          ),
+          heldBaseText(
+            (result.pull.heldBases ?? []).filter(
+              (path) => !(result.push.viewEdits ?? []).some((edit) => edit.path === path),
+            ),
+          ),
           readOnlyText(result.push),
           unsentDeletionText(result.push),
         ),
@@ -784,6 +809,58 @@ function readOnlyText(result: PushResult): string | null {
   );
 }
 
+/** 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로 바꾼 것(ADR-045) — 행 값은 그대로라 수정 수에 들지 않는다. */
+function renamedPropertyText(result: PushResult): string | null {
+  const renames = result.renamedProperties ?? [];
+  if (renames.length === 0) return null;
+  return `볼트에서 바꾼 속성 이름을 Notion 열에 옮겼습니다: ${renames
+    .map(({ from, to }) => `${from} → ${to}`)
+    .join(", ")}`;
+}
+
+/** 고친 사이드카의 속성을 Notion DB 에 올린 것(ADR-045). */
+function schemaEditText(result: PushResult): string | null {
+  const edits = result.schemaEdits ?? [];
+  if (edits.length === 0) return null;
+  const changes = edits.flatMap((edit) => [
+    ...edit.added.map((name) => `${name} 더함`),
+    ...edit.removed.map((name) => `${name} 지움`),
+    ...edit.renamed.map(([from, to]) => `${from} → ${to}`),
+    ...edit.retyped.map(([name, type]) => `${name} 타입 ${type}`),
+    ...edit.redefined.map((name) => `${name} 설정`),
+    ...(edit.droppedOptions ?? []).map(
+      ([name, options]) => `${name} 옵션 ${options.join(", ")} 지움(그 값의 행은 빈 값)`,
+    ),
+  ]);
+  return (
+    `사이드카에서 고친 속성을 Notion 에 올렸습니다: ` +
+    `${changes.slice(0, 3).join(", ")}${changes.length > 3 ? " …" : ""}`
+  );
+}
+
+/** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046). */
+function viewEditText(result: PushResult): string | null {
+  const edits = result.viewEdits ?? [];
+  if (edits.length === 0) return null;
+  const names = edits.map((edit) => (edit.from ? `${edit.from} → ${edit.view}` : edit.view));
+  return (
+    `.base 에서 고친 보기를 Notion 에 올렸습니다: ` +
+    `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""}`
+  );
+}
+
+/** 볼트에서 보기를 고쳐 Pull 이 덮어쓰지 않은 `.base`(ADR-046) — Push 해야 Notion 에 간다. */
+function heldBaseText(paths: readonly string[]): string | null {
+  if (paths.length === 0) return null;
+  return `보기를 고친 .base 는 덮어쓰지 않았습니다 — Push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다: ${listedPaths(paths)}`;
+}
+
+/** 볼트에서 고쳐 Pull 이 덮어쓰지 않은 사이드카(ADR-045) — Push 해야 Notion 에 간다. */
+function heldSidecarText(paths: readonly string[]): string | null {
+  if (paths.length === 0) return null;
+  return `고친 사이드카는 덮어쓰지 않았습니다 — Push 하면 고친 속성을 Notion 에 올립니다: ${listedPaths(paths)}`;
+}
+
 /** 볼트에서 지웠지만 Notion 에서 지우지 않은 노트(deleteSync 꺼짐) — 다음 Pull 이 되살린다(D8). */
 function unsentDeletionText(result: PushResult): string | null {
   const paths = result.unsentDeletions ?? [];
@@ -801,6 +878,28 @@ function restoredText(result: PullResult): string | null {
   return (
     `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
     listedPaths(paths)
+  );
+}
+
+/**
+ * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
+ * 올리지 않은 값이 있어 남긴 노트도 함께.
+ */
+function schemaFollowedText(result: PullResult): string | null {
+  const followed = result.schemaFollowed ?? [];
+  if (followed.length === 0) return null;
+  const changes = followed.flatMap((db) => [
+    ...db.renamed.map(([from, to]) => `${from} → ${to}`),
+    ...db.removed.map((name) => `${name} 지움`),
+  ]);
+  const rows = followed.reduce((sum, db) => sum + db.rows, 0);
+  const kept = followed.flatMap((db) => db.kept.map(({ path, key }) => `${path} (${key})`));
+  return (
+    `Notion 에서 바뀐 속성을 행 노트 ${rows}개에 옮겼습니다: ` +
+    `${changes.slice(0, 3).join(", ")}${changes.length > 3 ? " …" : ""}` +
+    (kept.length > 0
+      ? `\n지운 속성에 올리지 않은 값이 있어 남겼습니다(Notion 에는 그 열이 없습니다): ${listedPaths(kept)}`
+      : "")
   );
 }
 

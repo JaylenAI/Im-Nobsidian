@@ -65,6 +65,76 @@ export function mergeRowFrontmatter(
 }
 
 /**
+ * frontmatter 의 키 이름을 바꾸고 몇 개를 뺀다 — 값과 자리, 다른 키의 줄은 그대로(P3). Notion 에서 속성 이름을
+ * 바꾸거나 지운 것을 행 노트에 옮길 때 쓴다. 받은 값으로 다시 쓰지 않는다 — 원격은 그대로이고, 올리지 않은 로컬
+ * 값이 있으면 그 값을 지켜 새 이름으로 옮긴다.
+ *
+ * 새 이름이 이미 노트에 있고 그 키가 그대로 남으면 바꾸지 않는다 — 두 값 중 하나를 버리게 된다. 서로 이름을
+ * 맞바꾼 것(A→B · B→A)은 한 번에 바꾼다.
+ *
+ * @param renamed 옛 키 → 새 키.
+ * @param dropped 뺄 키인가 — 키와 로컬 값을 받는다.
+ * @returns 바꾼 frontmatter 의 YAML 줄들. 바꿀 것이 없거나 frontmatter 를 읽을 수 없으면 null.
+ */
+export function rekeyRowFrontmatter(
+  localNote: string,
+  renamed: ReadonlyMap<string, string>,
+  dropped: (key: string, value: unknown) => boolean,
+): string[] | null {
+  let local: FrontmatterSplit;
+  try {
+    local = splitFrontmatter(localNote);
+  } catch {
+    return null;
+  }
+  if (!local.hasFrontmatter) return null;
+
+  const keys = Object.keys(local.data);
+  const drops = new Set(keys.filter((key) => dropped(key, local.data[key])));
+  const staying = new Set(keys.filter((key) => !drops.has(key) && !renamed.has(key)));
+  const target = new Map<string, string>();
+  for (const key of keys) {
+    const next = renamed.get(key);
+    if (next === undefined || next === key || drops.has(key) || staying.has(next)) continue;
+    if ([...target.values()].includes(next)) continue;
+    target.set(key, next);
+  }
+  if (drops.size === 0 && target.size === 0) return null;
+
+  const values: Record<string, unknown> = {};
+  for (const key of keys) {
+    if (drops.has(key)) continue;
+    values[target.get(key) ?? key] = plainFrontmatterValue(local.data[key]);
+  }
+
+  const chunks = localChunks(localNote, local.data);
+  if (chunks !== null) {
+    const lines: string[] = [];
+    for (const chunk of chunks) {
+      if (chunk.key !== "" && !drops.has(chunk.key)) {
+        const next = target.get(chunk.key);
+        lines.push(...(next === undefined ? chunk.body : renamedChunk(chunk, next, values[next])));
+      }
+      lines.push(...chunk.trailing);
+    }
+    if (readsAs(lines, values)) return lines;
+  }
+  return frontmatterLines(values);
+}
+
+/** 키 줄의 키만 바꾼 조각 — 값의 줄은 그대로. 키를 그 자리에서 바꿀 수 없으면 새 키와 값으로 다시 적는다. */
+function renamedChunk(chunk: Chunk, next: string, value: unknown): readonly string[] {
+  const [first = "", ...rest] = chunk.body;
+  const tokens = [chunk.key, JSON.stringify(chunk.key), `'${chunk.key.replace(/'/g, "''")}'`];
+  const token = tokens.find((t) => first.startsWith(`${t}:`));
+  if (token === undefined) return frontmatterLines({ [next]: value });
+  // 새 키를 적는 모양 — 값 자리의 0 을 떼어 낸다.
+  const sample = frontmatterLines({ [next]: 0 })[0] ?? "";
+  const nextToken = sample.slice(0, sample.lastIndexOf(":"));
+  return [`${nextToken}${first.slice(token.length)}`, ...rest];
+}
+
+/**
  * 합친 frontmatter 의 키 차례 — 로컬 키는 로컬 차례로(받은 속성에 없는 Notion 키는 뺀다), 받은 속성에만
  * 있는 키는 받은 차례에서 앞에 오는 키 바로 뒤에. 앞에 오는 키가 없으면 받은 키 중 맨 앞에 놓인 것 앞에.
  */

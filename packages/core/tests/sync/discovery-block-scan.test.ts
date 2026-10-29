@@ -127,4 +127,46 @@ describe("하위 DB 블록 스캔은 처음 한 번만", () => {
     expect(scanned()).toBe(0);
     expect([...vault.files.keys()].some((path) => path.endsWith("/F1.md"))).toBe(true);
   });
+
+  // 루트는 받는 노트가 아니라 본문을 읽지 않는다 — 루트 바로 아래 새 DB 는 `--force` 만 찾았다(2026-10-29 실측).
+  it("루트가 바뀌면 루트만 훑어 그 아래 새 DB 를 찾는다 — 다른 페이지는 훑지 않고", async () => {
+    at("10:05:00");
+    await orchestrator.pull();
+
+    at("10:20:00");
+    notion.add(FOUND, "F1", "", {});
+    const search = notion.client.searchRecentPages.getMockImplementation()!;
+    notion.client.searchRecentPages.mockImplementation(async (...args: unknown[]) => [
+      ...(await (search as (...a: unknown[]) => Promise<unknown[]>)(...args)),
+      {
+        id: ROOT,
+        last_edited_time: `${DAY}T10:20:00.000Z`,
+        last_edited_by: { id: "user" },
+        parentDatabaseId: null,
+        parent: { type: "workspace", workspace: true },
+        title: "Root",
+      },
+    ]);
+    notion.client.getChildDatabaseIds.mockImplementation(async (id: string) =>
+      id === ROOT ? [FOUND] : [],
+    );
+    notion.client.getDatabaseSyncability.mockResolvedValue({ title: "Found", queryable: true });
+    notion.client.getChildDatabaseIds.mockClear();
+    at("10:21:00");
+
+    const result = await orchestrator.pull();
+
+    expect(result).toMatchObject({ failed: [] });
+    expect(notion.client.getChildDatabaseIds.mock.calls).toEqual([[ROOT]]);
+    expect([...vault.files.keys()].some((path) => path.endsWith("/F1.md"))).toBe(true);
+  });
+
+  it("루트가 그대로면 훑지 않는다", async () => {
+    at("10:05:00");
+    await orchestrator.pull();
+    vi.clearAllMocks();
+    at("10:21:00");
+    await orchestrator.pull();
+    expect(scanned()).toBe(0);
+  });
 });

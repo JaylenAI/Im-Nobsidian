@@ -1,4 +1,11 @@
 import type { BasePropertySchema, BaseStatusGroup } from "../types/view.js";
+import {
+  RELATIVE_DATE_RANGES,
+  RELATIVE_DATE_VALUES,
+  dateOnly,
+  relativeRangeExprs,
+} from "./relative-dates.js";
+import { BASES_TIMESTAMPS } from "./bases-file-properties.js";
 
 /**
  * Notion 뷰 필터식 → Obsidian Bases 필터식 번역기.
@@ -13,7 +20,7 @@ import type { BasePropertySchema, BaseStatusGroup } from "../types/view.js";
  *
  * ## 부분 번역의 안전 규칙 — 이 파일의 핵심
  *
- * Notion 필터 문법은 Bases 보다 넓다(rollup any/every/none, 상대 날짜, formula 등).
+ * Notion 필터 문법은 Bases 보다 넓다(rollup any/every/none, 이번 주(this_week), formula 등).
  * 못 옮기는 리프를 만났을 때 **어느 방향으로 틀릴지**는 논리 위치에 따라 다르다:
  *
  *   - `and` 안에서 리프 하나를 버리면 조건이 느슨해진다 → 결과는 **상위집합**.
@@ -117,7 +124,8 @@ function translateNode(node: unknown, ctx: Ctx): BasesFilterNode | null {
 function translateLeaf(leaf: Record<string, unknown>, ctx: Ctx): BasesFilterNode | null {
   const timestamp = leaf["timestamp"];
   if (typeof timestamp === "string") {
-    const ref = timestamp === "created_time" ? "file.ctime" : "file.mtime";
+    const ref =
+      BASES_TIMESTAMPS[timestamp === "created_time" ? "created_time" : "last_edited_time"];
     const cond = leaf[timestamp];
     if (!isRecord(cond)) return unsupported(ctx, `timestamp '${timestamp}' 필터`);
     return translateDate(ref, cond, ctx, `timestamp '${timestamp}'`);
@@ -377,12 +385,21 @@ function translateEmptiness(
   return unsupported(ctx, `${label}: 연산자 '${op}' 미지원`);
 }
 
+/** 날짜 비교 연산자 → Bases 비교 기호. */
+const DATE_COMPARISONS: Readonly<Record<string, string>> = {
+  equals: "==",
+  before: "<",
+  after: ">",
+  on_or_before: "<=",
+  on_or_after: ">=",
+};
+
 /**
- * 날짜 필터. 절대 시각(equals/before/after/on_or_*)만 옮긴다.
+ * 날짜 필터 — 절대 날짜 비교, 상대 날짜 값(`"today"` · `"one_week_ago"` …), 상대 기간(`past_week` …).
  *
- * `past_week`·`this_month` 같은 상대 조건은 Bases 에도 대응 표현이 있지만, Notion 의
- * 기준 시각·주 시작 요일 정의와 어긋나면 경계 근처 행이 조용히 어긋난다. 잘못 옮기느니
- * 생략하고 사이드카에 남기는 쪽을 택한다(상위집합).
+ * 상대 날짜는 예전에 옮기지 않았다. 그런데 2026-03-30 부터 Notion 이 `equals: "today"` 처럼 상대 날짜를 **문자열**
+ * 로 주자, 절대 날짜로 읽어 `note["마감"] == "today"` 를 썼다 — 아무 행도 고르지 않는 보기였다. 상대 조건의 뜻은
+ * 실측해 `relative-dates.ts` 에 두었다. `this_week` 만 옮기지 않는다(주 시작 요일).
  */
 function translateDate(
   ref: string,
@@ -394,26 +411,25 @@ function translateDate(
   if (empt) return empt;
 
   const [op, value] = firstEntry(cond);
+  const range = Object.hasOwn(RELATIVE_DATE_RANGES, op) ? RELATIVE_DATE_RANGES[op] : undefined;
+  if (range) return { and: relativeRangeExprs(ref, range) };
   if (typeof value !== "string") {
     return unsupported(ctx, `${label}: 상대 날짜 조건 '${op}' 은 옮기지 않음`);
   }
-  const lit = str(value);
-
-  switch (op) {
-    case "equals":
-      return `${ref} == ${lit}`;
-    case "before":
-      return `${ref} < ${lit}`;
-    case "after":
-      return `${ref} > ${lit}`;
-    case "on_or_before":
-      return `${ref} <= ${lit}`;
-    case "on_or_after":
-      return `${ref} >= ${lit}`;
-    default:
-      return unsupported(ctx, `${label}: 날짜 연산자 '${op}' 미지원`);
+  const symbol = Object.hasOwn(DATE_COMPARISONS, op) ? DATE_COMPARISONS[op] : undefined;
+  if (!symbol) return unsupported(ctx, `${label}: 날짜 연산자 '${op}' 미지원`);
+  const relative = Object.hasOwn(RELATIVE_DATE_VALUES, value)
+    ? RELATIVE_DATE_VALUES[value]
+    : undefined;
+  if (relative) return `${dateOnly(ref)} ${symbol} ${relative}`;
+  if (!ISO_DATE_RE.test(value)) {
+    return unsupported(ctx, `${label}: 날짜 값 '${value}' 을 해석하지 못함`);
   }
+  return `${ref} ${symbol} ${str(value)}`;
 }
+
+/** 절대 날짜 값 — `2026-10-29` 또는 시각이 붙은 ISO 8601. */
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.]+(?:Z|[+-]\d{2}:?\d{2})?)?$/;
 
 /** is_empty/is_not_empty 는 모든 타입에 공통이라 한 곳에서 처리한다. */
 function translateEmptinessOnly(ref: string, cond: Record<string, unknown>): string | null {

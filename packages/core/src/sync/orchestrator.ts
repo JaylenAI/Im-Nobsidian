@@ -39,6 +39,7 @@ import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
 import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
+import { notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
 import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
@@ -52,6 +53,9 @@ import {
   remoteScanInfo,
 } from "./remote-scan.js";
 import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
+import { VaultSchemaRenames } from "./schema-push.js";
+import { SidecarSchemaEdits } from "./sidecar-schema-edit.js";
+import { BaseViewEdits } from "./base-view-push.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -99,6 +103,12 @@ export class SyncOrchestrator {
   private readonly databaseSyncer: DatabaseSyncer;
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
+  /** 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로(ADR-045). */
+  private readonly vaultRenames: VaultSchemaRenames;
+  /** 볼트에서 고친 사이드카의 속성을 Notion DB 의 열로(ADR-045). */
+  private readonly sidecarEdits: SidecarSchemaEdits;
+  /** 볼트에서 고친 `.base` 의 보기를 Notion 보기로(ADR-046). */
+  private readonly viewEdits: BaseViewEdits;
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
@@ -222,11 +232,29 @@ export class SyncOrchestrator {
     propertyMapper.setWikilinkResolver(wikilinkResolver);
     this.notionClient.setWikilinkResolver(wikilinkResolver);
     this.rowSchemas = new RowSchemaCache(
-      (databaseId) => notionClient.getDatabaseSchema(databaseId),
+      async (databaseId, dataSourceId) => {
+        if (!dataSourceId) return notionClient.getDatabaseSchema(databaseId);
+        const meta = await notionClient.getDatabaseMeta(databaseId);
+        const own =
+          meta.dataSources.length > 1
+            ? meta.dataSources.find((ds) => notionIdsEqual(ds.id, dataSourceId))?.properties
+            : undefined;
+        return notionClient.getDatabaseSchema(
+          databaseId,
+          own ? { ...meta, properties: own } : meta,
+        );
+      },
       wikilinkResolver,
       () => PropertyMapper.fromConfig(config),
       async () => peopleResolverOf(await notionClient.listUsers()),
+      async (databaseId) => {
+        const sources = (await notionClient.getDatabaseMeta(databaseId)).dataSources;
+        return sources.length > 1 ? sources[0]!.id : null;
+      },
     );
+    this.vaultRenames = new VaultSchemaRenames(stateDb, vaultFs, notionClient);
+    this.sidecarEdits = new SidecarSchemaEdits(stateDb, vaultFs, notionClient);
+    this.viewEdits = new BaseViewEdits(stateDb, vaultFs, notionClient);
 
     this.drift = new RemoteDriftChecker(
       config,
@@ -387,16 +415,33 @@ export class SyncOrchestrator {
       .pendingFolderMoves(plan)
       .filter((move) => inAnyPathScope(move.to, options?.paths));
 
+    // 고친 사이드카 — 노트가 아니라 변경 목록에 없다. 행보다 먼저 Notion 의 열을 바꾼다(ADR-045).
+    const inScope = (path: string): boolean =>
+      inAnyPathScope(path, options?.paths) && !excludeSet?.has(path);
+    const sidecarPlan = await this.sidecarEdits.plan(inScope);
+    const plannedEdits = sidecarPlan.planned.map((edit) => edit.edit);
+    // 고친 `.base` 의 보기 — 사이드카처럼 노트가 아니다. 속성을 바꾼 뒤에 보기를 바꾼다(ADR-046).
+    const viewPlan = await this.viewEdits.plan(inScope);
+    const plannedViews = viewPlan.planned.flatMap((file) => file.views.map((view) => view.edit));
+
     if (filtered.length === 0 && folderMoves.length === 0) {
       // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
       if (!options?.dryRun) await this.completeDatabaseSchemas();
+      const edited = options?.dryRun
+        ? { applied: plannedEdits, failed: [] }
+        : await this.sidecarEdits.apply(sidecarPlan.planned);
+      const viewed = options?.dryRun
+        ? { applied: plannedViews, failed: [] }
+        : await this.viewEdits.apply(viewPlan.planned);
       return {
         created: 0,
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [],
+        failed: [...sidecarPlan.refused, ...edited.failed, ...viewPlan.refused, ...viewed.failed],
         duration: Date.now() - startTime,
+        ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
+        ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
       };
     }
 
@@ -405,6 +450,8 @@ export class SyncOrchestrator {
     const refusedCreates = this.placement.refusedCreates(filtered, view.lookup);
     const refusedMoves = this.placement.refusedMoves(filtered, view);
     const refusedFailures: FailedOperation[] = [
+      ...sidecarPlan.refused,
+      ...viewPlan.refused,
       ...[...refusedCreates].map(([path, error]) => ({
         path,
         operation: "create" as const,
@@ -418,9 +465,16 @@ export class SyncOrchestrator {
       if (error) refusedFailures.push({ path: move.to, operation: "move", error });
       else movableFolders.push(move);
     }
-    const applicable = filtered.filter(
+    const placeable = filtered.filter(
       (c) => !refusedCreates.has(c.path) && !refusedMoves.has(c.path),
     );
+    // 볼트에서 바꾼 속성 이름 — 행보다 먼저 Notion 의 열 이름을 바꾼다. Notion 에 옮길 수 없는 이름 바꾸기의 행은
+    // 올리지 않는다 — 올리면 옛 열을 비운다(ADR-045).
+    const renames = await this.vaultRenames.plan(placeable);
+    refusedFailures.push(...renames.refused);
+    const renameRefused = new Set(renames.refused.map((f) => f.path));
+    const applicable = placeable.filter((c) => !renameRefused.has(c.path));
+    const plannedRenames = renames.planned.map(({ folder, from, to }) => ({ folder, from, to }));
 
     if (options?.dryRun) {
       // deleteSync 가 꺼져 있으면 실제 push 는 지운 노트를 대기로 적기만 한다 — 지우지도 세지도
@@ -454,6 +508,9 @@ export class SyncOrchestrator {
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
+        ...(plannedRenames.length > 0 ? { renamedProperties: plannedRenames } : {}),
+        ...(plannedEdits.length > 0 ? { schemaEdits: plannedEdits } : {}),
+        ...(plannedViews.length > 0 ? { viewEdits: plannedViews } : {}),
       };
     }
 
@@ -462,11 +519,23 @@ export class SyncOrchestrator {
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
+    const edited = await this.sidecarEdits.apply(sidecarPlan.planned);
+    failed.push(...edited.failed);
+    const viewed = await this.viewEdits.apply(viewPlan.planned);
+    failed.push(...viewed.failed);
+    const renamed = await this.vaultRenames.apply(renames.planned);
+    failed.push(...renamed.failed);
+    if (renamed.applied.length > 0 || edited.applied.length > 0) this.rowSchemas.clear();
+    const renameFailed = new Set(renamed.failed.map((f) => f.path));
+    // 이름 바꾸기 말고는 바뀐 것이 없는 행은 올릴 것이 없다.
+    const pushing = applicable.filter(
+      (c) => !renamed.settled.has(c.path) && !renameFailed.has(c.path),
+    );
     // 볼트에서 지웠지만 Notion 에서 지우지 않은 노트 — 다음 pull 이 되살린다고 알린다(D8).
     const unsentDeletions: string[] = [];
 
     let completed = 0;
-    const total = movableFolders.length + applicable.length;
+    const total = movableFolders.length + pushing.length;
 
     // 옮긴 폴더의 페이지부터 — 그 아래로 옮긴 노트의 부모다.
     counts.moved += await this.pusher.pushFolderMoves(movableFolders, failed, (to) =>
@@ -520,14 +589,10 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.placement.prepareFolders(
-      applicable,
-      firstAttempt,
-      !options?.paths,
-    );
+    const pushedEarly = await this.placement.prepareFolders(pushing, firstAttempt, !options?.paths);
     await this.completeDatabaseSchemas();
     await runPool(
-      applicable.filter((c) => !pushedEarly.has(c.path)),
+      pushing.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
       { concurrency: this.config.advanced.concurrency, signal: options?.signal },
     );
@@ -685,6 +750,9 @@ export class SyncOrchestrator {
       duration: Date.now() - startTime,
       readOnlySkipped: this.pusher.takeReadOnlySkips(),
       ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
+      ...(renamed.applied.length > 0 ? { renamedProperties: renamed.applied } : {}),
+      ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
+      ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
     };
   }
 
@@ -784,6 +852,9 @@ export class SyncOrchestrator {
     this.puller.beginPull();
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.databaseSyncer.takeSchemaFollowed();
+    this.databaseSyncer.takeHeldSidecars();
+    this.databaseSyncer.takeHeldBases();
     const emptyResult: PullResult = {
       created: 0,
       updated: 0,
@@ -892,6 +963,9 @@ export class SyncOrchestrator {
       await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
+      const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
+      const heldSidecars = this.databaseSyncer.takeHeldSidecars();
+      const heldBases = this.databaseSyncer.takeHeldBases();
       const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
@@ -922,6 +996,9 @@ export class SyncOrchestrator {
         deleted,
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+        ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
+        ...(heldSidecars.length > 0 ? { heldSidecars } : {}),
+        ...(heldBases.length > 0 ? { heldBases } : {}),
         conflicts,
         writtenPaths,
         failed,
@@ -1070,6 +1147,7 @@ export class SyncOrchestrator {
         conflicts,
         {
           forceRediscovery: options?.force === true,
+          rescanRoot: this.detector.rootChanged(),
           paths: options?.paths,
           progress: rowProgress,
           ledger,

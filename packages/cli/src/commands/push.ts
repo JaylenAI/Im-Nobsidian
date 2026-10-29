@@ -9,12 +9,15 @@ import {
   duration,
   readOnlySkipLines,
   unsentDeletionLines,
+  renamedPropertyLines,
+  schemaEditLines,
+  viewEditLines,
   failedItem,
   dimText,
   completionHeader,
   failedCountText,
 } from "../utils/format.js";
-import { enableJsonMode, printJson, pushJson } from "../utils/json-output.js";
+import { enableJsonMode, printJson, pushDbChangeCount, pushJson } from "../utils/json-output.js";
 import { openVaultFs, vaultArgPath } from "../utils/vault.js";
 
 export const pushCommand = new Command("push")
@@ -63,12 +66,21 @@ export const pushCommand = new Command("push")
       const failedCount = result.failed.length;
       console.log(`\n  ${completionHeader("Push", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted, result.moved)}  ${failedCountText(failedCount)}`,
+        `  ${summary(result.created, result.updated, result.deleted, result.moved, pushDbChangeCount(result))}  ${failedCountText(failedCount)}`,
       );
       if (result.createdDatabases) {
         console.log(`  ${options.dryRun ? "만들 DB" : "만든 DB"} ${result.createdDatabases}`);
       }
       console.log(`  ${duration(result.duration)}`);
+      for (const line of renamedPropertyLines(result.renamedProperties, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of schemaEditLines(result.schemaEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of viewEditLines(result.viewEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       for (const line of readOnlySkipLines(result.readOnlySkipped, options.dryRun))
         console.log(`  ${line}`);
       for (const line of unsentDeletionLines(result.unsentDeletions, options.dryRun)) {
