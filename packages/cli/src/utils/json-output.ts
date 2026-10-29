@@ -82,6 +82,19 @@ export interface PullJson {
   readonly remoteScan: RemoteScanInfo | null;
 }
 
+/**
+ * 노트가 아니라 Notion DB 에 올린 것 — 만든 DB · 바꾼 열 이름 · 사이드카 속성 · `.base` 보기. 보기만 고친 push 가
+ * 요약 줄에 「no changes」 로 나왔다(2026-10-29 실측) — 노트 수만 셌다.
+ */
+export function pushDbChangeCount(result: PushResult): number {
+  return (
+    (result.createdDatabases ?? 0) +
+    (result.renamedProperties?.length ?? 0) +
+    (result.schemaEdits?.length ?? 0) +
+    (result.viewEdits?.length ?? 0)
+  );
+}
+
 export function pushJson(result: PushResult): PushJson {
   return {
     created: result.created,
@@ -89,14 +102,7 @@ export function pushJson(result: PushResult): PushJson {
     deleted: result.deleted,
     moved: result.moved,
     churn:
-      result.created +
-      result.updated +
-      result.deleted +
-      result.moved +
-      (result.createdDatabases ?? 0) +
-      (result.renamedProperties?.length ?? 0) +
-      (result.schemaEdits?.length ?? 0) +
-      (result.viewEdits?.length ?? 0),
+      result.created + result.updated + result.deleted + result.moved + pushDbChangeCount(result),
     createdDatabases: result.createdDatabases ?? 0,
     failed: result.failed,
     readOnlySkipped: result.readOnlySkipped ?? [],
