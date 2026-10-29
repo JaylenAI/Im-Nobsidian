@@ -363,6 +363,19 @@ Property changes travel both ways (since v0.13.0, [ADR-045](docs/02-architecture
   The title property can't be deleted, retyped or added, and databases with several data sources aren't edited this way.
   Only sidecars this vault pulled are applied — one copied from another vault still makes a new database (ADR-036).
 
+### Editing a database's views
+
+Edit a view in Obsidian — rename it, reorder or hide columns, change its sort or filter — and push: the matching Notion view
+is updated (since v0.13.0, [ADR-046](docs/02-architecture/adr/046-base-view-push.md)). Pull keeps the edited `.base` until
+everything in it has gone up, then rewrites it.
+
+- Filters are translated only when every condition has a Notion equivalent (text, number, checkbox, select, status,
+  multi-select, date, and the relative dates Notion has — `today()` ± `"1d"` · `"7d"` · `"1M"`, past / next week, month or
+  year — empty / not empty, and / or / not up to two levels). Otherwise the
+  filter is left as it is in Notion and push tells you why.
+- A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time, and views added
+  or removed in the vault, aren't sent — change those in Notion.
+
 ## Several Notion Workspaces in One Vault
 
 Each connection owns one folder of the vault and keeps its own settings and state in that folder's
