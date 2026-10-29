@@ -42,6 +42,7 @@ import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { getLogger } from "../utils/logger.js";
 import { withDeadline } from "../utils/deadline.js";
 import {
+  isEmptyFrontmatterValue,
   replaceFrontmatterLines,
   sameFrontmatterValue,
   snapshotFrontmatter,
@@ -709,10 +710,13 @@ export class DatabaseSyncer {
 
     const raw = rowProperties(page);
     const keys = this.staleKeys(splitFrontmatter(local).data, raw, refreshed);
-    // 고를 때 견준 값 그대로 적는다 — 다음 pull 이 같은 값으로 견줘 다시 고르지 않는다.
+    // 고를 때 견준 값 그대로 적는다 — 다음 pull 이 같은 값으로 견줘 다시 고르지 않는다. 빈 값은 행을 받을 때처럼
+    // 적지 않는다 — 받은 속성에 없는 키는 합치기가 지운다(지운 옵션의 행이 `상태: null` 이 되지 않게).
     const fresh = this.propertyMapper.fromNotionProperties(raw);
     const pulled = Object.fromEntries(
-      keys.filter((key) => Object.hasOwn(fresh, key)).map((key) => [key, fresh[key]]),
+      keys
+        .filter((key) => Object.hasOwn(fresh, key) && !isEmptyFrontmatterValue(fresh[key]))
+        .map((key) => [key, fresh[key]]),
     );
     const lines = keys.length > 0 ? mergeRowFrontmatter(local, pulled, new Set(keys)) : null;
     const content = lines === null ? null : replaceFrontmatterLines(local, lines);

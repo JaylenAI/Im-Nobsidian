@@ -1,6 +1,7 @@
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { DatabaseMeta } from "../notion/client.js";
 import { RANGE_END_SUFFIX, mayHaveRangeEnd } from "../notion/property-mapper.js";
+import { computeHash } from "../utils/hash.js";
 import { compactNotionId } from "../utils/id.js";
 
 /**
@@ -10,9 +11,12 @@ import { compactNotionId } from "../utils/id.js";
  */
 export const DB_SCHEMAS_META_KEY = "db_schemas";
 
-/** 한 data source 의 속성 — 속성 id → 이름 · 타입. 제목 속성은 뺀다(행 노트에서는 `title` 키다). */
+/**
+ * 한 data source 의 속성 — 속성 id → 이름 · 타입 · 값을 정하는 설정의 지문({@link valuesOf}). 제목 속성은 뺀다(행
+ * 노트에서는 `title` 키다). 지문이 없는 것은 0.13 이전 pull 이 적은 기록이다.
+ */
 export type SourceSchema = Readonly<
-  Record<string, { readonly name: string; readonly type: string }>
+  Record<string, { readonly name: string; readonly type: string; readonly values?: string }>
 >;
 
 /** DB 의 data source(하이픈 없는 id) → 그 소스의 속성. 속성 id 는 소스마다 따로 붙는다. */
@@ -24,7 +28,7 @@ export interface SchemaChange {
   readonly renamed: ReadonlyMap<string, string>;
   /** Notion 에서 지운 속성의 키. */
   readonly removed: ReadonlySet<string>;
-  /** 새로 생기거나 타입이 바뀐 속성의 키 — 행이 그대로여도 값을 다시 받는다. */
+  /** 새로 생기거나 타입 · 값을 정하는 설정이 바뀐 속성의 키 — 행이 그대로여도 값을 다시 받는다. */
   readonly refreshed: ReadonlySet<string>;
 }
 
@@ -58,14 +62,37 @@ export function sourceKeyOf(page: { readonly parent?: unknown }, databaseId: str
 }
 
 function schemaOf(properties: Readonly<Record<string, unknown>>): SourceSchema {
-  const schema: Record<string, { name: string; type: string }> = {};
+  const schema: Record<string, { name: string; type: string; values?: string }> = {};
   for (const [name, raw] of Object.entries(properties)) {
-    const prop = raw as { id?: unknown; type?: unknown } | null;
-    if (typeof prop?.id !== "string" || typeof prop.type !== "string") continue;
-    if (prop.type === "title") continue;
-    schema[prop.id] = { name, type: prop.type };
+    const prop = raw as Record<string, unknown> | null;
+    if (typeof prop?.["id"] !== "string" || typeof prop["type"] !== "string") continue;
+    if (prop["type"] === "title") continue;
+    const values = valuesOf(prop["type"], prop[prop["type"]]);
+    schema[prop["id"]] = { name, type: prop["type"], ...(values ? { values } : {}) };
   }
   return schema;
+}
+
+/**
+ * 행의 값을 정하는 설정의 지문 — 선택 옵션의 이름 · 수식 · 롤업. Notion 은 옵션을 지우거나 이름을 바꾸면 그 값을 가진
+ * 행의 값을 비우거나 바꾸고, 수식 · 롤업을 바꾸면 모든 행의 값이 바뀐다. 그래도 행의 수정 시각은 그대로다(2026-10-29
+ * 실측 — 사이드카로 옵션을 지운 뒤 다음 pull 이 그 행을 받지 않아 볼트에 옛 값이 남았다). 그 밖의 설정(색 · 숫자
+ * 형식)은 받는 값을 바꾸지 않는다.
+ */
+function valuesOf(type: string, config: unknown): string | undefined {
+  const c = (config ?? {}) as Record<string, unknown>;
+  let decides: unknown;
+  if (type === "select" || type === "multi_select" || type === "status") {
+    const options = Array.isArray(c["options"]) ? (c["options"] as Array<{ name?: unknown }>) : [];
+    decides = options.map((o) => String(o?.name ?? "")).sort();
+  } else if (type === "formula") {
+    decides = c["expression"] ?? null;
+  } else if (type === "rollup") {
+    decides = [c["relation_property_id"], c["rollup_property_id"], c["function"]];
+  } else {
+    return undefined;
+  }
+  return computeHash(JSON.stringify(decides)).slice(0, 16);
 }
 
 /** 지난번에 본 속성과 지금 속성을 id 로 견준다. */
@@ -88,7 +115,12 @@ export function diffSourceSchema(before: SourceSchema, after: SourceSchema): Sch
         renamed.set(old.name + RANGE_END_SUFFIX, now.name + RANGE_END_SUFFIX);
       }
     }
-    if (now.type !== old.type) for (const key of withEnd(now.name, now.type)) refreshed.add(key);
+    // 0.13 이전 기록에는 지문이 없다 — 견줄 수 없는 것을 바뀌었다고 보면 처음 pull 이 모든 DB 의 행을 견준다.
+    const revalued =
+      old.values !== undefined && now.values !== undefined && old.values !== now.values;
+    if (now.type !== old.type || revalued) {
+      for (const key of withEnd(now.name, now.type)) refreshed.add(key);
+    }
   }
   for (const [id, now] of Object.entries(after)) {
     if (!before[id]) for (const key of withEnd(now.name, now.type)) refreshed.add(key);

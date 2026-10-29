@@ -251,6 +251,7 @@ export function diffSidecarProperties(
     retyped: [] as Array<readonly [string, string]>,
     redefined: [] as string[],
   };
+  const droppedOptions: Array<readonly [string, readonly string[]]> = [];
 
   const names = new Set<string>();
   const seenIds = new Set<string>();
@@ -289,6 +290,8 @@ export function diffSidecarProperties(
       }
       change[prop.type] = definitionOf(prop, old);
       edit.redefined.push(prop.name);
+      const dropped = (old.options ?? []).filter((name) => !(prop.options ?? []).includes(name));
+      if (dropped.length > 0) droppedOptions.push([prop.name, dropped]);
     }
     if (Object.keys(change).length > 0) payload[old.id] = change;
   }
@@ -303,7 +306,11 @@ export function diffSidecarProperties(
   if (kept >= 2 && edit.removed.length === kept && edit.added.length === 0) {
     return fail("제목 말고 모든 속성을 지우는 것은 받지 않습니다 — 정말이면 Notion 에서 지우세요");
   }
-  return { ok: true, payload, edit };
+  return {
+    ok: true,
+    payload,
+    edit: droppedOptions.length > 0 ? { ...edit, droppedOptions } : edit,
+  };
 }
 
 /** 보낼 타입별 설정 — 옵션 이름만 고쳤으면 그 이름으로, 지난 옵션의 색은 그대로. */

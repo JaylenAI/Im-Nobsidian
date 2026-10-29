@@ -201,6 +201,24 @@ describe("schemaEditLines · heldSidecarLines — 사이드카에서 고친 속�
     ).toEqual([
       "✓ 사이드카에서 고친 속성을 Notion 에 올렸습니다 — 할 일/할 일.notion.json: 더함 마감 · 지움 메모 · 이름 점수 → 점수표 · 타입 상태 → select · 설정 두배",
     ]);
+    expect(
+      schemaEditLines(
+        [
+          {
+            path: "a.notion.json",
+            added: [],
+            removed: [],
+            renamed: [],
+            retyped: [],
+            redefined: ["상태"],
+            droppedOptions: [["상태", ["끝"]]],
+          },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "✓ 사이드카에서 고친 속성을 Notion 에 올립니다 — a.notion.json: 설정 상태 · 상태 옵션 지움 끝(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)",
+    ]);
     expect(heldSidecarLines(["할 일/할 일.notion.json"])).toEqual([
       "⚠ 고친 사이드카 1개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:",
       "  할 일/할 일.notion.json",
