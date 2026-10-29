@@ -46,12 +46,15 @@ export function seenSchemaOf(meta: DatabaseMeta): DatabaseSchemaSeen | null {
   return Object.keys(seen).length > 0 ? seen : null;
 }
 
+/** 행이 사는 data source — 부모가 data source 가 아니면(옛 DB) null. */
+export function dataSourceIdOf(page: { readonly parent?: unknown }): string | null {
+  const parent = page.parent as { type?: string; data_source_id?: string } | undefined;
+  return parent?.type === "data_source_id" && parent.data_source_id ? parent.data_source_id : null;
+}
+
 /** 행이 사는 data source — {@link seenSchemaOf} 의 키. 옛 DB 의 행은 DB id. */
 export function sourceKeyOf(page: { readonly parent?: unknown }, databaseId: string): string {
-  const parent = page.parent as { type?: string; data_source_id?: string } | undefined;
-  return compactNotionId(
-    parent?.type === "data_source_id" && parent.data_source_id ? parent.data_source_id : databaseId,
-  );
+  return compactNotionId(dataSourceIdOf(page) ?? databaseId);
 }
 
 function schemaOf(properties: Readonly<Record<string, unknown>>): SourceSchema {
