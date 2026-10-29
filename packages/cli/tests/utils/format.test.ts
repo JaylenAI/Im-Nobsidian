@@ -29,6 +29,7 @@ import {
   readOnlySkipLines,
   remoteDeletionHint,
   restoredLines,
+  schemaFollowedLines,
   unsentDeletionLines,
   remoteScanLines,
 } from "../../src/utils/format.js";
@@ -162,5 +163,26 @@ describe("거절한 로컬 삭제 (D8)", () => {
     expect(lines[lines.length - 1]).toBe("  … 외 3개");
     expect(restoredLines(undefined)).toEqual([]);
     expect(unsentDeletionLines([])).toEqual([]);
+  });
+});
+
+describe("schemaFollowedLines — Notion 에서 바뀐 속성을 행 노트에 옮긴 것 (ADR-045)", () => {
+  it("DB 마다 바꾼 이름 · 지운 속성과 노트 수, 남긴 값은 경고와 경로로", () => {
+    expect(
+      schemaFollowedLines([
+        {
+          folder: "databases/할 일",
+          renamed: [["점수", "점수표"]],
+          removed: ["메모"],
+          rows: 2,
+          kept: [{ path: "databases/할 일/가.md", key: "메모" }],
+        },
+      ]),
+    ).toEqual([
+      "✓ Notion 에서 바뀐 속성을 행 노트 2개에 옮겼습니다 — databases/할 일: 이름 점수 → 점수표 · 지움 메모",
+      "⚠ Notion 에서 지운 속성에 올리지 않은 값이 있어 노트에 남겼습니다 — Notion 에는 그 열이 없습니다:",
+      "  databases/할 일/가.md (메모)",
+    ]);
+    expect(schemaFollowedLines(undefined)).toEqual([]);
   });
 });

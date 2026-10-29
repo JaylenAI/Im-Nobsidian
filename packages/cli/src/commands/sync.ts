@@ -10,6 +10,7 @@ import {
   duration,
   readOnlySkipLines,
   restoredLines,
+  schemaFollowedLines,
   unsentDeletionLines,
   icons,
   dimText,
@@ -105,6 +106,7 @@ export const syncCommand = new Command("sync")
       console.log(`  ${duration(result.duration)}`);
       for (const line of readOnlySkipLines(pushResult.readOnlySkipped, options.dryRun))
         console.log(`  ${line}`);
+      for (const line of schemaFollowedLines(pullResult.schemaFollowed)) console.log(`  ${line}`);
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }

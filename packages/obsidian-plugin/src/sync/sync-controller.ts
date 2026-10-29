@@ -326,7 +326,7 @@ export class SyncController {
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
-        warning: restoredText(result),
+        warning: warnings(schemaFollowedText(result), restoredText(result)),
       }),
       (result) => this.dropPulled(result, paths),
     );
@@ -341,6 +341,7 @@ export class SyncController {
         summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
         phase: result.conflicts.length > 0 ? "conflict" : "ready",
         warning: warnings(
+          schemaFollowedText(result.pull),
           restoredText(result.pull),
           readOnlyText(result.push),
           unsentDeletionText(result.push),
@@ -801,6 +802,28 @@ function restoredText(result: PullResult): string | null {
   return (
     `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
     listedPaths(paths)
+  );
+}
+
+/**
+ * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
+ * 올리지 않은 값이 있어 남긴 노트도 함께.
+ */
+function schemaFollowedText(result: PullResult): string | null {
+  const followed = result.schemaFollowed ?? [];
+  if (followed.length === 0) return null;
+  const changes = followed.flatMap((db) => [
+    ...db.renamed.map(([from, to]) => `${from} → ${to}`),
+    ...db.removed.map((name) => `${name} 지움`),
+  ]);
+  const rows = followed.reduce((sum, db) => sum + db.rows, 0);
+  const kept = followed.flatMap((db) => db.kept.map(({ path, key }) => `${path} (${key})`));
+  return (
+    `Notion 에서 바뀐 속성을 행 노트 ${rows}개에 옮겼습니다: ` +
+    `${changes.slice(0, 3).join(", ")}${changes.length > 3 ? " …" : ""}` +
+    (kept.length > 0
+      ? `\n지운 속성에 올리지 않은 값이 있어 남겼습니다(Notion 에는 그 열이 없습니다): ${listedPaths(kept)}`
+      : "")
   );
 }
 

@@ -21,6 +21,7 @@ import {
   failedCountText,
   remoteScanLines,
   restoredLines,
+  schemaFollowedLines,
   LISTED_ITEMS,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
@@ -107,6 +108,7 @@ export const pullCommand = new Command("pull")
       if (result.restored > 0) {
         console.log(`  ${icons.success} ${chalk.yellow(`${result.restored} restored`)}`);
       }
+      for (const line of schemaFollowedLines(result.schemaFollowed)) console.log(`  ${line}`);
       for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }

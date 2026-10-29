@@ -4,6 +4,7 @@ import type {
   ProgressItem,
   ReadOnlySkip,
   RemoteScanInfo,
+  SchemaFollowed,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -186,6 +187,35 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
     ),
     ...pathLines(paths),
   ];
+}
+
+/**
+ * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
+ * 올리지 않은 값이 있어 남긴 키는 경고로 — 그 값을 받을 열이 Notion 에 없다.
+ */
+export function schemaFollowedLines(followed: readonly SchemaFollowed[] | undefined): string[] {
+  const lines: string[] = [];
+  for (const db of followed ?? []) {
+    const parts = [
+      ...(db.renamed.length > 0
+        ? [`이름 ${db.renamed.map(([from, to]) => `${from} → ${to}`).join(", ")}`]
+        : []),
+      ...(db.removed.length > 0 ? [`지움 ${db.removed.join(", ")}`] : []),
+    ];
+    lines.push(
+      `${icons.success} Notion 에서 바뀐 속성을 행 노트 ${db.rows}개에 옮겼습니다 — ${db.folder}: ${parts.join(" · ")}`,
+    );
+  }
+  const kept = (followed ?? []).flatMap((db) => db.kept);
+  if (kept.length > 0) {
+    lines.push(
+      chalk.yellow(
+        "⚠ Notion 에서 지운 속성에 올리지 않은 값이 있어 노트에 남겼습니다 — Notion 에는 그 열이 없습니다:",
+      ),
+      ...pathLines(kept.map(({ path, key }) => `${path} (${key})`)),
+    );
+  }
+  return lines;
 }
 
 /**
