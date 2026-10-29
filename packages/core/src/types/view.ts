@@ -69,6 +69,14 @@ export interface ViewRequest {
   readonly configuration?: Record<string, unknown>;
 }
 
+/** `views.update` 에 보낼 고침 — 보내지 않은 항목은 그대로, null 은 지운다. */
+export interface ViewUpdateRequest {
+  readonly name?: string;
+  readonly filter?: unknown;
+  readonly sorts?: unknown[] | null;
+  readonly configuration?: Record<string, unknown>;
+}
+
 export interface DatabaseViewsConfig {
   readonly databaseId: string;
   readonly databaseName?: string;

@@ -170,6 +170,20 @@ export interface PushResult {
   readonly renamedProperties?: readonly PropertyRename[];
   /** 볼트에서 고친 사이드카의 속성을 Notion DB 에 올린 것 — dry-run 은 올릴 것(ADR-045). 없으면 생략. */
   readonly schemaEdits?: readonly SchemaEdit[];
+  /** 볼트에서 고친 `.base` 보기를 Notion 보기에 올린 것(ADR-046) — dry-run 이면 올릴 것. */
+  readonly viewEdits?: readonly ViewEdit[];
+}
+
+/** 고친 `.base` 의 보기 하나가 Notion 보기에 한 일 — {@link PushResult.viewEdits}. */
+export interface ViewEdit {
+  /** `.base` 경로. */
+  readonly path: string;
+  /** 보기 이름(바꿨으면 새 이름). */
+  readonly view: string;
+  /** 이름을 바꿨으면 옛 이름. */
+  readonly from?: string;
+  /** 올린 것 — 이름 · 열 · 정렬 · 필터. */
+  readonly changed: readonly ("name" | "columns" | "sort" | "filter")[];
 }
 
 /** 고친 사이드카 하나가 Notion DB 에 한 일 — {@link PushResult.schemaEdits}. */
@@ -265,6 +279,11 @@ export interface PullResult {
    * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
    */
   readonly heldSidecars?: readonly string[];
+  /**
+   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올린다(ADR-046).
+   * 없으면 생략.
+   */
+  readonly heldBases?: readonly string[];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). 없으면 생략. */
   readonly schemaFollowed?: readonly SchemaFollowed[];
   readonly conflicts: Conflict[];

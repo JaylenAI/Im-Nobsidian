@@ -5,6 +5,7 @@ import { DEFAULT_CONFIG } from "../../src/types/config.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { DbBaseFiles } from "../../src/sync/db-base-files.js";
 import { remoteBodyFingerprint } from "../../src/sync/remote-observation.js";
 import { mockDatabaseMeta, settledObservation } from "../helpers/mock-orchestrator.js";
 
@@ -1609,6 +1610,72 @@ describe("DatabaseSyncer", () => {
       mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("Table", "Board"));
       await syncer.pullAll();
       expect(files.get(BASE)).toContain("Board");
+    });
+
+    describe("Obsidian 이 다시 쓴 .base — 머리 주석이 없어도 pull 이 쓴 파일이다(ADR-046)", () => {
+      let meta: Map<string, string>;
+      /** Obsidian 은 보기를 고치면 머리 주석을 지우고 다시 쓴다(1.13.7 실측). */
+      const rewrite = (text: string) =>
+        text
+          .split("\n")
+          .filter((line) => !line.startsWith("#"))
+          .join("\n")
+          .replace("name: Table", "name: 내 표");
+
+      beforeEach(() => {
+        meta = new Map();
+        mockStateDb.getMeta.mockImplementation((k: string) => meta.get(k) ?? null);
+        mockStateDb.setMeta.mockImplementation((k: string, v: string) => void meta.set(k, v));
+      });
+
+      it("붙잡아 두고 알리며, 보기 기록은 pull 이 쓴 때의 것을 지킨다", async () => {
+        await syncer.pullAll();
+        const recorded = new DbBaseFiles(mockStateDb as never).get("db-123")!;
+        expect(recorded.views?.map((v) => [v.viewId, v.name])).toEqual([["v0", "Table"]]);
+        syncer.takeHeldBases();
+
+        const edited = rewrite(files.get(BASE)!);
+        files.set(BASE, edited);
+        mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("Table", "Board"));
+        await syncer.pullAll();
+
+        expect(files.get(BASE)).toBe(edited);
+        expect(syncer.takeHeldBases()).toEqual([BASE]);
+        expect(new DbBaseFiles(mockStateDb as never).get("db-123")).toEqual(recorded);
+      });
+
+      it("push 가 고친 것을 모두 올려 기록이 그 파일이 되면 다음 pull 이 Notion 의 모습으로 다시 쓴다", async () => {
+        await syncer.pullAll();
+        const edited = rewrite(files.get(BASE)!);
+        files.set(BASE, edited);
+        const bases = new DbBaseFiles(mockStateDb as never);
+        bases.set("db-123", { ...bases.get("db-123")!, hash: computeHash(edited) });
+
+        mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(views("내 표"));
+        await syncer.pullAll();
+
+        expect(files.get(BASE)).toMatch(/^# Auto-generated/);
+        expect(files.get(BASE)).toContain("내 표");
+        expect(syncer.takeHeldBases()).toEqual([]);
+      });
+
+      it("보기를 기록하지 않은 경로의 머리 없는 .base 는 직접 만든 것이다 — 기록에 보기를 남기지 않는다", async () => {
+        files.set(BASE, "views:\n  - type: table\n    name: 내 표\n");
+
+        await syncer.pullAll();
+
+        expect(files.get(BASE)).toBe("views:\n  - type: table\n    name: 내 표\n");
+        expect(new DbBaseFiles(mockStateDb as never).get("db-123")?.views).toBeUndefined();
+      });
+
+      it("Notion 보기를 받지 못해 기본 표를 쓴 파일은 보기를 기록하지 않는다 — 올릴 보기가 없다", async () => {
+        mockNotionClient.getDatabaseViewsConfig.mockRejectedValue(new Error("views 403"));
+
+        await syncer.pullAll();
+
+        expect(files.get(BASE)).toContain("name: Table");
+        expect(new DbBaseFiles(mockStateDb as never).get("db-123")?.views).toBeUndefined();
+      });
     });
 
     it("DB 제목이 바뀌어 옛 이름이 된 .base 도 고쳤으면 지우지 않는다", async () => {

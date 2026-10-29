@@ -53,6 +53,7 @@ import { SidecarGenerator, type SidecarAppearance } from "../view/sidecar-genera
 import { richTextToNfm } from "../converter/blocks-to-nfm.js";
 import { isGeneratedDbArtifact, selectStaleDbArtifacts } from "./stale-db-artifacts.js";
 import { DbBaseFiles, type DbBaseFile } from "./db-base-files.js";
+import { recordBaseViews } from "./base-view-record.js";
 import { SidecarBases } from "./sidecar-bases.js";
 import { sidecarPropertiesEdited } from "./sidecar-schema-edit.js";
 import {
@@ -175,6 +176,8 @@ export class DatabaseSyncer {
   private readonly sidecarBases: SidecarBases;
   /** 이번 pull 이 고쳐 둔 것이라 덮어쓰지 않은 사이드카 경로. */
   private heldSidecars = new Set<string>();
+  /** 이번 pull 이 볼트에서 고친 것이라 덮어쓰지 않은 `.base` 경로(ADR-046). */
+  private heldBases = new Set<string>();
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -806,6 +809,13 @@ export class DatabaseSyncer {
     return held;
   }
 
+  /** 고쳐 둔 것이라 덮어쓰지 않은 `.base` — 가져가면 비운다. */
+  takeHeldBases(): string[] {
+    const held = [...this.heldBases];
+    this.heldBases = new Set();
+    return held;
+  }
+
   takeSchemaFollowed(): SchemaFollowed[] {
     const followed = this.schemaFollowed;
     this.schemaFollowed = [];
@@ -974,7 +984,7 @@ export class DatabaseSyncer {
         views: [{ id: "default", name: "Table", type: "table" }],
       };
 
-      const baseContent = this.baseFileGenerator.generate({
+      const generated = this.baseFileGenerator.generateWithViews({
         databaseId: dbConfig.databaseId,
         databaseName: dbName,
         schema: schemaFull,
@@ -982,13 +992,28 @@ export class DatabaseSyncer {
         folderPath: rowsFolder ?? dbConfig.localFolder,
         rangeEnds,
       });
+      const baseContent = generated.content;
 
       const safeName = sanitizeFileName(dbName);
       const basePath = `${dbConfig.localFolder}/${safeName}${BASE_SUFFIX}`;
       const previous = this.baseFileInfo.get(dbConfig.databaseId);
       const existing = await this.vaultFs.readFile(basePath).catch(() => null);
-      let hash = computeHash(baseContent);
-      if (existing !== null && !isGeneratedDbArtifact(basePath, existing)) {
+      let record: DbBaseFile = {
+        basePath,
+        title: dbName,
+        hash: computeHash(baseContent),
+        // Notion 보기를 받지 못해 기본 표 하나를 쓴 파일은 올릴 보기가 없다.
+        ...(viewsConfig ? recordBaseViews(baseContent, generated.views, viewsConfig.views) : null),
+      };
+      // Obsidian 은 보기를 고치면 `.base` 를 다시 쓰며 머리 주석을 지운다(1.13.7 실측) — 보기를 기록해 둔 경로면
+      // 머리가 없어도 pull 이 쓴 파일이다.
+      const ours =
+        existing === null ||
+        isGeneratedDbArtifact(basePath, existing) ||
+        (previous?.basePath === basePath && previous.views !== undefined);
+      if (!ours) {
+        // 직접 만든 `.base` 의 보기는 Notion 보기에서 온 것이 아니다 — 보기를 기록하지 않아 push 도 올리지 않는다.
+        record = { basePath, title: dbName, hash: record.hash };
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
           // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
@@ -1001,13 +1026,14 @@ export class DatabaseSyncer {
         existing !== baseContent &&
         editedSince(previous, basePath, existing)
       ) {
-        // pull 이 쓴 뒤 볼트에서 고친 보기 — 덮어쓰면 고친 것이 사라진다. 기록한 해시는 그대로 둔다(계속 «고친 것»).
-        hash = previous!.hash!;
+        // pull 이 쓴 뒤 볼트에서 고친 보기 — 덮어쓰면 고친 것이 사라진다. 기록은 그대로 둔다(계속 «고친 것»).
+        // push 가 이 기록과 견줘 고친 보기를 Notion 에 올린다.
+        record = { ...previous!, title: dbName };
         this.warnEditedBase(basePath);
       } else if (existing !== baseContent) {
         await this.vaultFs.writeFile(basePath, baseContent);
       }
-      this.baseFileInfo.set(dbConfig.databaseId, { basePath, title: dbName, hash });
+      this.baseFileInfo.set(dbConfig.databaseId, record);
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
       await this.generateSidecar(
@@ -1056,10 +1082,11 @@ export class DatabaseSyncer {
 
   /** 볼트에서 고친 `.base` 를 덮어쓰거나 지우지 않았다고 한 번 알린다. */
   private warnEditedBase(path: string): void {
+    this.heldBases.add(path);
     if (this.keptUserBases.has(path)) return;
     this.keptUserBases.add(path);
     getLogger().warn(
-      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
+      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다. Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
     );
   }
 

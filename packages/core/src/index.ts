@@ -17,6 +17,7 @@ export type {
   SchemaFollowed,
   PropertyRename,
   SchemaEdit,
+  ViewEdit,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

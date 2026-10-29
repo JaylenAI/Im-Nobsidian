@@ -14,7 +14,9 @@ import {
   unsentDeletionLines,
   renamedPropertyLines,
   schemaEditLines,
+  viewEditLines,
   heldSidecarLines,
+  heldBaseLines,
   icons,
   dimText,
   completionHeader,
@@ -122,10 +124,20 @@ export const syncCommand = new Command("sync")
       for (const line of schemaEditLines(pushResult.schemaEdits, options.dryRun)) {
         console.log(`  ${line}`);
       }
+      for (const line of viewEditLines(pushResult.viewEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       // sync 의 push 가 올렸으면 붙잡아 둔 사이드카는 이제 다음 pull 이 새로 쓴다 — 올리지 못한 것만 알린다.
       for (const line of heldSidecarLines(
         (pullResult.heldSidecars ?? []).filter(
           (path) => !(pushResult.schemaEdits ?? []).some((edit) => edit.path === path),
+        ),
+      )) {
+        console.log(`  ${line}`);
+      }
+      for (const line of heldBaseLines(
+        (pullResult.heldBases ?? []).filter(
+          (path) => !(pushResult.viewEdits ?? []).some((edit) => edit.path === path),
         ),
       )) {
         console.log(`  ${line}`);

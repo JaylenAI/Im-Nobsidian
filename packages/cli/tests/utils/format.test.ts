@@ -33,6 +33,8 @@ import {
   renamedPropertyLines,
   schemaEditLines,
   heldSidecarLines,
+  viewEditLines,
+  heldBaseLines,
   unsentDeletionLines,
   remoteScanLines,
 } from "../../src/utils/format.js";
@@ -224,5 +226,27 @@ describe("schemaFollowedLines — Notion 에서 바뀐 속성을 행 노트에 �
       "  databases/할 일/가.md (메모)",
     ]);
     expect(schemaFollowedLines(undefined)).toEqual([]);
+  });
+});
+
+describe("viewEditLines · heldBaseLines — .base 에서 고친 보기 (ADR-046)", () => {
+  it("보기마다 한 일을 내부 키 없이 한 줄로, 덮어쓰지 않은 것은 경고와 경로로", () => {
+    expect(
+      viewEditLines(
+        [
+          { path: "할 일/할 일.base", view: "점수표", from: "표", changed: ["name", "columns"] },
+          { path: "할 일/할 일.base", view: "보드", changed: ["sort", "filter"] },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 표 → 점수표 (이름 · 열)",
+      "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 보드 (정렬 · 필터)",
+    ]);
+    expect(heldBaseLines(["할 일/할 일.base"])).toEqual([
+      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:",
+      "  할 일/할 일.base",
+    ]);
+    expect(heldBaseLines([])).toEqual([]);
   });
 });
