@@ -39,6 +39,7 @@ import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
 import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
+import { notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
 import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
@@ -228,10 +229,25 @@ export class SyncOrchestrator {
     propertyMapper.setWikilinkResolver(wikilinkResolver);
     this.notionClient.setWikilinkResolver(wikilinkResolver);
     this.rowSchemas = new RowSchemaCache(
-      (databaseId) => notionClient.getDatabaseSchema(databaseId),
+      async (databaseId, dataSourceId) => {
+        if (!dataSourceId) return notionClient.getDatabaseSchema(databaseId);
+        const meta = await notionClient.getDatabaseMeta(databaseId);
+        const own =
+          meta.dataSources.length > 1
+            ? meta.dataSources.find((ds) => notionIdsEqual(ds.id, dataSourceId))?.properties
+            : undefined;
+        return notionClient.getDatabaseSchema(
+          databaseId,
+          own ? { ...meta, properties: own } : meta,
+        );
+      },
       wikilinkResolver,
       () => PropertyMapper.fromConfig(config),
       async () => peopleResolverOf(await notionClient.listUsers()),
+      async (databaseId) => {
+        const sources = (await notionClient.getDatabaseMeta(databaseId)).dataSources;
+        return sources.length > 1 ? sources[0]!.id : null;
+      },
     );
     this.vaultRenames = new VaultSchemaRenames(stateDb, vaultFs, notionClient);
     this.sidecarEdits = new SidecarSchemaEdits(stateDb, vaultFs, notionClient);
