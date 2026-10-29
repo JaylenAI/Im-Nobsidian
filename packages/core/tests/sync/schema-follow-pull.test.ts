@@ -7,6 +7,7 @@ import { createDefaultPipeline } from "../../src/converter/pipeline-factory.js";
 import { computeHash } from "../../src/utils/hash.js";
 import { diffRowProperties } from "../../src/sync/row-properties.js";
 import { snapshotFrontmatter, splitFrontmatter } from "../../src/utils/frontmatter.js";
+import { SidecarBases } from "../../src/sync/sidecar-bases.js";
 
 /**
  * P3 · ADR-045 — Notion 에서 속성 이름을 바꾸거나 지우거나 더한 것이 행 노트에 온다. 행 페이지의 수정 시각은
@@ -168,6 +169,7 @@ function setup() {
   return {
     files,
     records,
+    stateDb,
     syncer,
     dbConfig,
     tracked,
@@ -352,5 +354,58 @@ describe("Notion 스키마 변경을 행 노트에 옮긴다 (ADR-045)", () => {
     await t.pull();
 
     expect(t.files.get(path)).toBe("---\ntitle: r1\nTag: '3'\nScore: a\n---\n본문\n");
+  });
+});
+
+describe("볼트에서 고친 사이드카는 pull 이 덮어쓰지 않는다 (ADR-045)", () => {
+  const SCHEMA: Schema = {
+    Name: { id: "title", type: "title" },
+    Score: { id: "w%5E", type: "rich_text" },
+  };
+  const sidecarOf = (t: ReturnType<typeof setup>) =>
+    [...t.files.keys()].find((path) => path.endsWith(".notion.json"))!;
+
+  it("pull 이 쓴 그대로면 새로 쓰고, 고쳤으면 두고 알린다 — 올린 뒤에는 다시 새로 쓴다", async () => {
+    const t = setup();
+    t.setSchema([{ id: DS1, properties: SCHEMA }]);
+    t.tracked("r1", "---\ntitle: r1\nScore: '3'\n---\n본문\n");
+    t.setPages([row("r1", { Score: text("w%5E", "3") })]);
+    await t.pull();
+    const path = sidecarOf(t);
+    expect(path).toBeDefined();
+    expect(t.syncer.takeHeldSidecars()).toEqual([]);
+
+    const edited = t.files.get(path)!.replace('"name": "Score"', '"name": "점수"');
+    t.files.set(path, edited);
+    t.setSchema([{ id: DS1, properties: { ...SCHEMA, 메모: { id: "m1", type: "rich_text" } } }]);
+    await t.pull();
+    expect(t.files.get(path)).toBe(edited);
+    expect(t.syncer.takeHeldSidecars()).toEqual([path]);
+
+    // push 가 올리고 기록을 고친 내용으로 바꾼 뒤 — 다음 pull 은 Notion 의 지금 모습으로 새로 쓴다.
+    const bases = new SidecarBases(t.stateDb as never);
+    bases.set(DB_ID, { ...bases.get(DB_ID)!, hash: computeHash(edited) });
+    await t.pull();
+    expect(t.files.get(path)).not.toBe(edited);
+    expect(t.files.get(path)).toContain('"name": "메모"');
+    expect(t.syncer.takeHeldSidecars()).toEqual([]);
+    expect(bases.get(DB_ID)!.hash).toBe(computeHash(t.files.get(path)!));
+  });
+
+  it("보기만 고친 사이드카는 올릴 것이 없어 덮어쓴다 — 붙잡아 두면 Notion 의 속성이 다시 오지 않는다", async () => {
+    const t = setup();
+    t.setSchema([{ id: DS1, properties: SCHEMA }]);
+    t.tracked("r1", "---\ntitle: r1\nScore: '3'\n---\n본문\n");
+    t.setPages([row("r1", { Score: text("w%5E", "3") })]);
+    await t.pull();
+    const path = sidecarOf(t);
+    t.files.set(path, t.files.get(path)!.replace('"views": []', '"views": [{ "name": "x" }]'));
+    expect(t.files.get(path)).toContain('"name": "x"');
+    t.setSchema([{ id: DS1, properties: { ...SCHEMA, 메모: { id: "m1", type: "rich_text" } } }]);
+
+    await t.pull();
+
+    expect(t.syncer.takeHeldSidecars()).toEqual([]);
+    expect(t.files.get(path)).toContain('"name": "메모"');
   });
 });
