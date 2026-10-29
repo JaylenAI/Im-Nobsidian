@@ -1147,6 +1147,7 @@ export class SyncOrchestrator {
         conflicts,
         {
           forceRediscovery: options?.force === true,
+          rescanRoot: this.detector.rootChanged(),
           paths: options?.paths,
           progress: rowProgress,
           ledger,
