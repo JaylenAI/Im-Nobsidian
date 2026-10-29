@@ -52,6 +52,7 @@ import {
   remoteScanInfo,
 } from "./remote-scan.js";
 import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
+import { VaultSchemaRenames } from "./schema-push.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -99,6 +100,8 @@ export class SyncOrchestrator {
   private readonly databaseSyncer: DatabaseSyncer;
   /** DB 행 push 용 — DB 마다 스키마를 읽은 매퍼. 실행마다 비운다(S-01). */
   private readonly rowSchemas: RowSchemaCache;
+  /** 볼트에서 바꾼 DB 속성 이름을 Notion 의 열 이름으로(ADR-045). */
+  private readonly vaultRenames: VaultSchemaRenames;
   // 이번 실행이 원격을 보는 기준(N-05) — push · pull · status 가 시작할 때 정한다
   // ({@link RunObservation.begin}). 원격 판정과 관측 기록이 같은 값을 쓴다.
   private readonly observation: RunObservation;
@@ -227,6 +230,7 @@ export class SyncOrchestrator {
       () => PropertyMapper.fromConfig(config),
       async () => peopleResolverOf(await notionClient.listUsers()),
     );
+    this.vaultRenames = new VaultSchemaRenames(stateDb, vaultFs, notionClient);
 
     this.drift = new RemoteDriftChecker(
       config,
@@ -418,9 +422,16 @@ export class SyncOrchestrator {
       if (error) refusedFailures.push({ path: move.to, operation: "move", error });
       else movableFolders.push(move);
     }
-    const applicable = filtered.filter(
+    const placeable = filtered.filter(
       (c) => !refusedCreates.has(c.path) && !refusedMoves.has(c.path),
     );
+    // 볼트에서 바꾼 속성 이름 — 행보다 먼저 Notion 의 열 이름을 바꾼다. Notion 에 옮길 수 없는 이름 바꾸기의 행은
+    // 올리지 않는다 — 올리면 옛 열을 비운다(ADR-045).
+    const renames = await this.vaultRenames.plan(placeable);
+    refusedFailures.push(...renames.refused);
+    const renameRefused = new Set(renames.refused.map((f) => f.path));
+    const applicable = placeable.filter((c) => !renameRefused.has(c.path));
+    const plannedRenames = renames.planned.map(({ folder, from, to }) => ({ folder, from, to }));
 
     if (options?.dryRun) {
       // deleteSync 가 꺼져 있으면 실제 push 는 지운 노트를 대기로 적기만 한다 — 지우지도 세지도
@@ -454,6 +465,7 @@ export class SyncOrchestrator {
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
+        ...(plannedRenames.length > 0 ? { renamedProperties: plannedRenames } : {}),
       };
     }
 
@@ -462,11 +474,19 @@ export class SyncOrchestrator {
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
     const failed: FailedOperation[] = [...refusedFailures];
+    const renamed = await this.vaultRenames.apply(renames.planned);
+    failed.push(...renamed.failed);
+    if (renamed.applied.length > 0) this.rowSchemas.clear();
+    const renameFailed = new Set(renamed.failed.map((f) => f.path));
+    // 이름 바꾸기 말고는 바뀐 것이 없는 행은 올릴 것이 없다.
+    const pushing = applicable.filter(
+      (c) => !renamed.settled.has(c.path) && !renameFailed.has(c.path),
+    );
     // 볼트에서 지웠지만 Notion 에서 지우지 않은 노트 — 다음 pull 이 되살린다고 알린다(D8).
     const unsentDeletions: string[] = [];
 
     let completed = 0;
-    const total = movableFolders.length + applicable.length;
+    const total = movableFolders.length + pushing.length;
 
     // 옮긴 폴더의 페이지부터 — 그 아래로 옮긴 노트의 부모다.
     counts.moved += await this.pusher.pushFolderMoves(movableFolders, failed, (to) =>
@@ -520,14 +540,10 @@ export class SyncOrchestrator {
       }
     };
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
-    const pushedEarly = await this.placement.prepareFolders(
-      applicable,
-      firstAttempt,
-      !options?.paths,
-    );
+    const pushedEarly = await this.placement.prepareFolders(pushing, firstAttempt, !options?.paths);
     await this.completeDatabaseSchemas();
     await runPool(
-      applicable.filter((c) => !pushedEarly.has(c.path)),
+      pushing.filter((c) => !pushedEarly.has(c.path)),
       firstAttempt,
       { concurrency: this.config.advanced.concurrency, signal: options?.signal },
     );
@@ -685,6 +701,7 @@ export class SyncOrchestrator {
       duration: Date.now() - startTime,
       readOnlySkipped: this.pusher.takeReadOnlySkips(),
       ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
+      ...(renamed.applied.length > 0 ? { renamedProperties: renamed.applied } : {}),
     };
   }
 

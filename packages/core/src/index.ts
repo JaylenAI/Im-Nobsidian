@@ -15,6 +15,7 @@ export type {
   ReadOnlySkip,
   PullResult,
   SchemaFollowed,
+  PropertyRename,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

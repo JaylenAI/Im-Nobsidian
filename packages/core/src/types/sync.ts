@@ -163,6 +163,19 @@ export interface PushResult {
    * 예전에는 아무 말 없이 대기로 적기만 해, 지운 파일이 다음 pull 에 말없이 돌아왔다(D8). 없으면 빈 목록 · 생략.
    */
   readonly unsentDeletions?: readonly string[];
+  /**
+   * 볼트에서 바꾼 DB 속성 이름(Obsidian 의 속성 이름 바꾸기)을 Notion 의 열 이름으로 바꾼 것 — dry-run 은 바꿀 것
+   * (ADR-045). 없으면 생략.
+   */
+  readonly renamedProperties?: readonly PropertyRename[];
+}
+
+/** 볼트에서 바꾼 DB 속성 이름 하나 — {@link PushResult.renamedProperties}. */
+export interface PropertyRename {
+  /** DB 폴더. */
+  readonly folder: string;
+  readonly from: string;
+  readonly to: string;
 }
 
 /** 노트 하나에서 올리지 않은 읽기 전용 속성. */
