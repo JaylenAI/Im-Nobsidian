@@ -206,6 +206,34 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     expect(result).toMatchObject({ created: 1, deleted: 0 });
   });
 
+  it("힌트 없이도 본문이 거의 같으면 같은 페이지로 짝짓는다 — 제목을 바꾸고 본문을 갱신한다", async () => {
+    const body =
+      "회의에서 정한 것은 다음 주까지 초안을 내고 검토를 받는 것이다.\n\n- 일정 확인\n- 담당 정하기\n";
+    await seed({ "notes/Draft.md": `# Draft\n\n${body}` });
+    const pageId = db.getByPath("notes/Draft.md")!.notionPageId!;
+
+    vault.rename("notes/Draft.md", "notes/Final.md");
+    vault.write("notes/Final.md", `# Final\n\n${body}- 회의록 공유\n`);
+    const result = await orchestrator.push();
+
+    expect(result).toMatchObject({ created: 0, moved: 1, deleted: 0, failed: [] });
+    expect(db.getByPath("notes/Final.md")!.notionPageId).toBe(pageId);
+    expect(notion.pages.get(pageId)!.title).toBe("Final");
+    expect(notion.pages.get(pageId)!.body).toContain("회의록 공유");
+    expect(notion.client.createPageWithMarkdown).not.toHaveBeenCalled();
+  });
+
+  it("본문이 비슷해도 폴더와 이름이 함께 바뀌면 짝짓지 않는다", async () => {
+    const body = "회의에서 정한 것은 다음 주까지 초안을 내고 검토를 받는 것이다.\n";
+    await seed({ "A/Draft.md": body });
+
+    vault.rename("A/Draft.md", "B/Final.md");
+    vault.write("B/Final.md", `${body}덧붙임\n`);
+    const result = await orchestrator.push();
+
+    expect(result).toMatchObject({ created: 1, moved: 0 });
+  });
+
   it("frontmatter title 로 정한 제목은 이름을 바꿔도 그대로 둔다", async () => {
     await seed({ "notes/file-name.md": "---\ntitle: 사람이 정한 제목\n---\nBody\n" });
     const page = pageOf("notes/file-name.md");

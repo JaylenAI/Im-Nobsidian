@@ -9,6 +9,7 @@ import {
   pairLocalMoves,
   pendingMoveOrigins,
   type RenameHints,
+  type UntrackedNote,
 } from "./local-moves.js";
 
 export interface FileInfo {
@@ -45,6 +46,8 @@ interface ObservedFile {
   readonly path: string;
   readonly record: SyncRecord | null;
   readonly hash: string | null;
+  /** 추적하지 않는 파일의 내용 — 이름과 내용을 함께 바꾼 노트를 짝짓는 데 쓴다. */
+  readonly text?: string;
 }
 
 /**
@@ -95,10 +98,16 @@ export class ChangeDetector {
         !this.movePending(record, moveOrigins) &&
         record.localMtime === file.mtime &&
         record.localFileSize === file.size;
+      if (unchanged) {
+        observed.push({ path: file.path, record, hash: null });
+        continue;
+      }
+      const text = await readFile(file.path);
       observed.push({
         path: file.path,
         record,
-        hash: unchanged ? null : computeHash(await readFile(file.path)),
+        hash: computeHash(text),
+        ...(record === null ? { text } : {}),
       });
     }
     return this.assemble(observed, moveOrigins, options);
@@ -113,7 +122,12 @@ export class ChangeDetector {
         !this.movePending(record, moveOrigins) &&
         Boolean(record.localMtime) &&
         record.localMtime === file.mtime;
-      return { path: file.path, record, hash: unchanged ? null : computeHash(file.content) };
+      return {
+        path: file.path,
+        record,
+        hash: unchanged ? null : computeHash(file.content),
+        ...(record === null ? { text: file.content } : {}),
+      };
     });
     return this.assemble(observed, moveOrigins, options);
   }
@@ -130,7 +144,7 @@ export class ChangeDetector {
     options: LocalScanOptions | undefined,
   ): LocalScan {
     const changes: LocalChange[] = [];
-    const untracked: Array<{ path: string; hash: string }> = [];
+    const untracked: UntrackedNote[] = [];
     const existing = new Set<string>();
 
     for (const file of observed) {
@@ -139,7 +153,13 @@ export class ChangeDetector {
       if (!hasRemotePage(record)) {
         if (record === null) {
           // 「복제」 해소의 원격 사본은 올리지 않는다 — 원격 본문이 Notion 에 한 벌 더 생긴다.
-          if (!isConflictCopyPath(file.path)) untracked.push({ path: file.path, hash: hash! });
+          if (!isConflictCopyPath(file.path)) {
+            untracked.push({
+              path: file.path,
+              hash: hash!,
+              ...(file.text !== undefined ? { text: file.text } : {}),
+            });
+          }
         } else
           changes.push({
             path: file.path,
@@ -182,6 +202,7 @@ export class ChangeDetector {
         path: record.obsidianPath,
         hash: record.contentHash,
         origin: moveOrigins.get(record.id),
+        ...(record.baseSnapshot ? { text: record.baseSnapshot.toString("utf-8") } : {}),
       })),
       untracked,
       options?.hints ?? EMPTY_RENAME_HINTS,
