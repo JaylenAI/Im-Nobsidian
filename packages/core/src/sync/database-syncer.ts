@@ -582,11 +582,18 @@ export class DatabaseSyncer {
           moves: [{ from: record.obsidianPath, to: path }, ...(children ? [children] : [])],
         });
       } else {
+        // Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 실제 pull 과 같은 판정으로 새 이름을 보인다.
+        const retitle = await this.retitledRowTarget(dbConfig.localFolder, record, page);
+        const renamed = retitle && "to" in retitle ? retitle : null;
         planned.push({
           pageId: page.id,
-          path: record.obsidianPath,
+          path: renamed?.to ?? record.obsidianPath,
           operation: "update",
           restore: action === "restore",
+          // 실제 pull 이 알리는 것과 같게 행만 — 하위 페이지 폴더는 함께 옮기지만 따로 알리지 않는다.
+          ...(renamed
+            ? { moves: [{ from: record.obsidianPath, to: renamed.to, renamed: true }] }
+            : {}),
         });
       }
     }
@@ -1606,6 +1613,43 @@ export class DatabaseSyncer {
     return hasChildren ? { from, to: stripMarkdownExtension(rowPath) } : null;
   }
 
+  /**
+   * Notion 에서 바꾼 제목으로 행 이름을 바꿀 자리(`sync.renameOnTitleChange`) — 바꿀 것이 없으면 null.
+   * 받기 · pull dry-run · status 가 같은 판정을 쓴다. 행의 하위 페이지 폴더(`행/`)도 새 이름으로 옮기며, 옮길 수
+   * 없으면 이름을 바꾸지 않는다(예전처럼 제목만 받는다) — 그 까닭을 돌려준다.
+   */
+  async retitledRowTarget(
+    localFolder: string,
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<{ to: string; children: RemoteMove | null } | { reason: string } | null> {
+    const recordPath = record.obsidianPath;
+    const title = this.notionClient.extractTitle(page);
+    if (
+      !this.config.sync.renameOnTitleChange ||
+      !isDirectDbRowPath(localFolder, recordPath) ||
+      !retitledInNotion(snapshotFrontmatter(record.baseSnapshot), null, recordPath, title) ||
+      this.stateDb.getIncompleteOpByState(record.id, "move")
+    ) {
+      return null;
+    }
+    const safeName = sanitizeFileName(title);
+    const to = resolveDbRowPath(
+      localFolder,
+      safeName,
+      page.id,
+      await this.rowPathOwners(localFolder, safeName, page.id),
+    );
+    if (to === recordPath) return null;
+    const from = stripMarkdownExtension(recordPath);
+    if (!this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
+      return { to, children: null };
+    }
+    const children = { from, to: stripMarkdownExtension(to) };
+    const blocked = await this.relocator.blocked(children);
+    return blocked ? { reason: `하위 페이지 폴더 — ${blocked}` } : { to, children };
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -1618,21 +1662,17 @@ export class DatabaseSyncer {
     // local-first 스킵/충돌이면 원위치를 보존한다. 재산정은 resolveDbRowPath 를 그대로
     // 타므로 충돌 시절 붙은 id 접미사도 새 폴더에서 자연 이름으로 되돌아온다.
     const recordPath = existingRecord?.obsidianPath;
-    let filePath: string;
     // Notion 에서 제목을 바꿨으면(sync.renameOnTitleChange) 새 이름의 자리로 — 옮기는 것은 아래 재배치와 같다.
-    const retitled =
-      !!existingRecord &&
-      !!recordPath &&
-      this.config.sync.renameOnTitleChange &&
-      isDirectDbRowPath(dbConfig.localFolder, recordPath) &&
-      retitledInNotion(
-        snapshotFrontmatter(existingRecord.baseSnapshot),
-        null,
-        recordPath,
-        this.notionClient.extractTitle(page),
-      ) &&
-      !this.stateDb.getIncompleteOpByState(existingRecord.id, "move");
-    if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath) && !retitled) {
+    const retitle =
+      existingRecord && recordPath
+        ? await this.retitledRowTarget(dbConfig.localFolder, existingRecord, page)
+        : null;
+    let filePath: string;
+    let childFolderMove: RemoteMove | null = null;
+    if (retitle && "to" in retitle) {
+      filePath = retitle.to;
+      childFolderMove = retitle.children;
+    } else if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
       filePath = recordPath;
     } else {
       filePath = resolveDbRowPath(
@@ -1642,23 +1682,12 @@ export class DatabaseSyncer {
         await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
       );
     }
-    // 행의 하위 페이지 폴더(`행/`)도 새 이름으로 — 옮길 수 없으면 이름을 바꾸지 않는다(예전처럼 제목만 받는다).
-    let childFolderMove: RemoteMove | null = null;
-    if (retitled) {
-      const from = stripMarkdownExtension(recordPath);
-      if (this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
-        childFolderMove = { from, to: stripMarkdownExtension(filePath) };
-        const blocked = await this.relocator.blocked(childFolderMove);
-        if (blocked) {
-          getLogger().warn(
-            `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꾸지 않음 (${recordPath}): 하위 페이지 폴더 — ${blocked}`,
-          );
-          filePath = recordPath;
-          childFolderMove = null;
-        }
-      }
+    if (retitle && "reason" in retitle) {
+      getLogger().warn(
+        `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꾸지 않음 (${recordPath}): ${retitle.reason}`,
+      );
     }
-    const renaming = retitled && filePath !== recordPath;
+    const renaming = retitle !== null && "to" in retitle;
     // Notion 에서 DB 안으로 옮긴 페이지가 행이 된다(ADR-047) — 폴더 노트의 폴더 · 노트 옆 자식 폴더는 행의 하위
     // 페이지 폴더(`행/`)로 함께 옮긴다. 볼트에서 옮긴 것을 아직 올리지 않았으면 볼트가 먼저다(push 가 Notion 을 옮긴다).
     const becomesRow = !!existingRecord && !!recordPath && wasPage(existingRecord);
