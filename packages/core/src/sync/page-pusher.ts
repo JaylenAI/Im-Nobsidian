@@ -79,6 +79,7 @@ import {
   type RemoteDrift,
   type RemoteDriftChecker,
 } from "./remote-drift.js";
+import { UpdateJournal } from "./update-journal.js";
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
 import { columnsAddedByMove } from "./row-move-columns.js";
 import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
@@ -149,10 +150,14 @@ export class PagePusher {
     private readonly drift: RemoteDriftChecker,
     private readonly placement: FolderPlacement,
     private readonly recovery: InterruptedSyncRecovery,
-  ) {}
+  ) {
+    this.journal = new UpdateJournal(stateDb);
+  }
 
   /** 이번 실행에서 relation 을 보내지 못한 행 — 대상 노트가 아직 Notion 에 없었다. */
   private readonly unsentRelations = new Set<string>();
+  /** 본문을 쓰다 끊긴 노트를 다음 실행이 알게 — {@link UpdateJournal}. */
+  private readonly journal: UpdateJournal;
 
   /** 이번 실행에서 페이지 ↔ 행 · 다른 DB 의 행이 된 노트({@link takePlacementChanges}). */
   private readonly placementChanges: PlacementChange[] = [];
@@ -528,15 +533,16 @@ export class PagePusher {
     // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
     // 쓰되 수정 시각을 올리지 않는다 — 원격의 제목 변경은 다음 pull 이 받는다.
     const remote = await this.livePage(record);
-    const drift: RemoteDrift = this.drift.overwritesRemote(
-      record,
-      options?.overwriteRemote === true,
-    )
-      ? "none"
-      : await this.drift.remoteDrift(record, remote);
+    const drift: RemoteDrift =
+      this.drift.overwritesRemote(record, options?.overwriteRemote === true) ||
+      this.drift.interruptedOwnWrite(record, remote, content)
+        ? "none"
+        : await this.drift.remoteDrift(record, remote);
     refuseUnpulledBody(drift, path);
     const settles = drift === "none";
 
+    const hash = computeHash(content);
+    this.journal.begin(record.id, hash);
     const pushed = await this.pushUpdatePage(record.notionPageId, conversionResult.content, path);
     let bodyFingerprint = pushed.fingerprint;
 
@@ -586,11 +592,11 @@ export class PagePusher {
       written = await this.notionClient.getPage(record.notionPageId);
     }
 
-    const hash = computeHash(content);
     const fileStat = await this.vaultFs.getFileStat(path);
     const title = extractTitle(path);
     const aliases = extractAliases(conversionResult.properties);
     this.stateDb.transaction(() => {
+      this.journal.finish(record.id);
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
@@ -1329,9 +1335,10 @@ export class PagePusher {
     const remote = await this.livePage(record);
     // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
     const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));
-    const drift: RemoteDrift = options.overwriteRemote
-      ? "none"
-      : await this.drift.remoteDrift(record, remote);
+    const drift: RemoteDrift =
+      options.overwriteRemote || this.drift.interruptedOwnWrite(record, remote, content)
+        ? "none"
+        : await this.drift.remoteDrift(record, remote);
     const against = options.overwriteRemote
       ? this.remoteRowState(mapper, remote)
       : this.baseRowState(record);
@@ -1379,6 +1386,7 @@ export class PagePusher {
         parentMode: "database",
         anchors: await this.anchorLookup(content, pageId),
       });
+      this.journal.begin(record.id, computeHash(content));
       const pushed = await this.pushUpdatePage(pageId, conversionResult.content, path);
       bodyFingerprint = pushed.fingerprint;
       let touched = await this.fillDeferredBlocks(
@@ -1444,6 +1452,7 @@ export class PagePusher {
     const hash = computeHash(snapshot);
     const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
+      this.journal.finish(record.id);
       this.stateDb.updateHash(record.id, hash, Buffer.from(snapshot, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {

@@ -13,6 +13,8 @@ import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
 import type { RunObservation } from "./run-observation.js";
 import { decorationsUnchanged } from "./page-decorations.js";
+import { UpdateJournal } from "./update-journal.js";
+import { computeHash } from "../utils/hash.js";
 
 /**
  * 지난번에 본 뒤로 원격에서 바뀐 것(N-05).
@@ -73,7 +75,29 @@ export class RemoteDriftChecker {
     private readonly databaseSyncer: DatabaseSyncer,
     private readonly rowSchemas: RowSchemaCache,
     private readonly observation: RunObservation,
-  ) {}
+  ) {
+    this.journal = new UpdateJournal(stateDb);
+  }
+
+  private readonly journal: UpdateJournal;
+
+  /**
+   * 원격이 이 노트를 쓰다 끊긴 그대로인가({@link UpdateJournal}) — push 는 마저 올리고, pull 은 받을 것이 없다고
+   * 본다.
+   * @param localContent 지금 노트 글.
+   */
+  interruptedOwnWrite(
+    record: SyncRecord,
+    remote: PageObjectResponse,
+    localContent: string,
+  ): boolean {
+    return this.journal.wroteRemote(
+      record,
+      remote,
+      computeHash(localContent),
+      this.observation.context.botUserId,
+    );
+  }
 
   /**
    * 원격이 바뀌었는지 확인하지 않고 로컬로 덮어써도 되는가 — 원격을 로컬로 맞추라는 요청이다.
