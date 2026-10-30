@@ -254,6 +254,11 @@ Obsidian 볼트                          Notion 워크스페이스
 
 대화형 모드에는 **merge** 옵션(충돌 마커를 사용한 3-way 자동 병합)이 추가됩니다. 기본 `sync.conflictStrategy`는 `manual`이며, 충돌은 표시만 되고 직접 해결하도록 남겨둡니다.
 
+`sync.conflictStrategy` 를 `merge` 로 두면(플러그인: **다른 줄을 고친 충돌은 합치기**) `pull`/`sync` 가 자동으로 합칩니다 — 지난 동기화 뒤로
+노트와 Notion 페이지가 서로 다른 줄을 고쳤으면 지난 사본을 공통 조상으로 두 변경을 합쳐(3-way) 볼트에 씁니다. `sync` 는 같은 실행에서
+합친 글을 올리고, `pull` 은 로컬 편집으로 남겨 다음 `push` 가 올립니다. 같은 줄을 둘 다 고쳤으면 `manual` 처럼 충돌로 남기고, 노트에
+충돌 표시를 넣지 않습니다.
+
 ### CLI 와 플러그인을 같은 볼트에서
 
 CLI 와 Obsidian 플러그인은 볼트마다 하나인 동기화 상태 DB(`.im-nobsidian/sync.db`)를 함께 씁니다.
@@ -311,7 +316,7 @@ CLI 와 플러그인은 함께 업데이트합니다 — 이전 버전은 잠금
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate" | "merge"
     "deleteSync": false, // true: 한쪽에서 지운 노트를 다른 쪽에서도 지움 (플러그인은 늘 켬)
     "renameOnTitleChange": false, // true: Notion 에서 바꾼 제목으로 파일 이름을 바꾸고 링크를 고침
     "fullReconcileInterval": 3600, // Notion 전체 대조 주기(초) — 0 이면 pull 마다
