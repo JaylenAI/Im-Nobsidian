@@ -269,6 +269,8 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(again).toMatchObject({ created: 0, updated: 0, deleted: 0, moved: [], failed: [] });
       expect([...vault.files.keys()].filter((path) => path.startsWith("A/"))).toEqual([]);
       expect(bases()).toEqual([moved, "B/A/mine.base"]);
+      // `.base` 임베드를 고친 x.md 는 한 번 올린다 — Notion 은 그 경로를 글자로 들고 있다.
+      expect(await sync.push()).toMatchObject({ created: 0, updated: 1, moved: 0 });
       expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0 });
     });
 
@@ -589,8 +591,8 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
           { databaseId: DB_ID, localFolder: "B/Tasks" },
         ]);
 
-        // Notion 은 이미 그 자리다 — push 가 DB 를 다시 옮기지 않는다.
-        expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
+        // Notion 은 이미 그 자리다 — push 가 DB 를 다시 옮기지 않는다. `.base` 임베드를 고친 x.md 만 올린다.
+        expect(await sync.push()).toMatchObject({ created: 0, updated: 1, moved: 0, failed: [] });
         expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
         expect(await sync.pull()).toMatchObject({ created: 0, updated: 0, moved: [], failed: [] });
       });
@@ -685,8 +687,10 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
             { databaseId: DB_ID, localFolder: "A/할-일-목록" },
           ]);
 
-          expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
+          // `.base` 임베드를 고친 노트는 올린다 — Notion 은 그 경로를 글자로 들고 있다. 노트만 가리키는 링크면 올리지 않는다.
+          expect(await sync.push()).toMatchObject({ created: 0, updated: 1, moved: 0, failed: [] });
           expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
+          expect(await sync.push()).toMatchObject({ updated: 0, failed: [] });
           expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
         });
 

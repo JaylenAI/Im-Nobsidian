@@ -3,6 +3,7 @@ import type { RemoteMove } from "../types/sync.js";
 import { computeHash } from "../utils/hash.js";
 import { rewriteLinks } from "../utils/link-rewrite.js";
 import { getLogger } from "../utils/logger.js";
+import { isMarkdownPath } from "../utils/markdown-path.js";
 import type { VaultFS } from "./vault-fs.js";
 
 /**
@@ -12,8 +13,11 @@ import type { VaultFS } from "./vault-fs.js";
  * 옮기므로 그대로 두면 `[[옛 이름]]` 과 경로로 적은 링크가 끊긴다. 이 연결이 보는 노트만 고친다 — 경로 패턴이 뺀 노트 ·
  * 다른 연결 폴더의 노트는 두지 않는다.
  *
- * 동기화된 노트(지난 사본 그대로)는 고친 글을 사본으로 적는다 — Notion 의 링크는 페이지를 가리켜 그대로이므로, 다음
- * push 가 링크만 고친 노트를 다시 올리지 않게 한다. 올리지 않은 편집이 있는 노트는 그 편집과 함께 올라간다.
+ * 동기화된 노트(지난 사본 그대로)는 노트로 가는 링크만 고쳤으면 고친 글을 사본으로 적는다 — Notion 의 링크는 페이지를
+ * 가리켜 그대로이므로, 다음 push 가 링크만 고친 노트를 다시 올리지 않게 한다. 노트가 아닌 파일(`.base` · 첨부)로 가는
+ * 링크를 고쳤으면 사본으로 적지 않아 다음 push 가 올린다 — Notion 은 그 경로를 글자로 들고 있어(`local-file` 마커), 올리지
+ * 않으면 그 페이지를 다시 받을 때 옛 경로가 돌아와 임베드가 깨진다(2026-10-30 실측). 올리지 않은 편집이 있는 노트는 그
+ * 편집과 함께 올라간다.
  */
 export class LinkUpdater {
   constructor(
@@ -38,6 +42,7 @@ export class LinkUpdater {
     if (renames.size === 0) return [];
     const before = new Set([...after].map((path) => undo(path, moves)));
     const context = { before, after, renames };
+    const noteRenames = new Map([...renames].filter(([from]) => isMarkdownPath(from)));
 
     const relinked: string[] = [];
     for (const note of notes) {
@@ -55,7 +60,10 @@ export class LinkUpdater {
         continue;
       }
       const record = this.stateDb.getByPath(note.path);
-      if (record && record.contentHash === computeHash(note.content)) {
+      const notesOnly =
+        noteRenames.size === renames.size ||
+        rewriteLinks(note.content, source, { ...context, renames: noteRenames }) === next;
+      if (record && record.contentHash === computeHash(note.content) && notesOnly) {
         this.stateDb.updateHash(record.id, computeHash(next), Buffer.from(next, "utf-8"));
         const stat = await this.vaultFs.getFileStat(note.path);
         if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
