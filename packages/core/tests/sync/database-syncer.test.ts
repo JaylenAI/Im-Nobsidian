@@ -1695,6 +1695,128 @@ describe("DatabaseSyncer", () => {
     });
   });
 
+  describe("링크드 뷰의 .base — 그 컨테이너의 보기로 원본 DB 폴더에 (P6)", () => {
+    const OWNER = createDbConfig({ databaseId: "db-123", localFolder: "databases/tasks" });
+    const LINKED = "databases/tasks/Tasks - 진행중만.base";
+    let files: Map<string, string>;
+    const linkedViews = (name: string) => ({
+      databaseId: "db-linked",
+      lastSynced: "2026-10-30T00:00:00.000Z",
+      views: [
+        {
+          id: "lv1",
+          name,
+          type: "table" as const,
+          sorts: [{ property: "Name", direction: "descending" as const }],
+        },
+      ],
+    });
+
+    beforeEach(() => {
+      files = new Map();
+      mockNotionClient.queryAllDatabasePages.mockResolvedValue([]);
+      (mockVaultFs.readFile as any).mockImplementation(async (p: string) => {
+        const content = files.get(p);
+        if (content === undefined) throw new Error(`ENOENT: ${p}`);
+        return content;
+      });
+      (mockVaultFs.writeFile as any).mockImplementation(async (p: string, c: string) => {
+        files.set(p, c);
+      });
+      (mockVaultFs.deleteFile as any).mockImplementation(async (p: string) => {
+        files.delete(p);
+      });
+      (mockVaultFs.exists as any).mockImplementation(async (p: string) => files.has(p));
+      (mockVaultFs.listNonMarkdownFiles as any).mockImplementation(async () =>
+        [...files.keys()].map((path) => ({ path })),
+      );
+      mockNotionClient.getDatabaseViewsConfig.mockImplementation(async (id: string) =>
+        id !== "db-123"
+          ? linkedViews("진행중만")
+          : {
+              databaseId: id,
+              databaseName: "Tasks",
+              lastSynced: "2026-10-30T00:00:00.000Z",
+              views: [{ id: "v0", name: "Table", type: "table" as const }],
+            },
+      );
+    });
+
+    it("원본 제목 - 첫 보기 이름으로, 원본 폴더를 가리키게 쓰고 원본과 이어 기록한다 — 사이드카는 쓰지 않는다", async () => {
+      await syncer.pullAll();
+
+      expect(await syncer.pullLinkedView("db-linked", OWNER)).toBe("written");
+
+      expect(files.get(LINKED)).toContain('file.folder == "databases/tasks"');
+      expect(files.get(LINKED)).toContain("진행중만");
+      expect([...files.keys()].filter((p) => p.endsWith(".notion.json"))).toEqual([
+        "databases/tasks/Tasks.notion.json",
+      ]);
+      const bases = syncer.baseFileInfo;
+      expect(bases.get("db-linked")).toMatchObject({ basePath: LINKED, linkedTo: "db123" });
+      expect(bases.linkedBasesOf("db-123")).toEqual([LINKED]);
+      expect(bases.linkedContainerAt(LINKED)).toBe("dblinked");
+    });
+
+    it("원본 DB 를 다시 받아도 링크드 뷰의 .base 를 옛 산출물로 지우지 않는다", async () => {
+      await syncer.pullAll();
+      await syncer.pullLinkedView("db-linked", OWNER);
+
+      await syncer.pullAll();
+
+      expect(files.has(LINKED)).toBe(true);
+    });
+
+    it("보기 이름을 바꾸면 옛 .base 를 치우고 새 이름으로 쓴다 — 넣은 노트의 임베드를 고치게 알린다", async () => {
+      await syncer.pullAll();
+      await syncer.pullLinkedView("db-linked", OWNER);
+      syncer.takeRenamedRows();
+
+      mockNotionClient.getDatabaseViewsConfig.mockResolvedValue(linkedViews("끝난 것"));
+      await syncer.pullLinkedView("db-linked", OWNER);
+
+      expect(files.has(LINKED)).toBe(false);
+      expect(files.has("databases/tasks/Tasks - 끝난 것.base")).toBe(true);
+      expect(syncer.takeRenamedRows().applied).toEqual([
+        { from: LINKED, to: "databases/tasks/Tasks - 끝난 것.base" },
+      ]);
+    });
+
+    it("Notion 에서 지운 링크드 뷰는 .base 를 치우고 기록을 잊는다 — 볼트에서 고쳤으면 둔다", async () => {
+      await syncer.pullAll();
+      await syncer.pullLinkedView("db-linked", OWNER);
+      const trashed = { ...mockDatabaseMeta("db-linked"), inTrash: true as const };
+      mockNotionClient.getDatabaseMeta.mockResolvedValueOnce(trashed);
+
+      expect(await syncer.pullLinkedView("db-linked", OWNER)).toBe("gone");
+      expect(files.has(LINKED)).toBe(false);
+      expect(syncer.baseFileInfo.get("db-linked")).toBeUndefined();
+
+      await syncer.pullLinkedView("db-linked", OWNER);
+      files.set(LINKED, `${files.get(LINKED)!}\n# 볼트에서 더한 줄\n`);
+      mockNotionClient.getDatabaseMeta.mockResolvedValueOnce(trashed);
+      expect(await syncer.pullLinkedView("db-linked", OWNER)).toBe("gone");
+      expect(files.has(LINKED)).toBe(true);
+    });
+
+    it("보기를 받지 못하면 쓰지 않는다 — 원본과 같은 기본 표가 하나 더 생기지 않게", async () => {
+      mockNotionClient.getDatabaseViewsConfig.mockRejectedValue(new Error("views 403"));
+
+      expect(await syncer.pullLinkedView("db-linked", OWNER)).toBe("failed");
+      expect([...files.keys()].filter((p) => p.endsWith(".base"))).toEqual([]);
+    });
+
+    it("같은 이름을 다른 링크드 뷰가 쓰고 있으면 컨테이너 id 앞 네 자리를 붙인다", async () => {
+      await syncer.pullAll();
+      await syncer.pullLinkedView("db-linked", OWNER);
+
+      await syncer.pullLinkedView("db-other", OWNER);
+
+      expect(files.has("databases/tasks/Tasks - 진행중만 (dbot).base")).toBe(true);
+      expect(files.has(LINKED)).toBe(true);
+    });
+  });
+
   describe("F25 — linked view 컨테이너 행 소유 양보", () => {
     // 실측(E2E): 원본이 공유 범위에 있으면 linked view 컨테이너도 data_sources 가 채워져
     // 캐시에 원본처럼 오등록된다. 행 parent.database_id 는 항상 원본이므로 이것으로 판정한다.
@@ -1728,22 +1850,18 @@ describe("DatabaseSyncer", () => {
       expect(mockStateDb.upsert).not.toHaveBeenCalled();
     });
 
-    it("컨테이너의 .base 는 원본 폴더 필터로 재지향돼 빈 뷰가 되지 않는다", async () => {
+    it("컨테이너의 폴더에는 .base 를 쓰지 않는다 — 링크드 뷰의 .base 는 원본 폴더에 따로 쓴다", async () => {
       mockNotionClient.queryAllDatabasePages.mockResolvedValue([
         linkedPage("row-1", "달리기", "db-original"),
       ]);
       const config = createDbConfig({ databaseId: "db-linked", localFolder: "루틴/습관-목록" });
 
-      await syncer.pullDatabase(config, {
-        resolveDbFolder: () => "루틴/목록",
-      });
+      await syncer.pullDatabase(config, { resolveDbFolder: () => "루틴/목록" });
 
-      const baseWrite = (mockVaultFs.writeFile as any).mock.calls.find((c: any[]) =>
+      const baseWrites = (mockVaultFs.writeFile as any).mock.calls.filter((c: any[]) =>
         String(c[0]).endsWith(".base"),
       );
-      expect(baseWrite).toBeDefined();
-      expect(baseWrite![0]).toBe("루틴/습관-목록/Tasks.base");
-      expect(baseWrite![1]).toContain('file.folder == "루틴/목록"');
+      expect(baseWrites).toEqual([]);
     });
 
     it("원본 폴더를 모르면(미발견) 유일한 접근 통로이므로 기존대로 행을 소유한다", async () => {

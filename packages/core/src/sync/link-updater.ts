@@ -49,32 +49,91 @@ export class LinkUpdater {
       const source = { from: undo(note.path, moves), to: note.path };
       const next = rewriteLinks(note.content, source, context);
       if (next === note.content) continue;
-      try {
-        await this.vaultFs.writeFile(note.path, next);
-      } catch (error) {
-        getLogger().warn(
-          `[Im-Nobsidian] 옮긴 노트를 가리키던 링크를 고치지 못함 (${note.path}): ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-        );
-        continue;
-      }
-      const record = this.stateDb.getByPath(note.path);
       const notesOnly =
         noteRenames.size === renames.size ||
         rewriteLinks(note.content, source, { ...context, renames: noteRenames }) === next;
-      if (record && record.contentHash === computeHash(note.content) && notesOnly) {
-        this.stateDb.updateHash(record.id, computeHash(next), Buffer.from(next, "utf-8"));
-        const stat = await this.vaultFs.getFileStat(note.path);
-        if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
-      }
-      relinked.push(note.path);
+      if (await this.rewrite(note, next, notesOnly)) relinked.push(note.path);
     }
     if (relinked.length > 0) {
       getLogger().info(`[Im-Nobsidian] 옮긴 노트를 가리키던 링크를 고침: 노트 ${relinked.length}`);
     }
     return relinked;
   }
+
+  /**
+   * 치운 `.base` 를 넣은 줄을 뺀다 — Notion 에서 지운 링크드 뷰라 pull 이 그 `.base` 를 치웠다. Notion 의 본문에는 그
+   * 블록이 이미 없다. API 로 블록을 지우면 페이지의 수정 시각이 그대로라(2026-10-30 실측) 그 페이지를 다시 받지 않아
+   * 깨진 임베드가 남았다. 동기화된 노트는 고친 글을 사본으로 적는다 — Notion 의 본문과 같아졌다.
+   *
+   * @returns 임베드를 뺀 노트.
+   */
+  async dropEmbeds(basePaths: readonly string[]): Promise<string[]> {
+    if (basePaths.length === 0) return [];
+    const gone = new Set(basePaths);
+    const dropped: string[] = [];
+    for (const note of await this.vaultFs.listMarkdownFiles()) {
+      const next = dropEmbedLines(note.content, gone);
+      if (next !== note.content && (await this.rewrite(note, next, true))) dropped.push(note.path);
+    }
+    if (dropped.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] Notion 에서 지운 링크드 뷰의 임베드를 뺌: 노트 ${dropped.length}`,
+      );
+    }
+    return dropped;
+  }
+
+  /**
+   * 고친 글을 쓴다. `matchesNotion` 이고 동기화된 노트(지난 사본 그대로)면 고친 글을 사본으로 적어 다음 push 가 올리지
+   * 않게 한다 — Notion 의 본문은 이미 그 모양이다.
+   */
+  private async rewrite(
+    note: { readonly path: string; readonly content: string },
+    next: string,
+    matchesNotion: boolean,
+  ): Promise<boolean> {
+    try {
+      await this.vaultFs.writeFile(note.path, next);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 다른 노트를 가리키던 링크를 고치지 못함 (${note.path}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return false;
+    }
+    const record = this.stateDb.getByPath(note.path);
+    if (record && record.contentHash === computeHash(note.content) && matchesNotion) {
+      this.stateDb.updateHash(record.id, computeHash(next), Buffer.from(next, "utf-8"));
+      const stat = await this.vaultFs.getFileStat(note.path);
+      if (stat) this.stateDb.updateStatCache(record.id, stat.mtime, stat.size);
+    }
+    return true;
+  }
+}
+
+/** 줄 하나가 통째로 임베드인 것 — 그룹 1 은 경로(별칭 뺌). */
+const EMBED_LINE_RE = /^!\[\[([^\]|]+)(?:\|[^\]]*)?\]\]$/;
+
+/** `gone` 을 넣은 줄과 그 앞(맨 앞이면 뒤)의 빈 줄 하나를 뺀다 — 빈 줄 두 개가 남지 않게. */
+function dropEmbedLines(content: string, gone: ReadonlySet<string>): string {
+  const kept: string[] = [];
+  let skipBlank = false;
+  for (const line of content.split("\n")) {
+    const target = EMBED_LINE_RE.exec(line.trim())?.[1];
+    if (target !== undefined && gone.has(target)) {
+      if (kept.length > 0 && kept[kept.length - 1]!.trim() === "") kept.pop();
+      else skipBlank = kept.length === 0;
+      continue;
+    }
+    if (skipBlank && line.trim() === "") {
+      skipBlank = false;
+      continue;
+    }
+    skipBlank = false;
+    kept.push(line);
+  }
+  return kept.join("\n");
 }
 
 /** 지금 경로 → 옮기기 전 경로 — 옮긴 차례를 거꾸로 되짚는다. */

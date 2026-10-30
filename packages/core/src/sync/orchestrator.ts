@@ -1058,7 +1058,10 @@ export class SyncOrchestrator {
       const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
       const heldSidecars = this.databaseSyncer.takeHeldSidecars();
       const heldBases = this.databaseSyncer.takeHeldBases();
-      const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
+      const relinked = [
+        ...(await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied])),
+        ...(await this.linkUpdater.dropEmbeds(this.databaseSyncer.takeRetiredBases())),
+      ];
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
       // 있으면 그 수정 시각 앞으로 묶는다. 경로를 좁힌 pull 은 범위 밖을 받지 않았으므로

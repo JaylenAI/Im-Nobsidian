@@ -1,7 +1,7 @@
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
-import type { DatabaseMeta, NotionClient } from "../notion/client.js";
+import { isNotionObjectNotFound, type DatabaseMeta, type NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type {
@@ -47,7 +47,7 @@ import {
   ROOT_DATABASES_FOLDER,
   parseDiscoveredDbs,
 } from "./discovered-databases.js";
-import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { compactNotionId, normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { stripMarkdownExtension } from "../utils/markdown-path.js";
@@ -196,6 +196,10 @@ export class DatabaseSyncer {
   private heldSidecars = new Set<string>();
   /** 이번 pull 이 볼트에서 고친 것이라 덮어쓰지 않은 `.base` 경로(ADR-046). */
   private heldBases = new Set<string>();
+  /** 이번 pull 이 치운 링크드 뷰의 `.base`({@link takeRetiredBases}). */
+  private readonly retiredBases = new Set<string>();
+  /** 이번 실행에서 받은 DB(줄인 id)의 기간 날짜 짝 키 — 그 DB 를 원본으로 둔 링크드 뷰의 `.base` 도 같게 쓴다. */
+  private readonly rangeEnds = new Map<string, ReadonlyMap<string, string>>();
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -343,11 +347,8 @@ export class DatabaseSyncer {
         opts.onFolderMoved(move);
       }
     }
+    // 링크드 뷰의 `.base` 는 부른 쪽이 원본 DB 폴더에 쓴다({@link pullLinkedView}) — 이 컨테이너의 폴더는 행이 없다.
     if (target.kind === "linked") {
-      if (target.wholeDbInScope) {
-        const viewsConfig = await this.pullDatabaseViews(dbConfig);
-        await this.generateBaseFile(dbConfig, viewsConfig, target.meta, target.ownerFolder);
-      }
       return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: target.ownerDbId };
     }
     const { pages, wholeDbInScope, meta } = target;
@@ -367,7 +368,9 @@ export class DatabaseSyncer {
     // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
     if (wholeDbInScope) {
       const viewsConfig = await this.pullDatabaseViews(dbConfig);
-      await this.generateBaseFile(dbConfig, viewsConfig, meta, undefined, this.rangeEndsOf(pages));
+      const rangeEnds = this.rangeEndsOf(pages);
+      this.rangeEnds.set(compactNotionId(dbConfig.databaseId), rangeEnds);
+      await this.generateBaseFile(dbConfig, viewsConfig, meta, undefined, rangeEnds);
     }
 
     let created = 0;
@@ -1058,10 +1061,13 @@ export class DatabaseSyncer {
     rowsFolder?: string,
     /** 받은 행 가운데 기간이 있는 날짜 속성의 짝 키 — `BaseFileOptions.rangeEnds`. */
     rangeEnds?: ReadonlyMap<string, string>,
+    /** 링크드 뷰 컨테이너의 `.base` — 행을 가진 원본 DB 와 파일 이름({@link pullLinkedView}). */
+    linked?: { readonly ownerId: string; readonly name: string },
   ): Promise<void> {
     try {
       const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId, meta);
       const dbName =
+        linked?.name ||
         viewsConfig?.databaseName ||
         (await this.notionClient.getDatabaseTitle(dbConfig.databaseId, meta)) ||
         dbConfig.localFolder.split("/").pop() ||
@@ -1094,6 +1100,7 @@ export class DatabaseSyncer {
         hash: computeHash(baseContent),
         // Notion 보기를 받지 못해 기본 표 하나를 쓴 파일은 올릴 보기가 없다.
         ...(viewsConfig ? recordBaseViews(baseContent, generated.views, viewsConfig.views) : null),
+        ...(linked ? { linkedTo: compactNotionId(linked.ownerId) } : null),
       };
       // Obsidian 은 보기를 고치면 `.base` 를 다시 쓰며 머리 주석을 지운다(1.13.7 실측) — 보기를 기록해 둔 경로면
       // 머리가 없어도 pull 이 쓴 파일이다.
@@ -1103,7 +1110,7 @@ export class DatabaseSyncer {
         (previous?.basePath === basePath && previous.views !== undefined);
       if (!ours) {
         // 직접 만든 `.base` 의 보기는 Notion 보기에서 온 것이 아니다 — 보기를 기록하지 않아 push 도 올리지 않는다.
-        record = { basePath, title: dbName, hash: record.hash };
+        record = { basePath, title: dbName, hash: record.hash, linkedTo: record.linkedTo };
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
           // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
@@ -1126,6 +1133,21 @@ export class DatabaseSyncer {
       this.baseFileInfo.set(dbConfig.databaseId, record);
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
+      if (linked) {
+        // 사이드카는 원본 DB 의 것이 있다. 이름이 바뀌었으면(원본 제목 · 첫 보기 이름) 옛 `.base` 를 치운다 — 원본의
+        // 산출물 정리는 이 파일을 지키므로 여기서 지운다.
+        if (previous && previous.basePath !== basePath) {
+          await this.removeLinkedBase(previous);
+          if (
+            !(await this.vaultFs.exists(previous.basePath)) &&
+            (await this.vaultFs.exists(basePath))
+          ) {
+            this.renamedRows.applied.push({ from: previous.basePath, to: basePath });
+          }
+        }
+        return;
+      }
+
       await this.generateSidecar(
         dbConfig,
         dbName,
@@ -1135,7 +1157,12 @@ export class DatabaseSyncer {
         meta.isInline,
         await this.appearanceOf(meta, safeName),
       );
-      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName, previous);
+      await this.cleanupStaleDbArtifacts(
+        dbConfig.databaseId,
+        dbConfig.localFolder,
+        safeName,
+        previous,
+      );
       // DB 제목이 바뀌어 `.base` 이름이 바뀌었다 — 옛 `.base` 를 지웠으면 그것을 넣은 노트의 임베드 · 링크를 고친다.
       if (
         previous &&
@@ -1179,6 +1206,100 @@ export class DatabaseSyncer {
     };
   }
 
+  /**
+   * 링크드 뷰 컨테이너의 `.base` 를 그 컨테이너의 보기(이름 · 필터 · 정렬)로 원본 DB 폴더에 쓴다. 행은 원본 DB 가
+   * 갖는다(F25) — 폴더 필터도 원본 폴더를 가리킨다. 예전에는 링크드 뷰를 원본의 `.base` 로 몰아, 링크드 뷰가 고른
+   * 보기가 볼트에 오지 않았다.
+   *
+   * 이름은 Notion 이 그 블록 위에 보이는 것처럼 「원본 제목 - 첫 보기 이름」 이다. 컨테이너 제목은 비어 온다.
+   *
+   * @returns `gone` — Notion 에서 컨테이너를 지웠다. 쓴 `.base` 를 치웠으니 부른 쪽이 연결을 잊는다.
+   *   `failed` — 읽지 못했다. 쓴 `.base` 는 그대로 두고 다음 pull 이 다시 본다.
+   */
+  async pullLinkedView(
+    containerId: string,
+    owner: DatabaseSyncConfig,
+  ): Promise<"written" | "gone" | "failed"> {
+    let meta: DatabaseMeta;
+    try {
+      meta = await this.notionClient.getDatabaseMeta(containerId);
+    } catch (error) {
+      if (isNotionObjectNotFound(error)) {
+        await this.retireLinkedView(containerId);
+        return "gone";
+      }
+      getLogger().warn(
+        `[DB Sync] 링크드 뷰 ${containerId} 를 읽지 못함 (다음 pull 이 다시 봄):`,
+        error,
+      );
+      return "failed";
+    }
+    if (meta.inTrash) {
+      await this.retireLinkedView(containerId);
+      return "gone";
+    }
+    const container = { ...owner, databaseId: containerId };
+    const views = await this.pullDatabaseViews(container);
+    // 보기를 받지 못했으면 쓰지 않는다 — 기본 표를 쓰면 원본 DB 의 `.base` 와 같은 것이 하나 더 생긴다.
+    if (!views || views.views.length === 0) return "failed";
+    await this.generateBaseFile(
+      container,
+      views,
+      meta,
+      owner.localFolder,
+      this.rangeEnds.get(compactNotionId(owner.databaseId)),
+      { ownerId: owner.databaseId, name: this.linkedBaseName(containerId, owner, views) },
+    );
+    return "written";
+  }
+
+  /** 링크드 뷰 `.base` 의 이름 — 같은 폴더의 다른 `.base` 가 쓰는 이름이면 컨테이너 id 앞 네 자리를 붙인다. */
+  private linkedBaseName(
+    containerId: string,
+    owner: DatabaseSyncConfig,
+    views: DatabaseViewsConfig,
+  ): string {
+    const ownerTitle =
+      this.baseFileInfo.get(owner.databaseId)?.title ||
+      owner.localFolder.split("/").pop() ||
+      "Database";
+    const name = `${ownerTitle} - ${views.views[0]?.name || "View"}`;
+    const self = compactNotionId(containerId);
+    const taken = new Set(
+      this.baseFileInfo
+        .all()
+        .filter(([id]) => id !== self)
+        .map(([, file]) => file.basePath),
+    );
+    return taken.has(`${owner.localFolder}/${sanitizeFileName(name)}${BASE_SUFFIX}`)
+      ? `${name} (${self.slice(0, 4)})`
+      : name;
+  }
+
+  /** Notion 에서 지운 링크드 뷰 — 쓴 `.base` 를 치우고 기록을 잊는다. */
+  private async retireLinkedView(containerId: string): Promise<void> {
+    const record = this.baseFileInfo.get(containerId);
+    if (!record) return;
+    if (await this.removeLinkedBase(record)) this.retiredBases.add(record.basePath);
+    this.baseFileInfo.delete(containerId);
+    getLogger().info(`[DB Sync] Notion 에서 지운 링크드 뷰의 .base 를 치움: ${record.basePath}`);
+  }
+
+  /**
+   * pull 이 쓴 그대로인 링크드 뷰 `.base` 를 지운다 — 볼트에서 고쳤으면 두고 알린다.
+   * @returns 지웠나.
+   */
+  private async removeLinkedBase(record: DbBaseFile): Promise<boolean> {
+    const content = await this.vaultFs.readFile(record.basePath).catch(() => null);
+    if (content === null || !isGeneratedDbArtifact(record.basePath, content)) return false;
+    if (editedSince(record, record.basePath, content)) {
+      this.warnEditedBase(record.basePath);
+      return false;
+    }
+    await this.vaultFs.deleteFile(record.basePath);
+    return true;
+  }
+
   /** 볼트에서 고친 `.base` 를 덮어쓰거나 지우지 않았다고 한 번 알린다. */
   private warnEditedBase(path: string): void {
     this.heldBases.add(path);
@@ -1195,6 +1316,7 @@ export class DatabaseSyncer {
    * 아닌 것을 삭제해 멱등을 보장한다. 하위 폴더(중첩 DB)의 산출물은 보호한다.
    */
   private async cleanupStaleDbArtifacts(
+    databaseId: string,
     localFolder: string,
     safeName: string,
     /** 이 DB 의 `.base` 를 지난번에 쓴 기록 — 제목이 바뀌어 옛 이름이 된 것을 볼트에서 고쳤으면 지우지 않는다. */
@@ -1204,6 +1326,8 @@ export class DatabaseSyncer {
       const keep = new Set([
         `${localFolder}/${safeName}${BASE_SUFFIX}`,
         `${localFolder}/${safeName}${SIDECAR_SUFFIX}`,
+        // 이 DB 를 원본으로 둔 링크드 뷰의 `.base` — 같은 폴더에 놓인다.
+        ...this.baseFileInfo.linkedBasesOf(databaseId),
       ]);
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
@@ -1637,6 +1761,13 @@ export class DatabaseSyncer {
   }
 
   /** 이름을 바꾼 행을 가져가고 비운다. */
+  /** 이번 pull 이 Notion 에서 지운 링크드 뷰라 치운 `.base` — 그것을 넣은 노트의 임베드를 뺀다({@link LinkUpdater.dropEmbeds}). */
+  takeRetiredBases(): string[] {
+    const paths = [...this.retiredBases];
+    this.retiredBases.clear();
+    return paths;
+  }
+
   takeRenamedRows(): { renamed: RemoteMove[]; applied: RemoteMove[] } {
     const rows = this.renamedRows;
     this.renamedRows = { renamed: [], applied: [] };
