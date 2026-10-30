@@ -1,4 +1,5 @@
-import { Client } from "@notionhq/client";
+import * as notionSdk from "@notionhq/client";
+import type { Client } from "@notionhq/client";
 
 /**
  * 동기화가 쓴 페이지가 사람에게 알림을 보내나(2026-10-08 changelog «Control notifications from page writes»).
@@ -22,10 +23,17 @@ const NOTIFYING_WRITE_PATHS: readonly RegExp[] = [
 ];
 
 /**
+ * SDK 의 `Client` 클래스. 5.30.0 은 `Client` 를 `__importDefault(…)` 로 감싸 내보내, Node ESM 이 CommonJS 의 이름을 읽지
+ * 못하고 `import { Client }` 가 시작부터 SyntaxError 다. 이름으로 없으면 module.exports(`default`)에서 꺼낸다.
+ */
+const NotionClient: typeof Client =
+  notionSdk.Client ?? (notionSdk as unknown as { default: typeof notionSdk }).default.Client;
+
+/**
  * 쓰기마다 `notifications.mode` 를 붙이는 SDK 클라이언트. SDK(5.28 까지)는 모르는 매개변수를 요청에서 걸러
  * 내므로, 모든 메서드가 지나는 `request` 에서 붙인다. `default` 면 요청을 바꾸지 않는다.
  */
-export class SdkClient extends Client {
+export class SdkClient extends NotionClient {
   constructor(
     options: ConstructorParameters<typeof Client>[0],
     private readonly notifications: NotificationMode,

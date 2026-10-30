@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.1] - 2026-10-30
+
+> 패치 — 오늘 나온 Notion SDK 5.30.0 과 함께 설치하면 CLI 가 시작하지 못하던 것.
+
+### Fixed
+
+- **새로 설치한 CLI 가 `SyntaxError: Named export 'Client' not found` 로 시작부터 죽던 것** — `@notionhq/client` 5.30.0 이
+  `Client` 를 Node ESM 이 이름으로 읽지 못하는 꼴로 내보낸다. 의존성 범위(`^5.28.0`)가 그 버전을 받아 0.13.0 · 0.14.0 의 새 설치가
+  모두 깨졌다. `Client` 를 이름에 없으면 CommonJS 의 `module.exports` 에서 꺼낸다. CI 가 빌드한 CLI 를 띄워 보는 단계를 더했다.
+  0.14.0 npm 스모크에서 찾았다
+
 ## [0.14.0] - 2026-10-30
 
 > 노트를 DB 안팎으로 옮겨도 같은 Notion 페이지째 간다 — 볼트에서 옮기면 push 가 행 · 페이지로 바꾸고, Notion 에서 옮기면 pull 이
