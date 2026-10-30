@@ -75,7 +75,9 @@ export class PullPlanner {
     const queued = new Set(
       [...filtered, ...restoreChanges].map((change) => compactNotionId(change.pageId)),
     );
-    const rows = (await this.planDatabaseRows(options.paths, failed, ledger)).filter(
+    // 옮겨 적지 않은 볼트 이동 — 실제 pull 은 먼저 옮겨 적어 Notion 쪽 이동을 받지 않는다(볼트가 먼저).
+    const movingInVault = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
+    const rows = (await this.planDatabaseRows(options.paths, failed, ledger, movingInVault)).filter(
       (row) => !queued.has(compactNotionId(row.pageId)),
     );
 
@@ -186,6 +188,7 @@ export class PullPlanner {
     paths: readonly string[] | undefined,
     failed: FailedOperation[],
     ledger: DatabasePullLedger,
+    movingInVault: ReadonlySet<string>,
   ): Promise<PlannedRow[]> {
     const configured = this.config.notion.databases ?? [];
     const rows: PlannedRow[] = [];
@@ -204,6 +207,7 @@ export class PullPlanner {
             paths,
             resolveDbFolder,
             followPlacement: resolveDbFolder !== undefined,
+            movingInVault,
           })),
         );
       } catch (error) {

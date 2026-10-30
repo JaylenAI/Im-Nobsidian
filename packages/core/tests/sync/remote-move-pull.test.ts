@@ -187,7 +187,9 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
     moveInNotion("A/c.md", "B");
     vault.rename("A/c.md", "C/c.md");
 
+    const preview = await orchestrator.pull({ force: true, dryRun: true });
     const result = await orchestrator.pull({ force: true });
+    expect(preview.moveSkipped).toEqual(result.moveSkipped);
 
     expect(result.moved).toEqual([]);
     expect(result.moveSkipped?.[0]?.path).toBe("C/c.md");
@@ -452,6 +454,89 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(await sync.pull()).toMatchObject({ created: 0, updated: 0, deleted: 0, moved: [] });
       expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
       expect(vault.read("Tasks/M.md")).toBe(note);
+    });
+
+    describe("양쪽에서 옮긴 노트 — 볼트가 먼저 (ADR-047)", () => {
+      const OTHER = "db000000-0000-4000-8000-0000000000d2";
+      const notionParent = (id: string) => {
+        const page = notion.pages.get(id)!;
+        return { parent: page.parent, parentType: page.parentType ?? "page" };
+      };
+
+      async function setup() {
+        notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+          ...mockDatabaseMeta(id),
+          dataSources: [{ id, name: "" }],
+        }));
+        await seed({ "A/c.md": "c\n", "B/b.md": "b\n" });
+        db.setMeta(
+          "discovered_dbs",
+          JSON.stringify([
+            { databaseId: DB_ID, localFolder: "Tasks", titleProperty: "Name" },
+            { databaseId: OTHER, localFolder: "Other", titleProperty: "Name" },
+          ]),
+        );
+        const row = notion.add(DB_ID, "행", "행 본문", { properties: {} });
+        notion.add(OTHER, "남", "남 본문", { properties: {} });
+        const sync = everyPull();
+        expect((await sync.pull()).failed).toEqual([]);
+        return { sync, page: idOf("A/c.md"), row: row.id };
+      }
+
+      /** 볼트에서 옮기고 Notion 에서도 다른 곳으로 옮긴 뒤 pull · push — Notion 이 볼트의 자리를 따라야 한다. */
+      async function bothMoved(
+        sync: SyncOrchestrator,
+        id: string,
+        vaultTo: string,
+        notionTo: { parent: string; parentType: string },
+      ) {
+        const from = db.getByNotionId(id)!.obsidianPath;
+        vault.rename(from, vaultTo);
+        Object.assign(notion.pages.get(id)!, notionTo);
+        const preview = await sync.pull({ dryRun: true });
+        const result = await sync.pull();
+        expect(result.failed).toEqual([]);
+        expect(result.moved).toEqual([]);
+        expect(preview.moved).toEqual([]);
+        expect(preview.moveSkipped).toEqual(result.moveSkipped);
+        expect(result).toMatchObject({ created: 0, deleted: 0 });
+        expect(notes()).toContain(vaultTo);
+        expect(notes()).not.toContain(from);
+        expect((await sync.push()).failed).toEqual([]);
+        expect(db.getByNotionId(id)?.obsidianPath).toBe(vaultTo);
+        expect(await sync.pull()).toMatchObject({ created: 0, deleted: 0, moved: [] });
+        expect(await sync.push()).toMatchObject({ created: 0, moved: 0, failed: [] });
+        expect(notes().filter((path) => path.endsWith("/" + vaultTo.split("/").pop()))).toEqual([
+          vaultTo,
+        ]);
+      }
+
+      it("볼트는 페이지를 DB 폴더로 · Notion 은 다른 페이지 아래로", async () => {
+        const { sync, page } = await setup();
+        await bothMoved(sync, page, "Tasks/c.md", { parent: idOf("B"), parentType: "page" });
+        expect(notionParent(page).parent).toBe(DB_ID);
+        expect(db.getByNotionId(page)?.fileType).toBe("db-row");
+      });
+
+      it("볼트는 페이지를 DB 폴더로 · Notion 은 다른 DB 안으로", async () => {
+        const { sync, page } = await setup();
+        await bothMoved(sync, page, "Tasks/c.md", { parent: OTHER, parentType: "database" });
+        expect(notionParent(page).parent).toBe(DB_ID);
+      });
+
+      it("볼트는 행을 DB 밖으로 · Notion 은 다른 DB 안으로", async () => {
+        const { sync, row } = await setup();
+        await bothMoved(sync, row, "B/행.md", { parent: OTHER, parentType: "database" });
+        expect(notionParent(row)).toEqual({ parent: idOf("B"), parentType: "page" });
+        expect(db.getByNotionId(row)?.fileType).not.toBe("db-row");
+      });
+
+      it("볼트는 행을 다른 DB 폴더로 · Notion 은 DB 밖으로", async () => {
+        const { sync, row } = await setup();
+        await bothMoved(sync, row, "Other/행.md", { parent: idOf("B"), parentType: "page" });
+        expect(notionParent(row).parent).toBe(OTHER);
+        expect(db.getByNotionId(row)?.fileType).toBe("db-row");
+      });
     });
 
     describe("Notion 에서 옮긴 DB (ADR-047)", () => {

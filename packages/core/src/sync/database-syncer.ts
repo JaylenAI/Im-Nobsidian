@@ -501,6 +501,10 @@ export class DatabaseSyncer {
       paths?: readonly string[];
       /** 발견한 DB 다 — Notion 에서 옮긴 DB 의 폴더 이동도 보인다({@link pullDatabase}). */
       followPlacement?: boolean;
+      /**
+       * 볼트에서 옮긴 레코드 — dry-run 은 옮겨 적지 않아 이동 WAL 이 없다. 실제 pull 처럼 볼트가 먼저다.
+       */
+      movingInVault?: ReadonlySet<string>;
     },
   ): Promise<PlannedRow[]> {
     const target = await this.queryRows(dbConfig, opts);
@@ -508,9 +512,9 @@ export class DatabaseSyncer {
 
     const folderMove =
       opts?.followPlacement && !opts.paths
-        ? await this.unblocked(this.placementMoveOf(dbConfig, target.meta))
+        ? await this.unblocked(this.placementMoveOf(dbConfig, target.meta, opts.movingInVault))
         : null;
-    const planned = await this.planRows(dbConfig, target, opts?.paths);
+    const planned = await this.planRows(dbConfig, target, opts?.paths, opts?.movingInVault);
     if (!folderMove) return planned;
     // 실제 pull 은 폴더를 먼저 옮기고 행을 받는다 — 행도 새 자리로 보인다.
     const moved = (path: string) =>
@@ -530,6 +534,7 @@ export class DatabaseSyncer {
     dbConfig: DatabaseSyncConfig,
     target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
     paths: readonly string[] | undefined,
+    movingInVault: ReadonlySet<string> = new Set(),
   ): Promise<PlannedRow[]> {
     const opts = { paths };
     const planned: PlannedRow[] = [];
@@ -561,7 +566,7 @@ export class DatabaseSyncer {
         planned.push({ pageId: page.id, path, operation: "create" });
       } else if (wasPage(record) || arrivesFromOtherDatabase(record, dbConfig)) {
         // 볼트에서 옮긴 것을 아직 올리지 않았으면 받지 않는다(pullDatabasePage).
-        if (this.stateDb.getIncompleteOpByState(record.id, "move")) continue;
+        if (this.movedInVault(record, movingInVault)) continue;
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
         const path = resolveDbRowPath(
           dbConfig.localFolder,
@@ -1517,6 +1522,14 @@ export class DatabaseSyncer {
     return blocked ? this.unblocked({ path: outcome.from, reason: blocked }) : outcome;
   }
 
+  /** 볼트에서 옮기고 아직 올리지 않았나 — 이동 WAL, 또는 dry-run 이 옮겨 적지 않은 이번 이동. */
+  private movedInVault(record: SyncRecord, movingInVault: ReadonlySet<string>): boolean {
+    return (
+      movingInVault.has(record.id) ||
+      this.stateDb.getIncompleteOpByState(record.id, "move") !== null
+    );
+  }
+
   /**
    * Notion 에서 다른 페이지 아래로 옮긴 발견 DB 의 폴더를 옮길 곳(ADR-047) — 제자리면 null.
    *
@@ -1530,6 +1543,7 @@ export class DatabaseSyncer {
   private placementMoveOf(
     dbConfig: DatabaseSyncConfig,
     meta: DatabaseMeta,
+    movingInVault: ReadonlySet<string> = new Set(),
   ): RemoteMove | RemoteMoveSkip | null {
     const parentId = meta.parentPageId;
     if (!parentId) return null;
@@ -1547,7 +1561,7 @@ export class DatabaseSyncer {
     } else {
       const parent = this.stateDb.getByNotionId(parentId);
       if (!parent) return null;
-      if (this.stateDb.getIncompleteOpByState(parent.id, "move")) {
+      if (this.movedInVault(parent, movingInVault)) {
         return {
           path: folder,
           reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
