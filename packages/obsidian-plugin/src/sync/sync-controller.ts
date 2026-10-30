@@ -437,10 +437,14 @@ export class SyncController {
         const report = await this.orchestrator.prepareFolderDatabase(folder, configDir);
         const skipped =
           report.skipped.length > 0 ? ` · 옮기지 않은 것 ${report.skipped.length}` : "";
+        const pages =
+          report.pagesToRows > 0
+            ? ` 이미 올린 노트 ${report.pagesToRows}개는 같은 페이지째 행으로 옮깁니다.`
+            : "";
         this.hooks.onNotice?.(
           `${NOTICE_PREFIX}: ${report.folder} 를 다음 push 에서 Notion DB 로 만듭니다 — 행 ${report.rows} · ` +
             `속성 ${report.properties.length} · 보기 ${report.views.length}${skipped}. ` +
-            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.`,
+            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.${pages}`,
         );
         await this.refreshLocal(true);
       } catch (error) {

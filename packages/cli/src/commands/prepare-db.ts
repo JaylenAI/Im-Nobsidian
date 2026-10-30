@@ -25,6 +25,11 @@ export const prepareDbCommand = new Command("prepare-db")
       );
 
       console.log(`  ${icons.success} ${report.sidecarPath} — 행 ${report.rows}개`);
+      if (report.pagesToRows > 0) {
+        console.log(
+          `    이미 올린 노트 ${report.pagesToRows}개는 push 가 같은 페이지째 이 DB 의 행으로 옮깁니다`,
+        );
+      }
       for (const property of report.properties) {
         console.log(`    ${property.name}: ${property.type} ${chalk.dim(`(${property.reason})`)}`);
       }
