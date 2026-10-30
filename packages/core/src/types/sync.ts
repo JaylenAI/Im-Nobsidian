@@ -223,10 +223,11 @@ export interface SchemaEdit {
   /** 설정(수식 · 숫자 형식 · 옵션)을 바꾼 속성. */
   readonly redefined: readonly string[];
   /**
-   * 지운 선택 옵션 — 속성 이름 → 옵션 이름. Notion 은 그 옵션을 가진 행의 값을 비운다(옵션 이름을 바꾼 것도 지우고
-   * 새로 만든 것이다). 없으면 지운 옵션이 없다.
+   * 지운 선택 옵션 — 속성 이름 → 옵션 이름. Notion 은 그 옵션을 가진 행의 값을 비운다. 없으면 지운 옵션이 없다.
    */
   readonly droppedOptions?: ReadonlyArray<readonly [string, readonly string[]]>;
+  /** 이름을 바꾼 선택 옵션 — 속성 이름 · 옛 이름 · 새 이름. 그 값을 가진 Notion 행도 새 이름으로 옮긴다. */
+  readonly renamedOptions?: ReadonlyArray<readonly [string, string, string]>;
 }
 
 /** 볼트에서 바꾼 DB 속성 이름 하나 — {@link PushResult.renamedProperties}. */
