@@ -221,6 +221,88 @@ describe("pairLocalMoves — 없어진 추적 노트 ↔ 추적하지 않는 파
   });
 });
 
+describe("pairLocalMoves — 비슷한 내용", () => {
+  const body = "하나 둘 셋 넷 다섯 여섯 일곱 여덟 아홉 열 열하나 열둘";
+
+  it("같은 폴더에서 이름과 내용을 함께 바꾸면 짝이다 — frontmatter 는 보지 않는다", () => {
+    const pairs = pairLocalMoves(
+      [{ path: "A/옛.md", hash: "h1", text: `---\ntags: [a]\n---\n${body}\n` }],
+      [{ path: "A/새.md", hash: "h2", text: `---\ntags: [b, c]\n---\n${body} 열셋\n` }],
+      EMPTY_RENAME_HINTS,
+    );
+    expect(pairs).toEqual([{ from: "A/옛.md", to: "A/새.md" }]);
+  });
+
+  it("다른 폴더라도 파일 이름이 같으면 짝이다", () => {
+    const pairs = pairLocalMoves(
+      [{ path: "A/노트.md", hash: "h1", text: body }],
+      [{ path: "B/노트.md", hash: "h2", text: `${body} 열셋` }],
+      EMPTY_RENAME_HINTS,
+    );
+    expect(pairs).toEqual([{ from: "A/노트.md", to: "B/노트.md" }]);
+  });
+
+  it("폴더도 이름도 다르면 · 겹침이 적으면 · 본문이 짧으면 짝이 아니다", () => {
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "h1", text: body }],
+        [{ path: "B/새.md", hash: "h2", text: body }],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([]);
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "h1", text: body }],
+        [{ path: "A/새.md", hash: "h2", text: "전혀 다른 글 이 노트 는 새로 쓴 것 이다 정말로" }],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([]);
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "h1", text: "짧은 글" }],
+        [{ path: "A/새.md", hash: "h2", text: "짧은 글 하나" }],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([]);
+  });
+
+  it("겹침이 큰 쪽과 짝짓고, 겹침이 같은 후보가 둘이면 짓지 않는다", () => {
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "h1", text: body }],
+        [
+          { path: "A/먼.md", hash: "h2", text: `${body} 열셋 열넷 열다섯 열여섯` },
+          { path: "A/가까운.md", hash: "h3", text: `${body} 열셋` },
+        ],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([{ from: "A/옛.md", to: "A/가까운.md" }]);
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "h1", text: body }],
+        [
+          { path: "A/둘.md", hash: "h2", text: `${body} 열셋` },
+          { path: "A/셋.md", hash: "h3", text: `${body} 열셋` },
+        ],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([]);
+  });
+
+  it("같은 내용으로 짝지은 것은 비슷한 내용으로 또 짓지 않는다", () => {
+    expect(
+      pairLocalMoves(
+        [{ path: "A/옛.md", hash: "same", text: body }],
+        [
+          { path: "A/같은.md", hash: "same", text: body },
+          { path: "A/비슷.md", hash: "h2", text: `${body} 열셋` },
+        ],
+        EMPTY_RENAME_HINTS,
+      ),
+    ).toEqual([{ from: "A/옛.md", to: "A/같은.md" }]);
+  });
+});
+
 describe("deriveFolderMoves — 옮겨진 추적 폴더와 새 자리", () => {
   it("노트들의 짝이 모두 같은 폴더를 가리키면 그 폴더로", () => {
     const moves = deriveFolderMoves(
