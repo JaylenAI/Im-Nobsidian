@@ -8,6 +8,7 @@ import type {
 import { WIKILINK_PROTOCOL } from "../../constants/markers.js";
 import { computeAnchor, mapOutsideCode } from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
+import { anchorDisplay, notionBlockUrl, splitAnchor, type AnchorLookup } from "../anchor-links.js";
 
 /**
  * 대상·별칭 어디에도 `[` `]` 를 허용하지 않는다 — 안쪽 링크를 잡게 하기 위해서다.
@@ -58,6 +59,10 @@ export class WikilinkResolver implements Processor {
           const target = display === undefined ? written : withoutTableAliasEscape(written);
           const label = display ?? target;
 
+          // 제목 · 블록으로 가는 링크 — 대상 페이지에서 그 블록을 찾으면 블록 링크로 보낸다. 못 찾으면 아래(예전과 같다).
+          const anchored = this.anchorLink(target, display, input.context.anchors);
+          if (anchored) return anchored;
+
           if (this.resolve) {
             const entry = this.resolve(target);
             if (entry) {
@@ -94,5 +99,24 @@ export class WikilinkResolver implements Processor {
       content: resolved,
       metadata: { ...input.metadata, preserveMarkers },
     };
+  }
+
+  /**
+   * `[[노트#제목]]` · `[[노트#^블록]]` · `[[#제목]]` → `[글자](https://www.notion.so/<페이지>#<블록>)`. 글자는 별칭,
+   * 없으면 Obsidian 이 보이는 「노트 > 제목」 — pull 이 그 글자면 별칭을 붙이지 않는다. 대상 페이지 · 블록을 못 찾으면 null.
+   */
+  private anchorLink(
+    target: string,
+    display: string | undefined,
+    anchors: AnchorLookup | undefined,
+  ): string | null {
+    const split = anchors ? splitAnchor(target) : null;
+    if (!anchors || !split) return null;
+    const pageId =
+      split.note === "" ? anchors.selfPageId : (this.resolve?.(split.note)?.notionPageId ?? null);
+    if (!pageId) return null;
+    const blockId = anchors.blockOf(pageId, split.anchor);
+    if (!blockId) return null;
+    return `[${display ?? anchorDisplay(split.note, split.anchor)}](${notionBlockUrl(pageId, blockId)})`;
   }
 }

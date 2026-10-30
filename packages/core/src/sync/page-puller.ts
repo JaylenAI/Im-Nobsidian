@@ -6,7 +6,12 @@ import {
   type ChildTag,
 } from "../converter/child-tags.js";
 import { notionBodyToObsidian, pageBlocksToObsidian } from "./page-body.js";
-import { resolveNotionIdWikilinks } from "../converter/notion-id-links.js";
+import {
+  notionBlockLinkIds,
+  resolveNotionBlockLinks,
+  resolveNotionIdWikilinks,
+} from "../converter/notion-id-links.js";
+import { readBlockAnchors } from "./block-anchors.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
 import type { NotionClient } from "../notion/client.js";
@@ -660,8 +665,11 @@ export class PagePuller {
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
         this.detector.noteBodyChildren(pageId, result.markdown);
         return {
-          content: this.resolveNotionIdWikilinks(
-            await notionBodyToObsidian(this.notionClient, result.markdown, pageId),
+          content: await this.resolveBlockLinks(
+            this.resolveNotionIdWikilinks(
+              await notionBodyToObsidian(this.notionClient, result.markdown, pageId),
+            ),
+            pageId,
           ),
           // 압축형 판정은 반드시 원시 export 기준 — enhanced 변환이 <empty-block/> 을
           // 빈 줄로 바꾼 뒤에는 BlockSpacer 가 저작형과 구분할 수 없다(D1).
@@ -685,7 +693,10 @@ export class PagePuller {
     this.discovery.collectInlineDbRefs(pageId, fallback.markdown);
     this.detector.noteBodyChildren(pageId, fallback.markdown);
     return {
-      content: this.resolveNotionIdWikilinks(fallback.content),
+      content: await this.resolveBlockLinks(
+        this.resolveNotionIdWikilinks(fallback.content),
+        pageId,
+      ),
       compact: isCompactExport(fallback.markdown),
       children: extractChildTags(fallback.markdown),
       fingerprint: null,
@@ -899,6 +910,20 @@ export class PagePuller {
       markdown,
       (id) => this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null,
     ).markdown;
+  }
+
+  /**
+   * 볼트에 있는 페이지로 가는 블록 링크를 `[[노트#제목]]` 으로 — 그 블록을 읽어 앵커를 안다(anchor-links). 아직 받지
+   * 않은 페이지로 가는 것은 pull 끝의 링크 패스가 푼다.
+   */
+  private async resolveBlockLinks(markdown: string, pageId: string): Promise<string> {
+    const pathOf = (id: string): string | null =>
+      this.stateDb.getByNotionId(normalizeNotionId(id))?.obsidianPath ?? null;
+    const blockIds = notionBlockLinkIds(markdown, pathOf);
+    if (blockIds.length === 0) return markdown;
+    const anchors = await readBlockAnchors(this.notionClient, blockIds);
+    return resolveNotionBlockLinks(markdown, pathOf, (id) => anchors.get(id) ?? null, pageId)
+      .markdown;
   }
 
   private async ensureDbSchema(): Promise<void> {

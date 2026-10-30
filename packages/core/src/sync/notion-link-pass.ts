@@ -2,6 +2,8 @@ import {
   degradeUnresolvedNotionIdWikilinks,
   degradeUnresolvedNotionRelativePageLinks,
   linkLabelOfTitle,
+  notionBlockLinkIds,
+  resolveNotionBlockLinks,
   resolveNotionIdWikilinks,
   resolveNotionRelativePageLinks,
   unlabeledNotionIds,
@@ -26,6 +28,9 @@ import { isMarkdownPath } from "../utils/markdown-path.js";
  * 볼트 밖 페이지의 멘션은 Notion 이 제목 없이 준다 — 남기기 전에 `pageTitle` 로 제목을 한 번씩 읽어 링크 글자로
  * 쓴다. 읽지 못하면 id 를 쓴다.
  *
+ * 블록 링크(`notion.so/<페이지>#<블록>`)는 `blockAnchors` 로 블록을 읽어 `[[노트#제목]]` 으로 되돌린다 — 변환 때
+ * 아직 받지 않은 페이지로 가는 것이다.
+ *
  * @returns 푼 링크 수.
  */
 export async function resolveNotionLinks(
@@ -33,6 +38,7 @@ export async function resolveNotionLinks(
   vaultFs: VaultFS,
   paths: string[],
   pageTitle?: (pageId: string) => Promise<string | null>,
+  blockAnchors?: (blockIds: string[]) => Promise<ReadonlyMap<string, string>>,
 ): Promise<number> {
   let totalResolved = 0;
   let totalDegraded = 0;
@@ -82,6 +88,22 @@ export async function resolveNotionLinks(
       if (urlPass.resolved > 0) {
         totalResolved += urlPass.resolved;
         changed = true;
+      }
+
+      const blockIds = blockAnchors ? notionBlockLinkIds(content, notionIdToPath) : [];
+      if (blockIds.length > 0) {
+        const anchors = await blockAnchors!(blockIds);
+        const blockPass = resolveNotionBlockLinks(
+          content,
+          notionIdToPath,
+          (id) => anchors.get(id) ?? null,
+          stateDb.getByPath(filePath)?.notionPageId ?? null,
+        );
+        content = blockPass.markdown;
+        if (blockPass.resolved > 0) {
+          totalResolved += blockPass.resolved;
+          changed = true;
+        }
       }
 
       // frontmatter 의 relation/people 원시 UUID → `[[제목]]`. 변환 시점에는 대상
