@@ -621,6 +621,30 @@ export class DatabaseSyncer {
     return resolution.action === "write" ? null : { action: resolution.action };
   }
 
+  /**
+   * 수정 시각 · 편집자로 가르지 못한 행이 지난 사본 그대로인가 — 본문 지문과 본문 밖 속성으로({@link rowRemoteUnchanged}).
+   * dry-run 이 실제 pull 처럼 받을 것이 없는 행을 세지 않게. 견줄 사본 · 지문이 없거나 본문을 읽지 못하면 아니다.
+   */
+  private async unverifiedRowUnchanged(
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<boolean> {
+    if (this.remoteVerdict(record, page) !== "unverified") return false;
+    const base = snapshotFrontmatter(record.baseSnapshot);
+    if (base === null || record.notionBodyFingerprint === null) return false;
+    try {
+      const fingerprint = remoteBodyFingerprint(
+        (await this.notionClient.getPageMarkdown(page.id)).markdown,
+      );
+      return (
+        fingerprint === record.notionBodyFingerprint &&
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, record.obsidianPath)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private async planRows(
     dbConfig: DatabaseSyncConfig,
     target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
@@ -673,6 +697,8 @@ export class DatabaseSyncer {
           moves: [{ from: record.obsidianPath, to: path }, ...(children ? [children] : [])],
         });
       } else {
+        // 수정 시각 · 편집자로 가르지 못한 행 — 실제 pull 은 받아 견주고 그대로면 세지 않는다.
+        if (action === "pull" && (await this.unverifiedRowUnchanged(record, page))) continue;
         // Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 실제 pull 과 같은 판정으로 새 이름을 보인다.
         const retitle = await this.retitledRowTarget(dbConfig.localFolder, record, page);
         const renamed = retitle && "to" in retitle ? retitle : null;
@@ -818,6 +844,17 @@ export class DatabaseSyncer {
     // 원격도 바뀐 행이라도 볼트에서 사라진 것이면 되살린 것이다 — 받는 일은 같고 세는 칸만 다르다.
     // 예전에는 «업데이트» 로 세어, 지운 파일이 돌아온다는 것을 결과가 말하지 않았다.
     if (this.config.sync.deleteSync || (await this.vaultFs.exists(record.obsidianPath))) {
+      // deleteSync 로 볼트에서 지운 행은 원격이 바뀌었을 때만 받는다(되살린다). 수정 시각 · 편집자로 가르지 못했으면
+      // 내용으로 — 받아 견줄 로컬이 없어, 받으면 그대로인 원격으로 지운 파일을 되살린다.
+      if (
+        changed &&
+        !misplaced &&
+        this.config.sync.deleteSync &&
+        !(await this.vaultFs.exists(record.obsidianPath)) &&
+        (await this.unverifiedRowUnchanged(record, page))
+      ) {
+        return "skip";
+      }
       return changed ? "pull" : "skip";
     }
     return "restore";
