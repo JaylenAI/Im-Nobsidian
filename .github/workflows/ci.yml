@@ -36,6 +36,10 @@ jobs:
       - name: Build
         run: pnpm build
 
+      # 빌드한 CLI 를 Node ESM 으로 띄운다 — SDK 의 CommonJS 내보내기를 이름으로 못 읽으면 시작부터 죽는다(0.14.0)
+      - name: CLI starts
+        run: node packages/cli/dist/index.js --version
+
       - name: Lint
         run: pnpm lint
 
