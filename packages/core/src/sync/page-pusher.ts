@@ -1,6 +1,14 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { vaultBookmarks } from "../converter/bookmark.js";
+import {
+  anchorBlockId,
+  anchorBlockOf,
+  anchoredWikilinkTargets,
+  splitAnchor,
+  type AnchorBlock,
+  type AnchorLookup,
+} from "../converter/anchor-links.js";
 import { obsidianToNotionEnhanced } from "../converter/enhanced-md-converter.js";
 import { encodeMarkerTarget } from "../converter/marker-url.js";
 import {
@@ -293,6 +301,7 @@ export class PagePusher {
       path: selectedPath,
       filePath: path,
       parentMode: this.config.notion.parentMode,
+      anchors: await this.anchorLookup(content, null),
     });
     // 제목은 frontmatter `title` 이 먼저다 — 갱신(changedPageTitle) · 이동(titleAfterMove)과 같은
     // 규칙이어야 만든 뒤 첫 갱신에서 제목이 뒤집히지 않는다. 행도 같다(pushRowUpdate).
@@ -437,6 +446,42 @@ export class PagePusher {
     return uploads;
   }
 
+  /**
+   * 노트의 제목 · 블록 링크(`[[노트#제목]]`)가 가리키는 페이지의 맨 위 블록을 읽어 둔다 — 변환은 기다리지 않는다
+   * (anchor-links). 그런 링크가 없으면 읽지 않는다. 읽지 못한 페이지의 링크는 예전처럼 간다.
+   *
+   * @param selfPageId 이 노트의 페이지 — `[[#제목]]` 의 대상. 새로 만드는 노트는 아직 없다(그 링크는 다음 push 에 걸린다).
+   */
+  private async anchorLookup(
+    content: string,
+    selfPageId: string | null,
+  ): Promise<AnchorLookup | undefined> {
+    const pages = new Set<string>();
+    for (const target of anchoredWikilinkTargets(content)) {
+      const { note } = splitAnchor(target)!;
+      const pageId =
+        note === "" ? selfPageId : (this.stateDb.resolveWikilink(note)?.notionPageId ?? null);
+      if (pageId) pages.add(compactNotionId(pageId));
+    }
+    if (pages.size === 0) return undefined;
+    const blocks = new Map<string, AnchorBlock[]>();
+    for (const pageId of pages) {
+      try {
+        blocks.set(pageId, (await this.notionClient.fetchAllChildren(pageId)).map(anchorBlockOf));
+      } catch (error) {
+        getLogger().debug(
+          `[Im-Nobsidian] 제목 링크의 대상 페이지 블록을 읽지 못함 (${pageId}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return {
+      selfPageId,
+      blockOf: (pageId, anchor) => anchorBlockId(blocks.get(compactNotionId(pageId)) ?? [], anchor),
+    };
+  }
+
   private async livePage(record: SyncRecord): Promise<PageObjectResponse> {
     const presence = await remotePresence(this.notionClient, record.notionPageId!);
     if (presence.kind === "alive") return presence.page;
@@ -477,6 +522,7 @@ export class PagePusher {
       path: updatePath,
       filePath: path,
       parentMode: this.config.notion.parentMode,
+      anchors: await this.anchorLookup(content, record.notionPageId),
     });
 
     // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
@@ -1061,6 +1107,7 @@ export class PagePusher {
       path: selectedPath,
       filePath: path,
       parentMode: "database",
+      anchors: await this.anchorLookup(content, null),
     });
 
     const placeholder = this.stateDb.upsert({
@@ -1330,6 +1377,7 @@ export class PagePusher {
         path: selectedPath,
         filePath: path,
         parentMode: "database",
+        anchors: await this.anchorLookup(content, pageId),
       });
       const pushed = await this.pushUpdatePage(pageId, conversionResult.content, path);
       bodyFingerprint = pushed.fingerprint;

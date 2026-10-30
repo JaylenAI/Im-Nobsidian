@@ -1,4 +1,5 @@
 import type { ChildTag } from "../converter/child-tags.js";
+import type { AnchorLookup } from "../converter/anchor-links.js";
 
 export type ConversionPath = "markdown-api" | "block-api";
 
@@ -49,6 +50,8 @@ export interface ConversionContext {
   readonly path: ConversionPath;
   readonly filePath: string;
   readonly parentMode?: "page" | "database";
+  /** push — 제목 · 블록으로 가는 위키링크를 Notion 블록 링크로 풀 때 쓴다(미리 읽은 대상 페이지의 블록). */
+  readonly anchors?: AnchorLookup;
 }
 
 export interface Processor {
