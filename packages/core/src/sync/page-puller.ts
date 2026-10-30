@@ -709,6 +709,25 @@ export class PagePuller {
    * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
    *         이 변경 앞에 묶인다).
    */
+  /**
+   * 이 폴더 레코드의 Notion 페이지에서 받을 본문이 있나 — dry-run 이 실제 pull({@link pullFolderRecord})과 같게 센다.
+   * 본문이 하위 페이지뿐이면 실제 pull 은 본 것만 적고 고친 것으로 세지 않는다.
+   */
+  async folderPageHasBody(record: SyncRecord): Promise<boolean> {
+    const page = await this.notionClient.getPage(record.notionPageId!);
+    if (isTrashedOrArchived(page)) return false;
+    const { markdown } = await this.notionClient.getPageMarkdown(page.id);
+    return hasBodyBesidesChildren(markdown) && this.folderNoteRefusal(record.obsidianPath) === null;
+  }
+
+  /** 이 폴더에 폴더 노트를 둘 수 없는 까닭 — 둘 수 있으면 null. */
+  private folderNoteRefusal(folder: string): string | null {
+    if (isDatabaseMode(this.config)) return "DB 모드는 폴더 노트를 받지 않음";
+    return this.placement.folderLookup().databaseAt(folder)
+      ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
+      : null;
+  }
+
   private async pullFolderRecord(
     record: SyncRecord,
     page: PageObjectResponse,
@@ -721,11 +740,7 @@ export class PagePuller {
       this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
-    const noPlace = isDatabaseMode(this.config)
-      ? "DB 모드는 폴더 노트를 받지 않음"
-      : this.placement.folderLookup().databaseAt(folder)
-        ? "그 폴더는 DB 라 폴더 노트를 둘 수 없음"
-        : null;
+    const noPlace = this.folderNoteRefusal(folder);
     if (noPlace) {
       getLogger().warn(
         `[Im-Nobsidian] 폴더(${folder})의 Notion 페이지에 본문이 있지만 ${noPlace} — Notion 에만 있다`,

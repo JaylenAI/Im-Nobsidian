@@ -77,4 +77,21 @@ describe("자식만 있는 페이지는 폴더로만 받는다", () => {
     expect(notes()).toEqual(["빈폴더/빈폴더.md", "빈폴더/안.md"]);
     expect(vault.read("빈폴더/빈폴더.md")).toContain("이제 본문");
   });
+
+  it("dry-run 은 실제 pull 과 같게 센다 — 하위 페이지만 바뀐 폴더 페이지는 고친 것이 아니다", async () => {
+    const folder = notion.add(ROOT, "빈폴더", "");
+    notion.add(folder.id, "안", "안 본문");
+    await orchestrator().pull();
+
+    // 하위 페이지 · DB 를 옮기면 Notion 은 그 페이지의 수정 시각을 바꾼다 — 본문은 그대로.
+    notion.edit(folder.id, () => {});
+    const preview = await orchestrator().pull({ dryRun: true });
+    expect(preview).toMatchObject({ updated: 0, failed: [] });
+    expect(await orchestrator().pull()).toMatchObject({ updated: preview.updated, failed: [] });
+
+    notion.edit(folder.id, (page) => (page.body = "이제 본문"));
+    const withBody = await orchestrator().pull({ dryRun: true });
+    expect(withBody).toMatchObject({ updated: 1, failed: [] });
+    expect(await orchestrator().pull()).toMatchObject({ updated: withBody.updated, failed: [] });
+  });
 });
