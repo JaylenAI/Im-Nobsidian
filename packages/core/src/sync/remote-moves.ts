@@ -71,7 +71,13 @@ export class RemoteMoveFollower {
    */
   async follow(
     moved: ReadonlyMap<string, string>,
-    options: { readonly dryRun?: boolean } = {},
+    options: {
+      readonly dryRun?: boolean;
+      /**
+       * dry-run 이 옮겨 적지 않은 볼트 이동(레코드 id → 새 경로) — 실제 pull 은 먼저 옮겨 적어 이동 WAL 로 본다.
+       */
+      readonly movingInVault?: ReadonlyMap<string, string>;
+    } = {},
   ): Promise<RemoteMoveResult> {
     const result: { moved: RemoteMove[]; skipped: RemoteMoveSkip[] } = { moved: [], skipped: [] };
     for (const [pageId, parentId] of moved) {
@@ -80,7 +86,12 @@ export class RemoteMoveFollower {
       if (this.vaultFs.excludesPath?.(record.obsidianPath)) continue;
       let outcome: RemoteMoveSkip | { readonly moves: readonly RemoteMove[] };
       try {
-        outcome = await this.followOne(record, parentId, options.dryRun === true);
+        outcome = await this.followOne(
+          record,
+          parentId,
+          options.dryRun === true,
+          options.movingInVault?.get(record.id),
+        );
       } catch (error) {
         outcome = {
           path: record.obsidianPath,
@@ -103,9 +114,13 @@ export class RemoteMoveFollower {
     record: SyncRecord,
     parentId: string,
     dryRun: boolean,
+    movingTo?: string,
   ): Promise<RemoteMoveSkip | { readonly moves: readonly RemoteMove[] }> {
-    const skip = (reason: string): RemoteMoveSkip => ({ path: record.obsidianPath, reason });
-    if (this.stateDb.getIncompleteOpByState(record.id, "move")) {
+    const skip = (reason: string): RemoteMoveSkip => ({
+      path: movingTo ?? record.obsidianPath,
+      reason,
+    });
+    if (movingTo !== undefined || this.stateDb.getIncompleteOpByState(record.id, "move")) {
       return skip(
         "볼트에서 옮긴 것을 아직 올리지 않았다 — 다음 push 가 Notion 을 볼트의 자리로 옮긴다",
       );

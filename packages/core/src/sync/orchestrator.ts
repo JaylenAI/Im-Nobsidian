@@ -892,7 +892,10 @@ export class SyncOrchestrator {
   }
 
   /** 감지가 본, Notion 에서 옮긴 페이지를 볼트에서 옮긴다 — 경로를 좁힌 pull 은 그 범위의 것만. */
-  private async followRemoteMoves(options?: PullOptions): Promise<RemoteMoveResult> {
+  private async followRemoteMoves(
+    options?: PullOptions,
+    localPlan?: LocalPlan | null,
+  ): Promise<RemoteMoveResult> {
     const moved = new Map(
       [...this.detector.movedPages].filter(([pageId]) => {
         const record = this.stateDb.getByNotionId(pageId);
@@ -900,7 +903,11 @@ export class SyncOrchestrator {
       }),
     );
     if (moved.size === 0) return { moved: [], skipped: [] };
-    return await this.remoteMoves.follow(moved, { dryRun: options?.dryRun });
+    // dry-run 은 볼트 이동을 옮겨 적지 않았다 — 실제 pull 처럼 볼트가 먼저인 것으로 보인다.
+    return await this.remoteMoves.follow(moved, {
+      dryRun: options?.dryRun,
+      movingInVault: options?.dryRun ? this.planner.plannedPaths(localPlan ?? null) : undefined,
+    });
   }
 
   /**
@@ -1002,7 +1009,7 @@ export class SyncOrchestrator {
     const remoteChanges = detection.changes;
     detected = remoteChanges;
     // Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039) — 아래 받기 · 되살리기가 새 경로를 본다.
-    const remoteMoves = await this.followRemoteMoves(options);
+    const remoteMoves = await this.followRemoteMoves(options, localPlan);
     // Notion 에서 바꾼 제목으로 노트 이름을 바꾼다 — 옮긴 뒤 · 받기 전에. 다른 노트의 링크는 마감에서 고친다.
     const remoteRenames = await this.followRemoteRenames(remoteChanges, options);
     const relocated = {
@@ -1457,7 +1464,7 @@ export class SyncOrchestrator {
     const detection = await this.detector.detectRemote(scan, { signal, databases: false });
     const detected = await this.drift.withoutUnchangedRemotes(detection.changes, signal);
     // 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 것(ADR-039 · ADR-040)과 뺀 자리라 받지 않을 새 페이지 — 바꾸지 않고 본다.
-    const moves = await this.followRemoteMoves({ dryRun: true });
+    const moves = await this.followRemoteMoves({ dryRun: true }, plan);
     const renames = await this.followRemoteRenames(detected, { dryRun: true });
     const exclusions = await this.plannedExclusions(detected);
     const remoteChanges = detected.filter((change) => !exclusions.has(change.pageId));
