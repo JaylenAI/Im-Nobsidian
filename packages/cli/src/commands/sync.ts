@@ -11,6 +11,7 @@ import {
   readOnlySkipLines,
   restoredLines,
   mergedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   unsentDeletionLines,
   renamedPropertyLines,
@@ -133,7 +134,9 @@ export const syncCommand = new Command("sync")
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
-      for (const line of mergedLines(pullResult.mergedPaths, "pushed")) console.log(`  ${line}`);
+      for (const line of mergedLines(pullResult.mergedPaths, "pushed", options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
         console.log(`  ${line}`);
       }
@@ -171,7 +174,13 @@ export const syncCommand = new Command("sync")
         for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
       }
 
-      if (result.conflicts.length > 0) {
+      if (options.dryRun) {
+        const planned = plannedConflictLines(
+          result.conflicts.map((conflict) => conflict.syncRecord.obsidianPath),
+        );
+        if (planned.length > 0) console.log("");
+        for (const line of planned) console.log(`  ${line}`);
+      } else if (result.conflicts.length > 0) {
         console.log(
           `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );

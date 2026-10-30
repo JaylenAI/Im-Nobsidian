@@ -211,14 +211,29 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
 export function mergedLines(
   paths: readonly string[] | undefined,
   then: "push" | "pushed",
+  dryRun = false,
 ): string[] {
   if (!paths || paths.length === 0) return [];
   return [
     chalk.cyan(
-      `↻ 양쪽이 다른 줄을 고친 노트 ${paths.length}개를 합쳤습니다 — ` +
+      `↻ 양쪽이 다른 줄을 고친 노트 ${paths.length}개를 ${dryRun ? "합칩니다" : "합쳤습니다"} — ` +
         (then === "push"
           ? "push 하면 합친 글을 Notion 에 올립니다:"
           : "합친 글을 Notion 에 올립니다:"),
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
+ * dry-run 이 미리 본 충돌 — 받으면 충돌로 남을 노트(양쪽이 같은 줄을 고쳤거나 전략이 manual · duplicate). 실제 pull 은
+ * 충돌 수만 알리고 `nobsi resolve` 가 목록을 보인다 — dry-run 은 아직 충돌로 적지 않아 여기서 경로를 보인다.
+ */
+export function plannedConflictLines(paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+  return [
+    chalk.magenta(
+      `⚠ 양쪽을 고친 노트 ${paths.length}개는 받으면 충돌로 남습니다 — 받은 뒤 nobsi resolve 로 고르세요:`,
     ),
     ...pathLines(paths),
   ];

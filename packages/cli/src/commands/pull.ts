@@ -22,6 +22,7 @@ import {
   remoteScanLines,
   restoredLines,
   mergedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   heldSidecarLines,
   heldBaseLines,
@@ -126,7 +127,9 @@ export const pullCommand = new Command("pull")
       for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
-      for (const line of mergedLines(result.mergedPaths, "push")) console.log(`  ${line}`);
+      for (const line of mergedLines(result.mergedPaths, "push", options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {
         const verb = move.renamed ? "rename" : "move";
@@ -157,7 +160,13 @@ export const pullCommand = new Command("pull")
         for (const line of remoteScanLines(result.remoteScan)) console.log(`  ${line}`);
       }
 
-      if (result.conflicts.length > 0) {
+      if (options.dryRun) {
+        const planned = plannedConflictLines(
+          result.conflicts.map((conflict) => conflict.syncRecord.obsidianPath),
+        );
+        if (planned.length > 0) console.log("");
+        for (const line of planned) console.log(`  ${line}`);
+      } else if (result.conflicts.length > 0) {
         console.log(
           `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );

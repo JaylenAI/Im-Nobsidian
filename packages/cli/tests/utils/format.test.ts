@@ -29,6 +29,8 @@ import {
   readOnlySkipLines,
   remoteDeletionHint,
   restoredLines,
+  mergedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   renamedPropertyLines,
   schemaEditLines,
@@ -326,5 +328,27 @@ describe("databaseMoveLines — 옮긴 DB 폴더 (ADR-047)", () => {
       "⚠ DB 폴더를 옮겼습니다 — databases/밖 → B/밖 (Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로)",
     ]);
     expect(databaseMoveLines(undefined)).toEqual([]);
+  });
+});
+
+describe("dry-run 이 미리 본 합침 · 충돌", () => {
+  it("합칠 노트는 합칩니다 · 합친 노트는 합쳤습니다로 — 경로를 늘어놓는다", () => {
+    expect(mergedLines(["가.md"], "push", true)).toEqual([
+      "↻ 양쪽이 다른 줄을 고친 노트 1개를 합칩니다 — push 하면 합친 글을 Notion 에 올립니다:",
+      "  가.md",
+    ]);
+    expect(mergedLines(["가.md"], "pushed")[0]).toContain(
+      "합쳤습니다 — 합친 글을 Notion 에 올립니다",
+    );
+    expect(mergedLines([], "push", true)).toEqual([]);
+  });
+
+  it("충돌로 남을 노트는 경로와 함께 — 없으면 아무 줄도 없다", () => {
+    expect(plannedConflictLines(["가.md", "나.md"])).toEqual([
+      "⚠ 양쪽을 고친 노트 2개는 받으면 충돌로 남습니다 — 받은 뒤 nobsi resolve 로 고르세요:",
+      "  가.md",
+      "  나.md",
+    ]);
+    expect(plannedConflictLines([])).toEqual([]);
   });
 });
