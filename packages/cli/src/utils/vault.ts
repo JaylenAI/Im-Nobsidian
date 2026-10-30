@@ -8,6 +8,8 @@ import {
   ScopedVaultFS,
   findConnectionFolders,
   OBSIDIAN_CONFIG_DIR,
+  IGNORE_FILE,
+  type OutsideVault,
   type PathFilterConfig,
   type VaultFS,
 } from "@im-nobsidian/core";
@@ -28,6 +30,34 @@ export async function openVaultFs(cwd: string, paths: PathFilterConfig): Promise
 }
 
 /**
+ * 볼트 전체 — 이 연결이 보지 않는 노트(바깥 · 안쪽 연결 폴더, 경로 패턴 · 제외 파일이 뺀 노트)에서도 동기화가 옮긴 노트로
+ * 가는 링크를 고친다. 이 폴더가 볼트 전체를 그대로 보면 없다 — 고칠 노트가 없다. 볼트(`.obsidian`)를 못 찾아도 없다.
+ */
+export async function outsideVault(
+  cwd: string,
+  paths: PathFilterConfig,
+): Promise<OutsideVault | undefined> {
+  const root = vaultRoot(cwd);
+  if (root === null) return undefined;
+  const folder = relative(root, cwd).split("\\").join("/");
+  const whole =
+    folder === "" &&
+    (paths.include ?? []).length === 0 &&
+    (paths.exclude ?? []).length === 0 &&
+    !existsSync(join(cwd, IGNORE_FILE)) &&
+    (await nestedConnections(cwd)).length === 0;
+  return whole ? undefined : { fs: new NodeVaultFS(root, {}, false), folder };
+}
+
+/** `.obsidian` 을 둔 볼트 맨 위 — 위로 올라가 찾는다. 없으면 null. */
+function vaultRoot(cwd: string): string | null {
+  for (let dir = cwd; ; dir = dirname(dir)) {
+    if (existsSync(join(dir, OBSIDIAN_CONFIG_DIR))) return dir;
+    if (dirname(dir) === dir) return null;
+  }
+}
+
+/**
  * 명령줄에 받은 볼트 경로 → 볼트 경로(`/`). Windows 에서는 `00 Me\a.md` 처럼 `\` 로 쳐도 같은 노트다(이슈 #8) —
  * 예전에는 `-p "00 Me\"` 가 어느 노트에도 맞지 않아 「변경 없음」 이었다. 다른 OS 에서 `\` 는 이름의 글자다.
  */
@@ -40,12 +70,10 @@ export function vaultArgPath(path: string, platform: NodeJS.Platform = process.p
  * (없으면 속성 타입을 값으로 정한다).
  */
 export function obsidianConfigDir(cwd: string): string {
-  for (let dir = cwd; ; dir = dirname(dir)) {
-    if (existsSync(join(dir, OBSIDIAN_CONFIG_DIR))) {
-      return relative(cwd, join(dir, OBSIDIAN_CONFIG_DIR)).split("\\").join("/");
-    }
-    if (dirname(dir) === dir) return OBSIDIAN_CONFIG_DIR;
-  }
+  const root = vaultRoot(cwd);
+  return root === null
+    ? OBSIDIAN_CONFIG_DIR
+    : relative(cwd, join(root, OBSIDIAN_CONFIG_DIR)).split("\\").join("/");
 }
 
 /**

@@ -29,6 +29,8 @@ vi.mock("@im-nobsidian/core", async () => ({
   findConnectionFolders: vi.fn().mockResolvedValue([]),
   ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
+  OBSIDIAN_CONFIG_DIR: ".obsidian",
+  IGNORE_FILE: ".im-nobsidian-ignore",
   WatchSyncService: vi.fn().mockImplementation(() => ({
     start: mockStart,
     stop: mockStop,
