@@ -10,6 +10,11 @@ const YAML_PROPERTIES_REGEX = new RegExp(
 const LEGACY_TABLE_REGEX =
   /^\s*\| Property\s*\| Value\s*\|\n\s*\|\s*-{3,}\s*\|\s*-{3,}\s*\|\n((?:\|[^\n]+\|\n?)+)\n*---\n*/;
 
+/** 본문 첫머리에 페이지의 속성 블록(push 가 페이지 본문에 싣는 frontmatter)이 있나. */
+export function hasPropertiesBlock(markdown: string): boolean {
+  return YAML_PROPERTIES_REGEX.test(markdown) || LEGACY_TABLE_REGEX.test(markdown);
+}
+
 export class PropertiesTableRestorer implements Processor {
   readonly name = "PropertiesTableRestorer";
   readonly order = 5;

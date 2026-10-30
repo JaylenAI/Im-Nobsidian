@@ -31,7 +31,8 @@ export class NoteRelocator {
    */
   unitsOf(record: SyncRecord): string[] {
     if (isFolderRecord(record)) return [record.obsidianPath];
-    if (record.fileType !== "file") return [parentFolderOf(record.obsidianPath)];
+    // 폴더 노트(`X/X.md`)는 폴더째. 노트와 행은 파일 하나와 그 옆의 하위 페이지 폴더(`X/`).
+    if (record.fileType === "folder-note") return [parentFolderOf(record.obsidianPath)];
     const children = stripMarkdownExtension(record.obsidianPath);
     const hasChildren = this.stateDb.getAll().some((r) => within(r.obsidianPath, children));
     return hasChildren ? [record.obsidianPath, children] : [record.obsidianPath];

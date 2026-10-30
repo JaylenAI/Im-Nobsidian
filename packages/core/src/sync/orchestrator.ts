@@ -1161,7 +1161,7 @@ export class SyncOrchestrator {
           ...plan.remoteScan,
           deletionsDeferred: plan.remoteScan.deletionsDeferred && !this.detector.deletionsChecked(),
         },
-        moved: relocated.moved,
+        moved: [...relocated.moved, ...(plan.moved ?? [])],
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
       };
