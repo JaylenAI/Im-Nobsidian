@@ -177,6 +177,16 @@ export interface PushResult {
    * 될 것. 없으면 생략.
    */
   readonly placementChanges?: readonly PlacementChange[];
+  /** 볼트에서 옮기거나 이름을 바꾼 DB 폴더(ADR-047) — dry-run 이면 옮길 것. 없으면 생략. */
+  readonly databaseMoves?: readonly DatabaseMove[];
+}
+
+/** 옮긴 DB 폴더 하나 — {@link PushResult.databaseMoves}. */
+export interface DatabaseMove {
+  readonly from: string;
+  readonly to: string;
+  /** Notion 의 DB 도 옮겼나(옮기나). false 면 DB 가 볼트가 받지 않는 곳에 있어 볼트 쪽 자리만 바뀐다. dry-run 은 모른다. */
+  readonly inNotion?: boolean;
 }
 
 /** 옮긴 노트 하나가 Notion 에서 바뀐 자리 — {@link PushResult.placementChanges}. */

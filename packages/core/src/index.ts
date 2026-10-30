@@ -19,6 +19,7 @@ export type {
   SchemaEdit,
   ViewEdit,
   PlacementChange,
+  DatabaseMove,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

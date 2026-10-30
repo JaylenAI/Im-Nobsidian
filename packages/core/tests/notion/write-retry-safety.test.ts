@@ -198,6 +198,50 @@ describe("두 번 적용해도 같은 요청 — 모호한 실패도 다시 보�
     });
   });
 
+  it("DB 옮기기 · 이름 바꾸기: 504 → 다시 보낸다 (databases.update 의 parent · title, ADR-047)", async () => {
+    const client = newClient();
+    const request = failOnce(apiError(504), {});
+    sdk(client).request = request;
+
+    await client.updateDatabasePlacement("db", { parentPageId: "parent", title: "새 이름" });
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenLastCalledWith({
+      path: "databases/db",
+      method: "patch",
+      body: {
+        parent: { type: "page_id", page_id: "parent" },
+        title: [{ type: "text", text: { content: "새 이름" } }],
+      },
+    });
+    // 바꿀 것이 없으면 보내지 않는다.
+    await client.updateDatabasePlacement("db", {});
+    expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("DB 자리 읽기: 페이지 부모만 pageId — 블록 안의 DB 는 null", async () => {
+    const client = newClient();
+    const retrieve = vi
+      .fn()
+      .mockResolvedValueOnce({
+        parent: { type: "page_id", page_id: "p" },
+        title: [{ plain_text: "표" }],
+      })
+      .mockResolvedValueOnce({ parent: { type: "block_id", block_id: "b" }, title: [] });
+    sdk(client).databases = { retrieve };
+
+    expect(await client.getDatabasePlacement("db")).toEqual({
+      parentType: "page_id",
+      pageId: "p",
+      title: "표",
+    });
+    expect(await client.getDatabasePlacement("db")).toEqual({
+      parentType: "block_id",
+      pageId: null,
+      title: "",
+    });
+  });
+
   it("블록 삭제: 타임아웃 → 다시 보낸다", async () => {
     const client = newClient();
     const del = failOnce(codeError("notionhq_client_request_timeout"), {});

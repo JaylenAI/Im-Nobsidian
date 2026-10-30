@@ -68,6 +68,7 @@ import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
 import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
+import { DatabaseMover, mergeDatabaseMoves } from "./database-moves.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
 import { LinkUpdater } from "./link-updater.js";
@@ -124,6 +125,7 @@ export class SyncOrchestrator {
 
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
+  private readonly databaseMover: DatabaseMover;
   private readonly remoteMoves: RemoteMoveFollower;
   private readonly remoteRenames: RemoteRenameFollower;
   private readonly linkUpdater: LinkUpdater;
@@ -285,6 +287,12 @@ export class SyncOrchestrator {
     );
     this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
+    this.databaseMover = new DatabaseMover(stateDb, notionClient, {
+      rootPageId: config.notion.rootPageId,
+      ensureFolderPage: (folder) => this.placement.ensureFolderPage(folder),
+      folderLookup: () => this.placement.folderLookup(),
+      folderMoveRefusal: (folder, lookup) => this.placement.folderMoveRefusal(folder, lookup),
+    });
     this.remoteMoves = new RemoteMoveFollower(config, stateDb, vaultFs, () =>
       this.placement.folderLookup(),
     );
@@ -431,7 +439,34 @@ export class SyncOrchestrator {
 
     // 이미 올린 노트가 든 채로 DB 로 준비한 폴더는 노트가 그대로여도 DB 를 만들고 행으로 옮긴다(ADR-047).
     const preparedDatabases = loadPreparedDatabases(this.stateDb).size > 0;
-    if (filtered.length === 0 && folderMoves.length === 0 && !preparedDatabases) {
+    // 노트 없이 옮긴 DB 폴더(빈 DB)와 앞서 반영하지 못한 DB 이동도 Notion 에 반영한다(ADR-047).
+    // dry-run 은 이번 DB 폴더 이동을 적지 않았다 — 적어 둔 이동에 겹쳐 본다(같은 DB 는 하나로).
+    const recordedLookup = this.placement.folderLookup();
+    const databaseMoves = mergeDatabaseMoves(
+      this.databaseMover.pending(),
+      options?.dryRun
+        ? plan.databaseFolderMoves.flatMap((move) => {
+            const databaseId = recordedLookup.databaseAt(move.from);
+            return databaseId ? [{ databaseId, from: move.from, to: move.to }] : [];
+          })
+        : [],
+    ).filter((move) => inAnyPathScope(move.to, options?.paths));
+    // dry-run 은 실제 push 가 거절할 DB 이동(DB 폴더 안으로)을 실패로 보인다.
+    const refusedDatabaseMoves = options?.dryRun
+      ? databaseMoves.flatMap((move) => {
+          const error = this.placement.folderMoveRefusal(move.to, view.lookup);
+          return error ? [{ path: move.to, operation: "move" as const, error }] : [];
+        })
+      : [];
+    const movableDatabases = databaseMoves.filter(
+      (move) => !refusedDatabaseMoves.some((refused) => refused.path === move.to),
+    );
+    if (
+      filtered.length === 0 &&
+      folderMoves.length === 0 &&
+      !preparedDatabases &&
+      databaseMoves.length === 0
+    ) {
       // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
       if (!options?.dryRun) await this.completeDatabaseSchemas();
       const edited = options?.dryRun
@@ -514,7 +549,7 @@ export class SyncOrchestrator {
         items.some((item) => item.path === change.path),
       ).length;
       const placementChanges = [
-        ...(await this.pusher.previewPlacementChanges(applicable)),
+        ...(await this.pusher.previewPlacementChanges(applicable, view.lookup)),
         ...preparedConversions,
       ];
       return {
@@ -522,8 +557,8 @@ export class SyncOrchestrator {
         created: count("create"),
         updated: count("update") - convertedUpdates,
         deleted: count("delete"),
-        moved: count("move") + preparedConversions.length,
-        failed: refusedFailures,
+        moved: count("move") + preparedConversions.length + movableDatabases.length,
+        failed: [...refusedFailures, ...refusedDatabaseMoves],
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
@@ -531,6 +566,9 @@ export class SyncOrchestrator {
         ...(plannedEdits.length > 0 ? { schemaEdits: plannedEdits } : {}),
         ...(plannedViews.length > 0 ? { viewEdits: plannedViews } : {}),
         ...(placementChanges.length > 0 ? { placementChanges } : {}),
+        ...(movableDatabases.length > 0
+          ? { databaseMoves: movableDatabases.map(({ from, to }) => ({ from, to })) }
+          : {}),
       };
     }
 
@@ -561,6 +599,12 @@ export class SyncOrchestrator {
     counts.moved += await this.pusher.pushFolderMoves(movableFolders, failed, (to) =>
       options?.onProgress?.(++completed, total, { path: to, operation: "move" }),
     );
+    // 옮긴 DB 폴더의 DB — 옮긴 폴더 페이지 아래로 갈 수 있어 그 뒤에.
+    const movedDatabases = await this.databaseMover.apply(
+      (folder) => inAnyPathScope(folder, options?.paths),
+      failed,
+    );
+    counts.moved += movedDatabases.filter((move) => move.inNotion).length;
 
     // 이번 push 가 본문을 보낸 노트 — 링크 패스가 이 노트의 실패를 실패로 알린다.
     const pushedBodies = new Set<string>();
@@ -780,6 +824,7 @@ export class SyncOrchestrator {
       ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
       ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
       ...(placementChanges.length > 0 ? { placementChanges } : {}),
+      ...(movedDatabases.length > 0 ? { databaseMoves: movedDatabases } : {}),
     };
   }
 
