@@ -8,6 +8,7 @@ import type {
   PropertyRename,
   SchemaEdit,
   ViewEdit,
+  PlacementChange,
 } from "@im-nobsidian/core";
 
 export const icons = {
@@ -275,6 +276,24 @@ export function viewEditLines(edits: readonly ViewEdit[] | undefined, dryRun = f
   return (edits ?? []).map((edit) => {
     const name = edit.from ? `${edit.from} → ${edit.view}` : edit.view;
     return `${icons.success} .base 에서 고친 보기를 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${name} (${edit.changed.map((field) => VIEW_FIELD_LABELS[field]).join(" · ")})`;
+  });
+}
+
+/**
+ * 볼트에서 DB 폴더 안팎 · 다른 DB 폴더로 옮겨 Notion 에서 행 · 페이지가 된 노트(ADR-047). 다른 DB 에서 온 행은 Notion 이
+ * 대상 DB 에 더한 열을 함께 알린다 — 지우려면 Notion 에서 지운다.
+ */
+export function placementChangeLines(
+  changes: readonly PlacementChange[] | undefined,
+  dryRun = false,
+): string[] {
+  return (changes ?? []).map((change) => {
+    const becomes = change.becomes === "row" ? "DB 의 행으" : "페이지";
+    const columns =
+      change.addedColumns && change.addedColumns.length > 0
+        ? ` — 대상 DB 에 ${dryRun ? "더해질" : "더해진"} 열: ${change.addedColumns.join(", ")}`
+        : "";
+    return `${icons.success} Notion 에서 ${becomes}${dryRun ? "로 옮깁니다" : "로 옮겼습니다"} — ${change.path}${columns}`;
   });
 }
 
