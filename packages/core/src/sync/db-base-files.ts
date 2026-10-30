@@ -25,6 +25,11 @@ export interface DbBaseFile {
    * 지문(`BaseViewRecord.rest`)과 이것으로 견준다. 예전 기록에는 없다.
    */
   readonly docRest?: string;
+  /**
+   * 링크드 뷰 컨테이너의 `.base` 면 행을 가진 원본 DB(줄인 id) — 원본 DB 폴더에 놓이고 그 폴더를 가리킨다. 원본의
+   * 옛 이름 산출물을 치울 때 지우지 않고, push 가 이 `.base` 임베드를 컨테이너 블록으로 되돌린다.
+   */
+  readonly linkedTo?: string;
 }
 
 /**
@@ -63,6 +68,30 @@ export class DbBaseFiles {
     this.stateDb.setMeta(DB_BASE_FILES_META_KEY, this.loadedRaw);
   }
 
+  /** 기록을 지운다 — Notion 에서 지운 링크드 뷰. */
+  delete(databaseId: string): void {
+    const entries = this.load();
+    if (!entries.delete(compactNotionId(databaseId))) return;
+    this.loadedRaw = JSON.stringify(Object.fromEntries(entries));
+    this.stateDb.setMeta(DB_BASE_FILES_META_KEY, this.loadedRaw);
+  }
+
+  /** 이 DB 를 원본으로 둔 링크드 뷰의 `.base` 경로. */
+  linkedBasesOf(databaseId: string): string[] {
+    const owner = compactNotionId(databaseId);
+    return [...this.load().values()]
+      .filter((file) => file.linkedTo === owner)
+      .map((file) => file.basePath);
+  }
+
+  /** 이 경로에 쓴 링크드 뷰 컨테이너(줄인 id) — 없으면 null. */
+  linkedContainerAt(basePath: string): string | null {
+    for (const [id, file] of this.load()) {
+      if (file.linkedTo && file.basePath === basePath) return id;
+    }
+    return null;
+  }
+
   /** 상태 메타에서 읽는다 — 값이 그대로면 읽어 둔 것을 쓴다. 없거나 깨졌으면 비어 있다 — 이번 실행이 기록하는 것부터 다시 쌓는다. */
   private load(): Map<string, DbBaseFile> {
     const raw = this.stateDb.getMeta(DB_BASE_FILES_META_KEY);
@@ -86,6 +115,7 @@ export class DbBaseFiles {
               ...(Array.isArray(entry.views) ? { views: entry.views } : {}),
               ...(typeof entry.rest === "string" ? { rest: entry.rest } : {}),
               ...(typeof entry.docRest === "string" ? { docRest: entry.docRest } : {}),
+              ...(typeof entry.linkedTo === "string" ? { linkedTo: entry.linkedTo } : {}),
             }),
           );
         }
@@ -106,5 +136,6 @@ function normalize(info: DbBaseFile): DbBaseFile {
     ...(info.views && info.views.length > 0 ? { views: info.views } : {}),
     ...(info.views && info.views.length > 0 && info.rest ? { rest: info.rest } : {}),
     ...(info.views && info.views.length > 0 && info.docRest ? { docRest: info.docRest } : {}),
+    ...(info.linkedTo ? { linkedTo: info.linkedTo } : {}),
   };
 }

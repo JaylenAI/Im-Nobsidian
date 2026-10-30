@@ -1,5 +1,5 @@
 import type { Conflict, FailedOperation } from "../types/sync.js";
-import { DEFAULT_TITLE_PROPERTY, type Config } from "../types/config.js";
+import { DEFAULT_TITLE_PROPERTY, type Config, type DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { isNotionAccessDenied, isNotionObjectNotFound } from "../notion/client.js";
@@ -212,6 +212,8 @@ export class DatabaseDiscovery {
       // 향하게 하고, 해소 완료 컨테이너의 재해소(건당 API ~4회)를 건너뛰게 한다.
       const linkedMap = loadLinkedDbMap(this.stateDb);
       let linkedChanged = false;
+      /** 이번에 원본으로 해소한 컨테이너 — 원본을 조회하지 않아도 링크드 뷰의 `.base` 를 쓴다. */
+      const linkedNow = new Set<string>();
 
       // 발견하다 읽지 못한 것 — 이유와 함께 실패로 싣고 다음 pull 이 다시 본다. 읽지 못한 것을
       // 없다고 하면 pull 이 성공으로 끝나, 사용자는 그 DB 를 받지 못한 줄 모른다.
@@ -279,6 +281,7 @@ export class DatabaseDiscovery {
         } else if (outcome.kind === "linked") {
           const origNohyph = outcome.originalDbId.replace(/-/g, "");
           linkedMap.set(nohyph, origNohyph);
+          linkedNow.add(nohyph);
           linkedChanged = true;
           await registerOriginal(origNohyph);
         } else if (outcome.kind === "inaccessible") {
@@ -346,6 +349,8 @@ export class DatabaseDiscovery {
       // 신규 발견을 등록하고 발견이 마를 때까지 반복한다. 페이지 pull 경로(_inlineDbRefs)만
       // 스캔하던 기존 구현은 row 내부 DB 를 어떤 pull 에서도 발견하지 못했다.
       const stillSyncable: typeof dbConfigs = [];
+      /** 이번에 폴더 전체를 받은 DB — 그 DB 를 원본으로 둔 링크드 뷰의 `.base` 도 다시 받는다. */
+      const pulledWhole = new Set<string>();
       let queue = [...dbConfigs];
       const MAX_DISCOVERY_ROUNDS = 4;
       // F25: linked view 컨테이너 판정 시 행 소유를 양보할 원본 폴더 탐색. 디스커버리
@@ -393,10 +398,8 @@ export class DatabaseDiscovery {
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해
             // 다음 pull 부터 이중 방문 자체를 없앤다. .base 재지향은 pullDatabase 가 마쳤다.
             if (dbResult.linkedOriginalDbId) {
-              linkedMap.set(
-                dbConfig.databaseId.replace(/-/g, ""),
-                dbResult.linkedOriginalDbId.replace(/-/g, ""),
-              );
+              linkedMap.set(nohyph, dbResult.linkedOriginalDbId.replace(/-/g, ""));
+              linkedNow.add(nohyph);
               linkedChanged = true;
               changed = true;
               ledger?.settle(dbConfig.databaseId);
@@ -405,6 +408,7 @@ export class DatabaseDiscovery {
               );
               continue;
             }
+            if (!paths) pulledWhole.add(nohyph);
             created += dbResult.created;
             updated += dbResult.updated;
             deleted += dbResult.deleted;
@@ -459,6 +463,14 @@ export class DatabaseDiscovery {
         }
       }
 
+      if (!signal?.aborted) {
+        linkedChanged =
+          (await this.pullLinkedViews(linkedMap, stillSyncable, {
+            pulled: (container, original) =>
+              forceRediscovery || linkedNow.has(container) || pulledWhole.has(original),
+          })) || linkedChanged;
+      }
+
       // 대기는 이제 동기화하는 DB 만 — 설정에서 뺐거나 · 접근 불가로 뺀 DB 를 영영 들고 있지 않는다.
       ledger?.keepOnly([...configuredIds, ...stillSyncable.map((c) => c.databaseId)]);
 
@@ -492,6 +504,34 @@ export class DatabaseDiscovery {
     }
 
     return { created, updated, deleted, restored };
+  }
+
+  /**
+   * 링크드 뷰 컨테이너마다 그 보기로 `.base` 를 쓴다({@link DatabaseSyncer.pullLinkedView}). 원본 DB 를 받은 pull ·
+   * 이번에 해소한 컨테이너 · 아직 `.base` 가 없는 컨테이너만 — 보기만 고친 것은 DB 수정 시각을 바꾸지 않아 원본처럼
+   * 다음 전체 대조가 받는다. Notion 에서 지운 컨테이너는 연결에서 뺀다.
+   *
+   * @returns 연결(`linkedMap`)을 바꿨나.
+   */
+  private async pullLinkedViews(
+    linkedMap: Map<string, string>,
+    syncing: readonly DatabaseSyncConfig[],
+    due: { readonly pulled: (container: string, original: string) => boolean },
+  ): Promise<boolean> {
+    let changed = false;
+    const owners = [...syncing, ...(this.config.notion.databases ?? [])];
+    for (const [container, original] of [...linkedMap]) {
+      const owner = owners.find((c) => c.databaseId.replace(/-/g, "") === original);
+      if (!owner) continue;
+      if (!due.pulled(container, original) && this.databaseSyncer.baseFileInfo.get(container)) {
+        continue;
+      }
+      if ((await this.databaseSyncer.pullLinkedView(container, owner)) === "gone") {
+        linkedMap.delete(container);
+        changed = true;
+      }
+    }
+    return changed;
   }
 
   private async discoverChildDatabases(pageIds: readonly string[]): Promise<{
@@ -640,6 +680,13 @@ export class DatabaseDiscovery {
     // 탈락한 id 의 placeholder 는 마커째 남아 다음 pull 에서 재시도된다.
     for (const [key, t] of [...targets]) {
       if (!(await this.vaultFs.exists(t.basePath))) targets.delete(key);
+    }
+    // 링크드 뷰는 자기 `.base` 로 — 없으면(쓰지 못했으면) 아래에서 원본의 `.base` 로 간다.
+    for (const container of linkedMap.keys()) {
+      const info = this.databaseSyncer.baseFileInfo.get(container);
+      if (info?.linkedTo && (await this.vaultFs.exists(info.basePath))) {
+        targets.set(container, { basePath: info.basePath, title: info.title });
+      }
     }
     if (targets.size === 0) return;
 

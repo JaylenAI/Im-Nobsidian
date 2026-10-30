@@ -30,6 +30,7 @@ import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
+import { DbBaseFiles } from "./db-base-files.js";
 import {
   folderContainer,
   isFolderNotePath,
@@ -1629,11 +1630,13 @@ export class PagePusher {
   }
 
   /**
-   * `.base` 가 나타내는 Notion DB id 들 — 옆 사이드카(`<이름>.notion.json`)의 DB 와, 그 DB 를
-   * 원본으로 둔 링크드 뷰 컨테이너(pull 이 `.base` 를 원본 DB 로 몰아 만든다). 사이드카가
-   * 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
+   * `.base` 가 나타내는 Notion DB id 들 — 링크드 뷰의 `.base` 면 그 컨테이너. 아니면 옆 사이드카(`<이름>.notion.json`)의
+   * DB 와, 그 DB 를 원본으로 둔 링크드 뷰 컨테이너(예전 pull 은 링크드 뷰를 원본의 `.base` 로 몰아 넣었다 — 그 노트를
+   * 올릴 때도 링크드 뷰 블록을 지킨다). 사이드카가 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
    */
   private async databaseIdsOfBase(basePath: string): Promise<string[]> {
+    const container = new DbBaseFiles(this.stateDb).linkedContainerAt(basePath);
+    if (container) return [container];
     // 부르는 쪽(child-tags)이 `.base` 로 끝나는 경로만 넘긴다.
     const sidecarPath = basePath.slice(0, -BASE_SUFFIX.length) + SIDECAR_SUFFIX;
     let databaseId: unknown;
