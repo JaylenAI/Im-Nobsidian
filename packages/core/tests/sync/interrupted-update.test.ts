@@ -138,6 +138,10 @@ describe("끊긴 갱신 이어 하기", () => {
     });
 
     it("그 사이 pull 은 이 도구가 쓰다 만 본문을 받지도 충돌로 올리지도 않는다", async () => {
+      expect(await orchestrator.pull({ dryRun: true })).toMatchObject({
+        updated: 0,
+        conflicts: [],
+      });
       const pulled = await orchestrator.pull();
 
       expect(pulled).toMatchObject({ updated: 0, conflicts: [], failed: [] });
@@ -193,6 +197,10 @@ describe("끊긴 갱신 이어 하기", () => {
       expect(notion.pages.get(row.id)!.body).toContain(deferredCodeMarker(0));
       at("10:04:00");
 
+      expect(await orchestrator.pull({ dryRun: true })).toMatchObject({
+        updated: 0,
+        conflicts: [],
+      });
       expect(await orchestrator.pull()).toMatchObject({ updated: 0, conflicts: [] });
       expect(vault.read(path)).toBe(edited);
       expect(await orchestrator.push()).toMatchObject({ updated: 1, failed: [] });
