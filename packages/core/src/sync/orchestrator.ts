@@ -74,6 +74,7 @@ import { DatabaseMover, mergeDatabaseMoves } from "./database-moves.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
 import { LinkUpdater, type OutsideVault } from "./link-updater.js";
+import { readBlockAnchors } from "./block-anchors.js";
 import { ChangeInspector } from "./change-inspector.js";
 import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
@@ -1666,8 +1667,12 @@ export class SyncOrchestrator {
 
   /** pull 이 쓴 노트의 Notion 링크를 볼트 링크로 푼다 — 푼 링크 수를 돌려준다. */
   private async resolveNotionLinks(paths: string[]): Promise<number> {
-    return resolveNotionLinks(this.stateDb, this.vaultFs, paths, async (pageId) =>
-      this.notionClient.extractTitle(await this.notionClient.getPage(pageId)),
+    return resolveNotionLinks(
+      this.stateDb,
+      this.vaultFs,
+      paths,
+      async (pageId) => this.notionClient.extractTitle(await this.notionClient.getPage(pageId)),
+      (blockIds) => readBlockAnchors(this.notionClient, blockIds),
     );
   }
 
