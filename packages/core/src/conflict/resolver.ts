@@ -28,7 +28,7 @@ export function applicableChoices(conflict: Conflict): readonly ResolutionChoice
 
 /**
  * 전략이 이 충돌에 고르는 것. 원격에서 지운 노트는 복제할 원격이 없어 duplicate 도 «로컬 유지» —
- * 둘 다 잃는 것이 없다. manual 은 자동 병합인데 지운 원격과는 병합할 수 없어 던진다.
+ * 둘 다 잃는 것이 없다. manual · merge 는 자동 병합인데 지운 원격과는 병합할 수 없어 던진다.
  */
 export function choiceForStrategy(
   conflict: Conflict,
@@ -42,6 +42,7 @@ export function choiceForStrategy(
     case "duplicate":
       return isRemoteDeletion(conflict) ? "local" : "duplicate";
     case "manual":
+    case "merge":
       if (isRemoteDeletion(conflict)) {
         throw new Error(
           `Notion 에서 지운 노트는 자동 병합할 수 없음 — 로컬 유지나 원격 유지를 고르세요: ${conflict.syncRecord.obsidianPath}`,

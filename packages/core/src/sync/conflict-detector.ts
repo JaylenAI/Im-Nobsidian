@@ -1,13 +1,15 @@
 import type { Conflict, ConflictStrategy, RemoteChange, SyncRecord } from "../types/sync.js";
+import { threeWayMerge } from "../conflict/merger.js";
 import { computeHash } from "../utils/hash.js";
 
 /**
  * Pull 충돌 해소 시 취할 동작.
  * - `write`: 로컬을 리모트 내용으로 덮어쓴다 (로컬 미수정 또는 remote-first).
  * - `skip`: 로컬을 보존하고 리모트 내용을 버린다 (local-first).
- * - `conflict`: 양쪽 모두 수정됨 → 사용자 해소 대기 (manual/duplicate).
+ * - `conflict`: 양쪽 모두 수정됨 → 사용자 해소 대기 (manual/duplicate · merge 가 겹친 줄).
+ * - `merge`: 양쪽이 다른 줄을 고쳐 3-way 로 합쳤다 — 합친 글을 쓰고, 로컬 편집으로 남겨 push 가 올린다(merge).
  */
-export type PullConflictAction = "write" | "skip" | "conflict";
+export type PullConflictAction = "write" | "skip" | "conflict" | "merge";
 
 export interface PullConflictInput {
   /** 동기화 상태 레코드 (마지막 동기화 시점 해시·스냅샷 포함). */
@@ -38,6 +40,8 @@ export interface PullConflictResult {
   readonly action: PullConflictAction;
   /** action === "conflict" 일 때만 채워진다. */
   readonly conflict?: Conflict;
+  /** action === "merge" 일 때만 — 지난 사본 · 로컬 · 원격을 합친 글. */
+  readonly merged?: string;
   /** 호출자가 재계산하지 않도록 제공하는 로컬 내용 해시. */
   readonly localHash: string;
   /**
@@ -119,7 +123,15 @@ export function resolvePullConflict(input: PullConflictInput): PullConflictResul
     return { action: "skip", localHash };
   }
 
-  // manual / duplicate → 충돌로 보존, 사용자 해소 대기.
+  // merge: 지난 사본을 공통 조상으로 양쪽 변경을 합친다. 서로 다른 줄을 고쳤으면 합친 글을 쓰고,
+  // 같은 줄을 다르게 고쳤으면(겹침) manual 처럼 충돌로 남긴다 — 충돌 표시를 노트에 넣지 않는다.
+  // 지난 사본이 없으면 공통 조상을 모르므로 합치지 않는다.
+  if (strategy === "merge" && baseContent !== null) {
+    const result = threeWayMerge(baseContent, localContent, remoteContent);
+    if (result.success) return { action: "merge", merged: result.merged, localHash };
+  }
+
+  // manual / duplicate · 합치지 못한 merge → 충돌로 보존, 사용자 해소 대기.
   const conflict: Conflict = {
     syncRecord: record,
     localChange: {

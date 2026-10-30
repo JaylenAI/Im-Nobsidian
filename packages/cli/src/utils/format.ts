@@ -205,6 +205,26 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
 }
 
 /**
+ * merge 전략이 받은 원격에 로컬 편집을 합친 노트 · 행. pull 만 했으면 합친 글은 아직 볼트에만 있다 — push 가 올린다.
+ * sync 는 같은 실행의 push 가 올린다.
+ */
+export function mergedLines(
+  paths: readonly string[] | undefined,
+  then: "push" | "pushed",
+): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.cyan(
+      `↻ 양쪽이 다른 줄을 고친 노트 ${paths.length}개를 합쳤습니다 — ` +
+        (then === "push"
+          ? "push 하면 합친 글을 Notion 에 올립니다:"
+          : "합친 글을 Notion 에 올립니다:"),
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
  * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
  * 올리지 않은 값이 있어 남긴 키는 경고로 — 그 값을 받을 열이 Notion 에 없다.
  */

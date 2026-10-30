@@ -943,6 +943,7 @@ export class SyncOrchestrator {
     this.puller.beginPull();
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.databaseSyncer.takeMergedRows();
     this.databaseSyncer.takeSchemaFollowed();
     this.databaseSyncer.takeHeldSidecars();
     this.databaseSyncer.takeHeldBases();
@@ -994,6 +995,8 @@ export class SyncOrchestrator {
     const writtenPaths: string[] = [];
     // 볼트에서 사라져 Notion 에서 되살린 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다(D8).
     const restoredPaths: string[] = [];
+    // merge 전략이 받은 원격에 로컬 편집을 합친 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다.
+    const mergedPaths: string[] = [];
     // 동기화에서 뺀 자리에 놓일 새 원격 페이지 — 받지 않고 알린다.
     const excluded: string[] = [];
     const failed: FailedOperation[] = [];
@@ -1058,6 +1061,7 @@ export class SyncOrchestrator {
       await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
+      mergedPaths.push(...this.databaseSyncer.takeMergedRows());
       const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
       const heldSidecars = this.databaseSyncer.takeHeldSidecars();
       const heldBases = this.databaseSyncer.takeHeldBases();
@@ -1094,6 +1098,7 @@ export class SyncOrchestrator {
         deleted,
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+        ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
         ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
         ...(heldSidecars.length > 0 ? { heldSidecars } : {}),
         ...(heldBases.length > 0 ? { heldBases } : {}),
@@ -1308,6 +1313,10 @@ export class SyncOrchestrator {
           const outcome = await this.puller.pullUpdate(change);
           if (outcome.action === "conflict") {
             conflicts.push(outcome.conflict);
+          } else if (outcome.action === "merged") {
+            // 받았지만 합친 로컬 편집이 남았다 — writtenPaths 에 넣지 않아 sync 의 push 가 올린다.
+            counts.updated++;
+            mergedPaths.push(outcome.path);
           } else if (outcome.action === "written") {
             writtenPaths.push(outcome.path);
             if (restoreIds.has(change.pageId)) {

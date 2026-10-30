@@ -262,6 +262,11 @@ When both sides change the same file, `pull`/`sync` flags it as a conflict inste
 
 Interactive mode adds a **merge** option (3-way auto-merge with conflict markers). The default `sync.conflictStrategy` is `manual` — conflicts are flagged and left for you to resolve.
 
+Set `sync.conflictStrategy` to `merge` (plugin: **다른 줄을 고친 충돌은 합치기**) to merge automatically on `pull`/`sync`: when the
+note and the Notion page changed different lines since the last sync, both changes are combined (3-way, against the last synced
+copy) and written to the vault; `sync` uploads the result in the same run, `pull` leaves it as a local edit for the next `push`.
+When both sides changed the same lines it stays a conflict as with `manual` — no conflict markers are written into the note.
+
 ### CLI and Plugin on the Same Vault
 
 The CLI and the Obsidian plugin share one sync-state database per vault (`.im-nobsidian/sync.db`),
@@ -319,7 +324,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate" | "merge"
     "deleteSync": false, // true: deleting a note deletes it on the other side too (the plugin always does)
     "renameOnTitleChange": false, // true: a title changed in Notion renames the file and updates links to it
     "fullReconcileInterval": 3600, // seconds between full scans of Notion — 0 = every pull

@@ -414,6 +414,35 @@ export class PagePuller {
       this.stateDb.updateStatus(record.id, "conflict");
       return { action: "conflict", path: record.obsidianPath, conflict: resolution.conflict! };
     }
+    // merge: 합친 글을 쓰고 지난 사본은 받은 원격으로 적는다 — 합친 글이 원격과 다른 만큼(로컬 편집)이
+    // 바뀐 노트로 남아 이어지는 push 가 올린다. 파일 stat 은 비운다 — 적으면 변경 확인이 내용을 읽지 않고
+    // 바뀌지 않은 노트로 본다(B5).
+    if (resolution.action === "merge") {
+      await this.vaultFs.writeFile(record.obsidianPath, resolution.merged!);
+      this.stateDb.transaction(() => {
+        this.stateDb.upsert({
+          obsidianPath: record.obsidianPath,
+          notionPageId: change.pageId,
+          notionParentId: record.notionParentId,
+          contentHash: computeHash(remoteContent),
+          ...this.observation.fieldsOf(page, rendered.bodyFingerprint),
+          localLastModified: new Date().toISOString(),
+          syncDirection: record.syncDirection,
+          fileType: record.fileType,
+          status: "synced",
+          baseSnapshot: Buffer.from(remoteContent, "utf-8"),
+          localMtime: null,
+          localFileSize: null,
+        });
+        this.stateDb.upsertWikilink({
+          obsidianPath: record.obsidianPath,
+          notionPageId: change.pageId,
+          title: rendered.title,
+          aliases: extractAliases(rendered.properties),
+        });
+      });
+      return { action: "merged", path: record.obsidianPath };
+    }
 
     // I5 false-churn 차단: 리모트 변환 결과가 디스크 내용과 바이트 동일하면 Notion 이
     // last_edited 만 갱신한 '가짜 수정'이다. 파일을 재기록하면 mtime 이 바뀌어 다음 push 가
