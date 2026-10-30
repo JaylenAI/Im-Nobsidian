@@ -331,7 +331,7 @@ export interface PullResult {
   readonly moved?: readonly RemoteMove[];
   /** Notion 에서 옮겼지만 볼트에서 옮기지 않은 것과 그 까닭. */
   readonly moveSkipped?: readonly RemoteMoveSkip[];
-  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. */
+  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. 이 연결이 보지 않는 노트는 볼트 맨 위 기준 경로다. */
   readonly relinked?: readonly string[];
   /**
    * Notion 에 새로 생겼지만 동기화에서 뺀 자리(paths · `.im-nobsidian-ignore`)에 놓일 것이라 받지 않은 페이지 —

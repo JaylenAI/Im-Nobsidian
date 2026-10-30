@@ -45,6 +45,7 @@ vi.mock("@im-nobsidian/core", () => ({
   ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
   IGNORE_FILE: ".im-nobsidian-ignore",
+  OBSIDIAN_CONFIG_DIR: ".obsidian",
   setLogger: (...args: unknown[]) => mockSetLogger(...args),
 }));
 

@@ -138,7 +138,20 @@ export class ConnectionEngine {
       config.paths.include,
       config.paths.exclude,
     );
-    const orchestrator = new SyncOrchestrator(config, stateDb, client, syncFs, obsidianFetch);
+    // 이 연결이 볼트 전체를 보지 않으면 나머지 노트의 링크도 고친다. 쓰기의 볼트 이벤트를 가리지 않는 어댑터라 그 노트를
+    // 맡은 연결이 바뀐 노트로 받는다.
+    const outside =
+      syncFs === vaultAdapter
+        ? undefined
+        : { fs: new ObsidianVaultAdapter(this.host.app.vault), folder: this.folder };
+    const orchestrator = new SyncOrchestrator(
+      config,
+      stateDb,
+      client,
+      syncFs,
+      obsidianFetch,
+      outside,
+    );
     // 동기화 실행은 전부 SyncController 가 담당한다. 플러그인은 Notice/사이드바/상태바 표시만 훅으로 넘긴다.
     this.controller = new SyncController(
       orchestrator,

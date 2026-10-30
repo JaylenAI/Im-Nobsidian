@@ -32,7 +32,7 @@ import {
   pushDbChangeCount,
   pushJson,
 } from "../utils/json-output.js";
-import { openVaultFs } from "../utils/vault.js";
+import { openVaultFs, outsideVault } from "../utils/vault.js";
 import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const syncCommand = new Command("sync")
@@ -53,7 +53,14 @@ export const syncCommand = new Command("sync")
     try {
       const client = NotionClient.fromConfig(config);
       const vaultFs = await openVaultFs(cwd, config.paths);
-      const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
+      const orchestrator = new SyncOrchestrator(
+        config,
+        stateDb,
+        client,
+        vaultFs,
+        undefined,
+        await outsideVault(cwd, config.paths),
+      );
 
       log(`\n${header("  Bidirectional Sync")}`);
       log(`  ${separator()}`);

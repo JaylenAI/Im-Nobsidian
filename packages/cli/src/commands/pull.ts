@@ -27,7 +27,7 @@ import {
   LISTED_ITEMS,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
-import { openVaultFs, vaultArgPath } from "../utils/vault.js";
+import { openVaultFs, outsideVault, vaultArgPath } from "../utils/vault.js";
 import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const pullCommand = new Command("pull")
@@ -58,7 +58,14 @@ export const pullCommand = new Command("pull")
     try {
       const client = NotionClient.fromConfig(config);
       const vaultFs = await openVaultFs(cwd, config.paths);
-      const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
+      const orchestrator = new SyncOrchestrator(
+        config,
+        stateDb,
+        client,
+        vaultFs,
+        undefined,
+        await outsideVault(cwd, config.paths),
+      );
 
       if (!json) {
         console.log(`\n${header("  Pulling from Notion...")}`);

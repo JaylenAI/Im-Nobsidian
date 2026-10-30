@@ -65,3 +65,74 @@ describe("LinkUpdater.dropEmbeds — Notion 에서 지운 링크드 뷰의 임�
     expect(await updater.dropEmbeds([])).toEqual([]);
   });
 });
+
+describe("LinkUpdater.apply — 다른 연결의 노트에서도 링크를 고친다 (P6)", () => {
+  /** 볼트 전체와 연결 폴더 `Work` 만 보는 볼트 — 같은 파일을 나눠 본다. */
+  function vault(notes: Record<string, string>) {
+    const files = new Map(Object.entries(notes));
+    const fsOf = (folder: string) => {
+      const prefix = folder === "" ? "" : `${folder}/`;
+      const inside = () =>
+        [...files].filter(([path]) => path.startsWith(prefix) && path.endsWith(".md"));
+      return {
+        listMarkdownFiles: vi.fn(async () =>
+          inside().map(([path, content]) => ({ path: path.slice(prefix.length), content })),
+        ),
+        listNonMarkdownFiles: vi.fn(async () => []),
+        writeFile: vi.fn(async (path: string, content: string) => {
+          files.set(prefix + path, content);
+        }),
+        getFileStat: vi.fn(async () => ({ mtime: "2026-10-30T00:00:00.000Z", size: 1 })),
+      };
+    };
+    const stateDb = { getByPath: vi.fn(() => null), updateHash: vi.fn(), updateStatCache: vi.fn() };
+    return { files, fsOf, stateDb };
+  }
+
+  it("볼트 맨 위 · 다른 연결 폴더의 노트가 옮긴 노트를 가리키면 고치고, 이 연결의 노트는 한 번만 쓴다", async () => {
+    const { files, fsOf, stateDb } = vault({
+      "Work/b.md": "옮긴 노트\n",
+      "Work/w.md": "[[a]]\n",
+      "Personal/p.md": "[[Work/a|회의]]\n",
+      "home.md": "[[a]] · [[home]]\n",
+    });
+    const own = fsOf("Work");
+    const whole = fsOf("");
+    const updater = new LinkUpdater(stateDb as never, own as never, {
+      fs: whole as never,
+      folder: "Work",
+    });
+
+    const relinked = await updater.apply([{ from: "a.md", to: "b.md", renamed: true }]);
+
+    expect(relinked.sort()).toEqual(["Personal/p.md", "home.md", "w.md"]);
+    expect(files.get("Work/w.md")).toBe("[[b]]\n");
+    expect(files.get("Personal/p.md")).toBe("[[Work/b|회의]]\n");
+    expect(files.get("home.md")).toBe("[[b]] · [[home]]\n");
+    expect(own.writeFile).toHaveBeenCalledTimes(1);
+    expect(whole.writeFile).toHaveBeenCalledTimes(2);
+  });
+
+  it("볼트 전체를 받지 않으면 이 연결의 노트만 고친다 — 예전과 같다", async () => {
+    const { files, fsOf, stateDb } = vault({
+      "Work/b.md": "옮긴 노트\n",
+      "home.md": "[[a]]\n",
+    });
+    const updater = new LinkUpdater(stateDb as never, fsOf("Work") as never);
+
+    expect(await updater.apply([{ from: "a.md", to: "b.md" }])).toEqual([]);
+    expect(files.get("home.md")).toBe("[[a]]\n");
+  });
+
+  it("옮긴 것이 없으면 볼트 전체를 읽지 않는다", async () => {
+    const { fsOf, stateDb } = vault({ "home.md": "[[a]]\n" });
+    const whole = fsOf("");
+    const updater = new LinkUpdater(stateDb as never, fsOf("Work") as never, {
+      fs: whole as never,
+      folder: "Work",
+    });
+
+    expect(await updater.apply([])).toEqual([]);
+    expect(whole.listMarkdownFiles).not.toHaveBeenCalled();
+  });
+});

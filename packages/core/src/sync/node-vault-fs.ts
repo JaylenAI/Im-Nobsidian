@@ -15,12 +15,17 @@ export interface PathFilterConfig {
 export class NodeVaultFS implements VaultFS {
   private readonly filter: PathFilter;
 
+  /**
+   * @param ignoreFile 폴더의 `.im-nobsidian-ignore` 를 따른다 — 볼트 전체를 보는 쪽(다른 연결의 노트에서 링크를 고칠 때)은
+   *   그 폴더를 맡은 연결의 제외 목록을 따르지 않는다.
+   */
   constructor(
     private readonly rootPath: string,
     pathConfig?: PathFilterConfig,
+    ignoreFile = true,
   ) {
     const configExclude = pathConfig?.exclude ?? [];
-    const ignorePatterns = this.loadImNobsidianIgnore();
+    const ignorePatterns = ignoreFile ? this.loadImNobsidianIgnore() : [];
     this.filter = new PathFilter(pathConfig?.include ?? [], [...configExclude, ...ignorePatterns]);
   }
 

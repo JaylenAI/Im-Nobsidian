@@ -73,7 +73,7 @@ import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-pl
 import { DatabaseMover, mergeDatabaseMoves } from "./database-moves.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
-import { LinkUpdater } from "./link-updater.js";
+import { LinkUpdater, type OutsideVault } from "./link-updater.js";
 import { ChangeInspector } from "./change-inspector.js";
 import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
@@ -174,6 +174,8 @@ export class SyncOrchestrator {
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
     customFetch?: typeof globalThis.fetch,
+    /** 볼트 전체 — 이 연결이 보지 않는 노트에서도 옮긴 노트로 가는 링크를 고친다(연결 폴더 · 경로 패턴). */
+    outside?: OutsideVault,
   ) {
     this.observation = new RunObservation(stateDb, notionClient);
     this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
@@ -312,7 +314,7 @@ export class SyncOrchestrator {
         this.detector.discoveredPage(pageId) ?? (await notionClient.getPage(pageId)),
       config.notion.databases ?? [],
     );
-    this.linkUpdater = new LinkUpdater(stateDb, vaultFs);
+    this.linkUpdater = new LinkUpdater(stateDb, vaultFs, outside);
     this.puller = new PagePuller(
       config,
       stateDb,
