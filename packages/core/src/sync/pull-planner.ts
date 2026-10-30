@@ -19,6 +19,7 @@ import {
 } from "./discovered-databases.js";
 import { isFolderRecord } from "./folder-container.js";
 import type { LocalPlan, LocalPlanner } from "./local-planner.js";
+import type { PagePuller } from "./page-puller.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { decideRemoteDeletion } from "./remote-deletion.js";
 import type { RemoteDriftChecker } from "./remote-drift.js";
@@ -39,6 +40,7 @@ export class PullPlanner {
     private readonly databaseSyncer: DatabaseSyncer,
     private readonly drift: RemoteDriftChecker,
     private readonly planner: LocalPlanner,
+    private readonly puller: Pick<PagePuller, "folderPageHasBody">,
   ) {}
 
   /**
@@ -63,9 +65,9 @@ export class PullPlanner {
     // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
     const planned: RemoteChange[] = [];
     for (const change of unchangedDropped) {
-      if (change.type !== "deleted" || (await this.plannedRemoteDeletion(change))) {
-        planned.push(change);
-      }
+      if (change.type === "deleted" && !(await this.plannedRemoteDeletion(change))) continue;
+      if (change.type === "modified" && !(await this.plannedFolderPage(change))) continue;
+      planned.push(change);
     }
     const failed: FailedOperation[] = [];
     // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
@@ -143,6 +145,20 @@ export class PullPlanner {
         skippedDatabases: ledger.skipped,
       },
     };
+  }
+
+  /**
+   * 고친 페이지를 실제 pull 이 받는가 — 폴더로만 추적하는 페이지는 본문이 생겼을 때만 폴더 노트로 받는다. 하위 페이지 ·
+   * DB 를 옮기기만 해도 그 페이지의 수정 시각이 바뀌어 고친 것으로 보였다. 확인하지 못하면 센다(실제 pull 이 받아 본다).
+   */
+  private async plannedFolderPage(change: RemoteChange): Promise<boolean> {
+    const record = this.stateDb.getByNotionId(change.pageId);
+    if (!record || !isFolderRecord(record)) return true;
+    try {
+      return await this.puller.folderPageHasBody(record);
+    } catch {
+      return true;
+    }
   }
 
   /** 원격에서 지운 페이지를 실제 pull 이 볼트에서 지우는가 — `PagePuller.pullDelete` 와 같게 가른다. */
