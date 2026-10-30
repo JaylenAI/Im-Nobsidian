@@ -215,6 +215,10 @@ Obsidian Vault                        Notion Workspace
 3. Converts changed files: frontmatter → properties, markdown → Notion blocks
 4. Creates/updates pages via Notion API (rate-limited at 3 req/s)
 
+A note renamed and edited at once still updates the same page — the CLI can't see renames, so it pairs a new note with a
+vanished one in the same folder or with the same file name when their text overlaps enough (0.6 or more). Two equally
+close candidates are left unpaired.
+
 ### Pull (Notion → Obsidian)
 
 1. Finds what changed in Notion since the last pull — pages, database rows, and databases whose schema
@@ -234,7 +238,11 @@ Obsidian Vault                        Notion Workspace
    note written as a path (`[[Folder/Note]]`, `[x](Folder/Note.md)`) are updated in your other notes.
    A title changed in Notion goes into the note's frontmatter `title:` and the file name stays — turn on
    `sync.renameOnTitleChange` (plugin: **Settings → Notion 에서 바꾼 제목으로 이름 바꾸기**) to rename the
-   file instead; links to it are updated the same way
+   file instead; links to it are updated the same way. Renaming a database renames its folder too (only while the folder
+   still follows the database's previous name). `status` and `pull --dry-run` show the renames ahead. Links are also
+   updated in other connections' folders and in notes that aren't synced. When a sync move leaves a `.base` you made
+   yourself filtering on the old folder, it isn't changed silently — you're asked what to do: the CLI asks at the end of
+   pull, push or sync (`--yes` fixes without asking), the plugin opens a dialog when the run is done
 4. Detects changes by `last_edited_time`
 5. Converts Notion blocks → markdown, properties → frontmatter
 6. Downloads images to your attachments folder (deduplicated)
@@ -269,33 +277,34 @@ Update the CLI and the plugin together — older versions don't take the lock.
 
 ## Supported Conversions
 
-| Feature                                         |        Push         |     Pull      |
-| ----------------------------------------------- | :-----------------: | :-----------: |
-| Headings, paragraphs, bold/italic/strikethrough |         ✅          |      ✅       |
-| Code blocks (30+ languages)                     |         ✅          |      ✅       |
-| Ordered / unordered / checkbox lists            |         ✅          |      ✅       |
-| Links and wikilinks                             |         ✅          |      ✅       |
-| Callouts / Notion callout blocks (collapsible)  |         ✅          |      ✅       |
-| Math equations (LaTeX, inline + block)          |         ✅          |      ✅       |
-| Tables                                          |         ✅          |      ✅       |
-| Dividers                                        |         ✅          |      ✅       |
-| Toggle blocks                                   |         ✅          |      ✅       |
-| Column layouts                                  |         ✅          |      ✅       |
-| Colors and underlines                           |         ✅          | ✅ Preserved  |
-| Media (audio / video / pdf / file)              |         ✅          |      ✅       |
-| Tab blocks                                      |         ✅          | ✅ Preserved  |
-| Video / embed URLs                              |         ✅          |      ✅       |
-| Frontmatter ↔ database properties (21 types)    |         ✅          |      ✅       |
-| Highlights (`==mark==`)                         |         ✅          |      ✅       |
-| Footnotes (`[^1]`)                              |         ✅          | ✅ Round-trip |
-| Table column alignment                          |         ✅          | ✅ Round-trip |
-| Obsidian comments (`%%…%%`)                     | ✅ Hidden in Notion |  ✅ Restored  |
-| Images                                          |         ✅          |  ✅ Download  |
-| File attachments (xlsx, pdf, ipynb, etc.)       |          —          |  ✅ Download  |
-| Cover images + icons                            |          —          |  ✅ Download  |
-| Notion-only blocks (bookmark, embed, etc.)      |         ✅          | ✅ Preserved  |
-| Notion HTML blocks ↔ `.html` attachments        |         ✅          |  ✅ Download  |
-| Notion-only blocks (button, form, synced block) |          —          | 📌 Preserved  |
+| Feature                                                       |        Push         |     Pull      |
+| ------------------------------------------------------------- | :-----------------: | :-----------: |
+| Headings, paragraphs, bold/italic/strikethrough               |         ✅          |      ✅       |
+| Code blocks (30+ languages)                                   |         ✅          |      ✅       |
+| Ordered / unordered / checkbox lists                          |         ✅          |      ✅       |
+| Links and wikilinks                                           |         ✅          |      ✅       |
+| Heading and block links (`[[Note#Heading]]` · `[[Note#^id]]`) |   ✅ block links    |      ✅       |
+| Callouts / Notion callout blocks (collapsible)                |         ✅          |      ✅       |
+| Math equations (LaTeX, inline + block)                        |         ✅          |      ✅       |
+| Tables                                                        |         ✅          |      ✅       |
+| Dividers                                                      |         ✅          |      ✅       |
+| Toggle blocks                                                 |         ✅          |      ✅       |
+| Column layouts                                                |         ✅          |      ✅       |
+| Colors and underlines                                         |         ✅          | ✅ Preserved  |
+| Media (audio / video / pdf / file)                            |         ✅          |      ✅       |
+| Tab blocks                                                    |         ✅          | ✅ Preserved  |
+| Video / embed URLs                                            |         ✅          |      ✅       |
+| Frontmatter ↔ database properties (21 types)                  |         ✅          |      ✅       |
+| Highlights (`==mark==`)                                       |         ✅          |      ✅       |
+| Footnotes (`[^1]`)                                            |         ✅          | ✅ Round-trip |
+| Table column alignment                                        |         ✅          | ✅ Round-trip |
+| Obsidian comments (`%%…%%`)                                   | ✅ Hidden in Notion |  ✅ Restored  |
+| Images                                                        |         ✅          |  ✅ Download  |
+| File attachments (xlsx, pdf, ipynb, etc.)                     |          —          |  ✅ Download  |
+| Cover images + icons                                          |          —          |  ✅ Download  |
+| Notion-only blocks (bookmark, embed, etc.)                    |         ✅          | ✅ Preserved  |
+| Notion HTML blocks ↔ `.html` attachments                      |         ✅          |  ✅ Download  |
+| Notion-only blocks (button, form, synced block)               |          —          | 📌 Preserved  |
 
 ## Configuration
 
@@ -360,7 +369,9 @@ Property changes travel both ways (since v0.13.0, [ADR-045](docs/02-architecture
   and push: the Notion property is renamed instead of a new one being created. Don't change a value in the same push if
   the database has a single row — there is nothing to tell the rename from a new key; push again afterwards.
 - **Edited in the sidecar** — `<db>.notion.json` next to the rows lists the properties. Rename, retype, add or delete one
-  there, or change a formula, number format or select options, and push. Pull keeps an edited sidecar until that push.
+  there, or change a formula, number format or select options, and push. Renaming a select option carries the rows'
+  values along — the API can't rename options, so push adds the new one, moves the rows over and removes the old one.
+  Pull keeps an edited sidecar until that push.
   The title property can't be deleted, retyped or added, and databases with several data sources aren't edited this way.
   Only sidecars this vault pulled are applied — one copied from another vault still makes a new database (ADR-036).
 
@@ -374,8 +385,13 @@ everything in it has gone up, then rewrites it.
   multi-select, date, and the relative dates Notion has — `today()` ± `"1d"` · `"7d"` · `"1M"`, past / next week, month or
   year — empty / not empty, and / or / not up to two levels). Otherwise the
   filter is left as it is in Notion and push tells you why.
-- A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time, and views added
-  or removed in the vault, aren't sent — change those in Notion.
+- A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time isn't sent —
+  change that in Notion.
+- Views added in the vault (table, cards, list) are created in Notion, and views removed are deleted there. A view
+  changed in Notion meanwhile, and a `.base` with every view removed, aren't deleted.
+- A linked view placed on another page arrives as its own `.base` in the source database's folder ("Source title - view
+  name") with that view's name, filter and sort. The note embeds it, and push turns the embed back into the same linked
+  view block. A linked view deleted in Notion takes its `.base` and the embed with it.
 
 ### Moving Pages and Rows Between Databases
 
@@ -413,7 +429,8 @@ root page. Commands run every ready connection in turn, and the changes panel le
 - A folder that the outer connection already syncs cannot become its own connection — the outer
   connection would read its notes as deleted. `init` refuses, and sync stops if it finds one.
 - Wikilinks between connections stay plain text in Notion — a page cannot link to another
-  workspace.
+  workspace. When one connection's sync moves a note, links to it in other connections' notes are
+  updated too.
 
 ## Packages
 
