@@ -66,6 +66,8 @@ export class InterruptedSyncRecovery {
 
     for (const op of ops) {
       if (op.direction === "push" && op.operation === "move") continue;
+      // 갱신 WAL 도 재개 대상이 아니라 «쓰다 끊겼다» 는 기록이다 — 다음 push · pull 이 원격을 볼 때 읽는다(UpdateJournal).
+      if (op.direction === "push" && op.operation === "update") continue;
       if (op.direction !== "push" || op.operation !== "create") {
         // 현재 WAL 재개는 create·push 만 대상. 그 외는 정리만 한다.
         this.stateDb.markPendingFailed(op.id, "unsupported resume op");

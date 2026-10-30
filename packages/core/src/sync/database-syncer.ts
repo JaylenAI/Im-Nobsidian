@@ -19,6 +19,7 @@ import { PropertyMapper, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { PullOutcome } from "./pull-outcome.js";
+import { UpdateJournal } from "./update-journal.js";
 import {
   applyRemoteDeletion,
   decideRemoteDeletion,
@@ -188,6 +189,8 @@ export class DatabaseSyncer {
   };
   /** 볼트에서 사라져 되살린 행의 경로 — pull 마감이 가져가 화면에 알린다(D8). */
   private restoredRows: string[] = [];
+  /** 쓰다 끊긴 행을 알아본다 — {@link UpdateJournal}. */
+  private readonly journal: UpdateJournal;
   /** merge 전략이 받은 행에 로컬 편집을 합친 행 — {@link takeMergedRows}. */
   private mergedRows: string[] = [];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
@@ -234,6 +237,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.journal = new UpdateJournal(stateDb);
     this.sidecarBases = new SidecarBases(stateDb);
     this.schemaLedger = new SchemaLedger(stateDb);
     this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
@@ -1934,12 +1938,24 @@ export class DatabaseSyncer {
 
       // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
       // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 행은 되살린다.
+      // 이 도구가 이 행을 쓰다 끊긴 원격도 받을 것이 없다 — push 가 마저 올린다({@link UpdateJournal}).
       const base = snapshotFrontmatter(existingRecord.baseSnapshot);
       const remoteUnchanged =
         localExists &&
-        base !== null &&
-        bodyFingerprint === existingRecord.notionBodyFingerprint &&
-        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, existingRecord.obsidianPath);
+        ((base !== null &&
+          bodyFingerprint === existingRecord.notionBodyFingerprint &&
+          this.rowOutsideBodyUnchanged(
+            this.propertyMapper,
+            page,
+            base,
+            existingRecord.obsidianPath,
+          )) ||
+          this.journal.wroteRemote(
+            existingRecord,
+            page,
+            computeHash(localContent),
+            this.observation().botUserId,
+          ));
 
       const resolution = resolvePullConflict({
         record: existingRecord,

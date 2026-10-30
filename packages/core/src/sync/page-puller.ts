@@ -387,8 +387,11 @@ export class PagePuller {
 
     // 받은 원격이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
     // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 파일은 되살린다.
+    // 이 도구가 이 노트를 쓰다 끊긴 원격도 받을 것이 없다 — 노트는 그때 보내던 글 그대로라 push 가 마저 올린다.
     const remoteUnchanged =
-      localExists && (await this.drift.unchangedSinceSync(record, page, rendered.bodyFingerprint));
+      localExists &&
+      ((await this.drift.unchangedSinceSync(record, page, rendered.bodyFingerprint)) ||
+        this.drift.interruptedOwnWrite(record, page, localContent));
 
     const resolution = resolvePullConflict({
       record,
