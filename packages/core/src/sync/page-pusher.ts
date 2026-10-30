@@ -223,6 +223,64 @@ export class PagePusher {
     return skips.sort((a, b) => a.path.localeCompare(b.path));
   }
 
+  /**
+   * dry-run 이 알릴, 실제 push 가 원격을 보고 거절할 고침 · 지움 — {@link pushUpdate} · {@link pushDelete} 와 같은
+   * 판정이다(Notion 에서 지운 페이지 · pull 하지 않은 Notion 편집). 원격을 읽기만 하고 상태 DB 는 바꾸지 않는다 —
+   * 실제 push 는 지운 페이지를 충돌로 남기지만 dry-run 은 이유만 보인다. 원격을 읽지 못했으면 그 실패를 보인다.
+   *
+   * 옮김은 보지 않는다 — 옮기는 노트는 옮길 자리 판정을 먼저 받는다(S-11).
+   */
+  async previewRemoteRefusals(changes: readonly LocalChange[]): Promise<FailedOperation[]> {
+    const refused: FailedOperation[] = [];
+    for (const change of changes) {
+      const operation =
+        change.type === "modified" ? "update" : change.type === "deleted" ? "delete" : null;
+      if (operation === null) continue;
+      if (operation === "delete" && !this.config.sync.deleteSync) continue;
+      const record = this.stateDb.getByPath(change.path);
+      if (!record?.notionPageId) continue;
+      try {
+        if (operation === "update") await this.previewUpdate(change.path, record);
+        else await this.previewDelete(change.path, record);
+      } catch (error) {
+        refused.push({
+          path: change.path,
+          operation,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return refused;
+  }
+
+  /** 실제 고침이 원격을 보고 거절하면 그 오류를 던진다({@link pushUpdate} · {@link pushRowUpdate}). */
+  private async previewUpdate(path: string, record: SyncRecord): Promise<void> {
+    const presence = await remotePresence(this.notionClient, record.notionPageId!);
+    if (presence.kind !== "alive") throw new Error(trashedPageRefusal(path));
+    if (this.drift.overwritesRemote(record, false)) return;
+    const content = await this.vaultFs.readFile(path);
+    if (this.drift.interruptedOwnWrite(record, presence.page, content)) return;
+    if (rowDatabaseOf(this.config, record)) {
+      // 행은 본문을 고쳤을 때만 원격 본문 편집을 거절한다 — 속성만 고친 행은 그 속성만 보낸다.
+      const base = this.baseRowState(record);
+      let body: string;
+      try {
+        body = parseFrontmatter(content).body;
+      } catch {
+        return; // 실제 push 가 frontmatter 를 읽지 못한 이유로 알린다
+      }
+      if (base?.body != null && base.body === body) return;
+    }
+    refuseUnpulledBody(await this.drift.remoteDrift(record, presence.page), path);
+  }
+
+  /** 실제 지움이 원격을 보고 거절하면 그 오류를 던진다({@link pushDelete}). 이미 사라진 원격은 추적만 놓는다. */
+  private async previewDelete(path: string, record: SyncRecord): Promise<void> {
+    const presence = await remotePresence(this.notionClient, record.notionPageId!);
+    if (presence.kind !== "alive" || this.drift.overwritesRemote(record, false)) return;
+    refuseUnpulledDeletion(await this.drift.remoteDrift(record, presence.page), path);
+  }
+
   /** dry-run 이 견줄 행 — 새 행은 기준 없이, 고친 행은 지난 동기화 사본과. 행이 아니거나 사본이 없으면 null. */
   private previewRow(
     change: LocalChange,
@@ -491,10 +549,7 @@ export class PagePusher {
     const presence = await remotePresence(this.notionClient, record.notionPageId!);
     if (presence.kind === "alive") return presence.page;
     this.stateDb.updateStatus(record.id, "conflict");
-    throw new Error(
-      `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남겼다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
-        `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${record.obsidianPath}`,
-    );
+    throw new Error(trashedPageRefusal(record.obsidianPath));
   }
 
   /**
@@ -1832,4 +1887,12 @@ function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock
 /** 보내지 않은 행 속성 가운데 아이콘 · 커버는 뺀다 — 속성이 아니라 페이지의 아이콘 · 커버로 따로 보낸다. */
 function withoutDecorations(skipped: readonly string[]): string[] {
   return skipped.filter((key) => key !== "icon" && key !== "cover");
+}
+
+/** Notion 에서 지운 페이지를 고치지 않는 이유 — 실제 push 는 충돌로 남기고, dry-run 은 이유만 보인다. */
+function trashedPageRefusal(path: string): string {
+  return (
+    `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남긴다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
+    `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${path}`
+  );
 }
