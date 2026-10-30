@@ -15,6 +15,8 @@ import type {
   ChangeDiff,
   ProgressCallback,
   ProgressItem,
+  RemoteMove,
+  RemoteMoveSkip,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
@@ -39,7 +41,7 @@ import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
 import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
-import { notionIdsEqual } from "../utils/id.js";
+import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
 import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
@@ -1471,6 +1473,7 @@ export class SyncOrchestrator {
     // 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 것(ADR-039 · ADR-040)과 뺀 자리라 받지 않을 새 페이지 — 바꾸지 않고 본다.
     const moves = await this.followRemoteMoves({ dryRun: true }, plan);
     const renames = await this.followRemoteRenames(detected, { dryRun: true });
+    const rowRenames = await this.previewRowRenames(detected, signal);
     const exclusions = await this.plannedExclusions(detected);
     const remoteChanges = detected.filter((change) => !exclusions.has(change.pageId));
     const conflictRecords = this.stateDb.getByStatus("conflict");
@@ -1493,10 +1496,51 @@ export class SyncOrchestrator {
       lastSyncAt,
       lastFullScanAt,
       remoteScan: remoteScanInfo(scan, lastFullScanAt, this.config.sync.deleteSync),
-      remoteMoves: [...moves.moved, ...renames.renamed],
-      remoteMoveSkipped: [...moves.skipped, ...renames.skipped],
+      remoteMoves: [...moves.moved, ...renames.renamed, ...rowRenames.renamed],
+      remoteMoveSkipped: [...moves.skipped, ...renames.skipped, ...rowRenames.skipped],
       remoteExcluded: [...exclusions.values()],
     };
+  }
+
+  /**
+   * 다음 pull 이 Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 바꾸지 않고 본다. 행 이름은 DB 받기가 바꾸므로
+   * 페이지 이름 바꾸기({@link followRemoteRenames})에 없다. 판정은 받기와 같다(`retitledRowTarget`).
+   */
+  private async previewRowRenames(
+    changes: readonly RemoteChange[],
+    signal?: AbortLike,
+  ): Promise<{ renamed: RemoteMove[]; skipped: RemoteMoveSkip[] }> {
+    const renamed: RemoteMove[] = [];
+    const skipped: RemoteMoveSkip[] = [];
+    if (!this.config.sync.renameOnTitleChange) return { renamed, skipped };
+    const folders = new Map<string, string>();
+    for (const db of [
+      ...(this.config.notion.databases ?? []),
+      ...parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY)),
+    ]) {
+      if (db.databaseId) folders.set(compactNotionId(db.databaseId), db.localFolder);
+    }
+    for (const change of changes) {
+      throwIfAborted(signal);
+      if (change.type !== "modified") continue;
+      const record = this.stateDb.getByNotionId(change.pageId);
+      if (record?.fileType !== "db-row" || !record.notionParentId) continue;
+      if (this.vaultFs.excludesPath?.(record.obsidianPath)) continue;
+      const folder = folders.get(compactNotionId(record.notionParentId));
+      if (folder === undefined) continue;
+      try {
+        const page =
+          this.detector.discoveredPage(change.pageId) ??
+          (await this.notionClient.getPage(change.pageId));
+        const target = await this.databaseSyncer.retitledRowTarget(folder, record, page);
+        if (target === null) continue;
+        if ("reason" in target) skipped.push({ path: record.obsidianPath, reason: target.reason });
+        else renamed.push({ from: record.obsidianPath, to: target.to, renamed: true });
+      } catch {
+        // 미리 보기만 한다 — 읽지 못한 행은 다음 pull 이 받으며 가른다.
+      }
+    }
+    return { renamed, skipped };
   }
 
   /**
