@@ -9,6 +9,7 @@ import type {
   FailedOperation,
   ProgressItem,
   RemoteMove,
+  RemoteMoveSkip,
   SchemaFollowed,
   SyncRecord,
 } from "../types/sync.js";
@@ -35,7 +36,13 @@ import {
   type PathOwner,
 } from "../utils/db-row-path.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
-import { parentFolderOf } from "./folder-container.js";
+import { childFolderOf, isFolderRecord, parentFolderOf } from "./folder-container.js";
+import { loadDatabaseMoves } from "./database-moves.js";
+import {
+  DISCOVERED_DBS_META_KEY,
+  ROOT_DATABASES_FOLDER,
+  parseDiscoveredDbs,
+} from "./discovered-databases.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
@@ -69,7 +76,7 @@ import {
   type SchemaChange,
 } from "./schema-ledger.js";
 import { rekeyTrackedRows } from "./schema-follow.js";
-import { NoteRelocator, within } from "./note-relocation.js";
+import { NoteRelocator, baseName, joinPath, within } from "./note-relocation.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH, BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
@@ -122,9 +129,10 @@ export interface DatabaseSyncResult {
 export interface PlannedRow {
   readonly pageId: string;
   readonly path: string;
-  readonly operation: "create" | "update" | "delete";
+  /** `move` — Notion 에서 다른 페이지 아래로 옮긴 DB 의 폴더를 옮긴다(`pageId` 는 DB, ADR-047). */
+  readonly operation: "create" | "update" | "delete" | "move";
   readonly restore?: boolean;
-  /** Notion 에서 DB 안으로 옮긴 페이지가 행이 되며 옮길 것 — 노트와 하위 페이지 폴더(ADR-047). */
+  /** Notion 에서 DB 안으로 옮긴 페이지가 행이 되며 옮길 것 — 노트와 하위 페이지 폴더 · 옮긴 DB 의 폴더(ADR-047). */
   readonly moves?: readonly RemoteMove[];
 }
 
@@ -314,11 +322,23 @@ export class DatabaseSyncer {
        * 행 파일은 쓰지 않는다.
        */
       rescanRowChildren?: boolean;
+      /**
+       * 발견한 DB 다 — Notion 에서 다른 페이지 아래로 옮겼으면 볼트에서도 폴더를 옮기고 알린다({@link placementMoveOf}).
+       * 설정 파일에 적은 DB 의 폴더는 사용자가 정했다 — 주지 않는다.
+       */
+      onFolderMoved?: (move: RemoteMove) => void;
     },
   ): Promise<DatabaseSyncResult> {
     const scope = opts?.paths;
     const target = await this.queryRows(dbConfig, opts);
     if (target.kind === "out-of-scope") return emptyDatabaseSyncResult();
+    if (target.kind === "rows" && opts?.onFolderMoved && !scope) {
+      const move = await this.followPlacement(dbConfig, target.meta);
+      if (move) {
+        dbConfig = { ...dbConfig, localFolder: move.to };
+        opts.onFolderMoved(move);
+      }
+    }
     if (target.kind === "linked") {
       if (target.wholeDbInScope) {
         const viewsConfig = await this.pullDatabaseViews(dbConfig);
@@ -479,11 +499,39 @@ export class DatabaseSyncer {
     opts?: {
       resolveDbFolder?: (databaseId: string) => string | null;
       paths?: readonly string[];
+      /** 발견한 DB 다 — Notion 에서 옮긴 DB 의 폴더 이동도 보인다({@link pullDatabase}). */
+      followPlacement?: boolean;
     },
   ): Promise<PlannedRow[]> {
     const target = await this.queryRows(dbConfig, opts);
     if (target.kind !== "rows") return [];
 
+    const folderMove =
+      opts?.followPlacement && !opts.paths
+        ? await this.unblocked(this.placementMoveOf(dbConfig, target.meta))
+        : null;
+    const planned = await this.planRows(dbConfig, target, opts?.paths);
+    if (!folderMove) return planned;
+    // 실제 pull 은 폴더를 먼저 옮기고 행을 받는다 — 행도 새 자리로 보인다.
+    const moved = (path: string) =>
+      within(path, folderMove.from) ? folderMove.to + path.slice(folderMove.from.length) : path;
+    return [
+      {
+        pageId: dbConfig.databaseId,
+        path: folderMove.to,
+        operation: "move",
+        moves: [folderMove],
+      },
+      ...planned.map((row) => ({ ...row, path: moved(row.path) })),
+    ];
+  }
+
+  private async planRows(
+    dbConfig: DatabaseSyncConfig,
+    target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
+    paths: readonly string[] | undefined,
+  ): Promise<PlannedRow[]> {
+    const opts = { paths };
     const planned: PlannedRow[] = [];
     // 이번에 만들 행이 고른 경로 — 경로 → 페이지. 뒤 차례 행은 이 경로를 피한다.
     const claimed = new Map<string, string>();
@@ -1433,6 +1481,93 @@ export class DatabaseSyncer {
     const rows = this.restoredRows;
     this.restoredRows = [];
     return rows;
+  }
+
+  /**
+   * Notion 에서 다른 페이지 아래로 옮긴 DB 의 폴더를 볼트에서도 옮긴다 — 옮겼으면 그 이동. 옮기지 못하면 까닭을 남기고
+   * 옛 자리에서 받는다.
+   */
+  private async followPlacement(
+    dbConfig: DatabaseSyncConfig,
+    meta: DatabaseMeta,
+  ): Promise<RemoteMove | null> {
+    const outcome = this.placementMoveOf(dbConfig, meta);
+    if (!outcome) return null;
+    const move = await this.unblocked(outcome);
+    if (!move) return null;
+    await this.relocator.relocate([move]);
+    this.renamedRows.renamed.push(move);
+    this.renamedRows.applied.push(move);
+    getLogger().info(
+      `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮김: ${move.from} → ${move.to}`,
+    );
+    return move;
+  }
+
+  /** 옮길 수 있으면 그 이동, 막혔으면 까닭을 알리고 null. */
+  private async unblocked(outcome: RemoteMove | RemoteMoveSkip | null): Promise<RemoteMove | null> {
+    if (!outcome) return null;
+    if ("reason" in outcome) {
+      getLogger().warn(
+        `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮기지 않음 (${outcome.path}): ${outcome.reason}`,
+      );
+      return null;
+    }
+    const blocked = await this.relocator.blocked(outcome);
+    return blocked ? this.unblocked({ path: outcome.from, reason: blocked }) : outcome;
+  }
+
+  /**
+   * Notion 에서 다른 페이지 아래로 옮긴 발견 DB 의 폴더를 옮길 곳(ADR-047) — 제자리면 null.
+   *
+   * Notion 에서 DB 를 옮겨도 DB · 행의 수정 시각이 그대로라 받은 DB 의 부모로만 안다 — 전체 대조는 모든 DB 를 받으니
+   * 거기서 보인다. 새 자리는 처음 발견할 때와 같다 — 부모 페이지의 하위 폴더 이름 그대로, 루트면 `databases` 선반.
+   * 맨 위 폴더도 루트 아래로 본다(볼트에서 옮긴 DB 를 push 가 루트 아래에 둔다 — {@link DatabaseMover}).
+   * 다음은 옮기지 않는다.
+   *   - 부모가 블록(토글 · 열) 안 · 볼트가 모르는 페이지 — 볼트에 그 자리가 없다
+   *   - 볼트에서 옮긴 DB 폴더 · 부모 노트를 아직 올리지 않았다 — 볼트가 먼저다(push 가 Notion 을 옮긴다)
+   */
+  private placementMoveOf(
+    dbConfig: DatabaseSyncConfig,
+    meta: DatabaseMeta,
+  ): RemoteMove | RemoteMoveSkip | null {
+    const parentId = meta.parentPageId;
+    if (!parentId) return null;
+    const id = dbConfig.databaseId;
+    if ((this.config.notion.databases ?? []).some((db) => notionIdsEqual(db.databaseId, id))) {
+      return null;
+    }
+    if (loadDatabaseMoves(this.stateDb).some((move) => notionIdsEqual(move.databaseId, id))) {
+      return null;
+    }
+    const folder = dbConfig.localFolder;
+    let places: string[];
+    if (notionIdsEqual(parentId, this.config.notion.rootPageId)) {
+      places = [ROOT_DATABASES_FOLDER, ""];
+    } else {
+      const parent = this.stateDb.getByNotionId(parentId);
+      if (!parent) return null;
+      if (this.stateDb.getIncompleteOpByState(parent.id, "move")) {
+        return {
+          path: folder,
+          reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
+        };
+      }
+      places = [childFolderOf(parent, { databaseAt: (path) => this.databaseAt(path) })];
+      // 처음 발견할 때는 폴더로 추적하는 페이지면 그 폴더 안에 두었다(`DatabaseDiscovery`).
+      if (isFolderRecord(parent)) places.push(parent.obsidianPath);
+    }
+    if (places.includes(parentFolderOf(folder))) return null;
+    return { from: folder, to: joinPath(places[0]!, baseName(folder)) };
+  }
+
+  /** 이 폴더가 받는 DB — 설정한 DB 와 발견한 DB 에서. */
+  private databaseAt(folder: string): string | null {
+    const all = [
+      ...(this.config.notion.databases ?? []),
+      ...parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY)),
+    ];
+    return all.find((db) => db.localFolder === folder)?.databaseId ?? null;
   }
 
   /** 이름을 바꾼 행을 가져가고 비운다. */

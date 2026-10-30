@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import { StateDB } from "../../src/state/state-db.js";
 import { DEFAULT_CONFIG, type DatabaseSyncConfig } from "../../src/types/config.js";
-import { createConfig } from "../helpers/mock-orchestrator.js";
+import { createConfig, mockDatabaseMeta } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
 const ROOT = "root-page-id";
@@ -408,6 +408,112 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(await sync.pull()).toMatchObject({ created: 0, updated: 0, deleted: 0, moved: [] });
       expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
       expect(vault.read("Tasks/M.md")).toBe(note);
+    });
+
+    describe("Notion 에서 옮긴 DB (ADR-047)", () => {
+      /** Notion 이 돌려주는 DB 의 부모 — `notion.databases` 에 적은 자리. */
+      const placeInNotion = (parent: string | null) => {
+        notion.databases.set(DB_ID, { parent: parent ?? ROOT, title: "Tasks" });
+      };
+      beforeEach(() => {
+        notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+          ...mockDatabaseMeta(id),
+          parentPageId: notion.databases.get(id)?.parent ?? null,
+        }));
+      });
+
+      async function shelf(): Promise<{ sync: SyncOrchestrator; row: string; base: string }> {
+        await seed({ "A/a.md": "a\n", "B/b.md": "b\n" });
+        db.setMeta(
+          "discovered_dbs",
+          JSON.stringify([{ databaseId: DB_ID, localFolder: "A/Tasks", titleProperty: "Name" }]),
+        );
+        placeInNotion(idOf("A"));
+        const row = notion.add(DB_ID, "행", "행 본문", { properties: {} }).id;
+        const sync = everyPull();
+        expect((await sync.pull()).failed).toEqual([]);
+        const [base] = bases();
+        vault.write("x.md", `![[${base!}]] [[A/Tasks/행]]\n`);
+        expect((await sync.push()).failed).toEqual([]);
+        return { sync, row, base: base! };
+      }
+
+      it("다른 페이지 아래로 옮긴 DB 는 폴더 · 행 · .base 보기를 그 페이지의 폴더로 옮기고 링크를 고친다", async () => {
+        const { sync, row, base } = await shelf();
+        placeInNotion(idOf("B"));
+
+        const preview = await sync.pull({ dryRun: true });
+        expect(preview.moved).toEqual([{ from: "A/Tasks", to: "B/Tasks" }]);
+        expect(notes()).toContain("A/Tasks/행.md");
+
+        const result = await sync.pull();
+        expect(result.failed).toEqual([]);
+        expect(result.moved).toEqual(preview.moved);
+        expect(result).toMatchObject({ created: preview.created, updated: preview.updated });
+        const moved = base.replace(/^A\//, "B/");
+        expect(bases()).toEqual([moved]);
+        expect(vault.read(moved)).toContain('file.inFolder("B/Tasks")');
+        expect(notes()).toEqual(["A/a.md", "B/Tasks/행.md", "B/b.md", "x.md"]);
+        expect(vault.read("x.md")).toBe(`![[${moved}]] [[B/Tasks/행]]\n`);
+        expect(db.getByNotionId(row)?.obsidianPath).toBe("B/Tasks/행.md");
+        expect(JSON.parse(db.getMeta("discovered_dbs")!)).toMatchObject([
+          { databaseId: DB_ID, localFolder: "B/Tasks" },
+        ]);
+
+        // Notion 은 이미 그 자리다 — push 가 DB 를 다시 옮기지 않는다.
+        expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
+        expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
+        expect(await sync.pull()).toMatchObject({ created: 0, updated: 0, moved: [], failed: [] });
+      });
+
+      it("루트로 옮긴 DB 는 databases 선반으로 — 맨 위 폴더에 둔 DB 는 루트 아래 그대로", async () => {
+        const { sync } = await shelf();
+        placeInNotion(null);
+        expect((await sync.pull()).moved).toEqual([{ from: "A/Tasks", to: "databases/Tasks" }]);
+        expect(notes()).toContain("databases/Tasks/행.md");
+        expect(await sync.push()).toMatchObject({ moved: 0, failed: [] });
+        expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
+
+        // 볼트에서 맨 위로 옮긴 DB — push 가 루트 아래에 둔다. 다음 pull 이 선반으로 되돌리지 않는다.
+        vault.renameFolder("databases/Tasks", "Tasks");
+        expect((await sync.push()).failed).toEqual([]);
+        expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
+        expect(notes()).toContain("Tasks/행.md");
+      });
+
+      it("볼트에서 옮긴 DB 폴더를 아직 올리지 않았거나 · 부모가 블록 안 · 볼트가 모르는 페이지면 옮기지 않는다", async () => {
+        const { sync } = await shelf();
+        db.setMeta(
+          "db_moves_pending",
+          JSON.stringify([{ databaseId: DB_ID, from: "B/Tasks", to: "A/Tasks" }]),
+        );
+        placeInNotion(idOf("B"));
+        expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
+        db.setMeta("db_moves_pending", "[]");
+
+        notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+          ...mockDatabaseMeta(id),
+          parentPageId: null,
+        }));
+        expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
+
+        placeInNotion("eeee0000-0000-4000-8000-00000000000e");
+        notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+          ...mockDatabaseMeta(id),
+          parentPageId: notion.databases.get(id)?.parent ?? null,
+        }));
+        expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
+        expect(notes()).toContain("A/Tasks/행.md");
+      });
+
+      it("옮길 자리에 같은 이름이 있으면 옮기지 않고 옛 자리에서 받는다", async () => {
+        const { sync } = await shelf();
+        vault.write("B/Tasks/남의 것.md", "x\n");
+        placeInNotion(idOf("B"));
+        const result = await sync.pull();
+        expect(result).toMatchObject({ moved: [], failed: [] });
+        expect(notes()).toContain("A/Tasks/행.md");
+      });
     });
 
     it("설정 파일로 정한 DB 의 폴더는 옮기지 않는다 — 설정을 고쳐 적을 수 없다", async () => {
