@@ -3,7 +3,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import { computeHash } from "../utils/hash.js";
 import { getLogger } from "../utils/logger.js";
 import { isMarkdownPath } from "../utils/markdown-path.js";
-import { IN_FOLDER_FILTER_RE, inFolderFilter } from "../view/base-file-generator.js";
+import { FOLDER_FILTER_RE, folderFilter } from "../view/base-file-generator.js";
 import { DB_BASE_FILES_META_KEY } from "./db-base-files.js";
 import { CREATED_DBS_META_KEY } from "./database-creator.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
@@ -92,7 +92,7 @@ function rewriteCreatedDatabaseFolders(
 }
 
 /**
- * 동기화가 만든 `.base` 의 폴더 필터를 새 자리로 고친다 — 보기는 `file.inFolder("폴더")` 로 행을 고른다. 옮긴 폴더 밖의
+ * 동기화가 만든 `.base` 의 폴더 필터를 새 자리로 고친다 — 보기는 `file.folder == "폴더"` 로 행을 고른다. 옮긴 폴더 밖의
  * `.base`(원본 DB 를 가리키는 연결 보기)도 본다. 사용자가 만든 `.base` 는 둔다. 고치지 못해도 옮긴 것을 무르지 않는다 —
  * 그 DB 를 다음에 받을 때 다시 쓴다.
  *
@@ -107,28 +107,96 @@ export async function retargetBaseFiles(
 ): Promise<void> {
   const folders = moves.filter((move) => !isMarkdownPath(move.from));
   if (folders.length === 0) return;
+  await rewriteBaseFilters(
+    vaultFs,
+    stateDb,
+    (folder) => finalPath(folder, folders),
+    "옮긴 폴더를 가리키던 .base 보기를 고치지 못함",
+  );
+}
+
+/** 예전 버전이 쓴 `.base` 의 폴더 필터를 지금 꼴로 고쳐 쓴 뒤 적는 메타 — 한 번만 훑는다. */
+export const BASE_FOLDER_FILTER_UPGRADED_META_KEY = "base_folder_filter_v2";
+
+/**
+ * 예전 버전이 쓴 `file.inFolder("폴더")` 를 `file.folder == "폴더"` 로 고쳐 쓴다 — `inFolder` 는 하위 폴더까지 보아 행의
+ * 하위 페이지(`행/…`)도 보기에 행으로 나왔다. 바뀐 DB 만 다시 받으므로(ADR-027) 받기를 기다리면 그대로인 DB 의 보기는
+ * 계속 틀린다. 끝까지 훑었으면 다시 훑지 않는다.
+ */
+export async function upgradeBaseFolderFilters(
+  vaultFs: Pick<VaultFS, "listNonMarkdownFiles" | "readFile" | "writeFile">,
+  stateDb: Pick<IStateDB, "getMeta" | "setMeta">,
+): Promise<void> {
+  if (stateDb.getMeta(BASE_FOLDER_FILTER_UPGRADED_META_KEY)) return;
+  const done = await rewriteBaseFilters(
+    vaultFs,
+    stateDb,
+    (folder) => folder,
+    "예전 .base 보기의 폴더 필터를 고치지 못함",
+  );
+  if (done) stateDb.setMeta(BASE_FOLDER_FILTER_UPGRADED_META_KEY, "1");
+}
+
+/**
+ * 동기화가 만든 `.base` 의 폴더 필터를 `retarget` 이 정한 폴더로 고쳐 쓴다 — 예전 꼴(`file.inFolder`)은 지금 꼴로.
+ *
+ * @returns 끝까지 훑었나.
+ */
+async function rewriteBaseFilters(
+  vaultFs: Pick<VaultFS, "listNonMarkdownFiles" | "readFile" | "writeFile">,
+  stateDb: Pick<IStateDB, "getMeta" | "setMeta"> | undefined,
+  retarget: (folder: string) => string,
+  failure: string,
+): Promise<boolean> {
   const rehashed = new Map<string, { readonly before: string; readonly after: string }>();
+  const viewed = stateDb ? recordedViewBases(stateDb) : new Set<string>();
+  let done = true;
   try {
     for (const file of await vaultFs.listNonMarkdownFiles()) {
       if (!file.path.endsWith(BASE_SUFFIX)) continue;
       const content = await vaultFs.readFile(file.path);
-      if (!isGeneratedDbArtifact(file.path, content)) continue;
-      const next = content.replace(IN_FOLDER_FILTER_RE, (whole, folder: string) => {
-        const to = finalPath(folder, folders);
-        return to === folder ? whole : inFolderFilter(to);
-      });
+      // Obsidian 은 보기를 고치거나 열면 머리 주석을 지운다(1.12.4 · 1.13.7 실측) — 보기를 기록해 둔 경로면 pull 이 쓴
+      // 파일이다(`DatabaseSyncer.generateBaseFile` 과 같은 판정).
+      if (!isGeneratedDbArtifact(file.path, content) && !viewed.has(file.path)) continue;
+      const next = content.replace(
+        FOLDER_FILTER_RE,
+        (whole, legacy: string | undefined, current: string | undefined) => {
+          const folder = legacy ?? current!;
+          const to = retarget(folder);
+          return legacy === undefined && to === folder ? whole : folderFilter(to);
+        },
+      );
       if (next === content) continue;
       await vaultFs.writeFile(file.path, next);
       rehashed.set(file.path, { before: computeHash(content), after: computeHash(next) });
     }
   } catch (error) {
+    done = false;
     getLogger().warn(
-      `[Im-Nobsidian] 옮긴 폴더를 가리키던 .base 보기를 고치지 못함: ${
-        error instanceof Error ? error.message : String(error)
-      }`,
+      `[Im-Nobsidian] ${failure}: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (stateDb && rehashed.size > 0) rehashBaseFiles(stateDb, rehashed);
+  return done;
+}
+
+/** pull 이 보기를 기록해 둔 `.base` 경로. */
+function recordedViewBases(stateDb: Pick<IStateDB, "getMeta">): Set<string> {
+  const paths = new Set<string>();
+  try {
+    const entries = JSON.parse(stateDb.getMeta(DB_BASE_FILES_META_KEY) ?? "{}") as Record<
+      string,
+      { basePath?: unknown; views?: unknown } | null
+    >;
+    for (const entry of Object.values(entries ?? {})) {
+      if (typeof entry?.basePath === "string" && entry.views !== undefined) {
+        paths.add(entry.basePath);
+      }
+    }
+  } catch {
+    // 깨진 기록 — 머리 주석으로만 가린다.
+  }
+  return paths;
 }
 
 /** 고쳐 쓴 `.base` 가운데 pull 이 쓴 그대로였던 것의 기록 해시를 새 내용으로 바꾼다. */

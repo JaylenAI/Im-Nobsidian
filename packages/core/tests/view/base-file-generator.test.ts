@@ -64,11 +64,11 @@ function makeOptions(overrides?: Partial<BaseFileOptions>): BaseFileOptions {
 describe("BaseFileGenerator", () => {
   const generator = new BaseFileGenerator();
 
-  it("file.inFolder 필터로 데이터 소스를 지정한다", () => {
+  it("file.folder 필터로 데이터 소스를 지정한다 — 행의 하위 페이지 폴더(`행/`)는 고르지 않는다", () => {
     const result = generator.generate(makeOptions());
 
     expect(result).toContain("filters:");
-    expect(result).toContain('file.inFolder("databases/Tasks")');
+    expect(result).toContain('file.folder == "databases/Tasks"');
   });
 
   it("properties 섹션에 displayName을 출력한다", () => {
@@ -669,7 +669,7 @@ describe("BaseFileGenerator", () => {
       "\n" +
       "filters:\n" +
       "  and:\n" +
-      '    - file.inFolder("databases/Tasks")\n' +
+      '    - file.folder == "databases/Tasks"\n' +
       '    - file.ext == "md"\n' +
       "\n" +
       "properties:\n" +
@@ -716,7 +716,7 @@ describe("BaseFileGenerator", () => {
     expect(filterBlock).toEqual([
       "filters:",
       "  and:",
-      '    - file.inFolder("databases/Tasks")',
+      '    - file.folder == "databases/Tasks"',
       '    - file.ext == "md"',
     ]);
   });
@@ -769,7 +769,7 @@ describe("BaseFileGenerator — RAW vs URL-인코딩 속성 id 해석 (rank13)",
     "\n" +
     "filters:\n" +
     "  and:\n" +
-    '    - file.inFolder("databases/Tasks")\n' +
+    '    - file.folder == "databases/Tasks"\n' +
     '    - file.ext == "md"\n' +
     "\n" +
     "properties:\n" +
@@ -1011,7 +1011,7 @@ describe("BaseFileGenerator — 결정론·dedupe 유일성 (rank18)", () => {
 
     it("전역 폴더/확장자 필터는 그대로 남는다 — 뷰 필터가 이를 대체하지 않는다", () => {
       const result = withFilter({ property: "c1", checkbox: { equals: true } });
-      expect(result).toContain('    - file.inFolder("databases/Tasks")');
+      expect(result).toContain('    - file.folder == "databases/Tasks"');
       expect(result).toContain('    - file.ext == "md"');
     });
 

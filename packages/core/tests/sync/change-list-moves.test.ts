@@ -151,6 +151,7 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
       localFileSize: stat.size,
     });
     // 바뀐 DB 만 조회한다(ADR-027) — 다음 pull 이 DB 를 받지 않아도 보기 · 임베드가 새 자리를 가리켜야 한다.
+    // 예전 버전이 쓴 `file.inFolder` 꼴도 찾아 지금 꼴(`file.folder ==`)로 고쳐 쓴다.
     const view = `${BASE_FILE_HEADER} from Notion\nfilters:\n  and:\n    - file.inFolder("Tasks")\n`;
     vault.write("Tasks/Tasks.base", view);
     const mine = 'filters:\n  and:\n    - file.inFolder("Tasks")\n';
@@ -199,10 +200,12 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
       {
         basePath: "Work/Tasks/Tasks.base",
         title: "Tasks",
-        hash: computeHash(view.replace('"Tasks"', '"Work/Tasks"')),
+        hash: computeHash(view.replace('file.inFolder("Tasks")', 'file.folder == "Work/Tasks"')),
       },
     ]);
-    expect(vault.read("Work/Tasks/Tasks.base")).toBe(view.replace('"Tasks"', '"Work/Tasks"'));
+    expect(vault.read("Work/Tasks/Tasks.base")).toBe(
+      view.replace('file.inFolder("Tasks")', 'file.folder == "Work/Tasks"'),
+    );
     expect(vault.read("Work/Tasks/mine.base")).toBe(mine);
     expect(notion.pages.get(page.id)!.parent).toBe(DB_ID);
     expect((await orchestrator.statusLocal()).folderMoves).toEqual([]);

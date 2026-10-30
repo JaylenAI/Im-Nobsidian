@@ -1040,7 +1040,7 @@ export class DatabaseSyncer {
     /** {@link queryRows} 가 받은 이 DB — 스키마 · 제목을 다시 받지 않는다. */
     meta: DatabaseMeta,
     /**
-     * F25: 행이 실제로 사는 폴더(.base 의 inFolder 필터 대상). linked view 컨테이너의
+     * F25: 행이 실제로 사는 폴더(.base 의 폴더 필터 대상). linked view 컨테이너의
      * .base 는 자기 폴더가 아니라 원본 DB 폴더를 가리켜야 행 이관 후에도 빈 뷰가 되지
      * 않는다. 생략하면 자기 폴더(원본 DB 의 기본 동작).
      */

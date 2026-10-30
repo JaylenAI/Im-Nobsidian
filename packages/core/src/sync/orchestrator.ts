@@ -92,6 +92,7 @@ import {
 } from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
+import { upgradeBaseFolderFilters } from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   forgetRenameHint,
@@ -954,7 +955,11 @@ export class SyncOrchestrator {
     }
 
     this.observation.begin(startTime);
-    if (!options?.dryRun) this.recovery.cleanupInterruptedSync();
+    if (!options?.dryRun) {
+      this.recovery.cleanupInterruptedSync();
+      // 예전 버전이 쓴 `.base` 의 폴더 필터 — 행의 하위 페이지를 행으로 보였다. 한 번만 고쳐 쓴다.
+      await upgradeBaseFolderFilters(this.vaultFs, this.stateDb);
+    }
 
     // 옮긴 노트를 먼저 옮겨 적는다 — 아니면 옛 자리의 노트를 되살리고 원격 변경을 옛 경로에
     // 쓴다(S-11). dry-run 은 옮겨 적지 않고, 옮겨 적을 노트를 되살릴 대상에서 뺀다.

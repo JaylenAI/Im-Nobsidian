@@ -113,7 +113,7 @@ describe("draftFolderDatabase — 사이드카를 push 가 읽는 대로", () =>
   const BASE = [
     "filters:",
     "  and:",
-    '    - file.inFolder("Books")',
+    '    - file.folder == "Books"',
     "views:",
     "  - type: table",
     "    name: 전체",
