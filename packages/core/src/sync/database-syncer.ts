@@ -35,7 +35,11 @@ import {
   resolveDbRowPath,
   type PathOwner,
 } from "../utils/db-row-path.js";
-import { isDirectDbRowPath } from "../utils/db-folder-path.js";
+import {
+  databaseFolderName,
+  isDirectDbRowPath,
+  resolveDbFolderPath,
+} from "../utils/db-folder-path.js";
 import { childFolderOf, isFolderRecord, parentFolderOf } from "./folder-container.js";
 import { loadDatabaseMoves } from "./database-moves.js";
 import {
@@ -1132,6 +1136,15 @@ export class DatabaseSyncer {
         await this.appearanceOf(meta, safeName),
       );
       await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName, previous);
+      // DB 제목이 바뀌어 `.base` 이름이 바뀌었다 — 옛 `.base` 를 지웠으면 그것을 넣은 노트의 임베드 · 링크를 고친다.
+      if (
+        previous &&
+        previous.basePath !== basePath &&
+        !(await this.vaultFs.exists(previous.basePath)) &&
+        (await this.vaultFs.exists(basePath))
+      ) {
+        this.renamedRows.applied.push({ from: previous.basePath, to: basePath });
+      }
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
@@ -1511,7 +1524,7 @@ export class DatabaseSyncer {
     this.renamedRows.renamed.push(move);
     this.renamedRows.applied.push(move);
     getLogger().info(
-      `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮김: ${move.from} → ${move.to}`,
+      `[Im-Nobsidian] Notion 에서 ${move.renamed ? "이름을 바꾼" : "옮긴"} DB 의 폴더를 볼트에서 옮김: ${move.from} → ${move.to}`,
     );
     return move;
   }
@@ -1521,7 +1534,7 @@ export class DatabaseSyncer {
     if (!outcome) return null;
     if ("reason" in outcome) {
       getLogger().warn(
-        `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮기지 않음 (${outcome.path}): ${outcome.reason}`,
+        `[Im-Nobsidian] Notion 에서 옮기거나 이름을 바꾼 DB 의 폴더를 볼트에서 옮기지 않음 (${outcome.path}): ${outcome.reason}`,
       );
       return null;
     }
@@ -1538,13 +1551,14 @@ export class DatabaseSyncer {
   }
 
   /**
-   * Notion 에서 다른 페이지 아래로 옮긴 발견 DB 의 폴더를 옮길 곳(ADR-047) — 제자리면 null.
+   * Notion 에서 다른 페이지 아래로 옮기거나 이름을 바꾼 발견 DB 의 폴더를 옮길 곳(ADR-047 · {@link retitledFolderName})
+   * — 제자리면 null.
    *
    * Notion 에서 DB 를 옮겨도 DB · 행의 수정 시각이 그대로라 받은 DB 의 부모로만 안다 — 전체 대조는 모든 DB 를 받으니
    * 거기서 보인다. 새 자리는 처음 발견할 때와 같다 — 부모 페이지의 하위 폴더 이름 그대로, 루트면 `databases` 선반.
    * 맨 위 폴더도 루트 아래로 본다(볼트에서 옮긴 DB 를 push 가 루트 아래에 둔다 — {@link DatabaseMover}).
    * 다음은 옮기지 않는다.
-   *   - 부모가 블록(토글 · 열) 안 · 볼트가 모르는 페이지 — 볼트에 그 자리가 없다
+   *   - 부모가 블록(토글 · 열) 안 · 볼트가 모르는 페이지 — 볼트에 그 자리가 없다(이름만 따른다)
    *   - 볼트에서 옮긴 DB 폴더 · 부모 노트를 아직 올리지 않았다 — 볼트가 먼저다(push 가 Notion 을 옮긴다)
    */
   private placementMoveOf(
@@ -1552,8 +1566,6 @@ export class DatabaseSyncer {
     meta: DatabaseMeta,
     movingInVault: ReadonlySet<string> = new Set(),
   ): RemoteMove | RemoteMoveSkip | null {
-    const parentId = meta.parentPageId;
-    if (!parentId) return null;
     const id = dbConfig.databaseId;
     if ((this.config.notion.databases ?? []).some((db) => notionIdsEqual(db.databaseId, id))) {
       return null;
@@ -1562,24 +1574,57 @@ export class DatabaseSyncer {
       return null;
     }
     const folder = dbConfig.localFolder;
-    let places: string[];
-    if (notionIdsEqual(parentId, this.config.notion.rootPageId)) {
-      places = [ROOT_DATABASES_FOLDER, ""];
-    } else {
-      const parent = this.stateDb.getByNotionId(parentId);
-      if (!parent) return null;
-      if (this.movedInVault(parent, movingInVault)) {
-        return {
-          path: folder,
-          reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
-        };
+    const current = parentFolderOf(folder);
+    let place = current;
+    const parentId = meta.parentPageId;
+    if (parentId) {
+      let places: string[] | null = null;
+      if (notionIdsEqual(parentId, this.config.notion.rootPageId)) {
+        places = [ROOT_DATABASES_FOLDER, ""];
+      } else {
+        const parent = this.stateDb.getByNotionId(parentId);
+        if (parent && this.movedInVault(parent, movingInVault)) {
+          return {
+            path: folder,
+            reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
+          };
+        }
+        if (parent) {
+          places = [childFolderOf(parent, { databaseAt: (path) => this.databaseAt(path) })];
+          // 처음 발견할 때는 폴더로 추적하는 페이지면 그 폴더 안에 두었다(`DatabaseDiscovery`).
+          if (isFolderRecord(parent)) places.push(parent.obsidianPath);
+        }
       }
-      places = [childFolderOf(parent, { databaseAt: (path) => this.databaseAt(path) })];
-      // 처음 발견할 때는 폴더로 추적하는 페이지면 그 폴더 안에 두었다(`DatabaseDiscovery`).
-      if (isFolderRecord(parent)) places.push(parent.obsidianPath);
+      if (places && !places.includes(current)) place = places[0]!;
     }
-    if (places.includes(parentFolderOf(folder))) return null;
-    return { from: folder, to: joinPath(places[0]!, baseName(folder)) };
+    const renamed = this.retitledFolderName(folder, dbConfig.databaseId, meta.title);
+    const to =
+      renamed === null
+        ? joinPath(place, baseName(folder))
+        : resolveDbFolderPath(joinPath(place, renamed), id, (path) => this.databaseAt(path));
+    if (to === folder) return null;
+    return { from: folder, to, ...(renamed !== null ? { renamed: true } : {}) };
+  }
+
+  /**
+   * Notion 에서 바꾼 DB 제목을 따른 폴더 이름(`sync.renameOnTitleChange`) — 바꿀 것이 없으면 null.
+   *
+   * 지난번에 받은 제목({@link DbBaseFiles})과 달라졌고, 폴더 이름이 그 옛 제목을 따르고 있을 때만 — 폴더를 만든 규칙
+   * (`databaseFolderName`) 이나 `.base` 이름 규칙(`sanitizeFileName`, 볼트에서 바꿔 올린 이름) 그대로일 때다. 사용자가
+   * 따로 정한 이름이면 두고, 새 이름도 지금 이름과 같은 규칙으로 짓는다. 같은 이름 DB 와 가르려 붙인 ` (id 조각)` 은
+   * 떼고 견준다(F24) — 새 자리에서 다시 가른다.
+   */
+  private retitledFolderName(folder: string, databaseId: string, title: string): string | null {
+    if (!this.config.sync.renameOnTitleChange || !title) return null;
+    const previous = this.baseFileInfo.get(databaseId)?.title;
+    if (!previous || previous === title) return null;
+    const name = baseName(folder).replace(/ \([0-9a-f]{8,32}\)$/, "");
+    for (const style of [databaseFolderName, sanitizeFileName]) {
+      if (style(previous) !== name) continue;
+      const next = style(title);
+      return next && next !== name ? next : null;
+    }
+    return null;
   }
 
   /** 이 폴더가 받는 DB — 설정한 DB 와 발견한 DB 에서. */
