@@ -18,6 +18,7 @@ import {
 import { BaseFileGenerator } from "../../src/view/base-file-generator.js";
 import type { BasePropertySchema, ViewConfig } from "../../src/types/view.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { compactNotionId } from "../../src/utils/id.js";
 import { setLogger } from "../../src/utils/logger.js";
 import {
   createMockVaultFs,
@@ -135,6 +136,8 @@ describe("BaseViewEdits — push 가 고친 보기를 Notion 에 올린다", () 
   let notion: ReturnType<typeof createMockNotionClient> & {
     getView: ReturnType<typeof vi.fn>;
     updateView: ReturnType<typeof vi.fn>;
+    createView: ReturnType<typeof vi.fn>;
+    deleteView: ReturnType<typeof vi.fn>;
   };
   let metaStore: Map<string, string>;
   let files: Map<string, string>;
@@ -191,6 +194,22 @@ describe("BaseViewEdits — push 가 고친 보기를 Notion 에 올린다", () 
     }));
     notion.getDatabaseSchemaFull.mockResolvedValue(SCHEMA);
     notion.getView = vi.fn(async (id: string) => live.get(id) ?? null);
+    let made = 0;
+    notion.createView = vi.fn(
+      async ({ request }: { request: Record<string, unknown> }): Promise<string> => {
+        const id = `view-new-${++made}`;
+        live.set(id, {
+          id,
+          name: request["name"] as string,
+          type: request["type"] as ViewConfig["type"],
+          configuration: request["configuration"] as Record<string, unknown>,
+          ...(request["filter"] ? { filter: request["filter"] } : {}),
+          ...(request["sorts"] ? { sorts: request["sorts"] as ViewConfig["sorts"] } : {}),
+        });
+        return id;
+      },
+    );
+    notion.deleteView = vi.fn(async (id: string) => void live.delete(id));
     notion.updateView = vi.fn(async (id: string, request: Record<string, unknown>) => {
       const view = live.get(id)!;
       live.set(id, {
@@ -377,10 +396,10 @@ describe("BaseViewEdits — push 가 고친 보기를 Notion 에 올린다", () 
     expect(notion.updateView).not.toHaveBeenCalled();
   });
 
-  it("올리지 않는 것(보기 추가 · 타입)을 함께 고쳤으면 올린 뒤에도 붙잡아 둔다", async () => {
+  it("올리지 않는 것(보기 타입 · 표시 개수)을 함께 고쳤으면 올린 뒤에도 붙잡아 둔다", async () => {
     edit((views) => {
       views[0]!["name"] = "새 표";
-      views.push({ type: "list", name: "볼트에서 더한 목록" });
+      views[1]!["limit"] = 10;
     });
 
     const result = await build().push();
@@ -403,7 +422,7 @@ describe("BaseViewEdits — push 가 고친 보기를 Notion 에 올린다", () 
   });
 
   it("보기를 기록하지 않은 `.base`(직접 만든 것)는 건드리지 않는다", async () => {
-    const { views: _v, rest: _r, ...plain } = record();
+    const { views: _v, rest: _r, docRest: _d, ...plain } = record();
     new DbBaseFiles(stateDb as never).set(DB_ID, plain);
     edit((views) => {
       views[0]!["name"] = "새 표";
@@ -413,5 +432,192 @@ describe("BaseViewEdits — push 가 고친 보기를 Notion 에 올린다", () 
 
     expect(result.failed).toEqual([]);
     expect(notion.getView).not.toHaveBeenCalled();
+  });
+
+  describe("볼트에서 더하고 지운 보기 (P6)", () => {
+    it("더한 표 보기를 Notion 에 만든다 — 볼트에 없는 열은 숨기고, 기록이 생겨 다시 push 하면 할 것이 없다", async () => {
+      edit((views) => {
+        views.push({
+          type: "table",
+          name: "마감순",
+          order: ["file.name", "마감"],
+          sort: [{ property: "마감", direction: "ASC" }],
+          filters: { and: ['상태 == "가"'] },
+        });
+      });
+
+      const result = await build().push();
+
+      expect(result.failed).toEqual([]);
+      expect(notion.createView).toHaveBeenCalledWith({
+        databaseId: compactNotionId(DB_ID),
+        dataSourceId: "ds-1",
+        request: {
+          name: "마감순",
+          type: "table",
+          configuration: {
+            type: "table",
+            properties: [
+              { property_id: "title" },
+              { property_id: "p3", visible: true },
+              { property_id: "p:1", visible: false },
+              { property_id: "p2", visible: false },
+              { property_id: "p4", visible: false },
+            ],
+          },
+          filter: { property: "p4", select: { equals: "가" } },
+          sorts: [{ property: "p3", direction: "ascending" }],
+        },
+      });
+      expect(result.viewEdits).toEqual([
+        { path: PATH, view: "마감순", action: "created", changed: [] },
+      ]);
+      expect(record().views!.map((v) => v.viewId)).toEqual([
+        "view-table",
+        "view-board",
+        "view-new-1",
+      ]);
+      // 모두 올렸으니 다음 pull 이 Notion 의 모습으로 다시 쓴다.
+      expect(record().hash).toBe(computeHash(files.get(PATH)!));
+
+      notion.createView.mockClear();
+      expect((await build().push()).viewEdits).toBeUndefined();
+      expect(notion.createView).not.toHaveBeenCalled();
+    });
+
+    it("카드는 갤러리로 — 같은 보기 종류가 없으면(지도) 만들지 않고 붙잡아 둔다", async () => {
+      edit((views) => {
+        views.push({ type: "cards", name: "카드" });
+        views.push({ type: "map", name: "지도" });
+      });
+
+      const result = await build().push();
+
+      expect(notion.createView).toHaveBeenCalledTimes(1);
+      expect(notion.createView.mock.calls[0]![0].request).toEqual({
+        name: "카드",
+        type: "gallery",
+        configuration: { type: "gallery" },
+      });
+      expect(result.failed).toEqual([
+        expect.objectContaining({
+          error: expect.stringContaining("Notion 에 같은 보기 종류가 없습니다(map)"),
+        }),
+      ]);
+      expect(record().hash).toBe(computeHash(generated));
+      // 만든 보기는 기록했다 — 다음 push 가 또 만들지 않는다.
+      notion.createView.mockClear();
+      await build().push();
+      expect(notion.createView).not.toHaveBeenCalled();
+    });
+
+    it("Notion 이 받지 않는 키(그룹)가 있는 보기도 만들되 `.base` 는 붙잡아 둔다", async () => {
+      edit((views) => {
+        views.push({
+          type: "table",
+          name: "묶음",
+          groupBy: { property: "상태", direction: "ASC" },
+        });
+      });
+
+      const result = await build().push();
+
+      expect(result.viewEdits).toEqual([
+        { path: PATH, view: "묶음", action: "created", changed: [] },
+      ]);
+      expect(record().hash).toBe(computeHash(generated));
+    });
+
+    it("만들지 못하면 기록하지 않아 다음 push 가 다시 만든다", async () => {
+      notion.createView.mockRejectedValueOnce(new Error("validation_error"));
+      edit((views) => {
+        views.push({ type: "list", name: "목록" });
+      });
+
+      const first = await build().push();
+      expect(first.failed[0]?.error).toContain("만들지 못했습니다: validation_error");
+      expect(record().views).toHaveLength(2);
+
+      const second = await build().push();
+      expect(second.viewEdits).toEqual([
+        { path: PATH, view: "목록", action: "created", changed: [] },
+      ]);
+    });
+
+    it("지운 보기를 Notion 에서 지운다 — 기록에서 빠지고 다시 push 하면 할 것이 없다", async () => {
+      edit((views) => {
+        views.splice(1, 1);
+      });
+
+      const result = await build().push();
+
+      expect(notion.deleteView).toHaveBeenCalledWith("view-board");
+      expect(result.viewEdits).toEqual([
+        { path: PATH, view: "보드", action: "deleted", changed: [] },
+      ]);
+      expect(record().views!.map((v) => v.viewId)).toEqual(["view-table"]);
+      expect(record().hash).toBe(computeHash(files.get(PATH)!));
+      notion.deleteView.mockClear();
+      expect((await build().push()).viewEdits).toBeUndefined();
+    });
+
+    it("그 사이 Notion 에서 고친 보기는 지우지 않는다 · Notion 에서도 지웠으면 기록만 뺀다", async () => {
+      live.set("view-board", { ...live.get("view-board")!, name: "Notion 에서 바꿈" });
+      edit((views) => {
+        views.splice(1, 1);
+      });
+      const refused = await build().push();
+      expect(notion.deleteView).not.toHaveBeenCalled();
+      expect(refused.failed[0]?.error).toContain(
+        "그 사이 Notion 에서 이 보기를 고쳐 지우지 않았습니다",
+      );
+
+      live.delete("view-board");
+      const gone = await build().push();
+      expect(notion.deleteView).not.toHaveBeenCalled();
+      expect(gone.failed).toEqual([]);
+      expect(record().views!.map((v) => v.viewId)).toEqual(["view-table"]);
+    });
+
+    it("보기를 모두 지운 `.base` 로는 Notion 보기를 지우지 않는다", async () => {
+      edit((views) => {
+        views.splice(0, views.length);
+      });
+      const result = await build().push();
+      expect(notion.deleteView).not.toHaveBeenCalled();
+      expect(result.failed).toHaveLength(2);
+      expect(result.failed[0]?.error).toContain("보기를 모두 지운");
+    });
+
+    it("dry-run 은 만들고 지울 것을 알리기만 한다", async () => {
+      edit((views) => {
+        views.splice(1, 1);
+        views.push({ type: "list", name: "목록" });
+      });
+      const result = await build().push({ dryRun: true });
+      expect(result.viewEdits).toEqual([
+        { path: PATH, view: "목록", action: "created", changed: [] },
+        { path: PATH, view: "보드", action: "deleted", changed: [] },
+      ]);
+      expect(notion.createView).not.toHaveBeenCalled();
+      expect(notion.deleteView).not.toHaveBeenCalled();
+    });
+
+    it("보기마다의 지문이 없는 예전 기록이면 만들고 지워도 붙잡아 둔다", async () => {
+      const old = record();
+      new DbBaseFiles(stateDb as never).set(DB_ID, {
+        basePath: old.basePath,
+        title: old.title,
+        hash: old.hash!,
+        rest: old.rest!,
+        views: old.views!.map(({ rest: _r, ...view }) => view),
+      });
+      edit((views) => {
+        views.push({ type: "list", name: "목록" });
+      });
+      const result = await build().push();
+      expect(result.viewEdits).toHaveLength(1);
+      expect(record().hash).toBe(computeHash(generated));
+    });
   });
 });

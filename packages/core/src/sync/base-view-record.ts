@@ -22,6 +22,8 @@ export interface BaseViewRecord {
   readonly lossyFilter?: true;
   /** 그때 Notion 보기의 지문({@link viewFingerprint}) — 그 사이 Notion 에서도 고쳤는지 가른다. */
   readonly notion: string;
+  /** 이 보기에서 올리지 않는 값의 지문({@link viewRestOf}). 예전 기록에는 없다. */
+  readonly rest?: string;
 }
 
 export interface BasesSort {
@@ -129,6 +131,44 @@ export function matchViews(
   return out;
 }
 
+const without = (from: Readonly<Record<string, unknown>>, keys: readonly string[]) =>
+  Object.fromEntries(Object.entries(from).filter(([key]) => !keys.includes(key)));
+
+/** 보기 하나에서 올리지 않는 값(타입 · 그룹 · 수식 …)의 지문. */
+export function viewRestOf(view: Readonly<Record<string, unknown>>): string {
+  return computeHash(canonical(without(view, PUSHABLE_KEYS)));
+}
+
+/** `.base` 에서 보기 말고의 키(전체 필터 · 수식 · 속성 표시)의 지문. */
+export function docRestOf(parsed: ParsedBaseFile): string {
+  return computeHash(canonical(without(parsed.doc, ["views"])));
+}
+
+/**
+ * 볼트에서 고친 것 가운데 올리지 않는 것이 없나 — 기록과 이은 보기마다, 그리고 보기 말고의 키. 보기마다의 지문이 없는
+ * 예전 기록이면 파일 전체의 지문({@link restSignature})으로 견준다 — 그때는 보기를 더하거나 지운 파일을 계속 붙잡아 둔다.
+ * 더한 보기의 나머지는 여기서 보지 않는다(만들 때 가른다).
+ */
+export function restUnchanged(
+  parsed: ParsedBaseFile,
+  matched: ReadonlyArray<BaseViewRecord | undefined>,
+  base: {
+    readonly rest?: string;
+    readonly docRest?: string;
+    readonly views?: readonly BaseViewRecord[];
+  },
+): boolean {
+  const records = base.views ?? [];
+  if (base.docRest === undefined || records.some((record) => record.rest === undefined)) {
+    return (
+      matched.filter(Boolean).length === records.length &&
+      restSignature(parsed, matched) === base.rest
+    );
+  }
+  if (docRestOf(parsed) !== base.docRest) return false;
+  return parsed.views.every((view, i) => !matched[i] || viewRestOf(view) === matched[i]!.rest);
+}
+
 /**
  * 올리지 않는 것들의 지문 — 보기 말고의 키, 보기마다 올리는 값을 뺀 나머지, 기록과 잇지 못한 보기. pull 이 쓴 것과
  * 같으면 볼트에서 고친 것은 모두 Notion 에 올라가 다음 pull 이 `.base` 를 다시 써도 잃는 것이 없다.
@@ -137,8 +177,6 @@ export function restSignature(
   parsed: ParsedBaseFile,
   matched: ReadonlyArray<BaseViewRecord | undefined>,
 ): string {
-  const without = (from: Readonly<Record<string, unknown>>, keys: readonly string[]) =>
-    Object.fromEntries(Object.entries(from).filter(([key]) => !keys.includes(key)));
   const views: Record<string, unknown> = {};
   parsed.views.forEach((view, i) => {
     const key = matched[i] ? `id:${matched[i]!.viewId}` : `new:${String(view["name"])}`;
@@ -167,7 +205,11 @@ export function recordBaseViews(
   content: string,
   written: readonly WrittenBasesView[],
   views: readonly ViewConfig[],
-): { readonly views: BaseViewRecord[]; readonly rest: string } | null {
+): {
+  readonly views: BaseViewRecord[];
+  readonly rest: string;
+  readonly docRest: string;
+} | null {
   const parsed = readBaseFile(content);
   if (!parsed || written.length !== parsed.views.length) return null;
   const byId = new Map(views.map((view) => [view.id, view]));
@@ -181,9 +223,10 @@ export function recordBaseViews(
       ...pushableOf(parsed.views[i]!),
       ...(source.lossyFilter ? { lossyFilter: true as const } : {}),
       notion: viewFingerprint(view),
+      rest: viewRestOf(parsed.views[i]!),
     });
   }
-  return { views: records, rest: restSignature(parsed, records) };
+  return { views: records, rest: restSignature(parsed, records), docRest: docRestOf(parsed) };
 }
 
 /** 키 차례에 상관없는 JSON — 값이 같으면 글자도 같다. */

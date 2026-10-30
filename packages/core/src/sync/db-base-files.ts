@@ -20,6 +20,11 @@ export interface DbBaseFile {
   readonly views?: readonly BaseViewRecord[];
   /** 올리지 않는 나머지의 지문(`restSignature`) — 같아야 고친 것을 모두 올린 것이다. */
   readonly rest?: string;
+  /**
+   * 보기 말고의 키의 지문(`docRestOf`) — 보기를 더하거나 지운 `.base` 는 {@link rest} 로 견줄 수 없어 보기마다의
+   * 지문(`BaseViewRecord.rest`)과 이것으로 견준다. 예전 기록에는 없다.
+   */
+  readonly docRest?: string;
 }
 
 /**
@@ -80,6 +85,7 @@ export class DbBaseFiles {
               ...(typeof entry.hash === "string" ? { hash: entry.hash } : {}),
               ...(Array.isArray(entry.views) ? { views: entry.views } : {}),
               ...(typeof entry.rest === "string" ? { rest: entry.rest } : {}),
+              ...(typeof entry.docRest === "string" ? { docRest: entry.docRest } : {}),
             }),
           );
         }
@@ -99,5 +105,6 @@ function normalize(info: DbBaseFile): DbBaseFile {
     ...(info.hash ? { hash: info.hash } : {}),
     ...(info.views && info.views.length > 0 ? { views: info.views } : {}),
     ...(info.views && info.views.length > 0 && info.rest ? { rest: info.rest } : {}),
+    ...(info.views && info.views.length > 0 && info.docRest ? { docRest: info.docRest } : {}),
   };
 }
