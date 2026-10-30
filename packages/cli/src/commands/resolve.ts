@@ -12,6 +12,7 @@ import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
 import { printUnifiedDiff } from "../utils/diff-output.js";
 import { describeFailure } from "../utils/state-db-failure.js";
 import { openVaultFs } from "../utils/vault.js";
+import { isInteractive } from "../utils/interactive.js";
 
 /** 허용 전략 — 오타를 조용히 흘리지 않도록 실행 전에 한 번 검증한다. */
 const STRATEGIES = ["local-first", "remote-first", "duplicate"] as const;
@@ -43,16 +44,6 @@ function choiceName(conflict: Conflict, choice: ResolutionChoice, uploads: boole
     CHOICE_NAMES[choice] ??
     choice
   );
-}
-
-/**
- * 대화형 프롬프트를 띄울 수 있는 환경인지.
- *
- * 파이프·cron·CI 처럼 TTY 가 없는 곳에서 @inquirer 프롬프트를 띄우면 원인을 알 수 없는
- * 오류로 죽거나 입력을 기다리며 멎는다. 먼저 판정해 무엇을 어떻게 하라고 말해 준다.
- */
-function isInteractive(): boolean {
-  return process.stdin.isTTY === true && process.stdout.isTTY === true;
 }
 
 export const resolveCommand = new Command("resolve")

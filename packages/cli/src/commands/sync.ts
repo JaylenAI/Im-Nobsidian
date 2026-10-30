@@ -33,11 +33,13 @@ import {
   pushJson,
 } from "../utils/json-output.js";
 import { openVaultFs } from "../utils/vault.js";
+import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
+  .option("-y, --yes", "직접 만든 .base 의 폴더 필터를 묻지 않고 고침 (비대화형/CI)")
   .action(async (options) => {
     const json = options.json === true;
     if (json) enableJsonMode();
@@ -172,6 +174,7 @@ export const syncCommand = new Command("sync")
         for (const f of pushResult.failed) failedItem(f.path, f.error, "▲");
         process.exitCode = 1;
       }
+      await askUserBaseFilterFixes(orchestrator, options);
     } finally {
       stateDb.close();
     }

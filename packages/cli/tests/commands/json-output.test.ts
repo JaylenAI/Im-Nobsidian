@@ -39,6 +39,7 @@ vi.mock("@im-nobsidian/core", () => ({
       const push = await mockPush(options);
       return { pull, push, conflicts: pull.conflicts, duration: pull.duration + push.duration };
     },
+    userBaseFilterFixes: () => [],
   })),
   findConnectionFolders: vi.fn().mockResolvedValue([]),
   ScopedVaultFS: vi.fn(),
