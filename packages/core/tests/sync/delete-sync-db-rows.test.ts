@@ -368,6 +368,40 @@ describe("S-12 deleteSync 는 목록에 없는 것을 원격에 물어보고 지
       expect(db.getByNotionId(child.id)).not.toBeNull();
     });
 
+    it("받는 DB 의 행 아래 하위 페이지는 지우지 않는다 — 순회는 행을 보지 못한다", async () => {
+      const orchestrator = build();
+      const row = await pulledRow(orchestrator);
+      const sub = notion.add(row.id, "Sub", "하위 본문");
+      at("10:01:00");
+      await orchestrator.pull({ force: true });
+      const subPath = db.getByNotionId(sub.id)?.obsidianPath;
+      expect(subPath).toBeDefined();
+
+      at("10:05:00");
+      const result = await orchestrator.pull({ force: true });
+
+      expect(result).toMatchObject({ deleted: 0, failed: [] });
+      expect(vault.files.has(subPath!)).toBe(true);
+      expect(db.getByNotionId(sub.id)).not.toBeNull();
+    });
+
+    it("Notion 에서 받는 DB 안으로 옮긴 페이지는 지우지 않고 행으로 옮긴다 (ADR-047)", async () => {
+      const orchestrator = build();
+      const pageId = await pushedNote(orchestrator);
+
+      at("10:05:00");
+      notion.edit(pageId, (page) => {
+        page.parent = ROW_DB_ID;
+        page.parentType = "database";
+      });
+      const result = await orchestrator.pull();
+
+      expect(result).toMatchObject({ deleted: 0, failed: [] });
+      expect(result.moved).toEqual([{ from: "Note.md", to: "Tasks/Note.md" }]);
+      expect(vault.read("Tasks/Note.md")).toContain("원본");
+      expect(db.getByNotionId(pageId)).toMatchObject({ fileType: "db-row" });
+    });
+
     it("동기화 범위 밖으로 옮겨진 페이지는 지금처럼 지운다", async () => {
       const orchestrator = build();
       const pageId = await pushedNote(orchestrator);
