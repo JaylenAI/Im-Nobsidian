@@ -1274,6 +1274,10 @@ export class PagePusher {
       );
     }
 
+    // 빈 해시 · 지문 없음은 자리를 바꾼 뒤 맞추지 못한 행이다(ADR-047) — 지난 사본이 아니라 원격의 지금 값과 견준다.
+    if (record.contentHash === "" && record.notionBodyFingerprint === null) {
+      options = { ...options, overwriteRemote: true };
+    }
     const remote = await this.livePage(record);
     // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
     const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));

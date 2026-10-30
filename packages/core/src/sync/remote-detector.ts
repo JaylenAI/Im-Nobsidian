@@ -184,7 +184,9 @@ export class RemoteDetector {
   /** 받은 부모가 상태 DB 의 것과 다르면 옮긴 페이지로 적는다. */
   private noteParent(pageId: string, parentId: string): void {
     const record = this.stateDb.getByNotionId(pageId);
-    if (record && movedInNotion(record, parentId))
+    const tracksPage = (id: string): boolean =>
+      notionIdsEqual(id, this.config.notion.rootPageId) || this.stateDb.getByNotionId(id) !== null;
+    if (record && movedInNotion(record, parentId, tracksPage))
       this._moved.set(normalizeNotionId(pageId), parentId);
   }
 

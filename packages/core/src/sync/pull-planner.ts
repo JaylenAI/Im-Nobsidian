@@ -95,6 +95,8 @@ export class PullPlanner {
       });
     }
     for (const row of rows) items.push({ path: row.path, operation: row.operation });
+    // Notion 에서 DB 안으로 옮긴 페이지 — 행이 되며 옮긴다. 행으로 다시 쓰므로 고친 것으로도 센다(실제 pull 과 같다).
+    const movedRows = rows.filter((row) => row.moves !== undefined);
     items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
 
     const count = (type: RemoteChange["type"]) => planned.filter((c) => c.type === type).length;
@@ -123,6 +125,7 @@ export class PullPlanner {
       // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
       restored: restoreChanges.length + restoredModified + rowCount("update", true),
       ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+      ...(movedRows.length > 0 ? { moved: movedRows.flatMap((row) => row.moves!) } : {}),
       conflicts: [],
       writtenPaths: [],
       failed,

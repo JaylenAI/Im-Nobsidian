@@ -12,20 +12,31 @@ export interface RemoteMoveResult {
   readonly skipped: readonly RemoteMoveSkip[];
 }
 
-/** 옮길 수 있는 레코드 — 페이지 노트와 폴더. 행은 DB 를 옮기지 못하고(API), 행의 자리는 DB 폴더가 정한다. */
+/** 옮길 수 있는 레코드 — 페이지 노트와 폴더. 행은 DB 밖 페이지 아래로 나왔을 때만 옮긴다({@link movedInNotion}). */
 const MOVABLE_TYPES: ReadonlySet<SyncRecord["fileType"]> = new Set([
   "file",
   "folder-note",
   "folder-only",
 ]);
 
-/** 이 레코드의 Notion 부모가 바뀌었으면 옮길 대상이다 — 감지(RemoteDetector)가 묻는다. */
-export function movedInNotion(record: SyncRecord, parentId: string): boolean {
-  return (
-    MOVABLE_TYPES.has(record.fileType) &&
-    record.notionParentId !== null &&
-    !notionIdsEqual(record.notionParentId, parentId)
-  );
+/**
+ * 이 레코드의 Notion 부모가 바뀌었으면 옮길 대상이다 — 감지(RemoteDetector)가 묻는다.
+ *
+ * 행은 볼트가 아는 페이지(루트 · 추적하는 페이지) 아래로 나왔을 때만 — 페이지가 된다(ADR-047). 다른 DB 로 간 행은
+ * 그 DB 를 받을 때 그 DB 폴더로 옮긴다(DatabaseSyncer).
+ *
+ * @param tracksPage 루트거나 이 볼트가 추적하는 페이지인가 — 행만 묻는다.
+ */
+export function movedInNotion(
+  record: SyncRecord,
+  parentId: string,
+  tracksPage: (pageId: string) => boolean,
+): boolean {
+  if (record.notionParentId === null || notionIdsEqual(record.notionParentId, parentId)) {
+    return false;
+  }
+  if (MOVABLE_TYPES.has(record.fileType)) return true;
+  return record.fileType === "db-row" && tracksPage(parentId);
 }
 
 /**
@@ -65,7 +76,7 @@ export class RemoteMoveFollower {
     const result: { moved: RemoteMove[]; skipped: RemoteMoveSkip[] } = { moved: [], skipped: [] };
     for (const [pageId, parentId] of moved) {
       const record = this.stateDb.getByNotionId(pageId);
-      if (!record || !movedInNotion(record, parentId)) continue;
+      if (!record || !movedInNotion(record, parentId, (id) => this.tracksPage(id))) continue;
       if (this.vaultFs.excludesPath?.(record.obsidianPath)) continue;
       let outcome: RemoteMoveSkip | { readonly moves: readonly RemoteMove[] };
       try {
@@ -114,13 +125,29 @@ export class RemoteMoveFollower {
     }
     if (dryRun) return { moves };
 
-    await this.relocator.relocate(moves, () => this.stateDb.setNotionParentId(record.id, parentId));
+    await this.relocator.relocate(moves, () => {
+      this.stateDb.setNotionParentId(record.id, parentId);
+      // DB 밖으로 나온 행은 페이지가 된다 — 노트의 frontmatter(옛 속성)는 볼트에 그대로 둔다. Notion 은 옮기며 제목
+      // 말고 속성을 버린다.
+      if (record.fileType === "db-row") {
+        const moved = this.stateDb.getByNotionId(record.notionPageId!);
+        if (moved) this.stateDb.upsert({ ...moved, fileType: "file" });
+      }
+    });
     for (const move of moves) {
       getLogger().info(
         `[Im-Nobsidian] Notion 에서 옮긴 페이지를 볼트에서 옮김: ${move.from} → ${move.to}`,
       );
     }
     return { moves };
+  }
+
+  /** 루트거나 이 볼트가 추적하는 페이지인가. */
+  tracksPage(pageId: string): boolean {
+    return (
+      notionIdsEqual(pageId, this.config.notion.rootPageId) ||
+      this.stateDb.getByNotionId(pageId) !== null
+    );
   }
 
   /** 새 부모 아래의 자식이 놓일 폴더 — 새 페이지를 받을 때와 같은 규칙. 루트면 `""`, 볼트에 없는 부모면 null. */
