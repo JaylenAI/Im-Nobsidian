@@ -40,6 +40,7 @@ import {
 import { isDatabaseMode } from "./parent-mode.js";
 import { addPendingDatabases } from "./remote-scan.js";
 import type { VaultFS } from "./vault-fs.js";
+import { loadPreparedDatabases } from "./folder-database.js";
 
 /** 사이드카 파일인가 — 확장자 대소문자는 가리지 않는다. */
 function isSidecarPath(path: string): boolean {
@@ -152,13 +153,18 @@ export class DatabaseCreator {
 
     const known = this.knownDatabaseIds();
     const created = loadCreatedDatabases(this.stateDb);
+    // 이미 올린 노트가 든 채로 DB 로 바꾸라고 준비한 폴더 — 페이지 자리가 있어도 만든다(ADR-047).
+    const prepared = loadPreparedDatabases(this.stateDb);
     for (const file of await this.vaultFs.listNonMarkdownFiles()) {
       if (!isSidecarPath(file.path)) continue;
       const folder = parentFolderOf(file.path);
       if (found.has(folder)) continue;
-      if (!candidates.has(folder) && !(includeEmpty && !folderContainer(folder, lookup))) continue;
+      const container = folderContainer(folder, lookup);
+      const mayBePrepared = prepared.size > 0 && includeEmpty && container?.kind === "page";
+      if (!candidates.has(folder) && !(includeEmpty && !container) && !mayBePrepared) continue;
       const schema = await this.readSidecar(file.path);
       if (!schema) continue;
+      if (container && !prepared.has(compactNotionId(schema.databaseId))) continue;
       const entry = created.get(schema.databaseId);
       // 만든 적이 있으면 그 폴더의 자리가 이미 있다. 만드는 요청이 끝나지 않은 것만 다시 본다.
       if (entry && entry.databaseId !== null) continue;

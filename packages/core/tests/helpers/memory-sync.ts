@@ -132,8 +132,8 @@ export interface MemoryPage {
   readonly id: string;
   title: string;
   parent: string;
-  /** 부모가 DB 면 행이다 — 속성을 갖고, DB 조회(queryAllDatabasePages)로만 보인다. */
-  readonly parentType: "page" | "database";
+  /** 부모가 DB 면 행이다 — 속성을 갖고, DB 조회(queryAllDatabasePages)로만 보인다. 옮기면 바뀐다. */
+  parentType: "page" | "database";
   /** 제목 밖의 속성 — Notion 이 돌려주는 모양(`{ type, [type]: 값 }`). */
   properties: Record<string, unknown>;
   lastEdited: string;
@@ -330,8 +330,31 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     NotionClient.prototype.extractCover.call(client as never, page as never),
   );
   client.movePage.mockImplementation(async (id: string, parentId: string) => {
-    touch(id).parent = parentId;
+    const page = touch(id);
+    page.parent = parentId;
+    page.parentType = "page";
   });
+  // 메모리 Notion 의 DB 는 data source 가 DB 와 같은 id 다 — 시험이 getDatabaseMeta 로 그렇게 돌려준다.
+  client.movePageToDataSource.mockImplementation(async (id: string, dataSourceId: string) => {
+    const page = touch(id);
+    page.parent = dataSourceId;
+    page.parentType = "database";
+  });
+  // DB 의 자리 — 적지 않은 DB 는 루트 아래 같은 이름(시험이 `databases.set` 으로 정한다).
+  const databases = new Map<string, { parent: string; title: string }>();
+  client.getDatabasePlacement.mockImplementation(async (id: string) => {
+    const db = databases.get(id) ?? { parent: "root-page-id", title: "" };
+    return { parentType: "page_id", pageId: db.parent, title: db.title };
+  });
+  client.updateDatabasePlacement.mockImplementation(
+    async (id: string, change: { parentPageId?: string; title?: string }) => {
+      const db = databases.get(id) ?? { parent: "root-page-id", title: "" };
+      databases.set(id, {
+        parent: change.parentPageId ?? db.parent,
+        title: change.title ?? db.title,
+      });
+    },
+  );
   client.updatePageProperties.mockImplementation(
     async (id: string, props: Record<string, PropertyRequest>) => {
       const page = touch(id);
@@ -488,5 +511,5 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   ]);
-  return { client, pages, add, touch, edit, recent };
+  return { client, pages, databases, add, touch, edit, recent };
 }

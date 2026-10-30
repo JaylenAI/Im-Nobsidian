@@ -205,6 +205,11 @@ export function createMockNotionClient() {
     queryAllDatabasePages: vi.fn().mockResolvedValue([]),
     queryDatabase: vi.fn().mockResolvedValue({ results: [], nextCursor: null }),
     movePage: vi.fn().mockResolvedValue({}),
+    movePageToDataSource: vi.fn().mockResolvedValue(undefined),
+    getDatabasePlacement: vi
+      .fn()
+      .mockResolvedValue({ parentType: "page_id", pageId: "root-page-id", title: "" }),
+    updateDatabasePlacement: vi.fn().mockResolvedValue(undefined),
     updatePageMarkdownPartial: vi.fn().mockResolvedValue({}),
     searchRecentPages: vi.fn().mockResolvedValue([]),
     searchRecentDataSources: vi.fn().mockResolvedValue([]),

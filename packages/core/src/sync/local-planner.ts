@@ -4,6 +4,7 @@ import type { FolderMoveChange, SyncRecord } from "../types/sync.js";
 import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { ChangeDetector, LocalScan, LocalScanOptions } from "./change-detector.js";
+import { recordDatabaseMoves } from "./database-moves.js";
 import { retargetBaseFiles, rewriteDatabaseFolders } from "./db-folder-moves.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import { isFolderNotePath, isFolderRecord, type FolderLookup } from "./folder-container.js";
@@ -157,6 +158,13 @@ export class LocalPlanner {
     const moved = adoptions.length + plan.folderMoves.length + plan.databaseFolderMoves.length;
     if (moved === 0 && plan.settledMoveOps.length === 0 && isEmptyRenameHints(plan.hints)) return;
 
+    // 옮긴 DB 폴더의 DB — 옮겨 적기 전의 폴더로 찾는다. push 가 Notion 의 DB 도 옮긴다(ADR-047).
+    const lookup = this.placement.folderLookup();
+    const databaseMoves = plan.databaseFolderMoves.flatMap((move) => {
+      const databaseId = lookup.databaseAt(move.from);
+      return databaseId ? [{ databaseId, from: move.from, to: move.to }] : [];
+    });
+
     this.stateDb.transaction(() => {
       for (const opId of plan.settledMoveOps) this.stateDb.markPendingCompleted(opId);
       for (const { record, to } of adoptions) {
@@ -188,6 +196,7 @@ export class LocalPlanner {
         const record = this.stateDb.getByPath(move.from);
         if (record) this.moveRecord(record, move.to);
       }
+      recordDatabaseMoves(this.stateDb, databaseMoves);
       rewriteDatabaseFolders(this.stateDb, [...plan.folderMoves, ...plan.databaseFolderMoves]);
       // 이번 스캔이 쓴 힌트만 지운다 — 그 사이 플러그인이 적은 힌트는 다음 실행이 쓴다.
       if (!isEmptyRenameHints(plan.hints)) {
@@ -202,17 +211,15 @@ export class LocalPlanner {
         }건을 상태에 옮겨 적음`,
       );
     }
-    await retargetBaseFiles(this.vaultFs, [...plan.folderMoves, ...plan.databaseFolderMoves]);
-    for (const move of plan.databaseFolderMoves) {
-      getLogger().info(
-        `[Im-Nobsidian] DB 폴더를 옮김: ${move.from} → ${move.to} — 볼트 쪽 자리만 바뀐다. ` +
-          `Notion 의 DB 는 옮기거나 이름을 바꾸지 않는다`,
-      );
-    }
+    await retargetBaseFiles(
+      this.vaultFs,
+      [...plan.folderMoves, ...plan.databaseFolderMoves],
+      this.stateDb,
+    );
   }
 
   /**
-   * 변경 목록에 보일 폴더 이동 — Notion 에 반영할 폴더 페이지와, 볼트 쪽 자리만 바꿀 DB 폴더.
+   * 변경 목록에 보일 폴더 이동 — Notion 에 반영할 폴더 페이지와 DB 폴더(DB 는 push 가 옮긴다, ADR-047).
    * 옮긴 폴더는 노트가 아니라 {@link LocalChange} 가 없다. 예전에는 목록에 보이지 않고 push 결과의
    * 수에만 들었다.
    */

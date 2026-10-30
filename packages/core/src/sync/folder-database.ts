@@ -13,6 +13,7 @@ import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import { isFrontmatterDate, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isDirectDbRowPath } from "../utils/db-folder-path.js";
+import { compactNotionId } from "../utils/id.js";
 import {
   isEmptyFrontmatterValue,
   parseFrontmatter,
@@ -60,6 +61,40 @@ export interface FolderDatabaseReport extends FolderDatabaseDraft {
   readonly folder: string;
   readonly sidecarPath: string;
   readonly rows: number;
+  /** 그중 이미 Notion 페이지로 올라간 노트 — push 가 같은 페이지째 행으로 옮긴다(ADR-047). */
+  readonly pagesToRows: number;
+}
+
+/**
+ * 이미 올린 노트가 든 채로 DB 로 바꾸라고 준비한 사이드카의 DB id(하이픈 없는 꼴) — push 는 페이지 자리가 있는 폴더를
+ * DB 로 만들지 않는데, 여기 적힌 것만은 만들고 그 폴더의 페이지를 행으로 옮긴다. 사용자가 고른 폴더만 바꾸려는 표시다 —
+ * 예전 push 가 폴더 페이지로 올린 DB 폴더가 업그레이드로 갑자기 DB 가 되지 않게.
+ */
+export const PREPARED_DBS_META_KEY = "prepared_dbs";
+
+export function loadPreparedDatabases(stateDb: Pick<IStateDB, "getMeta">): Set<string> {
+  const raw = stateDb.getMeta(PREPARED_DBS_META_KEY);
+  if (!raw) return new Set();
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return new Set(Array.isArray(parsed) ? parsed.filter((id) => typeof id === "string") : []);
+  } catch {
+    return new Set();
+  }
+}
+
+/** 준비 표시를 더하거나 지운다. */
+export function setPreparedDatabase(
+  stateDb: Pick<IStateDB, "getMeta" | "setMeta">,
+  databaseId: string,
+  prepared: boolean,
+): void {
+  const ids = loadPreparedDatabases(stateDb);
+  const id = compactNotionId(databaseId);
+  if (prepared === ids.has(id)) return;
+  if (prepared) ids.add(id);
+  else ids.delete(id);
+  stateDb.setMeta(PREPARED_DBS_META_KEY, JSON.stringify([...ids].sort()));
 }
 
 /** 속성이 아닌 frontmatter 키 — Obsidian 의 것이거나 페이지의 꾸밈 · 제목이다. */
@@ -168,10 +203,11 @@ export function draftFolderDatabase(input: {
 }
 
 /**
- * 볼트 폴더를 Notion DB 로 올릴 준비 — 사이드카를 써 둔다. 다음 push 가 DB 를 만들고 노트를 행으로 올린다.
+ * 볼트 폴더를 Notion DB 로 올릴 준비 — 사이드카를 써 둔다. 다음 push 가 DB 를 만들고 노트를 행으로 올린다. 이미 Notion
+ * 페이지로 올라간 노트는 같은 페이지째 그 DB 의 행으로 옮긴다(ADR-047) — 준비 표시({@link PREPARED_DBS_META_KEY})를 남긴다.
  *
- * 거절하는 것: 노트가 없는 폴더, 이미 사이드카가 있는 폴더(pull 이 받은 DB 이거나 이미 준비했다), 노트가
- * 이미 Notion 에 올라간 폴더 — push 는 이미 있는 페이지를 DB 의 행으로 옮기지 않는다.
+ * 거절하는 것: 노트가 없는 폴더, 이미 사이드카가 있는 폴더(pull 이 받은 DB 이거나 이미 준비했다), 하위 폴더에 올린
+ * 노트가 든 폴더 — DB 폴더 안의 폴더는 같은 이름의 행 아래 페이지 자리라, 그 이름의 노트가 없으면 둘 자리가 없다.
  */
 export async function prepareFolderDatabase(
   vaultFs: VaultFS,
@@ -195,9 +231,17 @@ export async function prepareFolderDatabase(
   if (sidecar) throw new Error(`이미 DB 사이드카가 있다: ${sidecar}`);
 
   const synced = notePaths.filter((p) => stateDb.getByPath(p)?.notionPageId);
-  if (synced.length > 0) {
+  const rowNames = new Set(notePaths.map((p) => p.slice(trimmed.length + 1, -".md".length)));
+  const stranded = stateDb
+    .getAll()
+    .map((record) => record.obsidianPath)
+    .filter((path) => path.startsWith(`${trimmed}/`) && !isDirectDbRowPath(trimmed, path))
+    .filter((path) => !rowNames.has(path.slice(trimmed.length + 1).split("/")[0]!))
+    .sort();
+  if (stranded.length > 0) {
     throw new Error(
-      `노트 ${synced.length}개가 이미 Notion 페이지로 올라가 있다 — push 는 있는 페이지를 DB 의 행으로 옮기지 않는다 (${synced[0]} …)`,
+      `하위 폴더에 Notion 에 올린 노트 · 폴더가 있다 — DB 폴더 안의 폴더는 같은 이름의 행 아래 페이지 자리라 둘 곳이 ` +
+        `없다. 하위 폴더를 먼저 밖으로 옮기세요 (${stranded[0]} …)`,
     );
   }
 
@@ -242,12 +286,14 @@ export async function prepareFolderDatabase(
 
   const sidecarPath = `${trimmed}/${sanitizeFileName(title)}${SIDECAR_SUFFIX}`;
   await vaultFs.writeFile(sidecarPath, new SidecarGenerator().serialize(draft.sidecar));
+  if (synced.length > 0) setPreparedDatabase(stateDb, options.databaseId, true);
   return {
     ...draft,
     skipped: [...draft.skipped, ...extra],
     folder: trimmed,
     sidecarPath,
     rows: notes.length,
+    pagesToRows: synced.length,
   };
 }
 

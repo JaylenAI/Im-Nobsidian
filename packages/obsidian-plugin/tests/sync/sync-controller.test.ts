@@ -482,13 +482,15 @@ describe("SyncController", () => {
         properties: [{ name: "별점", type: "number", reason: "" }],
         views: ["전체"],
         skipped: [{ what: "보기 지도", reason: "" }],
+        pagesToRows: 2,
       });
       const { hooks, onState, onNotice } = createHooks();
       await makeController(mock, hooks).prepareDatabase("Books", ".obsidian");
       expect(mock.prepareFolderDatabase).toHaveBeenCalledWith("Books", ".obsidian");
       expect(onNotice).toHaveBeenCalledWith(
         "Im-Nobsidian: Books 를 다음 push 에서 Notion DB 로 만듭니다 — 행 3 · 속성 1 · 보기 1 · " +
-          "옮기지 않은 것 1. 속성 타입은 Books/Books.notion.json 에서 고칠 수 있습니다.",
+          "옮기지 않은 것 1. 속성 타입은 Books/Books.notion.json 에서 고칠 수 있습니다. " +
+          "이미 올린 노트 2개는 같은 페이지째 행으로 옮깁니다.",
       );
       expect(mock.statusLocal).toHaveBeenCalled();
       expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ syncState: "error" }));
@@ -496,12 +498,12 @@ describe("SyncController", () => {
 
     it("준비를 거절하면 까닭만 알린다 — 오류 상태로 두지 않는다", async () => {
       mock.prepareFolderDatabase.mockRejectedValueOnce(
-        new Error("노트 2개가 이미 Notion 페이지로 올라가 있다"),
+        new Error("하위 폴더에 Notion 에 올린 노트 · 폴더가 있다"),
       );
       const { hooks, onState, onNotice } = createHooks();
       await makeController(mock, hooks).prepareDatabase("Books", ".obsidian");
       expect(onNotice).toHaveBeenCalledWith(
-        "Im-Nobsidian: DB 로 올릴 준비를 하지 못함 — 노트 2개가 이미 Notion 페이지로 올라가 있다",
+        "Im-Nobsidian: DB 로 올릴 준비를 하지 못함 — 하위 폴더에 Notion 에 올린 노트 · 폴더가 있다",
       );
       expect(onState).not.toHaveBeenCalledWith(expect.objectContaining({ syncState: "error" }));
     });

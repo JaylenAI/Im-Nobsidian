@@ -301,6 +301,7 @@ export class SyncController {
           renamedPropertyText(result),
           schemaEditText(result),
           viewEditText(result),
+          placementChangeText(result),
           readOnlyText(result),
           unsentDeletionText(result),
         ),
@@ -357,6 +358,7 @@ export class SyncController {
           renamedPropertyText(result.push),
           schemaEditText(result.push),
           viewEditText(result.push),
+          placementChangeText(result.push),
           heldSidecarText(
             (result.pull.heldSidecars ?? []).filter(
               (path) => !(result.push.schemaEdits ?? []).some((edit) => edit.path === path),
@@ -435,10 +437,14 @@ export class SyncController {
         const report = await this.orchestrator.prepareFolderDatabase(folder, configDir);
         const skipped =
           report.skipped.length > 0 ? ` · 옮기지 않은 것 ${report.skipped.length}` : "";
+        const pages =
+          report.pagesToRows > 0
+            ? ` 이미 올린 노트 ${report.pagesToRows}개는 같은 페이지째 행으로 옮깁니다.`
+            : "";
         this.hooks.onNotice?.(
           `${NOTICE_PREFIX}: ${report.folder} 를 다음 push 에서 Notion DB 로 만듭니다 — 행 ${report.rows} · ` +
             `속성 ${report.properties.length} · 보기 ${report.views.length}${skipped}. ` +
-            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.`,
+            `속성 타입은 ${report.sidecarPath} 에서 고칠 수 있습니다.${pages}`,
         );
         await this.refreshLocal(true);
       } catch (error) {
@@ -846,6 +852,25 @@ function viewEditText(result: PushResult): string | null {
   return (
     `.base 에서 고친 보기를 Notion 에 올렸습니다: ` +
     `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""}`
+  );
+}
+
+/**
+ * 옮겨서 Notion 에서 행 · 페이지가 된 노트(ADR-047). 다른 DB 에서 온 행이 대상 DB 에 더한 열을 함께 알린다 — 그 열은
+ * Notion 이 더했고, 지우려면 Notion 에서 지운다.
+ */
+function placementChangeText(result: PushResult): string | null {
+  const changes = result.placementChanges ?? [];
+  if (changes.length === 0) return null;
+  const rows = changes.filter((change) => change.becomes === "row").length;
+  const pages = changes.length - rows;
+  const columns = [...new Set(changes.flatMap((change) => change.addedColumns ?? []))];
+  return (
+    `옮긴 노트를 Notion 에서 ${[rows > 0 ? `행 ${rows}개` : "", pages > 0 ? `페이지 ${pages}개` : ""].filter(Boolean).join(" · ")}로 바꿨습니다` +
+    (columns.length > 0
+      ? ` — 대상 DB 에 더해진 열: ${columns.slice(0, 5).join(", ")}${columns.length > 5 ? " …" : ""}`
+      : "") +
+    `: ${listedPaths(changes.map((change) => change.path))}`
   );
 }
 

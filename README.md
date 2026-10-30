@@ -229,8 +229,9 @@ Obsidian Vault                        Notion Workspace
    A move is left alone, with the reason printed, if the target name is taken, the note was moved in
    the vault and not yet pushed, or the folder holds a database you listed in `notion.databases`. A folder
    holding found databases moves with them — their `.base` views and embeds follow the new folder (the
-   same when you move it in the vault). Links to the moved note written as a path (`[[Folder/Note]]`,
-   `[x](Folder/Note.md)`) are updated in your other notes.
+   same when you move it in the vault). For moves into or out of a database see
+   [Moving Pages and Rows Between Databases](#moving-pages-and-rows-between-databases). Links to the moved
+   note written as a path (`[[Folder/Note]]`, `[x](Folder/Note.md)`) are updated in your other notes.
    A title changed in Notion goes into the note's frontmatter `title:` and the file name stays — turn on
    `sync.renameOnTitleChange` (plugin: **Settings → Notion 에서 바꾼 제목으로 이름 바꾸기**) to rename the
    file instead; links to it are updated the same way
@@ -375,6 +376,25 @@ everything in it has gone up, then rewrites it.
   filter is left as it is in Notion and push tells you why.
 - A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time, and views added
   or removed in the vault, aren't sent — change those in Notion.
+
+### Moving Pages and Rows Between Databases
+
+Moving a note into or out of a database folder moves the same Notion page (since v0.14.0,
+[ADR-047](docs/02-architecture/adr/047-page-database-moves.md)) — its id, comments and backlinks stay.
+
+| In the vault                                  | Push does in Notion                                                                      |
+| --------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Page note into a database folder              | It becomes a row — frontmatter becomes properties                                        |
+| Row note out of the database folder           | It becomes a page — frontmatter stays in the vault                                       |
+| Row note into another database folder         | It becomes a row there — Notion adds the columns the target lacks (shown beforehand)     |
+| Move or rename a database folder              | The database moves under the new parent and is renamed — rows and views stay             |
+| `nobsi prepare-db` on a folder already pushed | Creates the database and moves its pages in as rows — the emptied folder page is trashed |
+
+Moves made in Notion are followed by pull — a page into a database, a row out of one, a row to another database, a
+database under another page. A row's subpage folder moves with it. Moving doesn't change Notion's edit time, so the full
+scan (hourly, or `pull --force`) is what notices it. If both sides moved a note, the vault wins: pull leaves it and the
+next push moves Notion to the vault's place. A note with Notion edits not yet pulled isn't moved — push asks you to
+pull first.
 
 ## Several Notion Workspaces in One Vault
 

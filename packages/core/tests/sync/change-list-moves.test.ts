@@ -127,7 +127,7 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
     expect((await orchestrator.statusLocal()).folderMoves).toEqual([]);
   });
 
-  it("DB 폴더를 옮기면 변경 목록에 보이고, push 는 볼트 쪽 자리 · 보기 · 기록한 .base 경로만 옮겨 적는다", async () => {
+  it("DB 폴더를 옮기면 변경 목록에 보이고, push 는 Notion 의 DB 를 새 폴더의 페이지 아래로 옮기고 보기 · 기록한 .base 경로를 옮겨 적는다", async () => {
     db.setMeta(
       "discovered_dbs",
       JSON.stringify([{ databaseId: DB_ID, localFolder: "Tasks", titleProperty: "Name" }]),
@@ -151,6 +151,7 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
       localFileSize: stat.size,
     });
     // 바뀐 DB 만 조회한다(ADR-027) — 다음 pull 이 DB 를 받지 않아도 보기 · 임베드가 새 자리를 가리켜야 한다.
+    // 예전 버전이 쓴 `file.inFolder` 꼴도 찾아 지금 꼴(`file.folder ==`)로 고쳐 쓴다.
     const view = `${BASE_FILE_HEADER} from Notion\nfilters:\n  and:\n    - file.inFolder("Tasks")\n`;
     vault.write("Tasks/Tasks.base", view);
     const mine = 'filters:\n  and:\n    - file.inFolder("Tasks")\n';
@@ -158,24 +159,53 @@ describe("옮긴 노트 · 폴더를 변경 목록과 진행 표시에 옮김으
     db.setMeta(
       "db_base_files",
       JSON.stringify({
-        [DB_ID.replace(/-/g, "")]: { basePath: "Tasks/Tasks.base", title: "Tasks" },
+        [DB_ID.replace(/-/g, "")]: {
+          basePath: "Tasks/Tasks.base",
+          title: "Tasks",
+          hash: computeHash(view),
+        },
       }),
     );
+    db.setMeta(
+      "created_dbs",
+      JSON.stringify({ src: { databaseId: DB_ID, folder: "Tasks", schemaDone: false } }),
+    );
+    notion.databases.set(DB_ID, { parent: ROOT, title: "Tasks" });
     vault.renameFolder("Tasks", "Work/Tasks");
 
     const status = await orchestrator.statusLocal();
     expect(status.folderMoves).toEqual([{ from: "Tasks", to: "Work/Tasks" }]);
+    const preview = await orchestrator.push({ dryRun: true });
+    expect(preview.databaseMoves).toEqual([{ from: "Tasks", to: "Work/Tasks" }]);
+    expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
 
     const result = await orchestrator.push();
 
     expect(result.failed).toEqual([]);
+    expect(result.databaseMoves).toEqual([{ from: "Tasks", to: "Work/Tasks", inNotion: true }]);
+    // 새 부모 폴더의 페이지를 만들고 그 아래로 — 이름은 그대로라 제목은 보내지 않는다.
+    const work = db.getByPath("Work")!.notionPageId!;
+    expect(notion.client.updateDatabasePlacement).toHaveBeenCalledWith(DB_ID.replace(/-/g, ""), {
+      parentPageId: work,
+    });
+    expect(notion.databases.get(DB_ID.replace(/-/g, ""))!.parent).toBe(work);
+    expect(db.getMeta("db_moves_pending")).toBe("[]");
+    // 속성 · 보기를 마저 붙일 push 는 새 폴더의 사이드카를 읽는다.
+    expect(JSON.parse(db.getMeta("created_dbs")!).src.folder).toBe("Work/Tasks");
     expect(JSON.parse(db.getMeta("discovered_dbs")!)).toEqual([
       expect.objectContaining({ databaseId: DB_ID, localFolder: "Work/Tasks" }),
     ]);
+    // pull 이 쓴 그대로였던 `.base` 는 기록 해시도 고쳐 쓴 내용으로 — 아니면 pull 이 «볼트에서 고친 보기» 로 본다.
     expect(Object.values(JSON.parse(db.getMeta("db_base_files")!))).toEqual([
-      { basePath: "Work/Tasks/Tasks.base", title: "Tasks" },
+      {
+        basePath: "Work/Tasks/Tasks.base",
+        title: "Tasks",
+        hash: computeHash(view.replace('file.inFolder("Tasks")', 'file.folder == "Work/Tasks"')),
+      },
     ]);
-    expect(vault.read("Work/Tasks/Tasks.base")).toBe(view.replace('"Tasks"', '"Work/Tasks"'));
+    expect(vault.read("Work/Tasks/Tasks.base")).toBe(
+      view.replace('file.inFolder("Tasks")', 'file.folder == "Work/Tasks"'),
+    );
     expect(vault.read("Work/Tasks/mine.base")).toBe(mine);
     expect(notion.pages.get(page.id)!.parent).toBe(DB_ID);
     expect((await orchestrator.statusLocal()).folderMoves).toEqual([]);

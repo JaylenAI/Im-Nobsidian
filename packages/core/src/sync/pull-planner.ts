@@ -19,6 +19,7 @@ import {
 } from "./discovered-databases.js";
 import { isFolderRecord } from "./folder-container.js";
 import type { LocalPlan, LocalPlanner } from "./local-planner.js";
+import type { PagePuller } from "./page-puller.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { decideRemoteDeletion } from "./remote-deletion.js";
 import type { RemoteDriftChecker } from "./remote-drift.js";
@@ -39,6 +40,7 @@ export class PullPlanner {
     private readonly databaseSyncer: DatabaseSyncer,
     private readonly drift: RemoteDriftChecker,
     private readonly planner: LocalPlanner,
+    private readonly puller: Pick<PagePuller, "folderPageHasBody">,
   ) {}
 
   /**
@@ -63,9 +65,9 @@ export class PullPlanner {
     // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
     const planned: RemoteChange[] = [];
     for (const change of unchangedDropped) {
-      if (change.type !== "deleted" || (await this.plannedRemoteDeletion(change))) {
-        planned.push(change);
-      }
+      if (change.type === "deleted" && !(await this.plannedRemoteDeletion(change))) continue;
+      if (change.type === "modified" && !(await this.plannedFolderPage(change))) continue;
+      planned.push(change);
     }
     const failed: FailedOperation[] = [];
     // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
@@ -73,7 +75,9 @@ export class PullPlanner {
     const queued = new Set(
       [...filtered, ...restoreChanges].map((change) => compactNotionId(change.pageId)),
     );
-    const rows = (await this.planDatabaseRows(options.paths, failed, ledger)).filter(
+    // 옮겨 적지 않은 볼트 이동 — 실제 pull 은 먼저 옮겨 적어 Notion 쪽 이동을 받지 않는다(볼트가 먼저).
+    const movingInVault = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
+    const rows = (await this.planDatabaseRows(options.paths, failed, ledger, movingInVault)).filter(
       (row) => !queued.has(compactNotionId(row.pageId)),
     );
 
@@ -95,6 +99,9 @@ export class PullPlanner {
       });
     }
     for (const row of rows) items.push({ path: row.path, operation: row.operation });
+    // Notion 에서 DB 안으로 옮긴 페이지 — 행이 되며 옮긴다. 행으로 다시 쓰므로 고친 것으로도 센다(실제 pull 과 같다).
+    // Notion 에서 옮긴 DB 의 폴더도 옮긴다 — 행을 다시 쓰지 않아 고친 것으로 세지 않는다.
+    const movedRows = rows.filter((row) => row.moves !== undefined);
     items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
 
     const count = (type: RemoteChange["type"]) => planned.filter((c) => c.type === type).length;
@@ -123,6 +130,7 @@ export class PullPlanner {
       // 사용자가 사라진 파일이 되살아난다는 사실을 미리 알 수 없다.
       restored: restoreChanges.length + restoredModified + rowCount("update", true),
       ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+      ...(movedRows.length > 0 ? { moved: movedRows.flatMap((row) => row.moves!) } : {}),
       conflicts: [],
       writtenPaths: [],
       failed,
@@ -139,6 +147,20 @@ export class PullPlanner {
         skippedDatabases: ledger.skipped,
       },
     };
+  }
+
+  /**
+   * 고친 페이지를 실제 pull 이 받는가 — 폴더로만 추적하는 페이지는 본문이 생겼을 때만 폴더 노트로 받는다. 하위 페이지 ·
+   * DB 를 옮기기만 해도 그 페이지의 수정 시각이 바뀌어 고친 것으로 보였다. 확인하지 못하면 센다(실제 pull 이 받아 본다).
+   */
+  private async plannedFolderPage(change: RemoteChange): Promise<boolean> {
+    const record = this.stateDb.getByNotionId(change.pageId);
+    if (!record || !isFolderRecord(record)) return true;
+    try {
+      return await this.puller.folderPageHasBody(record);
+    } catch {
+      return true;
+    }
   }
 
   /** 원격에서 지운 페이지를 실제 pull 이 볼트에서 지우는가 — `PagePuller.pullDelete` 와 같게 가른다. */
@@ -166,6 +188,7 @@ export class PullPlanner {
     paths: readonly string[] | undefined,
     failed: FailedOperation[],
     ledger: DatabasePullLedger,
+    movingInVault: ReadonlySet<string>,
   ): Promise<PlannedRow[]> {
     const configured = this.config.notion.databases ?? [];
     const rows: PlannedRow[] = [];
@@ -180,7 +203,12 @@ export class PullPlanner {
       }
       try {
         rows.push(
-          ...(await this.databaseSyncer.planDatabase(dbConfig, { paths, resolveDbFolder })),
+          ...(await this.databaseSyncer.planDatabase(dbConfig, {
+            paths,
+            resolveDbFolder,
+            followPlacement: resolveDbFolder !== undefined,
+            movingInVault,
+          })),
         );
       } catch (error) {
         // 발견해 둔 DB 가 사라졌으면(404) 실제 pull 은 대상에서 빼기만 한다 — 실패가 아니다.

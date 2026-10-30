@@ -184,7 +184,9 @@ export class RemoteDetector {
   /** 받은 부모가 상태 DB 의 것과 다르면 옮긴 페이지로 적는다. */
   private noteParent(pageId: string, parentId: string): void {
     const record = this.stateDb.getByNotionId(pageId);
-    if (record && movedInNotion(record, parentId))
+    const tracksPage = (id: string): boolean =>
+      notionIdsEqual(id, this.config.notion.rootPageId) || this.stateDb.getByNotionId(id) !== null;
+    if (record && movedInNotion(record, parentId, tracksPage))
       this._moved.set(normalizeNotionId(pageId), parentId);
   }
 
@@ -654,7 +656,7 @@ export class RemoteDetector {
    * 목록에 없던 추적 페이지 가운데 원격에서 정말 사라진 것만 삭제로 낸다(S-12) — {@link remotePresence}.
    *
    * - 휴지통 · 보관 · 없음(404) → 삭제.
-   * - 살아 있고 부모가 동기화 범위(루트 · 목록에 있던 페이지 · 이렇게 살아 있다고 확인된 페이지) →
+   * - 살아 있고 부모가 동기화 범위(루트 · 목록에 있던 페이지 · 받는 DB 와 그 행 · 이렇게 살아 있다고 확인된 페이지) →
    *   목록이 빠뜨린 것이다. 둔다.
    * - 살아 있지만 범위 밖(다른 곳 · 워크스페이스 맨 위)으로 옮겨졌다 → 삭제(예전과 같다).
    * - 묻지 못했거나 부모를 알 수 없다 → 이번에는 둔다. 다음 전체 대조가 다시 묻는다.
@@ -669,6 +671,20 @@ export class RemoteDetector {
   ): Promise<RemoteChange[]> {
     const scope = new Set<string>([normalizeNotionId(this.config.notion.rootPageId), ...listed]);
     if (isDatabaseMode(this.config)) scope.add(normalizeNotionId(this.config.notion.databaseId!));
+    // 받는 DB 와 그 행도 범위다 — 페이지 순회는 행을 보지 못한다. 예전에는 DB 안으로 옮긴 페이지 · 행의 하위 페이지가
+    // 범위 밖으로 옮겨진 것으로 보여 볼트에서 지워졌다(2026-10-30 실측).
+    const databases = this.rowQueriedDatabaseIds();
+    for (const id of databases) scope.add(id);
+    for (const record of this.stateDb.getAll()) {
+      if (
+        record.fileType === "db-row" &&
+        record.notionPageId !== null &&
+        record.notionParentId !== null &&
+        databases.has(normalizeNotionId(record.notionParentId))
+      ) {
+        scope.add(normalizeNotionId(record.notionPageId));
+      }
+    }
 
     const deleted: SyncRecord[] = [];
     const alive = new Map<SyncRecord, string>();

@@ -68,6 +68,7 @@ import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
 import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-planner.js";
+import { DatabaseMover, mergeDatabaseMoves } from "./database-moves.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
 import { LinkUpdater } from "./link-updater.js";
@@ -84,9 +85,14 @@ import { detectMissingLocalFiles, restoredWhenMissing } from "./missing-local-fi
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { randomUUID } from "node:crypto";
 import { DatabaseCreator } from "./database-creator.js";
-import { prepareFolderDatabase, type FolderDatabaseReport } from "./folder-database.js";
+import {
+  loadPreparedDatabases,
+  prepareFolderDatabase,
+  type FolderDatabaseReport,
+} from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
+import { upgradeBaseFolderFilters } from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   forgetRenameHint,
@@ -120,6 +126,7 @@ export class SyncOrchestrator {
 
   // 이번 실행의 로컬 변경 — 옮긴 노트 · 폴더를 짝짓고 상태 DB 에 옮겨 적는다(S-11).
   private readonly planner: LocalPlanner;
+  private readonly databaseMover: DatabaseMover;
   private readonly remoteMoves: RemoteMoveFollower;
   private readonly remoteRenames: RemoteRenameFollower;
   private readonly linkUpdater: LinkUpdater;
@@ -281,6 +288,12 @@ export class SyncOrchestrator {
     );
     this.placement.useDatabaseCreator(this.databaseCreator);
     this.planner = new LocalPlanner(config, stateDb, vaultFs, changeDetector, this.placement);
+    this.databaseMover = new DatabaseMover(stateDb, notionClient, {
+      rootPageId: config.notion.rootPageId,
+      ensureFolderPage: (folder) => this.placement.ensureFolderPage(folder),
+      folderLookup: () => this.placement.folderLookup(),
+      folderMoveRefusal: (folder, lookup) => this.placement.folderMoveRefusal(folder, lookup),
+    });
     this.remoteMoves = new RemoteMoveFollower(config, stateDb, vaultFs, () =>
       this.placement.folderLookup(),
     );
@@ -315,6 +328,7 @@ export class SyncOrchestrator {
       this.databaseSyncer,
       this.drift,
       this.planner,
+      this.puller,
     );
     this.pusher = new PagePusher(
       config,
@@ -393,6 +407,7 @@ export class SyncOrchestrator {
     this.placement.resetUnpreparedFolders();
     this.databaseCreator.reset();
     this.pusher.takeReadOnlySkips(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.pusher.takePlacementChanges();
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -424,7 +439,36 @@ export class SyncOrchestrator {
     const viewPlan = await this.viewEdits.plan(inScope);
     const plannedViews = viewPlan.planned.flatMap((file) => file.views.map((view) => view.edit));
 
-    if (filtered.length === 0 && folderMoves.length === 0) {
+    // 이미 올린 노트가 든 채로 DB 로 준비한 폴더는 노트가 그대로여도 DB 를 만들고 행으로 옮긴다(ADR-047).
+    const preparedDatabases = loadPreparedDatabases(this.stateDb).size > 0;
+    // 노트 없이 옮긴 DB 폴더(빈 DB)와 앞서 반영하지 못한 DB 이동도 Notion 에 반영한다(ADR-047).
+    // dry-run 은 이번 DB 폴더 이동을 적지 않았다 — 적어 둔 이동에 겹쳐 본다(같은 DB 는 하나로).
+    const recordedLookup = this.placement.folderLookup();
+    const databaseMoves = mergeDatabaseMoves(
+      this.databaseMover.pending(),
+      options?.dryRun
+        ? plan.databaseFolderMoves.flatMap((move) => {
+            const databaseId = recordedLookup.databaseAt(move.from);
+            return databaseId ? [{ databaseId, from: move.from, to: move.to }] : [];
+          })
+        : [],
+    ).filter((move) => inAnyPathScope(move.to, options?.paths));
+    // dry-run 은 실제 push 가 거절할 DB 이동(DB 폴더 안으로)을 실패로 보인다.
+    const refusedDatabaseMoves = options?.dryRun
+      ? databaseMoves.flatMap((move) => {
+          const error = this.placement.folderMoveRefusal(move.to, view.lookup);
+          return error ? [{ path: move.to, operation: "move" as const, error }] : [];
+        })
+      : [];
+    const movableDatabases = databaseMoves.filter(
+      (move) => !refusedDatabaseMoves.some((refused) => refused.path === move.to),
+    );
+    if (
+      filtered.length === 0 &&
+      folderMoves.length === 0 &&
+      !preparedDatabases &&
+      databaseMoves.length === 0
+    ) {
       // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
       if (!options?.dryRun) await this.completeDatabaseSchemas();
       const edited = options?.dryRun
@@ -498,19 +542,35 @@ export class SyncOrchestrator {
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
       const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
+      // 실제 push 처럼 — 옮김 · 지움이 걸린 노트는 다음 push 에, 고친 노트는 옮기며 함께 보낸다(고침이 아니라 옮김으로 센다).
+      const preparedConversions = this.pusher.previewPreparedConversions(
+        newDatabases,
+        leavingPaths(planned),
+      );
+      const convertedUpdates = preparedConversions.filter((change) =>
+        items.some((item) => item.path === change.path),
+      ).length;
+      const placementChanges = [
+        ...(await this.pusher.previewPlacementChanges(applicable, view.lookup)),
+        ...preparedConversions,
+      ];
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
-        updated: count("update"),
+        updated: count("update") - convertedUpdates,
         deleted: count("delete"),
-        moved: count("move"),
-        failed: refusedFailures,
+        moved: count("move") + preparedConversions.length + movableDatabases.length,
+        failed: [...refusedFailures, ...refusedDatabaseMoves],
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
         ...(plannedRenames.length > 0 ? { renamedProperties: plannedRenames } : {}),
         ...(plannedEdits.length > 0 ? { schemaEdits: plannedEdits } : {}),
         ...(plannedViews.length > 0 ? { viewEdits: plannedViews } : {}),
+        ...(placementChanges.length > 0 ? { placementChanges } : {}),
+        ...(movableDatabases.length > 0
+          ? { databaseMoves: movableDatabases.map(({ from, to }) => ({ from, to })) }
+          : {}),
       };
     }
 
@@ -541,6 +601,12 @@ export class SyncOrchestrator {
     counts.moved += await this.pusher.pushFolderMoves(movableFolders, failed, (to) =>
       options?.onProgress?.(++completed, total, { path: to, operation: "move" }),
     );
+    // 옮긴 DB 폴더의 DB — 옮긴 폴더 페이지 아래로 갈 수 있어 그 뒤에.
+    const movedDatabases = await this.databaseMover.apply(
+      (folder) => inAnyPathScope(folder, options?.paths),
+      failed,
+    );
+    counts.moved += movedDatabases.filter((move) => move.inNotion).length;
 
     // 이번 push 가 본문을 보낸 노트 — 링크 패스가 이 노트의 실패를 실패로 알린다.
     const pushedBodies = new Set<string>();
@@ -591,8 +657,13 @@ export class SyncOrchestrator {
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
     const pushedEarly = await this.placement.prepareFolders(pushing, firstAttempt, !options?.paths);
     await this.completeDatabaseSchemas();
+    // 준비한 폴더가 DB 가 됐으면 그 안의 이미 올린 페이지를 행으로 — 그 노트의 다른 변경은 옮기며 함께 보낸다.
+    const converted = new Set(
+      await this.pusher.convertPreparedFolders(leavingPaths(pushing), failed),
+    );
+    counts.moved += converted.size;
     await runPool(
-      pushing.filter((c) => !pushedEarly.has(c.path)),
+      pushing.filter((c) => !pushedEarly.has(c.path) && !converted.has(c.path)),
       firstAttempt,
       { concurrency: this.config.advanced.concurrency, signal: options?.signal },
     );
@@ -740,6 +811,7 @@ export class SyncOrchestrator {
     // 완료/실패한 WAL 항목 정리 — 테이블 무한 증가 방지(미완료 항목은 보존).
     this.stateDb.clearCompletedOperations();
 
+    const placementChanges = this.pusher.takePlacementChanges();
     return {
       createdDatabases: this.databaseCreator.createdCount,
       created: counts.created,
@@ -753,6 +825,8 @@ export class SyncOrchestrator {
       ...(renamed.applied.length > 0 ? { renamedProperties: renamed.applied } : {}),
       ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
       ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
+      ...(placementChanges.length > 0 ? { placementChanges } : {}),
+      ...(movedDatabases.length > 0 ? { databaseMoves: movedDatabases } : {}),
     };
   }
 
@@ -819,7 +893,10 @@ export class SyncOrchestrator {
   }
 
   /** 감지가 본, Notion 에서 옮긴 페이지를 볼트에서 옮긴다 — 경로를 좁힌 pull 은 그 범위의 것만. */
-  private async followRemoteMoves(options?: PullOptions): Promise<RemoteMoveResult> {
+  private async followRemoteMoves(
+    options?: PullOptions,
+    localPlan?: LocalPlan | null,
+  ): Promise<RemoteMoveResult> {
     const moved = new Map(
       [...this.detector.movedPages].filter(([pageId]) => {
         const record = this.stateDb.getByNotionId(pageId);
@@ -827,7 +904,11 @@ export class SyncOrchestrator {
       }),
     );
     if (moved.size === 0) return { moved: [], skipped: [] };
-    return await this.remoteMoves.follow(moved, { dryRun: options?.dryRun });
+    // dry-run 은 볼트 이동을 옮겨 적지 않았다 — 실제 pull 처럼 볼트가 먼저인 것으로 보인다.
+    return await this.remoteMoves.follow(moved, {
+      dryRun: options?.dryRun,
+      movingInVault: options?.dryRun ? this.planner.plannedPaths(localPlan ?? null) : undefined,
+    });
   }
 
   /**
@@ -874,7 +955,11 @@ export class SyncOrchestrator {
     }
 
     this.observation.begin(startTime);
-    if (!options?.dryRun) this.recovery.cleanupInterruptedSync();
+    if (!options?.dryRun) {
+      this.recovery.cleanupInterruptedSync();
+      // 예전 버전이 쓴 `.base` 의 폴더 필터 — 행의 하위 페이지를 행으로 보였다. 한 번만 고쳐 쓴다.
+      await upgradeBaseFolderFilters(this.vaultFs, this.stateDb);
+    }
 
     // 옮긴 노트를 먼저 옮겨 적는다 — 아니면 옛 자리의 노트를 되살리고 원격 변경을 옛 경로에
     // 쓴다(S-11). dry-run 은 옮겨 적지 않고, 옮겨 적을 노트를 되살릴 대상에서 뺀다.
@@ -929,7 +1014,7 @@ export class SyncOrchestrator {
     const remoteChanges = detection.changes;
     detected = remoteChanges;
     // Notion 에서 옮긴 페이지를 볼트에서도 옮긴다(ADR-039) — 아래 받기 · 되살리기가 새 경로를 본다.
-    const remoteMoves = await this.followRemoteMoves(options);
+    const remoteMoves = await this.followRemoteMoves(options, localPlan);
     // Notion 에서 바꾼 제목으로 노트 이름을 바꾼다 — 옮긴 뒤 · 받기 전에. 다른 노트의 링크는 마감에서 고친다.
     const remoteRenames = await this.followRemoteRenames(remoteChanges, options);
     const relocated = {
@@ -1089,7 +1174,7 @@ export class SyncOrchestrator {
           ...plan.remoteScan,
           deletionsDeferred: plan.remoteScan.deletionsDeferred && !this.detector.deletionsChecked(),
         },
-        moved: relocated.moved,
+        moved: [...relocated.moved, ...(plan.moved ?? [])],
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
       };
@@ -1384,7 +1469,7 @@ export class SyncOrchestrator {
     const detection = await this.detector.detectRemote(scan, { signal, databases: false });
     const detected = await this.drift.withoutUnchangedRemotes(detection.changes, signal);
     // 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 것(ADR-039 · ADR-040)과 뺀 자리라 받지 않을 새 페이지 — 바꾸지 않고 본다.
-    const moves = await this.followRemoteMoves({ dryRun: true });
+    const moves = await this.followRemoteMoves({ dryRun: true }, plan);
     const renames = await this.followRemoteRenames(detected, { dryRun: true });
     const exclusions = await this.plannedExclusions(detected);
     const remoteChanges = detected.filter((change) => !exclusions.has(change.pageId));
@@ -1618,6 +1703,15 @@ export class SyncOrchestrator {
   generateConflictDiff(conflict: Conflict): string {
     return this.conflictWorkflow.generateConflictDiff(conflict);
   }
+}
+
+/** 이번 push 에 옮기거나 지우는 노트의 경로(옮긴 곳 · 옮기기 전) — 준비한 폴더의 변환이 다음 push 로 미룬다. */
+function leavingPaths(changes: readonly LocalChange[]): Set<string> {
+  return new Set(
+    changes
+      .filter((c) => c.type === "deleted" || c.type === "moved")
+      .flatMap((c) => [c.path, ...(c.movedFrom ? [c.movedFrom] : [])]),
+  );
 }
 
 /** 로컬 변경을 Notion 에 반영하는 일 — 진행 표시 · 결과 수 · 실패가 같은 이름을 쓴다. */

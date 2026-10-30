@@ -12,6 +12,8 @@ import {
   renamedPropertyLines,
   schemaEditLines,
   viewEditLines,
+  placementChangeLines,
+  databaseMoveLines,
   failedItem,
   dimText,
   completionHeader,
@@ -79,6 +81,12 @@ export const pushCommand = new Command("push")
         console.log(`  ${line}`);
       }
       for (const line of viewEditLines(result.viewEdits, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of placementChangeLines(result.placementChanges, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of databaseMoveLines(result.databaseMoves, options.dryRun)) {
         console.log(`  ${line}`);
       }
       for (const line of readOnlySkipLines(result.readOnlySkipped, options.dryRun))

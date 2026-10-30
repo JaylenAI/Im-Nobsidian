@@ -19,6 +19,7 @@ import type {
   FailedOperation,
   FileType,
   LocalChange,
+  PlacementChange,
   ReadOnlySkip,
   SyncRecord,
 } from "../types/sync.js";
@@ -29,7 +30,14 @@ import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
-import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
+import {
+  folderContainer,
+  isFolderNotePath,
+  isFolderRecord,
+  parentFolderOf,
+  type FolderLookup,
+} from "./folder-container.js";
+import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
@@ -63,6 +71,7 @@ import {
   type RemoteDriftChecker,
 } from "./remote-drift.js";
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
+import { columnsAddedByMove } from "./row-move-columns.js";
 import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
 import type { RowSchemaCache } from "./row-schema-cache.js";
 import { dataSourceIdOf } from "./schema-ledger.js";
@@ -135,6 +144,9 @@ export class PagePusher {
 
   /** 이번 실행에서 relation 을 보내지 못한 행 — 대상 노트가 아직 Notion 에 없었다. */
   private readonly unsentRelations = new Set<string>();
+
+  /** 이번 실행에서 페이지 ↔ 행 · 다른 DB 의 행이 된 노트({@link takePlacementChanges}). */
+  private readonly placementChanges: PlacementChange[] = [];
 
   /**
    * 우리 쓰기의 결과로 Notion 이 고친 페이지 — 다음 pull 이 내용으로 확인하게 본 기록에서 편집자 · 본 때를
@@ -568,6 +580,17 @@ export class PagePusher {
     const op = this.stateDb.getIncompleteOpByState(record.id, "move");
     const from = (op ? moveOrigin(op.payload) : null) ?? change.movedFrom ?? path;
 
+    const placement = this.placementChangeOf(record, path);
+    if (placement) {
+      await this.changePlacement(record, {
+        path,
+        from,
+        databaseId: placement.databaseId,
+        opId: op?.id ?? null,
+      });
+      return;
+    }
+
     const rowDatabaseId = rowDatabaseOf(this.config, record);
     const base = snapshotFrontmatter(record.baseSnapshot);
     let current: Record<string, unknown>;
@@ -595,6 +618,306 @@ export class PagePusher {
     });
 
     if (record.contentHash !== change.currentHash) await this.pushUpdate(path);
+  }
+
+  /**
+   * 이 노트를 이 경로로 옮기면 Notion 에서 자리의 종류가 바뀌나 — 페이지 → 행 · 행 → 페이지 · 다른 DB 의 행.
+   * 바뀌면 행이 될 DB(페이지가 되면 null), 같으면 null. DB 모드는 모든 노트가 루트 DB 의 행이라 바뀌지 않는다.
+   */
+  private placementChangeOf(
+    record: SyncRecord,
+    path: string,
+    lookup?: FolderLookup,
+  ): { readonly databaseId: string | null } | null {
+    if (isDatabaseMode(this.config)) return null;
+    const databaseId = this.placement.newRowDatabaseOf(path, lookup);
+    if (record.fileType !== "db-row") return databaseId === null ? null : { databaseId };
+    const sameDatabase =
+      databaseId !== null &&
+      record.notionParentId !== null &&
+      notionIdsEqual(databaseId, record.notionParentId);
+    return sameDatabase ? null : { databaseId };
+  }
+
+  /**
+   * dry-run 이 알릴 자리 바뀜 — 실제 push 처럼 옮긴 노트 가운데 페이지 ↔ 행 · 다른 DB 의 행이 될 것. 다른 DB 로 가는
+   * 행은 지금 행과 대상 DB 의 스키마를 읽어 더해질 열을 센다. 읽지 못하면 열은 빼고 알린다.
+   */
+  async previewPlacementChanges(
+    changes: readonly LocalChange[],
+    /** 옮겨 적은 뒤의 볼트(`LocalPlanner.localView`) — 함께 옮긴 DB 폴더의 행은 같은 DB 에 남는다. */
+    lookup: FolderLookup,
+  ): Promise<PlacementChange[]> {
+    const planned: PlacementChange[] = [];
+    for (const change of changes) {
+      if (change.type !== "moved") continue;
+      // dry-run 은 옮김을 상태 DB 에 적지 않는다 — 레코드는 옛 경로에 있다.
+      const record =
+        this.stateDb.getByPath(change.path) ??
+        (change.movedFrom ? this.stateDb.getByPath(change.movedFrom) : null);
+      if (!record?.notionPageId) continue;
+      const placement = this.placementChangeOf(record, change.path, lookup);
+      if (!placement) continue;
+      let addedColumns: string[] = [];
+      if (placement.databaseId && record.fileType === "db-row") {
+        try {
+          const meta = await this.notionClient.getDatabaseMeta(placement.databaseId);
+          const source = meta.dataSources[0];
+          const schema = await this.notionClient.getDatabaseSchema(
+            placement.databaseId,
+            source?.properties ? { ...meta, properties: source.properties } : meta,
+          );
+          const page = await this.notionClient.getPage(record.notionPageId);
+          addedColumns = columnsAddedByMove(pagePropertiesOf(page), schema);
+        } catch {
+          // 열은 실제 push 가 다시 센다.
+        }
+      }
+      planned.push({
+        path: change.path,
+        becomes: placement.databaseId ? "row" : "page",
+        ...(addedColumns.length > 0 ? { addedColumns } : {}),
+      });
+    }
+    return planned.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * 준비한 폴더(ADR-047)가 DB 가 된 뒤 그 폴더 바로 아래의 이미 올린 페이지를 같은 페이지째 그 DB 의 행으로 옮긴다. 다
+   * 옮기면 push 가 만든 빈 폴더 페이지를 휴지통에 넣고 준비 표시를 지운다. 옮기지 못한 노트는 실패로 남고 다음 push 가
+   * 다시 옮긴다.
+   *
+   * @param skip 이번 push 의 다른 변경이 다룰 노트(옮김 · 지움) — 그 폴더는 다음 push 에 마저 본다.
+   * @returns 행으로 옮긴 노트.
+   */
+  async convertPreparedFolders(
+    skip: ReadonlySet<string>,
+    failed: FailedOperation[],
+  ): Promise<string[]> {
+    const converted: string[] = [];
+    for (const { source, folder, databaseId } of this.preparedDatabaseFolders()) {
+      let complete = true;
+      for (const record of this.strandedPages(folder)) {
+        const path = record.obsidianPath;
+        if (skip.has(path) || this.stateDb.getIncompleteOpByState(record.id, "move")) {
+          complete = false;
+          continue;
+        }
+        try {
+          await this.changePlacement(record, { path, from: path, databaseId, opId: null });
+          converted.push(path);
+        } catch (error) {
+          complete = false;
+          failed.push({
+            path,
+            operation: "move",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!complete) continue;
+      await this.retireFolderPage(folder);
+      setPreparedDatabase(this.stateDb, source, false);
+    }
+    return converted;
+  }
+
+  /**
+   * dry-run 이 알릴 준비한 폴더의 변환 — 이번 push 가 만들 DB(`newFolders`)와 앞서 만든 DB 의 폴더 바로 아래의 이미 올린
+   * 페이지.
+   */
+  previewPreparedConversions(
+    newFolders: ReadonlyMap<string, { readonly schema: { readonly databaseId: string } }>,
+    skip: ReadonlySet<string>,
+  ): PlacementChange[] {
+    const prepared = loadPreparedDatabases(this.stateDb);
+    if (prepared.size === 0) return [];
+    const folders = new Set(this.preparedDatabaseFolders().map((entry) => entry.folder));
+    for (const [folder, target] of newFolders) {
+      if (prepared.has(compactNotionId(target.schema.databaseId))) folders.add(folder);
+    }
+    return [...folders]
+      .flatMap((folder) => this.strandedPages(folder))
+      .filter((record) => !skip.has(record.obsidianPath))
+      .map((record) => ({ path: record.obsidianPath, becomes: "row" as const }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** 준비 표시가 남은, push 가 만든 DB 와 그 폴더 — 지금도 그 DB 의 폴더인 것만. */
+  private preparedDatabaseFolders(): Array<{
+    readonly source: string;
+    readonly folder: string;
+    readonly databaseId: string;
+  }> {
+    const prepared = loadPreparedDatabases(this.stateDb);
+    if (prepared.size === 0) return [];
+    const lookup = this.placement.folderLookup();
+    const found: Array<{ source: string; folder: string; databaseId: string }> = [];
+    for (const [source, entry] of loadCreatedDatabases(this.stateDb)) {
+      if (!prepared.has(compactNotionId(source)) || !entry.databaseId) continue;
+      const at = lookup.databaseAt(entry.folder);
+      if (at && notionIdsEqual(at, entry.databaseId)) {
+        found.push({ source, folder: entry.folder, databaseId: entry.databaseId });
+      }
+    }
+    return found;
+  }
+
+  /** DB 폴더 바로 아래에 있지만 아직 페이지인 노트 — 준비한 폴더에서 행으로 옮길 것. */
+  private strandedPages(folder: string): SyncRecord[] {
+    return this.stateDb
+      .getAll()
+      .filter(
+        (record) =>
+          record.notionPageId !== null &&
+          record.fileType !== "db-row" &&
+          !isFolderRecord(record) &&
+          parentFolderOf(record.obsidianPath) === folder,
+      )
+      .sort((a, b) => a.obsidianPath.localeCompare(b.obsidianPath));
+  }
+
+  /**
+   * DB 가 된 폴더의 옛 폴더 페이지(push 가 만든 것)를 휴지통에 넣고 추적을 놓는다 — 노트가 모두 행으로 빠져 비었다. 아래에
+   * 다른 블록이 남아 있으면(Notion 에서 더한 것) 두고 알린다.
+   */
+  private async retireFolderPage(folder: string): Promise<void> {
+    const record = this.stateDb.getByPath(folder);
+    if (!record?.notionPageId || !isFolderRecord(record)) return;
+    const pageId = record.notionPageId;
+    const children = await this.notionClient.fetchAllChildren(pageId);
+    if (children.length > 0) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 가 된 폴더(${folder})의 옛 폴더 페이지에 블록 ${children.length}개가 남아 휴지통에 넣지 않음 — ` +
+          `Notion 에서 정리하세요`,
+      );
+      return;
+    }
+    await this.notionClient.archivePage(pageId);
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(folder);
+    });
+    getLogger().info(`[Im-Nobsidian] DB 가 된 폴더의 빈 폴더 페이지를 휴지통에 넣음: ${folder}`);
+  }
+
+  /** 이번 실행에서 페이지 ↔ 행 · 다른 DB 의 행이 된 노트를 넘기고 비운다. */
+  takePlacementChanges(): PlacementChange[] {
+    return this.placementChanges.splice(0);
+  }
+
+  /**
+   * 페이지 ↔ 행 · 다른 DB 의 행으로 옮긴다(ADR-047) — 같은 `pages.move` 라 페이지 id · 본문 · 자식 페이지가 그대로다.
+   *
+   * 옮긴 뒤에는 노트를 통째로 다시 보낸다. 행이 되면 frontmatter 가 대상 DB 의 속성으로 가고 본문의 속성 YAML 블록이
+   * 빠진다. 페이지가 되면 속성이 본문 첫머리 YAML 블록으로 간다(PropertiesTableInjector). 레코드는 «아직 한 번도
+   * 맞추지 않은» 상태로 적는다(사본 · 본문 지문 없음) — 다시 보내다 끊기면 다음 push 가 확인 없이 다시 보낸다
+   * ({@link RemoteDriftChecker.overwritesRemote}).
+   *
+   * 다시 보내면 Notion 을 덮으므로, 받지 않은 Notion 편집이 있으면 옮기지 않는다.
+   */
+  private async changePlacement(
+    record: SyncRecord,
+    move: {
+      readonly path: string;
+      readonly from: string;
+      /** 행이 될 DB. null 이면 페이지가 된다. */
+      readonly databaseId: string | null;
+      readonly opId: string | null;
+    },
+  ): Promise<void> {
+    const { path, databaseId } = move;
+    const pageId = record.notionPageId!;
+    let current: Record<string, unknown>;
+    try {
+      current = parseFrontmatter(await this.vaultFs.readFile(path)).data;
+    } catch (error) {
+      // 다시 보내는 것이 모든 속성을 지우라는 요청이 된다(pushRowUpdate).
+      throw new Error(
+        `frontmatter 를 읽지 못해 옮기지 않음 (${path}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+    const remote = await this.livePage(record);
+    if (
+      !this.drift.overwritesRemote(record, false) &&
+      (await this.drift.remoteDrift(record, remote)) !== "none"
+    ) {
+      throw new Error(
+        `Notion 에서 바뀐 뒤 받지 않은 편집이 있어 옮기지 않음 — 옮기면 노트를 통째로 다시 보내 그 편집을 덮는다. ` +
+          `pull 을 먼저 하세요: ${path}`,
+      );
+    }
+
+    const sourceDatabaseId = record.fileType === "db-row" ? record.notionParentId : null;
+    let parentId: string;
+    let addedColumns: string[] = [];
+    if (databaseId) {
+      const meta = await this.notionClient.getDatabaseMeta(databaseId);
+      // 새 행과 같은 data source — 데이터 소스가 여럿이면 첫 소스(rowSourceFor).
+      const source = meta.dataSources[0];
+      if (!source) throw new Error(`DB 의 data source 를 읽지 못해 옮기지 않음: ${path}`);
+      if (sourceDatabaseId) {
+        const schema = await this.notionClient.getDatabaseSchema(
+          databaseId,
+          source.properties ? { ...meta, properties: source.properties } : meta,
+        );
+        addedColumns = columnsAddedByMove(pagePropertiesOf(remote), schema);
+      }
+      await this.notionClient.movePageToDataSource(pageId, source.id);
+      parentId = databaseId;
+    } else {
+      parentId = this.placement.moveParentOf(path);
+      await this.notionClient.movePage(pageId, parentId);
+    }
+
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        ...record,
+        notionParentId: parentId,
+        fileType: databaseId ? "db-row" : isFolderNotePath(path) ? "folder-note" : "file",
+        contentHash: "",
+        baseSnapshot: null,
+        notionBodyFingerprint: null,
+        localMtime: null,
+        localFileSize: null,
+      });
+      if (move.opId !== null) this.stateDb.markPendingCompleted(move.opId);
+    });
+    // 행이 된 페이지의 제목은 다시 보내며 맞춘다(pushRowUpdate). 페이지가 되면 제목 속성의 이름이 `title` 로
+    // 바뀌므로 옮긴 뒤의 페이지로 맞춘다.
+    if (!databaseId) {
+      const moved = await this.notionClient.getPage(pageId);
+      const title = titleAfterMove(
+        snapshotFrontmatter(record.baseSnapshot),
+        current,
+        move.from,
+        path,
+        this.notionClient.extractTitle(moved),
+      );
+      if (title !== null) {
+        await this.notionClient.updatePageProperties(
+          pageId,
+          titleProperty(title, pagePropertiesOf(moved)),
+        );
+      }
+    }
+    if (addedColumns.length > 0) this.rowSchemas.forget(databaseId!);
+    await this.pushUpdate(path, { overwriteRemote: true });
+    // 행이 빠진 DB · 든 DB 를 다음 pull 이 조회한다 — 행 목록 · 더한 열 · `.base` 의 행 수.
+    addPendingDatabases(
+      this.stateDb,
+      [sourceDatabaseId, databaseId].filter((dbId): dbId is string => dbId !== null),
+    );
+    this.placementChanges.push({
+      path,
+      becomes: databaseId ? "row" : "page",
+      ...(addedColumns.length > 0 ? { addedColumns } : {}),
+    });
+    getLogger().info(
+      `[Im-Nobsidian] ${databaseId ? "DB 의 행으로" : "페이지로"} 옮김: ${move.from} → ${path}`,
+    );
   }
 
   /**
@@ -951,6 +1274,10 @@ export class PagePusher {
       );
     }
 
+    // 빈 해시 · 지문 없음은 자리를 바꾼 뒤 맞추지 못한 행이다(ADR-047) — 지난 사본이 아니라 원격의 지금 값과 견준다.
+    if (record.contentHash === "" && record.notionBodyFingerprint === null) {
+      options = { ...options, overwriteRemote: true };
+    }
     const remote = await this.livePage(record);
     // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
     const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));

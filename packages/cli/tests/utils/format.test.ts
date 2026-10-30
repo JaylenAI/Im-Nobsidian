@@ -34,6 +34,8 @@ import {
   schemaEditLines,
   heldSidecarLines,
   viewEditLines,
+  placementChangeLines,
+  databaseMoveLines,
   heldBaseLines,
   unsentDeletionLines,
   remoteScanLines,
@@ -275,5 +277,44 @@ describe("summary — Notion DB 에 올린 것", () => {
     expect(summary(0, 0, 0, 0, 2)).toBe("2 DB changes");
     expect(summary(1, 0, 0, 0, 1)).toBe("1 created  1 DB changes");
     expect(summary(0, 0, 0)).toBe("no changes");
+  });
+});
+
+describe("placementChangeLines — 옮겨서 행 · 페이지가 된 노트 (ADR-047)", () => {
+  it("무엇이 되었는지와 대상 DB 에 더해질 열을 한 줄로", () => {
+    expect(
+      placementChangeLines(
+        [
+          { path: "할 일/메모.md", becomes: "row", addedColumns: ["상태", "태그 1"] },
+          { path: "노트/메모2.md", becomes: "page" },
+        ],
+        true,
+      ),
+    ).toEqual([
+      "✓ Notion 에서 DB 의 행으로 옮깁니다 — 할 일/메모.md — 대상 DB 에 더해질 열: 상태, 태그 1",
+      "✓ Notion 에서 페이지로 옮깁니다 — 노트/메모2.md",
+    ]);
+    expect(placementChangeLines([{ path: "a.md", becomes: "row" }])).toEqual([
+      "✓ Notion 에서 DB 의 행으로 옮겼습니다 — a.md",
+    ]);
+    expect(placementChangeLines(undefined)).toEqual([]);
+  });
+});
+
+describe("databaseMoveLines — 옮긴 DB 폴더 (ADR-047)", () => {
+  it("Notion 의 DB 도 옮겼는지 · 볼트 쪽만인지 한 줄로", () => {
+    expect(databaseMoveLines([{ from: "A/표", to: "B/표" }], true)).toEqual([
+      "✓ DB 폴더를 옮깁니다 — A/표 → B/표 (Notion 의 DB 도 함께)",
+    ]);
+    expect(
+      databaseMoveLines([
+        { from: "A/표", to: "B/표", inNotion: true },
+        { from: "databases/밖", to: "B/밖", inNotion: false },
+      ]),
+    ).toEqual([
+      "✓ Notion 의 DB 도 옮겼습니다 — A/표 → B/표",
+      "⚠ DB 폴더를 옮겼습니다 — databases/밖 → B/밖 (Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로)",
+    ]);
+    expect(databaseMoveLines(undefined)).toEqual([]);
   });
 });

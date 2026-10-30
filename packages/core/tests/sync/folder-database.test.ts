@@ -5,6 +5,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   draftFolderDatabase,
+  loadPreparedDatabases,
   prepareFolderDatabase,
   type FolderNote,
 } from "../../src/sync/folder-database.js";
@@ -13,6 +14,7 @@ import { planViews } from "../../src/sync/database-views.js";
 import type { VaultFS } from "../../src/sync/vault-fs.js";
 import type { IStateDB } from "../../src/state/state-db-interface.js";
 import { SidecarGenerator } from "../../src/view/sidecar-generator.js";
+import { compactNotionId } from "../../src/utils/id.js";
 
 const ID = "0f0e0d0c-0b0a-4908-8706-050403020100";
 
@@ -111,7 +113,7 @@ describe("draftFolderDatabase — 사이드카를 push 가 읽는 대로", () =>
   const BASE = [
     "filters:",
     "  and:",
-    '    - file.inFolder("Books")',
+    '    - file.folder == "Books"',
     "views:",
     "  - type: table",
     "    name: 전체",
@@ -209,10 +211,15 @@ describe("prepareFolderDatabase — 볼트에 사이드카를 쓴다", () => {
       ),
     } as unknown as VaultFS;
   }
-  const state = (synced: string[] = []): IStateDB =>
-    ({
+  const state = (synced: string[] = []): IStateDB => {
+    const meta = new Map<string, string>();
+    return {
       getByPath: (p: string) => (synced.includes(p) ? { notionPageId: "x" } : null),
-    }) as unknown as IStateDB;
+      getAll: () => synced.map((obsidianPath) => ({ obsidianPath, notionPageId: "x" })),
+      getMeta: (key: string) => meta.get(key) ?? null,
+      setMeta: (key: string, value: string) => meta.set(key, value),
+    } as unknown as IStateDB;
+  };
 
   it("폴더 바로 아래 노트만 행 — .base 이름이 DB 제목, types.json 을 읽는다", async () => {
     const files: Record<string, string> = {
@@ -236,15 +243,34 @@ describe("prepareFolderDatabase — 볼트에 사이드카를 쓴다", () => {
     expect(written!.title).toBe("내 책장");
   });
 
-  it("이미 사이드카가 있거나 노트가 Notion 에 올라간 폴더 · 빈 폴더는 거절한다", async () => {
+  it("이미 올린 노트가 든 폴더는 준비 표시를 남긴다 — push 가 같은 페이지째 행으로 옮긴다", async () => {
+    const db = state(["A/x.md", "A/x/아래.md", "A/A.md"]);
+    const report = await prepareFolderDatabase(
+      vault({ "A/x.md": "", "A/y.md": "", "A/A.md": "" }),
+      db,
+      "A",
+      { databaseId: ID },
+    );
+    expect(report.rows).toBe(3);
+    expect(report.pagesToRows).toBe(2);
+    expect([...loadPreparedDatabases(db)]).toEqual([compactNotionId(ID)]);
+
+    const fresh = state();
+    await prepareFolderDatabase(vault({ "B/x.md": "" }), fresh, "B", { databaseId: ID });
+    expect(loadPreparedDatabases(fresh).size).toBe(0);
+  });
+
+  it("이미 사이드카가 있거나 하위 폴더에 올린 노트가 든 폴더 · 빈 폴더는 거절한다", async () => {
     await expect(
       prepareFolderDatabase(vault({ "A/x.md": "", "A/A.notion.json": "{}" }), state(), "A", {
         databaseId: ID,
       }),
     ).rejects.toThrow("이미 DB 사이드카가 있다");
     await expect(
-      prepareFolderDatabase(vault({ "A/x.md": "" }), state(["A/x.md"]), "A", { databaseId: ID }),
-    ).rejects.toThrow("이미 Notion 페이지로 올라가 있다");
+      prepareFolderDatabase(vault({ "A/x.md": "" }), state(["A/x.md", "A/하위/y.md"]), "A", {
+        databaseId: ID,
+      }),
+    ).rejects.toThrow("하위 폴더에 Notion 에 올린 노트 · 폴더가 있다");
     await expect(
       prepareFolderDatabase(vault({ "B/x.md": "" }), state(), "A", { databaseId: ID }),
     ).rejects.toThrow("노트가 없다");

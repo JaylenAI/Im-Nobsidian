@@ -505,9 +505,10 @@ export class FolderPlacement {
   /**
    * 옮긴 노트를 Notion 에서 그 자리로 옮길 수 없는 이유. 옮길 수 있으면 null.
    *
-   * - 행은 제 DB 폴더 바로 아래에서만 움직인다. Notion 에서 행을 DB 밖으로 옮기면 속성이 보이지
-   *   않게 되고, 다른 DB 로 옮기면 스키마가 달라 속성이 맞지 않는다.
-   * - 페이지는 DB 폴더로 옮길 수 없다 — DB 에는 행만 든다.
+   * - DB 폴더 바로 아래로 옮긴 노트는 그 DB 의 행이 된다 — 페이지 · 다른 DB 의 행 모두(ADR-047). 폴더 노트는 아니다 —
+   *   그 폴더의 하위 페이지가 볼트에 둘 자리가 없다.
+   * - DB 폴더 밖으로 옮긴 행은 페이지가 된다 — 새 노트와 같은 자리 규칙이다.
+   * - 페이지는 DB 폴더 안의 폴더 노트 꼴로 둘 수 없다 — DB 에는 행만 든다.
    * - 나머지는 새 노트와 같다 — DB 폴더 안의, 같은 이름의 행이 없는 폴더에는 자리가 없다.
    */
   private moveRefusal(
@@ -516,31 +517,18 @@ export class FolderPlacement {
     lookup: FolderLookup,
   ): string | null {
     const folder = parentFolderOf(change.path);
-    const databaseId = lookup.databaseAt(folder);
-    if (record.fileType === "db-row") {
-      if (
-        databaseId &&
-        record.notionParentId &&
-        notionIdsEqual(databaseId, record.notionParentId)
-      ) {
-        return null;
-      }
-      const home = change.movedFrom ? `«${parentFolderOf(change.movedFrom)}» ` : "";
+    if (lookup.databaseAt(folder)) {
+      if (record.fileType !== "folder-note") return null;
       return (
-        `DB 행은 그 DB 폴더 밖으로 옮기지 않음 — Notion 에서 행을 DB 밖 · 다른 DB 로 옮기면 ` +
-        `속성이 사라진다. 원래 DB 폴더 ${home}바로 아래로 되돌리세요`
+        `폴더 노트는 DB(${folder})의 행으로 옮기지 않음 — 그 폴더의 하위 페이지가 볼트에 둘 자리가 없다. ` +
+        `폴더째 DB 폴더 밖에 두세요`
       );
     }
     const placement = pagePlacementFolder(change.path);
-    const databaseFolder = databaseId
-      ? folder
-      : placement && lookup.databaseAt(placement)
-        ? placement
-        : null;
-    if (databaseFolder !== null) {
+    if (placement && lookup.databaseAt(placement)) {
       return (
-        `페이지를 DB 폴더(${databaseFolder})로 옮기지 않음 — DB 에는 행만 든다. ` +
-        `DB 폴더 밖으로 옮기세요`
+        `페이지를 DB 폴더(${placement})로 옮기지 않음 — DB 에는 행만 든다. ` +
+        `DB 폴더 바로 아래에 노트로 두면 행이 된다`
       );
     }
     return this.placementRefusal(placement, lookup, "move");

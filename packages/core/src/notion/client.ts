@@ -215,6 +215,11 @@ export interface DatabaseMeta {
   readonly properties: Readonly<Record<string, unknown>>;
   /** 페이지 본문 안에 놓인 인라인 DB 인가. */
   readonly isInline: boolean;
+  /**
+   * DB 가 바로 아래에 놓인 페이지 — 블록(토글 · 열) 안이거나 워크스페이스 맨 위면 null. 모르면(읽지 않았으면) 없다.
+   * Notion 에서 DB 를 옮겨도 수정 시각이 그대로라, 받은 DB 의 부모로만 옮긴 것을 안다(ADR-047).
+   */
+  readonly parentPageId?: string | null;
   /** DB 의 아이콘 · 커버 · 설명 · 제목 표시 — 받은 그대로. */
   readonly appearance?: DatabaseAppearance;
 }
@@ -705,6 +710,62 @@ export class NotionClient {
     );
   }
 
+  /**
+   * 페이지 · 행을 DB 의 data source 로 옮긴다 — 같은 `pages.move`. 페이지는 행이 되고, 다른 DB 의 행은 이 DB 의
+   * 행이 된다. id · 본문 · 자식은 그대로다(2026-10-27 실측). `database_id` 부모는 400 이라 data source 로만 옮긴다.
+   * 다른 DB 에서 오면 값이 있는 속성 가운데 이 DB 에 없는 것은 Notion 이 열로 더한다(2026-10-30 실측).
+   */
+  /**
+   * DB 의 지금 자리 — 부모와 제목. 볼트에서 옮긴 DB 폴더를 Notion 에서도 옮길지 정할 때 읽는다(ADR-047). 메타 캐시를 쓰지
+   * 않는다 — 옮기기 직전의 자리여야 한다.
+   *
+   * @returns 부모가 페이지면 `pageId`, 블록(토글 · 열 안의 인라인 DB) · 워크스페이스면 null.
+   */
+  async getDatabasePlacement(databaseId: string): Promise<{
+    readonly parentType: string;
+    readonly pageId: string | null;
+    readonly title: string;
+  }> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      parent?: { type?: string; page_id?: string };
+      title?: Array<{ plain_text: string }>;
+    };
+    return {
+      parentType: db.parent?.type ?? "",
+      pageId: db.parent?.type === "page_id" ? (db.parent.page_id ?? null) : null,
+      title: Array.isArray(db.title) ? db.title.map((t) => t.plain_text).join("") : "",
+    };
+  }
+
+  /**
+   * DB 를 다른 페이지 아래로 옮기거나 제목을 바꾼다(`databases.update`). 2026-10-30 실측 — 부모를 바꾸면 200 이고 DB id ·
+   * 행 · 보기는 그대로다. 같은 요청을 다시 보내도 결과가 같다.
+   */
+  async updateDatabasePlacement(
+    databaseId: string,
+    change: { readonly parentPageId?: string; readonly title?: string },
+  ): Promise<void> {
+    const body: Record<string, unknown> = {};
+    if (change.parentPageId) body.parent = { type: "page_id", page_id: change.parentPageId };
+    if (change.title !== undefined)
+      body.title = [{ type: "text", text: { content: change.title } }];
+    if (Object.keys(body).length === 0) return;
+    await this.withRateLimit(() =>
+      this.client.request({ path: `databases/${databaseId}`, method: "patch", body }),
+    );
+  }
+
+  async movePageToDataSource(pageId: string, dataSourceId: string): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.pages.move({
+        page_id: pageId,
+        parent: { type: "data_source_id", data_source_id: dataSourceId },
+      }),
+    );
+  }
+
   // ─── Database / DataSource ───
 
   /**
@@ -740,6 +801,7 @@ export class NotionClient {
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
       is_inline?: boolean;
+      parent?: { type?: string; page_id?: string };
       icon?: unknown;
       cover?: unknown;
       description?: unknown[];
@@ -788,6 +850,7 @@ export class NotionClient {
       })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
       isInline: db.is_inline === true,
+      parentPageId: db.parent?.type === "page_id" ? (db.parent.page_id ?? null) : null,
       appearance: {
         icon: db.icon ?? null,
         cover: db.cover ?? null,

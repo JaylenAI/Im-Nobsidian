@@ -14,7 +14,7 @@ import type { VaultFS } from "./vault-fs.js";
  * 그 아래의 상태 DB 레코드 · 위키링크 · 보존 마커 · 첨부 기록을 새 경로로 옮겨 적는다.
  *
  * DB 가 든 폴더도 옮긴다 — 발견한 DB 의 폴더(`discovered_dbs`) · 기록한 `.base` 경로(`db_base_files`) · 동기화가
- * 만든 `.base` 의 폴더 필터(`file.inFolder`)를 새 자리로 고친다. 설정 파일에 적은 DB(`notion.databases`)의 폴더와
+ * 만든 `.base` 의 폴더 필터(`file.folder ==`)를 새 자리로 고친다. 설정 파일에 적은 DB(`notion.databases`)의 폴더와
  * 다른 연결 폴더는 고쳐 적을 수 없어 옮기지 않는다.
  */
 export class NoteRelocator {
@@ -31,7 +31,8 @@ export class NoteRelocator {
    */
   unitsOf(record: SyncRecord): string[] {
     if (isFolderRecord(record)) return [record.obsidianPath];
-    if (record.fileType !== "file") return [parentFolderOf(record.obsidianPath)];
+    // 폴더 노트(`X/X.md`)는 폴더째. 노트와 행은 파일 하나와 그 옆의 하위 페이지 폴더(`X/`).
+    if (record.fileType === "folder-note") return [parentFolderOf(record.obsidianPath)];
     const children = stripMarkdownExtension(record.obsidianPath);
     const hasChildren = this.stateDb.getAll().some((r) => within(r.obsidianPath, children));
     return hasChildren ? [record.obsidianPath, children] : [record.obsidianPath];
@@ -84,7 +85,7 @@ export class NoteRelocator {
       rewriteDatabaseFolders(this.stateDb, moves);
       alsoInTransaction?.();
     });
-    await retargetBaseFiles(this.vaultFs, moves);
+    await retargetBaseFiles(this.vaultFs, moves, this.stateDb);
   }
 
   private holdsConfiguredDatabase(folder: string): boolean {
