@@ -26,6 +26,8 @@ interface MockOrchestrator {
   prepareFolderDatabase: ReturnType<typeof vi.fn>;
   localChangeDiff: ReturnType<typeof vi.fn>;
   remoteChangeDiff: ReturnType<typeof vi.fn>;
+  userBaseFilterFixes: ReturnType<typeof vi.fn>;
+  resolveUserBaseFilterFixes: ReturnType<typeof vi.fn>;
 }
 
 function createMockOrchestrator(): MockOrchestrator {
@@ -61,6 +63,8 @@ function createMockOrchestrator(): MockOrchestrator {
     prepareFolderDatabase: vi.fn(),
     localChangeDiff: vi.fn(),
     remoteChangeDiff: vi.fn(),
+    userBaseFilterFixes: vi.fn(() => []),
+    resolveUserBaseFilterFixes: vi.fn(async () => []),
     statusLocal: vi.fn().mockResolvedValue({
       lastSyncAt: null,
       localChanges: [],
@@ -105,7 +109,7 @@ function localStatus(conflictPaths: string[] = [], overrides: Record<string, unk
 }
 
 function createHooks(): {
-  hooks: Required<SyncControllerHooks>;
+  hooks: Required<Pick<SyncControllerHooks, "onState" | "onNotice" | "onStatusBar">>;
   onState: ReturnType<typeof vi.fn>;
   onNotice: ReturnType<typeof vi.fn>;
   onStatusBar: ReturnType<typeof vi.fn>;
@@ -125,6 +129,54 @@ describe("SyncController", () => {
 
   beforeEach(() => {
     mock = createMockOrchestrator();
+  });
+
+  describe("직접 만든 .base 의 폴더 필터", () => {
+    const fix = { path: "내/할일.base", from: "A/T", to: "A/U" };
+
+    it("작업이 끝난 뒤 묻고, 고치기를 고르면 고친다", async () => {
+      mock.userBaseFilterFixes.mockReturnValue([fix]);
+      mock.resolveUserBaseFilterFixes.mockResolvedValue(["내/할일.base"]);
+      const { hooks, onNotice } = createHooks();
+      let busyWhileAsking: boolean | null = null;
+      const controller = makeController(mock, {
+        ...hooks,
+        confirmBaseFilterFixes: async (fixes) => {
+          expect(fixes).toEqual([fix]);
+          busyWhileAsking = controller.isSyncing();
+          return true;
+        },
+      });
+
+      await controller.pull();
+
+      expect(busyWhileAsking).toBe(false);
+      expect(mock.resolveUserBaseFilterFixes).toHaveBeenCalledWith(true);
+      expect(onNotice).toHaveBeenCalledWith("Im-Nobsidian: .base 1개의 폴더 필터를 고쳤습니다");
+    });
+
+    it("그대로 두기는 기록만 지우고, 답하지 않고 닫으면 다음에 다시 묻는다", async () => {
+      mock.userBaseFilterFixes.mockReturnValue([fix]);
+      const answers: Array<boolean | null> = [false, null];
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, {
+        ...hooks,
+        confirmBaseFilterFixes: async () => answers.shift()!,
+      });
+
+      await controller.push();
+      expect(mock.resolveUserBaseFilterFixes).toHaveBeenCalledWith(false);
+      await controller.push();
+      expect(mock.resolveUserBaseFilterFixes).toHaveBeenCalledTimes(1);
+      expect(onNotice).not.toHaveBeenCalledWith(expect.stringContaining("폴더 필터를 고쳤"));
+    });
+
+    it("물을 것이 없으면 묻지 않는다", async () => {
+      const ask = vi.fn();
+      const { hooks } = createHooks();
+      await makeController(mock, { ...hooks, confirmBaseFilterFixes: ask }).sync();
+      expect(ask).not.toHaveBeenCalled();
+    });
   });
 
   describe("push", () => {

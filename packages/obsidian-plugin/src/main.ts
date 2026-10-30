@@ -26,6 +26,7 @@ import { announceStateDbClose } from "./state/state-db-handoff.js";
 import { ImNobsidianSettingTab } from "./settings.js";
 import { ConflictModal } from "./conflict-modal.js";
 import { ChangeDiffModal } from "./change-diff-modal.js";
+import { BaseFilterFixModal } from "./base-filter-modal.js";
 import { DiscardConfirmModal } from "./discard-confirm-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
@@ -177,6 +178,8 @@ export default class ImNobsidianPlugin extends Plugin {
             durationMs,
           ),
         onStatusBar: (state) => this.onEnginePhase(engine, state),
+        confirmBaseFilterFixes: (fixes) =>
+          new Promise((resolve) => new BaseFilterFixModal(this.app, fixes, resolve).open()),
       }),
       reopen: () => void this.initOrchestrator(),
     };

@@ -24,6 +24,7 @@ import type {
   StatusResult,
   SyncDirection,
   SyncRecord,
+  UserBaseFilterFix,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
 import { directionBlocks, type DirectionBlocks } from "./direction.js";
@@ -91,6 +92,11 @@ export interface SyncControllerHooks {
   onNotice?: (message: string, durationMs?: number) => void;
   /** 상태바 표시 갱신. */
   onStatusBar?: (state: SyncPhase) => void;
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 직접 만든 `.base` 의 폴더 필터를 고칠지 묻는다 — 고치면 true, 두면 false, 답하지 않고
+   * 닫으면 null(다음에 다시 묻는다).
+   */
+  confirmBaseFilterFixes?: (fixes: readonly UserBaseFilterFix[]) => Promise<boolean | null>;
 }
 
 /**
@@ -284,6 +290,33 @@ export class SyncController {
         await this.refreshLocal(true);
       } catch (error) {
         this.fail(label, error);
+      }
+    });
+    // 작업이 끝난 뒤에 묻는다 — 묻는 창이 열린 동안 자동 sync 를 막지 않는다.
+    await this.askBaseFilterFixes();
+  }
+
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 직접 만든 `.base` 의 폴더 필터 — 고칠지 묻는다. 동기화가 만든 `.base` 는 말없이 고치지만
+   * 직접 만든 것은 무엇을 보려고 만든 필터인지 모른다. 답하지 않고 닫으면 다음 작업 뒤에 다시 묻는다.
+   */
+  private async askBaseFilterFixes(): Promise<void> {
+    const ask = this.hooks.confirmBaseFilterFixes;
+    if (!ask || this.closed) return;
+    const fixes = this.orchestrator.userBaseFilterFixes();
+    if (fixes.length === 0) return;
+    const accept = await ask(fixes);
+    if (accept === null || !this.admit("base-filters")) return;
+    await this.exclusive("base-filters", async () => {
+      try {
+        const fixed = await this.orchestrator.resolveUserBaseFilterFixes(accept);
+        if (accept) {
+          this.hooks.onNotice?.(
+            `${NOTICE_PREFIX}: .base ${fixed.length}개의 폴더 필터를 고쳤습니다`,
+          );
+        }
+      } catch (error) {
+        this.fail(".base 폴더 필터 고치기", error);
       }
     });
   }
