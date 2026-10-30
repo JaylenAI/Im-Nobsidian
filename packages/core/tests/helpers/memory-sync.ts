@@ -340,6 +340,21 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
     page.parent = dataSourceId;
     page.parentType = "database";
   });
+  // DB 의 자리 — 적지 않은 DB 는 루트 아래 같은 이름(시험이 `databases.set` 으로 정한다).
+  const databases = new Map<string, { parent: string; title: string }>();
+  client.getDatabasePlacement.mockImplementation(async (id: string) => {
+    const db = databases.get(id) ?? { parent: "root-page-id", title: "" };
+    return { parentType: "page_id", pageId: db.parent, title: db.title };
+  });
+  client.updateDatabasePlacement.mockImplementation(
+    async (id: string, change: { parentPageId?: string; title?: string }) => {
+      const db = databases.get(id) ?? { parent: "root-page-id", title: "" };
+      databases.set(id, {
+        parent: change.parentPageId ?? db.parent,
+        title: change.title ?? db.title,
+      });
+    },
+  );
   client.updatePageProperties.mockImplementation(
     async (id: string, props: Record<string, PropertyRequest>) => {
       const page = touch(id);
@@ -496,5 +511,5 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   ]);
-  return { client, pages, add, touch, edit, recent };
+  return { client, pages, databases, add, touch, edit, recent };
 }

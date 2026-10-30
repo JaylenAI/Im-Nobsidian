@@ -1,5 +1,6 @@
 import { setLogger } from "@im-nobsidian/core";
 import type {
+  DatabaseMove,
   FailedOperation,
   PullResult,
   PushResult,
@@ -48,6 +49,7 @@ export interface PushJson {
   readonly viewEdits: readonly ViewEdit[];
   /** 옮겨서 Notion 에서 행 · 페이지 · 다른 DB 의 행이 된 노트(ADR-047) — moved 에 든다. */
   readonly placementChanges: readonly PlacementChange[];
+  readonly databaseMoves: readonly DatabaseMove[];
   readonly durationMs: number;
 }
 
@@ -114,6 +116,7 @@ export function pushJson(result: PushResult): PushJson {
     schemaEdits: result.schemaEdits ?? [],
     viewEdits: result.viewEdits ?? [],
     placementChanges: result.placementChanges ?? [],
+    databaseMoves: result.databaseMoves ?? [],
     durationMs: result.duration,
   };
 }

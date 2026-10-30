@@ -596,6 +596,42 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     expect(db.getMeta("local_rename_hints")).toBe("");
   });
 
+  it("DB 폴더를 다른 DB 폴더 안으로 옮기면 DB 는 거절하고 행은 제 DB 에 둔다 — dry-run 도 같게 보인다", async () => {
+    await seed({ "notes/keep.md": "# Keep\n" });
+    const row = seedRow("Tasks/Row.md", "Row");
+    useDatabases({ [DB_ID]: TASKS_SCHEMA, [OTHER_DB_ID]: TASKS_SCHEMA });
+    vault.write("Other/o.md", "---\ntitle: o\n---\n");
+
+    vault.renameFolder("Tasks", "Other/Tasks");
+    const preview = await orchestrator.push({ dryRun: true });
+    expect(preview.placementChanges).toBeUndefined();
+    expect(preview.databaseMoves).toBeUndefined();
+    expect(preview.failed).toEqual([
+      expect.objectContaining({ path: "Other/Tasks", error: expect.stringContaining("DB 폴더") }),
+    ]);
+
+    const result = await orchestrator.push();
+    expect(result.failed).toEqual([
+      expect.objectContaining({ path: "Other/Tasks", error: expect.stringContaining("DB 폴더") }),
+    ]);
+    expect(result.placementChanges).toBeUndefined();
+    expect(db.getByPath("Other/Tasks/Row.md")).toMatchObject({ fileType: "db-row" });
+    expect(row.parent).toBe(DB_ID);
+    expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
+
+    // 거절된 이동 뒤 다시 옮기면 dry-run 은 같은 DB 의 이동을 하나로 — 처음 자리에서 새 자리로.
+    vault.renameFolder("Other/Tasks", "notes/Tasks");
+    const again = await orchestrator.push({ dryRun: true });
+    expect(again.failed).toEqual([]);
+    expect(again.databaseMoves).toEqual([{ from: "Tasks", to: "notes/Tasks" }]);
+
+    // 되돌리면 반영할 것이 없다.
+    vault.renameFolder("notes/Tasks", "Tasks");
+    const back = await orchestrator.push();
+    expect(back.failed).toEqual([]);
+    expect(db.getMeta("db_moves_pending")).toBe("[]");
+  });
+
   describe("이미 올린 노트 폴더를 DB 로 (ADR-047)", () => {
     const NEW_DB = "dbdbdbdb-0000-4000-8000-0000000000aa";
     const BOOKS_SCHEMA = {

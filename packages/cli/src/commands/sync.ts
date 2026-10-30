@@ -16,6 +16,7 @@ import {
   schemaEditLines,
   viewEditLines,
   placementChangeLines,
+  databaseMoveLines,
   heldSidecarLines,
   heldBaseLines,
   icons,
@@ -135,6 +136,9 @@ export const syncCommand = new Command("sync")
         console.log(`  ${line}`);
       }
       for (const line of placementChangeLines(pushResult.placementChanges, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of databaseMoveLines(pushResult.databaseMoves, options.dryRun)) {
         console.log(`  ${line}`);
       }
       // sync 의 push 가 올렸으면 붙잡아 둔 사이드카는 이제 다음 pull 이 새로 쓴다 — 올리지 못한 것만 알린다.

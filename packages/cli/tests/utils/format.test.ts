@@ -35,6 +35,7 @@ import {
   heldSidecarLines,
   viewEditLines,
   placementChangeLines,
+  databaseMoveLines,
   heldBaseLines,
   unsentDeletionLines,
   remoteScanLines,
@@ -297,5 +298,23 @@ describe("placementChangeLines — 옮겨서 행 · 페이지가 된 노트 (ADR
       "✓ Notion 에서 DB 의 행으로 옮겼습니다 — a.md",
     ]);
     expect(placementChangeLines(undefined)).toEqual([]);
+  });
+});
+
+describe("databaseMoveLines — 옮긴 DB 폴더 (ADR-047)", () => {
+  it("Notion 의 DB 도 옮겼는지 · 볼트 쪽만인지 한 줄로", () => {
+    expect(databaseMoveLines([{ from: "A/표", to: "B/표" }], true)).toEqual([
+      "✓ DB 폴더를 옮깁니다 — A/표 → B/표 (Notion 의 DB 도 함께)",
+    ]);
+    expect(
+      databaseMoveLines([
+        { from: "A/표", to: "B/표", inNotion: true },
+        { from: "databases/밖", to: "B/밖", inNotion: false },
+      ]),
+    ).toEqual([
+      "✓ Notion 의 DB 도 옮겼습니다 — A/표 → B/표",
+      "⚠ DB 폴더를 옮겼습니다 — databases/밖 → B/밖 (Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로)",
+    ]);
+    expect(databaseMoveLines(undefined)).toEqual([]);
   });
 });

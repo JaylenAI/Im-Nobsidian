@@ -710,6 +710,48 @@ export class NotionClient {
    * 행이 된다. id · 본문 · 자식은 그대로다(2026-10-27 실측). `database_id` 부모는 400 이라 data source 로만 옮긴다.
    * 다른 DB 에서 오면 값이 있는 속성 가운데 이 DB 에 없는 것은 Notion 이 열로 더한다(2026-10-30 실측).
    */
+  /**
+   * DB 의 지금 자리 — 부모와 제목. 볼트에서 옮긴 DB 폴더를 Notion 에서도 옮길지 정할 때 읽는다(ADR-047). 메타 캐시를 쓰지
+   * 않는다 — 옮기기 직전의 자리여야 한다.
+   *
+   * @returns 부모가 페이지면 `pageId`, 블록(토글 · 열 안의 인라인 DB) · 워크스페이스면 null.
+   */
+  async getDatabasePlacement(databaseId: string): Promise<{
+    readonly parentType: string;
+    readonly pageId: string | null;
+    readonly title: string;
+  }> {
+    const db = (await this.withRateLimit(() =>
+      this.client.databases.retrieve({ database_id: databaseId }),
+    )) as unknown as {
+      parent?: { type?: string; page_id?: string };
+      title?: Array<{ plain_text: string }>;
+    };
+    return {
+      parentType: db.parent?.type ?? "",
+      pageId: db.parent?.type === "page_id" ? (db.parent.page_id ?? null) : null,
+      title: Array.isArray(db.title) ? db.title.map((t) => t.plain_text).join("") : "",
+    };
+  }
+
+  /**
+   * DB 를 다른 페이지 아래로 옮기거나 제목을 바꾼다(`databases.update`). 2026-10-30 실측 — 부모를 바꾸면 200 이고 DB id ·
+   * 행 · 보기는 그대로다. 같은 요청을 다시 보내도 결과가 같다.
+   */
+  async updateDatabasePlacement(
+    databaseId: string,
+    change: { readonly parentPageId?: string; readonly title?: string },
+  ): Promise<void> {
+    const body: Record<string, unknown> = {};
+    if (change.parentPageId) body.parent = { type: "page_id", page_id: change.parentPageId };
+    if (change.title !== undefined)
+      body.title = [{ type: "text", text: { content: change.title } }];
+    if (Object.keys(body).length === 0) return;
+    await this.withRateLimit(() =>
+      this.client.request({ path: `databases/${databaseId}`, method: "patch", body }),
+    );
+  }
+
   async movePageToDataSource(pageId: string, dataSourceId: string): Promise<void> {
     await this.withRateLimit(() =>
       this.client.pages.move({

@@ -35,6 +35,7 @@ import {
   isFolderNotePath,
   isFolderRecord,
   parentFolderOf,
+  type FolderLookup,
 } from "./folder-container.js";
 import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js";
 import type { FolderPlacement } from "./folder-placement.js";
@@ -626,9 +627,10 @@ export class PagePusher {
   private placementChangeOf(
     record: SyncRecord,
     path: string,
+    lookup?: FolderLookup,
   ): { readonly databaseId: string | null } | null {
     if (isDatabaseMode(this.config)) return null;
-    const databaseId = this.placement.newRowDatabaseOf(path);
+    const databaseId = this.placement.newRowDatabaseOf(path, lookup);
     if (record.fileType !== "db-row") return databaseId === null ? null : { databaseId };
     const sameDatabase =
       databaseId !== null &&
@@ -641,7 +643,11 @@ export class PagePusher {
    * dry-run 이 알릴 자리 바뀜 — 실제 push 처럼 옮긴 노트 가운데 페이지 ↔ 행 · 다른 DB 의 행이 될 것. 다른 DB 로 가는
    * 행은 지금 행과 대상 DB 의 스키마를 읽어 더해질 열을 센다. 읽지 못하면 열은 빼고 알린다.
    */
-  async previewPlacementChanges(changes: readonly LocalChange[]): Promise<PlacementChange[]> {
+  async previewPlacementChanges(
+    changes: readonly LocalChange[],
+    /** 옮겨 적은 뒤의 볼트(`LocalPlanner.localView`) — 함께 옮긴 DB 폴더의 행은 같은 DB 에 남는다. */
+    lookup: FolderLookup,
+  ): Promise<PlacementChange[]> {
     const planned: PlacementChange[] = [];
     for (const change of changes) {
       if (change.type !== "moved") continue;
@@ -650,7 +656,7 @@ export class PagePusher {
         this.stateDb.getByPath(change.path) ??
         (change.movedFrom ? this.stateDb.getByPath(change.movedFrom) : null);
       if (!record?.notionPageId) continue;
-      const placement = this.placementChangeOf(record, change.path);
+      const placement = this.placementChangeOf(record, change.path, lookup);
       if (!placement) continue;
       let addedColumns: string[] = [];
       if (placement.databaseId && record.fileType === "db-row") {

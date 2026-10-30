@@ -84,7 +84,7 @@ export class NoteRelocator {
       rewriteDatabaseFolders(this.stateDb, moves);
       alsoInTransaction?.();
     });
-    await retargetBaseFiles(this.vaultFs, moves);
+    await retargetBaseFiles(this.vaultFs, moves, this.stateDb);
   }
 
   private holdsConfiguredDatabase(folder: string): boolean {
