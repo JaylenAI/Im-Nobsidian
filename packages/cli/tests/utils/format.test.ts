@@ -265,8 +265,17 @@ describe("viewEditLines · heldBaseLines — .base 에서 고친 보기 (ADR-046
       "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 표 → 점수표 (이름 · 열)",
       "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 보드 (정렬 · 필터)",
     ]);
+    expect(
+      viewEditLines([
+        { path: "할 일/할 일.base", view: "목록", action: "created", changed: [] },
+        { path: "할 일/할 일.base", view: "보드", action: "deleted", changed: [] },
+      ]),
+    ).toEqual([
+      "✓ .base 에서 더한 보기를 Notion 에 만들었습니다 — 할 일/할 일.base: 목록",
+      "✓ .base 에서 지운 보기를 Notion 에서 지웠습니다 — 할 일/할 일.base: 보드",
+    ]);
     expect(heldBaseLines(["할 일/할 일.base"])).toEqual([
-      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:",
+      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다:",
       "  할 일/할 일.base",
     ]);
     expect(heldBaseLines([])).toEqual([]);
