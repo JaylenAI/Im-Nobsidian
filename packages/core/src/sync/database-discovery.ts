@@ -25,6 +25,7 @@ import {
   parseDiscoveredDbs,
   type DiscoveredDbConfig,
 } from "./discovered-databases.js";
+import { within } from "./note-relocation.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
@@ -375,6 +376,15 @@ export class DatabaseDiscovery {
               paths,
               progress,
               rescanRowChildren: forceRediscovery,
+              // Notion 에서 옮긴 DB 의 폴더를 옮겼다 — 그 안의 DB 폴더도 함께 옮겨 적는다(상태 메타는 옮기며 고쳤다).
+              onFolderMoved: (move) => {
+                for (const config of dbConfigs) {
+                  if (within(config.localFolder, move.from)) {
+                    config.localFolder = move.to + config.localFolder.slice(move.from.length);
+                  }
+                }
+                changed = true;
+              },
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
             // 매핑을 기록하고(placeholder 임베드가 원본 .base 로 향하게) 캐시에서 제거해

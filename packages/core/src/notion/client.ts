@@ -215,6 +215,11 @@ export interface DatabaseMeta {
   readonly properties: Readonly<Record<string, unknown>>;
   /** 페이지 본문 안에 놓인 인라인 DB 인가. */
   readonly isInline: boolean;
+  /**
+   * DB 가 바로 아래에 놓인 페이지 — 블록(토글 · 열) 안이거나 워크스페이스 맨 위면 null. 모르면(읽지 않았으면) 없다.
+   * Notion 에서 DB 를 옮겨도 수정 시각이 그대로라, 받은 DB 의 부모로만 옮긴 것을 안다(ADR-047).
+   */
+  readonly parentPageId?: string | null;
   /** DB 의 아이콘 · 커버 · 설명 · 제목 표시 — 받은 그대로. */
   readonly appearance?: DatabaseAppearance;
 }
@@ -796,6 +801,7 @@ export class NotionClient {
       properties?: Record<string, unknown>;
       data_sources?: Array<{ id: string; name?: string }>;
       is_inline?: boolean;
+      parent?: { type?: string; page_id?: string };
       icon?: unknown;
       cover?: unknown;
       description?: unknown[];
@@ -844,6 +850,7 @@ export class NotionClient {
       })),
       properties: anyAccessible ? merged : (db.properties ?? {}),
       isInline: db.is_inline === true,
+      parentPageId: db.parent?.type === "page_id" ? (db.parent.page_id ?? null) : null,
       appearance: {
         icon: db.icon ?? null,
         cover: db.cover ?? null,

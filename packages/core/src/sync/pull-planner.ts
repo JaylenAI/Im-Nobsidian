@@ -96,6 +96,7 @@ export class PullPlanner {
     }
     for (const row of rows) items.push({ path: row.path, operation: row.operation });
     // Notion 에서 DB 안으로 옮긴 페이지 — 행이 되며 옮긴다. 행으로 다시 쓰므로 고친 것으로도 센다(실제 pull 과 같다).
+    // Notion 에서 옮긴 DB 의 폴더도 옮긴다 — 행을 다시 쓰지 않아 고친 것으로 세지 않는다.
     const movedRows = rows.filter((row) => row.moves !== undefined);
     items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
 
@@ -183,7 +184,11 @@ export class PullPlanner {
       }
       try {
         rows.push(
-          ...(await this.databaseSyncer.planDatabase(dbConfig, { paths, resolveDbFolder })),
+          ...(await this.databaseSyncer.planDatabase(dbConfig, {
+            paths,
+            resolveDbFolder,
+            followPlacement: resolveDbFolder !== undefined,
+          })),
         );
       } catch (error) {
         // 발견해 둔 DB 가 사라졌으면(404) 실제 pull 은 대상에서 빼기만 한다 — 실패가 아니다.
