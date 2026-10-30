@@ -94,7 +94,12 @@ import {
 } from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
-import { upgradeBaseFolderFilters } from "./db-folder-moves.js";
+import {
+  pendingUserBaseFilterFixes,
+  resolveUserBaseFilterFixes,
+  upgradeBaseFolderFilters,
+  type UserBaseFilterFix,
+} from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   forgetRenameHint,
@@ -1726,6 +1731,20 @@ export class SyncOrchestrator {
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
+  }
+
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 사용자 `.base` 의 폴더 필터 — 말없이 고치지 않고 고칠지 묻는다. 없으면 빈 목록.
+   */
+  userBaseFilterFixes(): UserBaseFilterFix[] {
+    return pendingUserBaseFilterFixes(this.stateDb);
+  }
+
+  /** {@link userBaseFilterFixes} 를 물은 답대로 — 고치면 고친 `.base` 경로. 어느 쪽이든 다시 묻지 않는다. */
+  async resolveUserBaseFilterFixes(accept: boolean): Promise<string[]> {
+    return this.gate.run("base-filters", () =>
+      resolveUserBaseFilterFixes(this.vaultFs, this.stateDb, accept),
+    );
   }
 
   /**

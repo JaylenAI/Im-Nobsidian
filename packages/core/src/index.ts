@@ -299,6 +299,7 @@ export type { Logger } from "./utils/logger.js";
 
 // 볼트 하나에 연결 여럿(ADR-038)
 export { FilteredVaultFS } from "./sync/filtered-vault-fs.js";
+export type { UserBaseFilterFix } from "./sync/db-folder-moves.js";
 export {
   ScopedVaultFS,
   ConnectionBoundaryError,

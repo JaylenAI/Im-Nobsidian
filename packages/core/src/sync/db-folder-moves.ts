@@ -107,12 +107,90 @@ export async function retargetBaseFiles(
 ): Promise<void> {
   const folders = moves.filter((move) => !isMarkdownPath(move.from));
   if (folders.length === 0) return;
+  const found: UserBaseFilterFix[] = [];
   await rewriteBaseFilters(
     vaultFs,
     stateDb,
     (folder) => finalPath(folder, folders),
     "옮긴 폴더를 가리키던 .base 보기를 고치지 못함",
+    (fix) => found.push(fix),
   );
+  if (!stateDb) return;
+  // 앞서 찾아 두고 아직 묻지 않은 것도 이번 이동을 따라간다 — 같은 폴더나 그 `.base` 를 또 옮겼을 수 있다.
+  const pending = pendingUserBaseFilterFixes(stateDb).map((fix) => ({
+    path: finalPath(fix.path, folders),
+    from: fix.from,
+    to: finalPath(fix.to, folders),
+  }));
+  for (const fix of found) {
+    if (!pending.some((p) => p.path === fix.path && p.from === fix.from)) pending.push(fix);
+  }
+  // 되돌려 옮겨 제자리가 된 것은 물을 것이 없다.
+  const asks = pending.filter((fix) => fix.from !== fix.to);
+  stateDb.setMeta(USER_BASE_FILTER_FIXES_META_KEY, asks.length > 0 ? JSON.stringify(asks) : "");
+}
+
+/** 사용자가 만든 `.base` 의 폴더 필터가 옮긴 폴더를 가리킨다 — 묻고 고친다. */
+export interface UserBaseFilterFix {
+  /** `.base` 경로. */
+  readonly path: string;
+  /** 필터가 가리키는 옛 폴더. */
+  readonly from: string;
+  /** 그 폴더의 새 자리. */
+  readonly to: string;
+}
+
+/** 묻기를 기다리는 {@link UserBaseFilterFix} 를 두는 상태 메타 키. */
+export const USER_BASE_FILTER_FIXES_META_KEY = "user_base_filter_fixes";
+
+/** 묻기를 기다리는 사용자 `.base` 필터 — 깨진 기록은 없는 것으로 본다(다음 이동이 다시 찾는다). */
+export function pendingUserBaseFilterFixes(
+  stateDb: Pick<IStateDB, "getMeta">,
+): UserBaseFilterFix[] {
+  try {
+    const parsed = JSON.parse(stateDb.getMeta(USER_BASE_FILTER_FIXES_META_KEY) || "[]") as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (fix): fix is UserBaseFilterFix =>
+        typeof fix?.path === "string" && typeof fix.from === "string" && typeof fix.to === "string",
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * 물은 답대로 한다 — 고치면 그 `.base` 의 필터를 새 폴더로(사용자가 쓴 꼴 그대로: `file.inFolder(…)` 는 `inFolder` 로),
+ * 두면 그대로. 어느 쪽이든 다시 묻지 않는다.
+ *
+ * @returns 고친 `.base`.
+ */
+export async function resolveUserBaseFilterFixes(
+  vaultFs: Pick<VaultFS, "readFile" | "writeFile">,
+  stateDb: Pick<IStateDB, "getMeta" | "setMeta">,
+  accept: boolean,
+): Promise<string[]> {
+  const fixes = pendingUserBaseFilterFixes(stateDb);
+  stateDb.setMeta(USER_BASE_FILTER_FIXES_META_KEY, "");
+  if (!accept) return [];
+  const fixed: string[] = [];
+  for (const path of [...new Set(fixes.map((fix) => fix.path))]) {
+    const content = await vaultFs.readFile(path).catch(() => null);
+    if (content === null) continue;
+    const next = content.replace(
+      FOLDER_FILTER_RE,
+      (whole, legacy: string | undefined, current: string | undefined) => {
+        const folder = legacy ?? current!;
+        const fix = fixes.find((f) => f.path === path && f.from === folder);
+        if (!fix) return whole;
+        return legacy !== undefined ? `file.inFolder("${fix.to}")` : folderFilter(fix.to);
+      },
+    );
+    if (next === content) continue;
+    await vaultFs.writeFile(path, next);
+    fixed.push(path);
+  }
+  return fixed;
 }
 
 /** 예전 버전이 쓴 `.base` 의 폴더 필터를 지금 꼴로 고쳐 쓴 뒤 적는 메타 — 한 번만 훑는다. */
@@ -147,6 +225,8 @@ async function rewriteBaseFilters(
   stateDb: Pick<IStateDB, "getMeta" | "setMeta"> | undefined,
   retarget: (folder: string) => string,
   failure: string,
+  /** 사용자가 만든 `.base` 의 필터가 옮긴 폴더를 가리키면 — 고치지 않고 알린다. */
+  onUserBase?: (fix: UserBaseFilterFix) => void,
 ): Promise<boolean> {
   const rehashed = new Map<string, { readonly before: string; readonly after: string }>();
   const viewed = stateDb ? recordedViewBases(stateDb) : new Set<string>();
@@ -157,7 +237,17 @@ async function rewriteBaseFilters(
       const content = await vaultFs.readFile(file.path);
       // Obsidian 은 보기를 고치거나 열면 머리 주석을 지운다(1.12.4 · 1.13.7 실측) — 보기를 기록해 둔 경로면 pull 이 쓴
       // 파일이다(`DatabaseSyncer.generateBaseFile` 과 같은 판정).
-      if (!isGeneratedDbArtifact(file.path, content) && !viewed.has(file.path)) continue;
+      if (!isGeneratedDbArtifact(file.path, content) && !viewed.has(file.path)) {
+        // 사용자가 만든 `.base` 는 말없이 고치지 않는다 — 무엇을 보려고 만든 필터인지 모른다.
+        if (onUserBase) {
+          for (const match of content.matchAll(FOLDER_FILTER_RE)) {
+            const from = match[1] ?? match[2]!;
+            const to = retarget(from);
+            if (to !== from) onUserBase({ path: file.path, from, to });
+          }
+        }
+        continue;
+      }
       const next = content.replace(
         FOLDER_FILTER_RE,
         (whole, legacy: string | undefined, current: string | undefined) => {
