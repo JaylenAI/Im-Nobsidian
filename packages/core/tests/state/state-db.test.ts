@@ -253,10 +253,11 @@ describe("StateDB", () => {
       try {
         const seen = upgraded.getByPath("seen.md")!;
         expect(seen).toMatchObject({ notionLastEditedBy: null, notionBodyFingerprint: null });
-        // SQLite 의 'now' 는 밀리초까지다 — 연 때 안이어야 한다
+        // SQLite 의 'now' 는 밀리초까지다 — 연 때 안이어야 한다. SQLite 와 JS 는 시계를 따로 읽어 반올림이 갈린다 —
+        // 양쪽 끝에 1ms 를 둔다(Windows CI 에서 위쪽으로 1ms 넘친 실측, 2026-10-30).
         const seenAt = Date.parse(seen.notionSeenAt!);
         expect(seenAt).toBeGreaterThanOrEqual(before - 1);
-        expect(seenAt).toBeLessThanOrEqual(Date.now());
+        expect(seenAt).toBeLessThanOrEqual(Date.now() + 1);
         expect(upgraded.getByPath("local-only.md")!.notionSeenAt).toBeNull();
         expect(upgraded.getMeta("schema_version")).toBe("4");
       } finally {
