@@ -79,6 +79,14 @@ export class RowSchemaCache {
     return loaded;
   }
 
+  /** 한 DB 의 스키마만 다시 읽게 한다 — 다른 DB 의 행을 옮겨 와 Notion 이 열을 더했을 때. */
+  forget(databaseId: string): void {
+    const prefix = `${compactNotionId(databaseId)}:`;
+    for (const key of [...this.mappers.keys()]) {
+      if (key.startsWith(prefix)) this.mappers.delete(key);
+    }
+  }
+
   clear(): void {
     this.mappers.clear();
     this.rowSources.clear();
