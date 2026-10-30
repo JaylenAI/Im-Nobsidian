@@ -2,6 +2,7 @@ import { isNotionObjectNotFound } from "../notion/client.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type {
+  Conflict,
   FailedOperation,
   ProgressItem,
   PullOptions,
@@ -10,7 +11,7 @@ import type {
 } from "../types/sync.js";
 import { repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
-import type { DatabaseSyncer, PlannedRow } from "./database-syncer.js";
+import type { DatabaseSyncer, PlannedResolution, PlannedRow } from "./database-syncer.js";
 import {
   DISCOVERED_DBS_META_KEY,
   loadInaccessibleDbIds,
@@ -40,7 +41,7 @@ export class PullPlanner {
     private readonly databaseSyncer: DatabaseSyncer,
     private readonly drift: RemoteDriftChecker,
     private readonly planner: LocalPlanner,
-    private readonly puller: Pick<PagePuller, "folderPageHasBody">,
+    private readonly puller: Pick<PagePuller, "folderPageHasBody" | "previewUpdate">,
   ) {}
 
   /**
@@ -64,12 +65,27 @@ export class PullPlanner {
     // 지울 것은 실제 pull 과 같게 가른다 — 폴더 레코드는 추적만 놓고, 올리지 않은 로컬 편집이
     // 있으면 전략에 따라 두거나 충돌로 남긴다. 어느 쪽이든 지운 것으로 세지 않는다.
     const planned: RemoteChange[] = [];
+    const failed: FailedOperation[] = [];
+    // 로컬도 고친 노트 — 실제 pull 처럼 충돌로 남길 것 · 합칠 것을 알리고, 받지 않을 것은 세지 않는다.
+    const conflicts: Conflict[] = [];
+    const mergedPaths: string[] = [];
     for (const change of unchangedDropped) {
       if (change.type === "deleted" && !(await this.plannedRemoteDeletion(change))) continue;
       if (change.type === "modified" && !(await this.plannedFolderPage(change))) continue;
+      if (change.type === "modified" && !restoreIds.has(change.pageId)) {
+        const resolution = await this.previewUpdate(change, failed);
+        if (resolution === undefined) continue;
+        if (resolution?.action === "conflict") {
+          conflicts.push(resolution.conflict);
+          continue;
+        }
+        if (resolution?.action === "skip") continue;
+        if (resolution?.action === "merge") {
+          mergedPaths.push(this.stateDb.getByNotionId(change.pageId)!.obsidianPath);
+        }
+      }
       planned.push(change);
     }
-    const failed: FailedOperation[] = [];
     // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
     // pull 은 그 행을 페이지 경로에서 먼저 받고, 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다.
     const queued = new Set(
@@ -77,9 +93,14 @@ export class PullPlanner {
     );
     // 옮겨 적지 않은 볼트 이동 — 실제 pull 은 먼저 옮겨 적어 Notion 쪽 이동을 받지 않는다(볼트가 먼저).
     const movingInVault = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
-    const rows = (await this.planDatabaseRows(options.paths, failed, ledger, movingInVault)).filter(
-      (row) => !queued.has(compactNotionId(row.pageId)),
-    );
+    const rows: PlannedRow[] = [];
+    for (const row of await this.planDatabaseRows(options.paths, failed, ledger, movingInVault)) {
+      if (queued.has(compactNotionId(row.pageId))) continue;
+      if (row.resolution?.action === "conflict") conflicts.push(row.resolution.conflict);
+      else if (row.resolution?.action === "merge") mergedPaths.push(row.path);
+      if (row.resolution?.action === "conflict" || row.resolution?.action === "skip") continue;
+      rows.push(row);
+    }
 
     const items: ProgressItem[] = [];
     // 옮겨 적지 않았으니 레코드는 옛 경로다 — 실제 pull 이 쓸 새 경로로 보인다(S-11).
@@ -131,7 +152,8 @@ export class PullPlanner {
       restored: restoreChanges.length + restoredModified + rowCount("update", true),
       ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
       ...(movedRows.length > 0 ? { moved: movedRows.flatMap((row) => row.moves!) } : {}),
-      conflicts: [],
+      conflicts,
+      ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
       writtenPaths: [],
       failed,
       duration: Date.now() - startTime,
@@ -160,6 +182,26 @@ export class PullPlanner {
       return await this.puller.folderPageHasBody(record);
     } catch {
       return true;
+    }
+  }
+
+  /**
+   * 로컬도 고친 노트를 실제 pull 이 어떻게 처리할지({@link PagePuller.previewUpdate}). 원격을 읽지 못했으면 실제
+   * pull 도 그 노트에서 실패한다 — 실패로 싣고 undefined(세지 않는다).
+   */
+  private async previewUpdate(
+    change: RemoteChange,
+    failed: FailedOperation[],
+  ): Promise<PlannedResolution | null | undefined> {
+    try {
+      return await this.puller.previewUpdate(change);
+    } catch (error) {
+      failed.push({
+        path: this.stateDb.getByNotionId(change.pageId)?.obsidianPath ?? change.pageId,
+        operation: "update",
+        error: error instanceof Error ? error.message : String(error),
+      });
+      return undefined;
     }
   }
 

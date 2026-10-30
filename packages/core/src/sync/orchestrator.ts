@@ -391,7 +391,14 @@ export class SyncOrchestrator {
     if (foreign.length > 0) throw new ConnectionScopeError(foreign);
   }
 
-  private async executePush(options?: PushOptions): Promise<PushResult> {
+  /**
+   * @param mergedByPull sync dry-run 만 — 앞선 pull dry-run 이 합칠 노트. 실제 sync 는 합친 뒤 원격을 본 것으로
+   *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
+   */
+  private async executePush(
+    options?: PushOptions,
+    mergedByPull: ReadonlySet<string> = new Set(),
+  ): Promise<PushResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
 
@@ -533,7 +540,9 @@ export class SyncOrchestrator {
     if (options?.dryRun) {
       // 실제 push 가 원격을 보고 거절할 고침 · 지움은 실패로 보이고 세지 않는다 — 원격을 읽기만 한다.
       await this.observation.resolveBotUserId();
-      const remoteRefusals = await this.pusher.previewRemoteRefusals(applicable);
+      const remoteRefusals = await this.pusher.previewRemoteRefusals(
+        applicable.filter((change) => !mergedByPull.has(change.path)),
+      );
       const remoteRefused = new Set(remoteRefusals.map((failure) => failure.path));
       // deleteSync 가 꺼져 있으면 실제 push 는 지운 노트를 대기로 적기만 한다 — 지우지도 세지도
       // 않는다(N-02). dry-run 도 지울 것으로 보이지 않는다.
@@ -1458,12 +1467,19 @@ export class SyncOrchestrator {
     const tagged = (direction: "pull" | "push"): ProgressCallback | undefined =>
       onProgress && ((current, total, item) => onProgress(current, total, { ...item, direction }));
     const pullResult = await this.executePull({ ...options, onProgress: tagged("pull") });
-    const pushResult = await this.executePush({
-      ...options,
-      onProgress: tagged("push"),
-      paths: options?.paths,
-      excludePaths: pullResult.writtenPaths,
-    });
+    // dry-run 의 pull 은 충돌을 적지 않는다 — 실제 sync 의 push 처럼 충돌로 남을 노트는 뺀다.
+    const conflicted = options?.dryRun
+      ? pullResult.conflicts.map((conflict) => conflict.syncRecord.obsidianPath)
+      : [];
+    const pushResult = await this.executePush(
+      {
+        ...options,
+        onProgress: tagged("push"),
+        paths: options?.paths,
+        excludePaths: [...pullResult.writtenPaths, ...conflicted],
+      },
+      new Set(options?.dryRun ? (pullResult.mergedPaths ?? []) : []),
+    );
 
     return {
       pull: pullResult,

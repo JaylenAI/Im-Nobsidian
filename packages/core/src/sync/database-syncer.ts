@@ -139,7 +139,17 @@ export interface PlannedRow {
   readonly restore?: boolean;
   /** Notion 에서 DB 안으로 옮긴 페이지가 행이 되며 옮길 것 — 노트와 하위 페이지 폴더 · 옮긴 DB 의 폴더(ADR-047). */
   readonly moves?: readonly RemoteMove[];
+  /** 로컬도 고친 행을 실제 pull 이 받지 않는 까닭 — 없으면 받는다. */
+  readonly resolution?: PlannedResolution;
 }
+
+/**
+ * 로컬도 고친 노트를 실제 pull 이 어떻게 처리하나 — 충돌로 남김 · 합침(merge) · 받지 않음(원격이 그대로거나
+ * local-first). dry-run 이 미리 알린다.
+ */
+export type PlannedResolution =
+  | { readonly action: "conflict"; readonly conflict: Conflict }
+  | { readonly action: "merge" | "skip" };
 
 /**
  * 행을 받는 진행 — 진행 표시가 페이지와 행을 한 목록 · 한 수로 보이게 한다. 행은 DB 를 조회해야 몇
@@ -547,6 +557,70 @@ export class DatabaseSyncer {
     ];
   }
 
+  /**
+   * 받은 행이 지난 사본 그대로인가 — 렌더한 글이 달라도 받을 것이 없으면 그 사이 로컬 편집을 충돌로 올리지 않는다
+   * (N-05). 본문은 지문으로, 본문 밖은 지난 사본의 속성과 견준다. 이 도구가 이 행을 쓰다 끊긴 원격도 받을 것이
+   * 없다 — push 가 마저 올린다({@link UpdateJournal}).
+   */
+  private rowRemoteUnchanged(
+    record: SyncRecord,
+    page: PageObjectResponse,
+    bodyFingerprint: string | null,
+    localContent: string,
+  ): boolean {
+    const base = snapshotFrontmatter(record.baseSnapshot);
+    return (
+      (base !== null &&
+        bodyFingerprint === record.notionBodyFingerprint &&
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, record.obsidianPath)) ||
+      this.journal.wroteRemote(
+        record,
+        page,
+        computeHash(localContent),
+        this.observation().botUserId,
+      )
+    );
+  }
+
+  /**
+   * dry-run 이 알릴, 로컬도 고친 행을 실제 pull 이 어떻게 처리할지 — 받은 행과 견주는 판정은 실제 pull 과 같다.
+   * 첨부를 내려받지 않고 렌더하며 상태 DB 를 바꾸지 않는다. 로컬을 고치지 않았거나 읽지 못하면 null(받는다).
+   */
+  private async previewRowResolution(
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<PlannedResolution | null> {
+    let localContent: string;
+    try {
+      localContent = await this.vaultFs.readFile(record.obsidianPath);
+    } catch {
+      return null;
+    }
+    if (computeHash(localContent) === record.contentHash) return null;
+    const rendered = await this.renderRow(page, record.obsidianPath, { downloadMedia: false });
+    const resolution = resolvePullConflict({
+      record,
+      localContent,
+      remoteContent: rendered.content,
+      remoteUnchanged: this.rowRemoteUnchanged(
+        record,
+        page,
+        rendered.bodyFingerprint,
+        localContent,
+      ),
+      remoteChange: {
+        pageId: page.id,
+        type: "modified",
+        lastEdited: page.last_edited_time,
+        previousEdited: record.notionLastEdited,
+      },
+      strategy: this.config.sync.conflictStrategy,
+    });
+    if (resolution.action === "conflict")
+      return { action: "conflict", conflict: resolution.conflict! };
+    return resolution.action === "write" ? null : { action: resolution.action };
+  }
+
   private async planRows(
     dbConfig: DatabaseSyncConfig,
     target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
@@ -602,11 +676,15 @@ export class DatabaseSyncer {
         // Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 실제 pull 과 같은 판정으로 새 이름을 보인다.
         const retitle = await this.retitledRowTarget(dbConfig.localFolder, record, page);
         const renamed = retitle && "to" in retitle ? retitle : null;
+        // 로컬도 고친 행 — 실제 pull 이 충돌로 남기거나 · 합치거나 · 받지 않는다. 사라진 행은 되살린다.
+        const resolution =
+          action === "restore" ? null : await this.previewRowResolution(record, page);
         planned.push({
           pageId: page.id,
           path: renamed?.to ?? record.obsidianPath,
           operation: "update",
           restore: action === "restore",
+          ...(resolution ? { resolution } : {}),
           // 실제 pull 이 알리는 것과 같게 행만 — 하위 페이지 폴더는 함께 옮기지만 따로 알리지 않는다.
           ...(renamed
             ? { moves: [{ from: record.obsidianPath, to: renamed.to, renamed: true }] }
@@ -1936,26 +2014,9 @@ export class DatabaseSyncer {
         localExists = await this.vaultFs.exists(readPath);
       }
 
-      // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
-      // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 행은 되살린다.
-      // 이 도구가 이 행을 쓰다 끊긴 원격도 받을 것이 없다 — push 가 마저 올린다({@link UpdateJournal}).
-      const base = snapshotFrontmatter(existingRecord.baseSnapshot);
+      // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 사라진 행은 되살린다.
       const remoteUnchanged =
-        localExists &&
-        ((base !== null &&
-          bodyFingerprint === existingRecord.notionBodyFingerprint &&
-          this.rowOutsideBodyUnchanged(
-            this.propertyMapper,
-            page,
-            base,
-            existingRecord.obsidianPath,
-          )) ||
-          this.journal.wroteRemote(
-            existingRecord,
-            page,
-            computeHash(localContent),
-            this.observation().botUserId,
-          ));
+        localExists && this.rowRemoteUnchanged(existingRecord, page, bodyFingerprint, localContent);
 
       const resolution = resolvePullConflict({
         record: existingRecord,

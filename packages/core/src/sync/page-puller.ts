@@ -33,7 +33,7 @@ import { sanitizeFileName } from "../utils/sanitize.js";
 import { stripMarkdownExtension } from "../utils/markdown-path.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
 import type { DatabaseDiscovery } from "./database-discovery.js";
-import type { DatabaseSyncer } from "./database-syncer.js";
+import type { DatabaseSyncer, PlannedResolution } from "./database-syncer.js";
 import { childFolderOf, folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
@@ -347,6 +347,41 @@ export class PagePuller {
       status: "synced",
     });
     return folderPath;
+  }
+
+  /**
+   * dry-run 이 알릴, 로컬도 고친 노트를 실제 pull({@link pullUpdate})이 어떻게 처리할지 — 받은 원격과 견주는 판정은
+   * 실제 pull 과 같다. 첨부를 내려받지 않고 렌더하며 상태 DB 를 바꾸지 않는다. 로컬을 고치지 않았거나 · 읽지 못했거나
+   * · 폴더로 추적하는 페이지면 null(받는다).
+   */
+  async previewUpdate(change: RemoteChange): Promise<PlannedResolution | null> {
+    const record = this.stateDb.getByNotionId(change.pageId);
+    if (!record || isFolderRecord(record)) return null;
+    let localContent: string;
+    try {
+      localContent = await this.vaultFs.readFile(record.obsidianPath);
+    } catch {
+      return null;
+    }
+    if (computeHash(localContent) === record.contentHash) return null;
+    const page = await this.notionClient.getPage(change.pageId);
+    const rendered = await this.renderRemotePage(record, change.pageId, page, {
+      downloadMedia: false,
+    });
+    const resolution = resolvePullConflict({
+      record,
+      localContent,
+      remoteContent: rendered.content,
+      remoteUnchanged:
+        (await this.drift.unchangedSinceSync(record, page, rendered.bodyFingerprint)) ||
+        this.drift.interruptedOwnWrite(record, page, localContent),
+      remoteChange: change,
+      strategy: this.config.sync.conflictStrategy,
+    });
+    if (resolution.action === "conflict") {
+      return { action: "conflict", conflict: resolution.conflict! };
+    }
+    return resolution.action === "write" ? null : { action: resolution.action };
   }
 
   async pullUpdate(change: RemoteChange): Promise<PullOutcome> {
