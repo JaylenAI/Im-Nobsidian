@@ -393,6 +393,7 @@ export class SyncOrchestrator {
     this.placement.resetUnpreparedFolders();
     this.databaseCreator.reset();
     this.pusher.takeReadOnlySkips(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.pusher.takePlacementChanges();
     if (!options?.dryRun) await this.recovery.recoverInterruptedPushOps();
 
     // 옮긴 노트 · 폴더는 올리기 전에 상태 DB 에 옮겨 적는다(S-11). 판정은 옮겨 적은 뒤의 모습으로
@@ -498,6 +499,7 @@ export class SyncOrchestrator {
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
       const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
+      const placementChanges = await this.pusher.previewPlacementChanges(applicable);
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
@@ -511,6 +513,7 @@ export class SyncOrchestrator {
         ...(plannedRenames.length > 0 ? { renamedProperties: plannedRenames } : {}),
         ...(plannedEdits.length > 0 ? { schemaEdits: plannedEdits } : {}),
         ...(plannedViews.length > 0 ? { viewEdits: plannedViews } : {}),
+        ...(placementChanges.length > 0 ? { placementChanges } : {}),
       };
     }
 
@@ -740,6 +743,7 @@ export class SyncOrchestrator {
     // 완료/실패한 WAL 항목 정리 — 테이블 무한 증가 방지(미완료 항목은 보존).
     this.stateDb.clearCompletedOperations();
 
+    const placementChanges = this.pusher.takePlacementChanges();
     return {
       createdDatabases: this.databaseCreator.createdCount,
       created: counts.created,
@@ -753,6 +757,7 @@ export class SyncOrchestrator {
       ...(renamed.applied.length > 0 ? { renamedProperties: renamed.applied } : {}),
       ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
       ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
+      ...(placementChanges.length > 0 ? { placementChanges } : {}),
     };
   }
 

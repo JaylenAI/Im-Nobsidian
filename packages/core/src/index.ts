@@ -18,6 +18,7 @@ export type {
   PropertyRename,
   SchemaEdit,
   ViewEdit,
+  PlacementChange,
   RemoteMove,
   RemoteMoveSkip,
   SyncResult,

@@ -9,6 +9,7 @@ import type {
   PropertyRename,
   SchemaEdit,
   ViewEdit,
+  PlacementChange,
 } from "@im-nobsidian/core";
 
 /**
@@ -45,6 +46,8 @@ export interface PushJson {
   readonly schemaEdits: readonly SchemaEdit[];
   /** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046) — churn 에 든다. */
   readonly viewEdits: readonly ViewEdit[];
+  /** 옮겨서 Notion 에서 행 · 페이지 · 다른 DB 의 행이 된 노트(ADR-047) — moved 에 든다. */
+  readonly placementChanges: readonly PlacementChange[];
   readonly durationMs: number;
 }
 
@@ -110,6 +113,7 @@ export function pushJson(result: PushResult): PushJson {
     renamedProperties: result.renamedProperties ?? [],
     schemaEdits: result.schemaEdits ?? [],
     viewEdits: result.viewEdits ?? [],
+    placementChanges: result.placementChanges ?? [],
     durationMs: result.duration,
   };
 }
