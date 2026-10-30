@@ -14,7 +14,7 @@ import type { VaultFS } from "./vault-fs.js";
  * 그 아래의 상태 DB 레코드 · 위키링크 · 보존 마커 · 첨부 기록을 새 경로로 옮겨 적는다.
  *
  * DB 가 든 폴더도 옮긴다 — 발견한 DB 의 폴더(`discovered_dbs`) · 기록한 `.base` 경로(`db_base_files`) · 동기화가
- * 만든 `.base` 의 폴더 필터(`file.inFolder`)를 새 자리로 고친다. 설정 파일에 적은 DB(`notion.databases`)의 폴더와
+ * 만든 `.base` 의 폴더 필터(`file.folder ==`)를 새 자리로 고친다. 설정 파일에 적은 DB(`notion.databases`)의 폴더와
  * 다른 연결 폴더는 고쳐 적을 수 없어 옮기지 않는다.
  */
 export class NoteRelocator {

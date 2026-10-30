@@ -237,7 +237,7 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(notes()).toContain("A/Tasks/행.md");
       const [base] = bases();
       expect(base).toMatch(/^A\/Tasks\/.+\.base$/);
-      expect(vault.read(base!)).toContain('file.inFolder("A/Tasks")');
+      expect(vault.read(base!)).toContain('file.folder == "A/Tasks"');
       vault.write("x.md", `![[${base!}]] [[A/Tasks/행]]\n`);
       const mine = 'filters:\n  and:\n    - file.inFolder("A/Tasks")\n';
       vault.write("A/mine.base", mine);
@@ -253,7 +253,7 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(result.moved).toEqual([{ from: "A", to: "B/A" }]);
       const moved = `B/${base!}`;
       expect(bases()).toEqual([moved, "B/A/mine.base"]);
-      expect(vault.read(moved)).toContain('file.inFolder("B/A/Tasks")');
+      expect(vault.read(moved)).toContain('file.folder == "B/A/Tasks"');
       expect(notes()).toEqual(["B/A/Tasks/행.md", "B/A/a.md", "B/b.md", "x.md"]);
       expect(vault.read("x.md")).toBe(`![[${moved}]] [[B/A/Tasks/행]]\n`);
       expect(db.getByNotionId(row.id)?.obsidianPath).toBe("B/A/Tasks/행.md");
@@ -581,7 +581,7 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
         expect(result).toMatchObject({ created: preview.created, updated: preview.updated });
         const moved = base.replace(/^A\//, "B/");
         expect(bases()).toEqual([moved]);
-        expect(vault.read(moved)).toContain('file.inFolder("B/Tasks")');
+        expect(vault.read(moved)).toContain('file.folder == "B/Tasks"');
         expect(notes()).toEqual(["A/a.md", "B/Tasks/행.md", "B/b.md", "x.md"]);
         expect(vault.read("x.md")).toBe(`![[${moved}]] [[B/Tasks/행]]\n`);
         expect(db.getByNotionId(row)?.obsidianPath).toBe("B/Tasks/행.md");

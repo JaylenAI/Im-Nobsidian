@@ -1346,7 +1346,7 @@ describe("DatabaseSyncer", () => {
       expect(baseFileCall).toBeDefined();
       expect(baseFileCall[0]).toBe("databases/tasks/Tasks.base");
       expect(baseFileCall[1]).toContain("filters:");
-      expect(baseFileCall[1]).toContain('file.inFolder("databases/tasks")');
+      expect(baseFileCall[1]).toContain('file.folder == "databases/tasks"');
     });
 
     it(".base 파일에 스키마 속성이 포함된다", async () => {
@@ -1743,7 +1743,7 @@ describe("DatabaseSyncer", () => {
       );
       expect(baseWrite).toBeDefined();
       expect(baseWrite![0]).toBe("루틴/습관-목록/Tasks.base");
-      expect(baseWrite![1]).toContain('file.inFolder("루틴/목록")');
+      expect(baseWrite![1]).toContain('file.folder == "루틴/목록"');
     });
 
     it("원본 폴더를 모르면(미발견) 유일한 접근 통로이므로 기존대로 행을 소유한다", async () => {
