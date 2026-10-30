@@ -184,6 +184,20 @@ describe("두 번 적용해도 같은 요청 — 모호한 실패도 다시 보�
     expect(update).not.toHaveBeenCalled();
   });
 
+  it("DB 로 옮기기: 504 → 다시 보낸다 (data source 를 부모로 — database_id 부모는 400)", async () => {
+    const client = newClient();
+    const move = failOnce(apiError(504), PAGE);
+    sdk(client).pages = { move };
+
+    await client.movePageToDataSource("page", "source");
+
+    expect(move).toHaveBeenCalledTimes(2);
+    expect(move).toHaveBeenLastCalledWith({
+      page_id: "page",
+      parent: { type: "data_source_id", data_source_id: "source" },
+    });
+  });
+
   it("블록 삭제: 타임아웃 → 다시 보낸다", async () => {
     const client = newClient();
     const del = failOnce(codeError("notionhq_client_request_timeout"), {});

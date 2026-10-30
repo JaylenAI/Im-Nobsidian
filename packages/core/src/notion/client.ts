@@ -705,6 +705,20 @@ export class NotionClient {
     );
   }
 
+  /**
+   * 페이지 · 행을 DB 의 data source 로 옮긴다 — 같은 `pages.move`. 페이지는 행이 되고, 다른 DB 의 행은 이 DB 의
+   * 행이 된다. id · 본문 · 자식은 그대로다(2026-10-27 실측). `database_id` 부모는 400 이라 data source 로만 옮긴다.
+   * 다른 DB 에서 오면 값이 있는 속성 가운데 이 DB 에 없는 것은 Notion 이 열로 더한다(2026-10-30 실측).
+   */
+  async movePageToDataSource(pageId: string, dataSourceId: string): Promise<void> {
+    await this.withRateLimit(() =>
+      this.client.pages.move({
+        page_id: pageId,
+        parent: { type: "data_source_id", data_source_id: dataSourceId },
+      }),
+    );
+  }
+
   // ─── Database / DataSource ───
 
   /**
