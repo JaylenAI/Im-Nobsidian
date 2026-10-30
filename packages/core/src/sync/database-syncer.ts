@@ -559,7 +559,7 @@ export class DatabaseSyncer {
         });
         claimed.set(path, page.id);
         planned.push({ pageId: page.id, path, operation: "create" });
-      } else if (wasPage(record)) {
+      } else if (wasPage(record) || arrivesFromOtherDatabase(record, dbConfig)) {
         // 볼트에서 옮긴 것을 아직 올리지 않았으면 받지 않는다(pullDatabasePage).
         if (this.stateDb.getIncompleteOpByState(record.id, "move")) continue;
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
@@ -1648,23 +1648,27 @@ export class DatabaseSyncer {
     // Notion 에서 DB 안으로 옮긴 페이지가 행이 된다(ADR-047) — 폴더 노트의 폴더 · 노트 옆 자식 폴더는 행의 하위
     // 페이지 폴더(`행/`)로 함께 옮긴다. 볼트에서 옮긴 것을 아직 올리지 않았으면 볼트가 먼저다(push 가 Notion 을 옮긴다).
     const becomesRow = !!existingRecord && !!recordPath && wasPage(existingRecord);
-    if (becomesRow && this.stateDb.getIncompleteOpByState(existingRecord.id, "move")) {
+    // 다른 DB 에서 옮겨 온 행도 같다 — 하위 페이지 폴더와 함께 옮기고 옮긴 것으로 알린다.
+    const arrives =
+      becomesRow ||
+      (!!existingRecord && !!recordPath && arrivesFromOtherDatabase(existingRecord, dbConfig));
+    if (arrives && recordPath && this.stateDb.getIncompleteOpByState(existingRecord!.id, "move")) {
       getLogger().warn(
-        `[Im-Nobsidian] Notion 에서 DB 로 옮긴 페이지를 행으로 받지 않음 (${recordPath}): 볼트에서 옮긴 것을 아직 올리지 않았다 — 다음 push 가 Notion 을 볼트의 자리로 옮긴다`,
+        `[Im-Nobsidian] Notion 에서 DB 로 옮긴 것을 받지 않음 (${recordPath}): 볼트에서 옮긴 것을 아직 올리지 않았다 — 다음 push 가 Notion 을 볼트의 자리로 옮긴다`,
       );
       return { action: "skipped", path: recordPath };
     }
     let adoptedChildren: RemoteMove | null = null;
     let emptiedFolder: string | null = null;
-    if (becomesRow && filePath !== recordPath) {
+    if (arrives && recordPath && filePath !== recordPath) {
       adoptedChildren = this.adoptedChildrenOf(existingRecord, filePath);
       const blocked = adoptedChildren && (await this.relocator.blocked(adoptedChildren));
       if (blocked) {
         getLogger().warn(
-          `[Im-Nobsidian] 행이 된 페이지의 하위 페이지 폴더를 옮기지 않음 (${adoptedChildren!.from}): ${blocked}`,
+          `[Im-Nobsidian] DB 로 옮긴 행의 하위 페이지 폴더를 옮기지 않음 (${adoptedChildren!.from}): ${blocked}`,
         );
         adoptedChildren = null;
-      } else if (!adoptedChildren && existingRecord.fileType === "folder-note") {
+      } else if (!adoptedChildren && existingRecord!.fileType === "folder-note") {
         emptiedFolder = parentFolderOf(recordPath);
       }
     }
@@ -1829,13 +1833,15 @@ export class DatabaseSyncer {
       }
       if (adoptedChildren) await this.relocator.relocate([adoptedChildren]);
       if (emptiedFolder) await this.vaultFs.removeEmptyFolder?.(emptiedFolder);
-      if (becomesRow) {
+      if (arrives) {
         // 옮긴 것으로 알리고 옛 경로를 가리키던 링크를 고친다.
         const moved = { from: recordPath, to: filePath };
         this.renamedRows.renamed.push(moved, ...(adoptedChildren ? [adoptedChildren] : []));
         this.renamedRows.applied.push(moved, ...(adoptedChildren ? [adoptedChildren] : []));
         getLogger().info(
-          `[Im-Nobsidian] Notion 에서 DB 로 옮긴 페이지를 행으로 받음: ${recordPath} → ${filePath}`,
+          becomesRow
+            ? `[Im-Nobsidian] Notion 에서 DB 로 옮긴 페이지를 행으로 받음: ${recordPath} → ${filePath}`
+            : `[Im-Nobsidian] Notion 에서 다른 DB 로 옮긴 행을 받음: ${recordPath} → ${filePath}`,
         );
       }
       if (renaming) {
@@ -1853,6 +1859,15 @@ export class DatabaseSyncer {
 
     return { action: "written", path: filePath };
   }
+}
+
+/** 다른 DB 의 행으로 추적하던 레코드인가 — 이 DB 조회에 나오면 Notion 에서 이 DB 로 옮긴 것이다(ADR-047). */
+function arrivesFromOtherDatabase(record: SyncRecord, dbConfig: DatabaseSyncConfig): boolean {
+  return (
+    record.fileType === "db-row" &&
+    !!record.notionParentId &&
+    !notionIdsEqual(record.notionParentId, dbConfig.databaseId)
+  );
 }
 
 /** 페이지로 추적하던 레코드인가 — DB 조회에 나오면 Notion 에서 DB 안으로 옮긴 것이다(ADR-047). */

@@ -310,6 +310,50 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
       expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
     });
 
+    it("다른 DB 로 옮긴 행은 그 DB 폴더로 — 하위 페이지 폴더와 함께 옮기고 링크를 고친다 (ADR-047)", async () => {
+      const OTHER = "db000000-0000-4000-8000-0000000000d2";
+      db.setMeta(
+        "discovered_dbs",
+        JSON.stringify([
+          { databaseId: DB_ID, localFolder: "Tasks", titleProperty: "Name" },
+          { databaseId: OTHER, localFolder: "Other", titleProperty: "Name" },
+        ]),
+      );
+      const row = notion.add(DB_ID, "행", "행 본문", { properties: {} });
+      notion.add(OTHER, "남", "남 본문", { properties: {} });
+      const sync = everyPull();
+      expect((await sync.pull()).failed).toEqual([]);
+      vault.write("Tasks/행/아래.md", "아래 본문\n");
+      vault.write("x.md", "[[Tasks/행]]\n");
+      expect((await sync.push()).failed).toEqual([]);
+      const sub = idOf("Tasks/행/아래.md");
+
+      // 데이터 소스 사이 이동 — 수정 시각은 그대로다.
+      Object.assign(notion.pages.get(row.id)!, { parent: OTHER, parentType: "database" });
+      const preview = await sync.pull({ dryRun: true });
+      expect(preview.moved).toEqual([
+        { from: "Tasks/행.md", to: "Other/행.md" },
+        { from: "Tasks/행", to: "Other/행" },
+      ]);
+      const result = await sync.pull();
+
+      expect(result.failed).toEqual([]);
+      expect(result.moved).toEqual(preview.moved);
+      expect(result).toMatchObject({ created: 0, deleted: 0, updated: preview.updated });
+      expect(notes()).toEqual(["Other/남.md", "Other/행.md", "Other/행/아래.md", "x.md"]);
+      expect(vault.read("Other/행.md")).toContain("행 본문");
+      expect(vault.read("x.md")).toBe("[[Other/행]]\n");
+      expect(db.getByNotionId(row.id)).toMatchObject({
+        obsidianPath: "Other/행.md",
+        fileType: "db-row",
+        notionParentId: OTHER,
+      });
+      expect(db.getByNotionId(sub)?.obsidianPath).toBe("Other/행/아래.md");
+
+      expect(await sync.pull()).toMatchObject({ created: 0, updated: 0, deleted: 0, moved: [] });
+      expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
+    });
+
     it("DB 안으로 옮긴 페이지는 행이 된다 — 폴더 노트의 폴더 · 노트의 자식 폴더는 행의 하위 페이지 폴더로 (ADR-047)", async () => {
       await seed({ "P/P.md": "p\n", "P/c.md": "c\n", "N.md": "n\n", "N/sub.md": "sub\n" });
       db.setMeta(
