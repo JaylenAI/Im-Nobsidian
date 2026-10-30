@@ -923,6 +923,10 @@ export class PagePusher {
    * ({@link RemoteDriftChecker.overwritesRemote}).
    *
    * 다시 보내면 Notion 을 덮으므로, 받지 않은 Notion 편집이 있으면 옮기지 않는다.
+   *
+   * 옮기기 전에 보낼 노트를 갱신 WAL 에 적는다(P7). 옮긴 뒤 응답을 잃으면 같은 실행의 재시도 · 다음 push 는 이미 그
+   * 자리에 있고 마지막 편집자가 이 봇인 페이지를 본다 — 우리가 옮기다 끊긴 것이므로 옮기기를 건너뛰고 마저 보낸다.
+   * 예전에는 옮기며 바뀐 수정 시각을 Notion 편집으로 보고 «pull 을 먼저 하라» 고 거절했다.
    */
   private async changePlacement(
     record: SyncRecord,
@@ -936,9 +940,11 @@ export class PagePusher {
   ): Promise<void> {
     const { path, databaseId } = move;
     const pageId = record.notionPageId!;
+    let content: string;
     let current: Record<string, unknown>;
     try {
-      current = parseFrontmatter(await this.vaultFs.readFile(path)).data;
+      content = await this.vaultFs.readFile(path);
+      current = parseFrontmatter(content).data;
     } catch (error) {
       // 다시 보내는 것이 모든 속성을 지우라는 요청이 된다(pushRowUpdate).
       throw new Error(
@@ -948,7 +954,12 @@ export class PagePusher {
       );
     }
     const remote = await this.livePage(record);
+    const pageParentId = databaseId ? null : this.placement.moveParentOf(path);
+    const resumed =
+      placedAt(remote, databaseId ?? pageParentId!, databaseId !== null) &&
+      this.drift.interruptedOwnWrite(record, remote, content);
     if (
+      !resumed &&
       !this.drift.overwritesRemote(record, false) &&
       (await this.drift.remoteDrift(record, remote)) !== "none"
     ) {
@@ -973,11 +984,17 @@ export class PagePusher {
         );
         addedColumns = columnsAddedByMove(pagePropertiesOf(remote), schema);
       }
-      await this.notionClient.movePageToDataSource(pageId, source.id);
+      if (!resumed) {
+        this.journal.begin(record.id, computeHash(content));
+        await this.notionClient.movePageToDataSource(pageId, source.id);
+      }
       parentId = databaseId;
     } else {
-      parentId = this.placement.moveParentOf(path);
-      await this.notionClient.movePage(pageId, parentId);
+      parentId = pageParentId!;
+      if (!resumed) {
+        this.journal.begin(record.id, computeHash(content));
+        await this.notionClient.movePage(pageId, parentId);
+      }
     }
 
     this.stateDb.transaction(() => {
@@ -1895,4 +1912,19 @@ function trashedPageRefusal(path: string): string {
     `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남긴다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
     `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${path}`
   );
+}
+
+/**
+ * 페이지가 이미 그 자리에 있나 — 행이면 그 DB, 페이지면 그 부모 페이지. 옮기다 끊긴 것을 알아보는 데 쓴다.
+ */
+function placedAt(page: PageObjectResponse, targetId: string, asRow: boolean): boolean {
+  const parent = page.parent as { type?: string; page_id?: string; database_id?: string };
+  const at = asRow
+    ? parent.type === "data_source_id" || parent.type === "database_id"
+      ? parent.database_id
+      : undefined
+    : parent.type === "page_id"
+      ? parent.page_id
+      : undefined;
+  return at !== undefined && notionIdsEqual(at, targetId);
 }
