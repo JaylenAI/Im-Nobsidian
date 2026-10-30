@@ -5,6 +5,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-10-30
+
 > 노트를 DB 안팎으로 옮겨도 같은 Notion 페이지째 간다 — 볼트에서 옮기면 push 가 행 · 페이지로 바꾸고, Notion 에서 옮기면 pull 이
 > 따라온다(ADR-047). 예전엔 거절하던 이동이 Notion 을 바꾸는 동작 변경이라 마이너를 올린다.
 
