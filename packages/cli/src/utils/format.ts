@@ -1,5 +1,6 @@
 import chalk from "chalk";
 import type {
+  DatabaseMove,
   FullScanReason,
   ProgressItem,
   ReadOnlySkip,
@@ -294,6 +295,23 @@ export function placementChangeLines(
         ? ` — 대상 DB 에 ${dryRun ? "더해질" : "더해진"} 열: ${change.addedColumns.join(", ")}`
         : "";
     return `${icons.success} Notion 에서 ${becomes}${dryRun ? "로 옮깁니다" : "로 옮겼습니다"} — ${change.path}${columns}`;
+  });
+}
+
+/**
+ * 볼트에서 옮기거나 이름을 바꾼 DB 폴더(ADR-047) — Notion 의 DB 도 옮겼나. 볼트가 받지 않는 곳의 DB 는 볼트 쪽 자리만
+ * 바뀐다고 알린다. dry-run 은 Notion 의 지금 자리를 읽지 않아 옮길 것으로만 보인다.
+ */
+export function databaseMoveLines(
+  moves: readonly DatabaseMove[] | undefined,
+  dryRun = false,
+): string[] {
+  return (moves ?? []).map((move) => {
+    const where = `${move.from} → ${move.to}`;
+    if (dryRun) return `${icons.success} DB 폴더를 옮깁니다 — ${where} (Notion 의 DB 도 함께)`;
+    return move.inNotion === false
+      ? `⚠ DB 폴더를 옮겼습니다 — ${where} (Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로)`
+      : `${icons.success} Notion 의 DB 도 옮겼습니다 — ${where}`;
   });
 }
 
