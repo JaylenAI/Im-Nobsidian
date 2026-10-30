@@ -188,6 +188,8 @@ export class DatabaseSyncer {
   };
   /** 볼트에서 사라져 되살린 행의 경로 — pull 마감이 가져가 화면에 알린다(D8). */
   private restoredRows: string[] = [];
+  /** merge 전략이 받은 행에 로컬 편집을 합친 행 — {@link takeMergedRows}. */
+  private mergedRows: string[] = [];
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
   private schemaFollowed: SchemaFollowed[] = [];
   /** pull 이 마지막으로 쓴 사이드카 — 볼트에서 고친 것은 덮어쓰지 않는다(ADR-045). */
@@ -447,6 +449,10 @@ export class DatabaseSyncer {
             this.restoredRows.push(outcome.path);
           } else if (!followed.rekeyed.has(record.id)) updated++;
           writtenPaths.push(outcome.path);
+        } else if (outcome.action === "merged") {
+          // 받은 행에 로컬 편집을 합쳤다 — 받은 것으로 세되 push 에서 빼지 않는다(합친 글을 올려야 한다).
+          updated++;
+          this.mergedRows.push(outcome.path);
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
         }
@@ -1632,6 +1638,13 @@ export class DatabaseSyncer {
     return rows;
   }
 
+  /** 이번 받기에서 로컬 편집을 합친 행의 경로를 가져가고 비운다. */
+  takeMergedRows(): string[] {
+    const rows = this.mergedRows;
+    this.mergedRows = [];
+    return rows;
+  }
+
   /**
    * Notion 에서 다른 페이지 아래로 옮긴 DB 의 폴더를 볼트에서도 옮긴다 — 옮겼으면 그 이동. 옮기지 못하면 까닭을 남기고
    * 옛 자리에서 받는다.
@@ -1900,6 +1913,8 @@ export class DatabaseSyncer {
       : rendered.content;
     const seenAt = this.observation().seenAt;
 
+    // merge 전략이 합친 글 — 있으면 받은 행 대신 이것을 쓰고, 지난 사본은 받은 행으로 적는다.
+    let merged: string | null = null;
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.
     // (신규 페이지는 existingRecord 가 없으므로 충돌 검사 없이 바로 기록 — 로컬 파일 미존재)
     if (existingRecord) {
@@ -1984,11 +1999,14 @@ export class DatabaseSyncer {
         });
         return { action: "unchanged", path: filePath };
       }
+      // merge: 양쪽이 다른 줄을 고쳤다 — 합친 글을 쓴다. 지난 사본 · 해시는 받은 행이라 합친 글의
+      // 로컬 편집이 바뀐 행으로 남아 이어지는 push 가 올린다.
+      if (resolution.action === "merge") merged = resolution.merged!;
       // resolution.action === "write" → 아래로 진행하여 덮어쓰기
     }
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
-    await this.vaultFs.writeFile(filePath, finalContent);
+    await this.vaultFs.writeFile(filePath, merged ?? finalContent);
 
     const rehomed = existingRecord && recordPath && recordPath !== filePath;
     // 행이 된 페이지의 frontmatter 는 비어 있는 열에 지워지지 않고 남는다(mergeRowFrontmatter) — Notion 의 행과
@@ -2030,9 +2048,9 @@ export class DatabaseSyncer {
         fileType: "db-row",
         status: "synced",
         baseSnapshot: Buffer.from(finalContent, "utf-8"),
-        // 비운 해시를 변경 확인이 보게 — stat 이 맞으면 내용을 읽지 않는다(B5).
-        localMtime: outOfStep ? null : (stat?.mtime ?? null),
-        localFileSize: outOfStep ? null : (stat?.size ?? null),
+        // 비운 해시 · 합친 글을 변경 확인이 보게 — stat 이 맞으면 내용을 읽지 않는다(B5).
+        localMtime: outOfStep || merged !== null ? null : (stat?.mtime ?? null),
+        localFileSize: outOfStep || merged !== null ? null : (stat?.size ?? null),
         // 빈 해시와 함께 — push 가 지난 사본 대신 원격의 지금 값과 견줘 다른 속성을 모두 보낸다(overwritesRemote).
         ...(outOfStep ? { notionBodyFingerprint: null } : {}),
       });
@@ -2076,7 +2094,9 @@ export class DatabaseSyncer {
       }
     }
 
-    return { action: "written", path: filePath };
+    return merged !== null
+      ? { action: "merged", path: filePath }
+      : { action: "written", path: filePath };
   }
 }
 

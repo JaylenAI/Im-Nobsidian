@@ -4,6 +4,7 @@ import { BLOCK_CHILDREN_MAX } from "../constants/notion-limits.js";
 import { DEFAULT_DOWNLOAD_TIMEOUT_MS } from "../utils/download-fetch.js";
 import { DEFAULT_ITEM_TIMEOUT_MS } from "../utils/deadline.js";
 import { NOTIFICATION_MODES, type NotificationMode } from "../notion/sdk-client.js";
+import { CONFLICT_STRATEGIES } from "./sync.js";
 
 /** Notion 내부 통합 토큰의 머리 — 설정 검증과 CLI 의 입력 검사가 함께 읽는다. */
 export const NOTION_TOKEN_PREFIX = "ntn_";
@@ -90,9 +91,7 @@ export const ConfigSchema = z.object({
   }),
   sync: z.object({
     direction: z.enum(["push", "pull", "both"]).default(D.sync.direction),
-    conflictStrategy: z
-      .enum(["local-first", "remote-first", "manual", "duplicate"])
-      .default(D.sync.conflictStrategy),
+    conflictStrategy: z.enum(CONFLICT_STRATEGIES).default(D.sync.conflictStrategy),
     autoSync: z.boolean().default(D.sync.autoSync),
     autoSyncInterval: z.number().min(30).max(3600).default(D.sync.autoSyncInterval),
     // 전체 대조 주기(초) — 그 사이의 pull 은 바뀐 페이지 · 행 · DB 만 받는다. 원격 삭제는 전체 대조가

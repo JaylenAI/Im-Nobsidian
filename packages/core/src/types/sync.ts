@@ -2,7 +2,15 @@ export type SyncDirection = "push" | "pull" | "both";
 export type FileType = "file" | "folder-note" | "folder-only" | "db-row";
 export type SyncStatus = "synced" | "pending" | "conflict" | "error";
 export type OperationType = "create" | "update" | "delete" | "move";
-export type ConflictStrategy = "local-first" | "remote-first" | "manual" | "duplicate";
+/** 양쪽이 바뀌었을 때 무엇이 이기나 — 설정 검증(`ConfigSchema`)이 이 목록을 읽는다. */
+export const CONFLICT_STRATEGIES = [
+  "local-first",
+  "remote-first",
+  "manual",
+  "duplicate",
+  "merge",
+] as const;
+export type ConflictStrategy = (typeof CONFLICT_STRATEGIES)[number];
 
 export interface SyncRecord {
   readonly id: string;
@@ -307,6 +315,11 @@ export interface PullResult {
   readonly restored: number;
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
   readonly restoredPaths?: readonly string[];
+  /**
+   * 양쪽이 다른 줄을 고쳐 받은 원격에 로컬 편집을 합친 노트 · 행(`sync.conflictStrategy: "merge"`) — {@link updated} 에도 센다.
+   * 합친 글은 아직 Notion 에 없다 — 이어지는 push(`sync` 는 같은 실행)가 올린다. 없으면 생략.
+   */
+  readonly mergedPaths?: readonly string[];
   /**
    * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
    */

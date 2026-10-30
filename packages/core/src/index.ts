@@ -56,6 +56,7 @@ export {
   DEFAULT_TITLE_PROPERTY,
   NOTION_TOKEN_PREFIX,
 } from "./types/config.js";
+export { CONFLICT_STRATEGIES } from "./types/sync.js";
 export type { DatabaseSyncConfig } from "./types/config.js";
 export type {
   ViewType,
