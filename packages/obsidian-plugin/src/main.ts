@@ -54,7 +54,7 @@ export interface ImNobsidianSettings {
   syncDirection: Config["sync"]["direction"];
   autoSync: boolean;
   autoSyncInterval: number;
-  /** 설정 화면에서 고르지 않는다 — 충돌은 사이드바에서 하나씩 푼다. */
+  /** 설정 화면은 manual(충돌은 사이드바에서 하나씩 푼다)과 merge(다른 줄을 고친 충돌은 합침)만 고른다. */
   conflictStrategy: Config["sync"]["conflictStrategy"];
   attachments: string;
   /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */

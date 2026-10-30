@@ -371,6 +371,7 @@ export class SyncController {
           heldSidecarText(result.heldSidecars ?? []),
           heldBaseText(result.heldBases ?? []),
           restoredText(result),
+          mergedText(result, "pull"),
         ),
       }),
       (result) => this.dropPulled(result, paths),
@@ -388,6 +389,7 @@ export class SyncController {
         warning: warnings(
           schemaFollowedText(result.pull),
           restoredText(result.pull),
+          mergedText(result.pull, "sync"),
           renamedPropertyText(result.push),
           schemaEditText(result.push),
           viewEditText(result.push),
@@ -944,6 +946,19 @@ function restoredText(result: PullResult): string | null {
   if (paths.length === 0) return null;
   return (
     `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** 받은 원격에 로컬 편집을 합친 노트(merge 전략) — Pull 만 했으면 합친 글은 Push 가 올린다. */
+function mergedText(result: PullResult, operation: "pull" | "sync"): string | null {
+  const paths = result.mergedPaths ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `양쪽이 다른 줄을 고친 노트 ${paths.length}개를 합쳤습니다 — ` +
+    (operation === "pull"
+      ? "Push 하면 합친 글을 Notion 에 올립니다: "
+      : "합친 글을 Notion 에 올렸습니다: ") +
     listedPaths(paths)
   );
 }

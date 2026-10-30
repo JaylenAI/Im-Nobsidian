@@ -10,6 +10,7 @@ import {
   duration,
   readOnlySkipLines,
   restoredLines,
+  mergedLines,
   schemaFollowedLines,
   unsentDeletionLines,
   renamedPropertyLines,
@@ -132,6 +133,7 @@ export const syncCommand = new Command("sync")
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
+      for (const line of mergedLines(pullResult.mergedPaths, "pushed")) console.log(`  ${line}`);
       for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
         console.log(`  ${line}`);
       }

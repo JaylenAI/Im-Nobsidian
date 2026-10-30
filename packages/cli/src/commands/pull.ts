@@ -21,6 +21,7 @@ import {
   failedCountText,
   remoteScanLines,
   restoredLines,
+  mergedLines,
   schemaFollowedLines,
   heldSidecarLines,
   heldBaseLines,
@@ -125,6 +126,7 @@ export const pullCommand = new Command("pull")
       for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
+      for (const line of mergedLines(result.mergedPaths, "push")) console.log(`  ${line}`);
       // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {
         const verb = move.renamed ? "rename" : "move";
