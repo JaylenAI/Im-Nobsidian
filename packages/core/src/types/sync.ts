@@ -206,7 +206,9 @@ export interface ViewEdit {
   readonly view: string;
   /** 이름을 바꿨으면 옛 이름. */
   readonly from?: string;
-  /** 올린 것 — 이름 · 열 · 정렬 · 필터. */
+  /** 볼트에서 더해 Notion 에 만든 보기 · 지워 Notion 에서 지운 보기. 없으면 고친 보기. */
+  readonly action?: "created" | "deleted";
+  /** 올린 것 — 이름 · 열 · 정렬 · 필터. 만들고 지운 보기는 비었다. */
   readonly changed: readonly ("name" | "columns" | "sort" | "filter")[];
 }
 
@@ -310,7 +312,7 @@ export interface PullResult {
    */
   readonly heldSidecars?: readonly string[];
   /**
-   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올린다(ADR-046).
+   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올린다(ADR-046).
    * 없으면 생략.
    */
   readonly heldBases?: readonly string[];

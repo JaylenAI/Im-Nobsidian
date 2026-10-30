@@ -882,7 +882,15 @@ function schemaEditText(result: PushResult): string | null {
 function viewEditText(result: PushResult): string | null {
   const edits = result.viewEdits ?? [];
   if (edits.length === 0) return null;
-  const names = edits.map((edit) => (edit.from ? `${edit.from} → ${edit.view}` : edit.view));
+  const names = edits.map((edit) =>
+    edit.action === "created"
+      ? `${edit.view}(새 보기)`
+      : edit.action === "deleted"
+        ? `${edit.view}(지움)`
+        : edit.from
+          ? `${edit.from} → ${edit.view}`
+          : edit.view,
+  );
   return (
     `.base 에서 고친 보기를 Notion 에 올렸습니다: ` +
     `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""}`
@@ -911,7 +919,7 @@ function placementChangeText(result: PushResult): string | null {
 /** 볼트에서 보기를 고쳐 Pull 이 덮어쓰지 않은 `.base`(ADR-046) — Push 해야 Notion 에 간다. */
 function heldBaseText(paths: readonly string[]): string | null {
   if (paths.length === 0) return null;
-  return `보기를 고친 .base 는 덮어쓰지 않았습니다 — Push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다: ${listedPaths(paths)}`;
+  return `보기를 고친 .base 는 덮어쓰지 않았습니다 — Push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다: ${listedPaths(paths)}`;
 }
 
 /** 볼트에서 고쳐 Pull 이 덮어쓰지 않은 사이드카(ADR-045) — Push 해야 Notion 에 간다. */

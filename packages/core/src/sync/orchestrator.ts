@@ -57,7 +57,7 @@ import {
 import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
 import { VaultSchemaRenames } from "./schema-push.js";
 import { SidecarSchemaEdits } from "./sidecar-schema-edit.js";
-import { BaseViewEdits } from "./base-view-push.js";
+import { BaseViewEdits, plannedViewEdits } from "./base-view-push.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -444,7 +444,7 @@ export class SyncOrchestrator {
     const plannedEdits = sidecarPlan.planned.map((edit) => edit.edit);
     // 고친 `.base` 의 보기 — 사이드카처럼 노트가 아니다. 속성을 바꾼 뒤에 보기를 바꾼다(ADR-046).
     const viewPlan = await this.viewEdits.plan(inScope);
-    const plannedViews = viewPlan.planned.flatMap((file) => file.views.map((view) => view.edit));
+    const plannedViews = viewPlan.planned.flatMap(plannedViewEdits);
 
     // 이미 올린 노트가 든 채로 DB 로 준비한 폴더는 노트가 그대로여도 DB 를 만들고 행으로 옮긴다(ADR-047).
     const preparedDatabases = loadPreparedDatabases(this.stateDb).size > 0;

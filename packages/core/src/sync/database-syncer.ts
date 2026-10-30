@@ -1185,7 +1185,7 @@ export class DatabaseSyncer {
     if (this.keptUserBases.has(path)) return;
     this.keptUserBases.add(path);
     getLogger().warn(
-      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다. Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
+      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다. Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
     );
   }
 

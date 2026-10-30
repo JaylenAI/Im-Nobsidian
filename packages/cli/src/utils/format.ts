@@ -278,6 +278,12 @@ export function schemaEditLines(
 /** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046). */
 export function viewEditLines(edits: readonly ViewEdit[] | undefined, dryRun = false): string[] {
   return (edits ?? []).map((edit) => {
+    if (edit.action === "created") {
+      return `${icons.success} .base 에서 더한 보기를 Notion 에 ${dryRun ? "만듭니다" : "만들었습니다"} — ${edit.path}: ${edit.view}`;
+    }
+    if (edit.action === "deleted") {
+      return `${icons.success} .base 에서 지운 보기를 Notion 에서 ${dryRun ? "지웁니다" : "지웠습니다"} — ${edit.path}: ${edit.view}`;
+    }
     const name = edit.from ? `${edit.from} → ${edit.view}` : edit.view;
     return `${icons.success} .base 에서 고친 보기를 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${name} (${edit.changed.map((field) => VIEW_FIELD_LABELS[field]).join(" · ")})`;
   });
@@ -331,7 +337,7 @@ export function heldBaseLines(paths: readonly string[] | undefined): string[] {
   if (!paths || paths.length === 0) return [];
   return [
     chalk.yellow(
-      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:`,
+      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다:`,
     ),
     ...pathLines(paths),
   ];
