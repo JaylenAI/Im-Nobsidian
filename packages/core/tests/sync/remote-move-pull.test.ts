@@ -635,6 +635,76 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
         expect(notes()).toContain("A/Tasks/행.md");
       });
 
+      describe("Notion 에서 바꾼 DB 이름 (sync.renameOnTitleChange)", () => {
+        const retitled = (renameOnTitleChange: boolean) =>
+          new SyncOrchestrator(
+            createConfig({
+              notion: { token: "ntn_test_token", rootPageId: ROOT, databases: [] },
+              sync: { ...DEFAULT_CONFIG.sync, fullReconcileInterval: 0, renameOnTitleChange },
+              advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0 },
+            }),
+            db,
+            notion.client as never,
+            vault.fs(),
+          );
+        const titleInNotion = (title: string) => {
+          notion.databases.set(DB_ID, { parent: notion.databases.get(DB_ID)!.parent, title });
+        };
+        beforeEach(() => {
+          notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+            ...mockDatabaseMeta(id),
+            title: notion.databases.get(id)?.title ?? "",
+            parentPageId: notion.databases.get(id)?.parent ?? null,
+          }));
+          notion.client.getDatabaseTitle.mockImplementation(
+            async (id: string) => notion.databases.get(id)?.title ?? "",
+          );
+        });
+
+        it("폴더 · 행 · .base 를 새 이름으로 옮기고 링크를 고친다 — 다시 돌려도 바뀌는 것이 없다", async () => {
+          const { row } = await shelf();
+          const sync = retitled(true);
+          expect(bases()).toEqual(["A/Tasks/Tasks.base"]);
+          titleInNotion("할 일 목록");
+
+          const preview = await sync.pull({ dryRun: true });
+          const move = { from: "A/Tasks", to: "A/할-일-목록", renamed: true };
+          expect(preview.moved).toEqual([move]);
+          expect(notes()).toContain("A/Tasks/행.md");
+
+          const result = await sync.pull();
+          expect(result.failed).toEqual([]);
+          expect(result.moved).toEqual([move]);
+          expect(notes()).toEqual(["A/a.md", "A/할-일-목록/행.md", "B/b.md", "x.md"]);
+          expect(bases()).toEqual(["A/할-일-목록/할 일 목록.base"]);
+          expect(vault.read("x.md")).toBe(
+            "![[A/할-일-목록/할 일 목록.base]] [[A/할-일-목록/행]]\n",
+          );
+          expect(db.getByNotionId(row)?.obsidianPath).toBe("A/할-일-목록/행.md");
+          expect(JSON.parse(db.getMeta("discovered_dbs")!)).toMatchObject([
+            { databaseId: DB_ID, localFolder: "A/할-일-목록" },
+          ]);
+
+          expect(await sync.push()).toMatchObject({ created: 0, updated: 0, moved: 0, failed: [] });
+          expect(notion.client.updateDatabasePlacement).not.toHaveBeenCalled();
+          expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
+        });
+
+        it("끄면 · 볼트에서 따로 정한 폴더 이름이면 폴더를 두고 .base 이름만 따른다", async () => {
+          await shelf();
+          titleInNotion("할 일 목록");
+          expect(await retitled(false).pull()).toMatchObject({ moved: [], failed: [] });
+          expect(notes()).toContain("A/Tasks/행.md");
+          // `.base` 는 제목을 따라 이름이 바뀐다 — 그것을 넣은 노트의 임베드도 고친다.
+          expect(bases()).toEqual(["A/Tasks/할 일 목록.base"]);
+          expect(vault.read("x.md")).toBe("![[A/Tasks/할 일 목록.base]] [[A/Tasks/행]]\n");
+
+          // 이미 새 제목을 받았으니 켜도 옮기지 않는다 — 지난번에 받은 제목과 같다.
+          expect(await retitled(true).pull()).toMatchObject({ moved: [], failed: [] });
+          expect(notes()).toContain("A/Tasks/행.md");
+        });
+      });
+
       it("옮길 자리에 같은 이름이 있으면 옮기지 않고 옛 자리에서 받는다", async () => {
         const { sync } = await shelf();
         vault.write("B/Tasks/남의 것.md", "x\n");

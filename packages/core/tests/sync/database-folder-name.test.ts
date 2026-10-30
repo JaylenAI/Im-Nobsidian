@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { databaseFolderName } from "../../src/sync/database-discovery.js";
+import { databaseFolderName } from "../../src/utils/db-folder-path.js";
 
 describe("databaseFolderName — DB 제목 → 볼트 폴더 이름", () => {
   it("예전 이름 그대로 — 쓸 수 없는 글자를 빼고 공백은 하이픈", () => {
