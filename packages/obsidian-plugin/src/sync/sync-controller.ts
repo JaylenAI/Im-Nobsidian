@@ -834,6 +834,7 @@ function schemaEditText(result: PushResult): string | null {
     ...edit.renamed.map(([from, to]) => `${from} → ${to}`),
     ...edit.retyped.map(([name, type]) => `${name} 타입 ${type}`),
     ...edit.redefined.map((name) => `${name} 설정`),
+    ...(edit.renamedOptions ?? []).map(([name, from, to]) => `${name} 옵션 ${from} → ${to}`),
     ...(edit.droppedOptions ?? []).map(
       ([name, options]) => `${name} 옵션 ${options.join(", ")} 지움(그 값의 행은 빈 값)`,
     ),

@@ -4,11 +4,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
-import { diffSidecarProperties } from "../../src/sync/sidecar-schema-edit.js";
+import { diffSidecarProperties, renamedOptions } from "../../src/sync/sidecar-schema-edit.js";
 import { SIDECAR_BASES_META_KEY, SidecarBases } from "../../src/sync/sidecar-bases.js";
 import { DB_SCHEMAS_META_KEY } from "../../src/sync/schema-ledger.js";
 import type { SidecarProperty } from "../../src/view/sidecar-generator.js";
 import { computeHash } from "../../src/utils/hash.js";
+import { compactNotionId } from "../../src/utils/id.js";
 import { setLogger } from "../../src/utils/logger.js";
 import {
   createMockVaultFs,
@@ -103,6 +104,61 @@ describe("diffSidecarProperties — 지난 기록과 id 로 견준다", () => {
     expect(
       ok([TITLE, SCORE, MEMO, TWICE, { ...TAG, options: ["가", "나"] }]).edit,
     ).not.toHaveProperty("droppedOptions");
+  });
+
+  it("같은 자리의 옵션 이름을 바꾸면 이름 바꾸기 — 옛 이름 · 새 이름을 함께 먼저 보내고, 지운 것으로 알리지 않는다", () => {
+    const tags = {
+      ...TAG,
+      options: ["가", "나", "다"],
+      definition: {
+        options: [
+          { name: "가", color: "red" },
+          { name: "나", color: "blue" },
+          { name: "다", color: "green" },
+        ],
+      },
+    };
+    const diff = diffSidecarProperties(
+      [TITLE, tags],
+      [TITLE, { ...tags, options: ["가", "나나", "다"] }],
+    );
+    if (!diff.ok) throw new Error(diff.error);
+    const final = [
+      { name: "가", color: "red" },
+      { name: "나나", color: "blue" },
+      { name: "다", color: "green" },
+    ];
+    expect(diff.payload).toEqual({ p4: { select: { options: final } } });
+    expect(diff.staged).toEqual({
+      p4: { select: { options: [...final, { name: "나", color: "blue" }] } },
+    });
+    expect(diff.optionRenames).toEqual([
+      { propertyId: "p4", type: "select", from: "나", to: "나나" },
+    ]);
+    expect(diff.edit.renamedOptions).toEqual([["태그", "나", "나나"]]);
+    expect(diff.edit).not.toHaveProperty("droppedOptions");
+  });
+
+  it("설정(definition)의 옵션 이름을 고쳐도 이름 바꾸기 · 지운 것도 설정으로 가른다", () => {
+    const renamed = diffSidecarProperties(
+      [TITLE, TAG],
+      [TITLE, { ...TAG, definition: { options: [{ name: "갸", color: "red" }] } }],
+    );
+    if (!renamed.ok) throw new Error(renamed.error);
+    expect(renamed.edit.renamedOptions).toEqual([["태그", "가", "갸"]]);
+    const dropped = diffSidecarProperties(
+      [TITLE, TAG],
+      [TITLE, { ...TAG, definition: { options: [] } }],
+    );
+    if (!dropped.ok) throw new Error(dropped.error);
+    expect(dropped.edit.droppedOptions).toEqual([["태그", ["가"]]]);
+  });
+
+  it("renamedOptions — 자리가 밀리면 이름 바꾸기가 아니다", () => {
+    expect(renamedOptions(["가", "나", "다"], ["가", "다"])).toEqual([]);
+    expect(renamedOptions(["가", "나", "다"], ["가", "다", "라"])).toEqual([]);
+    expect(renamedOptions(["가", "나"], ["나", "가"])).toEqual([]);
+    expect(renamedOptions(["가", "나"], ["갸", "나", "다"])).toEqual([["가", "갸"]]);
   });
 
   it("제목은 지우거나 타입을 바꿀 수 없다 — 이름은 바꾼다", () => {
@@ -248,6 +304,90 @@ describe("push — 고친 사이드카의 속성을 Notion DB 에", () => {
     const again = await build().push();
     expect(again.schemaEdits).toBeUndefined();
     expect(notion.updateDataSourceProperties).not.toHaveBeenCalled();
+  });
+
+  it("옵션 이름을 바꾸면 새 이름을 더하고 · 그 값의 행을 옮긴 뒤 · 옛 이름을 지운다", async () => {
+    const calls: string[] = [];
+    notion.updateDataSourceProperties.mockImplementation(async (_ds: string, payload: object) => {
+      calls.push(`schema ${JSON.stringify(payload)}`);
+      return live;
+    });
+    notion.queryAllDatabasePages.mockImplementation(async (_db: string, filter: unknown) => {
+      calls.push(`query ${JSON.stringify(filter)}`);
+      return [
+        { id: "row-1", properties: { 태그: { id: "p4", type: "select", select: { name: "가" } } } },
+      ];
+    });
+    notion.updatePageProperties.mockImplementation(async (id: string, props: object) => {
+      calls.push(`row ${id} ${JSON.stringify(props)}`);
+      return {};
+    });
+    files.set(PATH, sidecar([TITLE, SCORE, MEMO, TWICE, { ...TAG, options: ["갸"] }]));
+
+    const result = await build().push();
+
+    expect(result.failed).toEqual([]);
+    expect(calls).toEqual([
+      `schema ${JSON.stringify({
+        p4: {
+          select: {
+            options: [
+              { name: "갸", color: "red" },
+              { name: "가", color: "red" },
+            ],
+          },
+        },
+      })}`,
+      `query ${JSON.stringify({ property: "p4", select: { equals: "가" } })}`,
+      `row row-1 ${JSON.stringify({ p4: { select: { name: "갸" } } })}`,
+      `schema ${JSON.stringify({ p4: { select: { options: [{ name: "갸", color: "red" }] } } })}`,
+    ]);
+    expect(result.schemaEdits?.[0]?.renamedOptions).toEqual([["태그", "가", "갸"]]);
+    expect(new SidecarBases(stateDb as never).get(DB_ID)!.hash).toBe(computeHash(files.get(PATH)!));
+  });
+
+  it("여러 선택 옵션은 행의 다른 값을 두고 바꾼 이름만 옮긴다 · 행을 옮기다 멈추면 기록을 두어 다음 push 가 다시 한다", async () => {
+    const LABELS: SidecarProperty = {
+      id: "p5",
+      name: "라벨",
+      type: "multi_select",
+      options: ["A", "B"],
+      definition: { options: [{ name: "A" }, { name: "B" }] },
+    };
+    const before = [...BASE, LABELS];
+    live = Object.fromEntries(before.map((p) => [p.name, { id: p.id, type: p.type }]));
+    files.set(PATH, sidecar(before));
+    new SidecarBases(stateDb as never).set(DB_ID, {
+      path: PATH,
+      hash: computeHash(files.get(PATH)!),
+      properties: before,
+    });
+    notion.updateDataSourceProperties.mockResolvedValue(live);
+    notion.queryAllDatabasePages.mockResolvedValue([
+      {
+        id: "row-1",
+        properties: { 라벨: { id: "p5", multi_select: [{ name: "A" }, { name: "B" }] } },
+      },
+    ]);
+    notion.updatePageProperties.mockRejectedValueOnce(new Error("rate limited"));
+    files.set(PATH, sidecar([...BASE, { ...LABELS, options: ["A", "BB"] }]));
+
+    const failed = await build().push();
+    expect(failed.failed[0]?.error).toContain("rate limited");
+    expect(notion.updateDataSourceProperties).toHaveBeenCalledTimes(1);
+    expect(new SidecarBases(stateDb as never).get(DB_ID)!.hash).not.toBe(
+      computeHash(files.get(PATH)!),
+    );
+
+    const retried = await build().push();
+    expect(retried.failed).toEqual([]);
+    expect(notion.queryAllDatabasePages).toHaveBeenLastCalledWith(compactNotionId(DB_ID), {
+      property: "p5",
+      multi_select: { contains: "B" },
+    });
+    expect(notion.updatePageProperties).toHaveBeenLastCalledWith("row-1", {
+      p5: { multi_select: [{ name: "A" }, { name: "BB" }] },
+    });
   });
 
   it("지난 pull 이 본 스키마가 없으면 바꾸기 전 것을 적는다 — 다음 pull 이 행 키를 옮긴다", async () => {
