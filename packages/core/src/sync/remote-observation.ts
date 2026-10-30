@@ -52,7 +52,14 @@ export interface ObservationContext {
 /** 동기화 밖의 기준 — 아무것도 가라앉았다고 보지 않는다. */
 export const NO_OBSERVATION: ObservationContext = { seenAt: null, botUserId: null };
 
-type ObservedRecord = Pick<SyncRecord, "notionLastEdited" | "notionLastEditedBy" | "notionSeenAt">;
+type ObservedRecord = Pick<
+  SyncRecord,
+  | "notionLastEdited"
+  | "notionLastEditedBy"
+  | "notionSeenAt"
+  | "notionBodyFingerprint"
+  | "baseSnapshot"
+>;
 
 /** 원격 페이지의 마지막 편집자 id. 응답에 없으면 null. */
 export function editorOf(page: RemotePageStamp): string | null {
@@ -133,9 +140,16 @@ export function compareRemote(
     return "changed";
   }
   if (isSettled(record.notionLastEdited, record.notionSeenAt)) return "unchanged";
-  // 우리가 쓴 뒤 편집자가 그대로 봇이면 그 뒤에 사람이 고치지 않았다. 같은 토큰을 쓰는 다른
-  // 기기의 쓰기와, 사람이 고친 직후 같은 분 안의 우리 쓰기는 가리지 못한다(ADR-017).
-  if (botUserId !== null && editor === botUserId && record.notionLastEditedBy === botUserId) {
+  // 우리가 쓴 뒤 편집자가 그대로 봇이면 그 뒤에 사람이 고치지 않았다. 같은 토큰을 쓰는 다른 기기가 같은 분 안에
+  // 쓴 것은 수정 시각 · 편집자로 가리지 못한다 — 지난 본문 지문과 사본이 있으면 내용으로 확인한다(P7). 없으면
+  // (만든 뒤 다시 맞추지 않은 페이지 · 폴더 페이지) 견줄 것이 없어 봇 규칙으로 가른다. 사람이 고친 직후 같은 분
+  // 안의 우리 쓰기는 여전히 가리지 못한다(ADR-017).
+  if (
+    botUserId !== null &&
+    editor === botUserId &&
+    record.notionLastEditedBy === botUserId &&
+    (record.notionBodyFingerprint === null || record.baseSnapshot === null)
+  ) {
     return "unchanged";
   }
   return "unverified";

@@ -306,7 +306,8 @@ describe("같은 분 안의 Notion 편집 (N-05)", () => {
       const pulled = await orchestrator.pull();
 
       expect(pulled).toMatchObject({ updated: 0, failed: [], conflicts: [] });
-      expect(notion.client.getPageMarkdown).not.toHaveBeenCalled();
+      // 같은 분 안의 봇 쓰기는 다른 기기(같은 토큰)일 수 있어 본문 지문을 한 번 견준다(P7) — 받아 적지는 않는다.
+      expect(notion.client.getPageMarkdown).toHaveBeenCalledTimes(1);
       expect(vault.stat("Note.md")!.mtime).toBe(before);
     });
 

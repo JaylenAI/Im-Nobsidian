@@ -42,6 +42,8 @@ describe("compareRemote", () => {
     notionLastEdited: T,
     notionLastEditedBy: HUMAN,
     notionSeenAt: "2026-09-01T10:00:30.000Z",
+    notionBodyFingerprint: null,
+    baseSnapshot: null,
     ...overrides,
   });
   const page = (editor: string | null = HUMAN, lastEdited = T) => ({
@@ -75,8 +77,23 @@ describe("compareRemote", () => {
     expect(compareRemote(record({ notionSeenAt: null }), page(), BOT)).toBe("unverified");
   });
 
-  it("우리가 쓰고 편집자가 그대로 봇이면 바뀌지 않았다", () => {
+  it("우리가 쓰고 편집자가 그대로 봇이면 바뀌지 않았다 — 견줄 지문 · 사본이 없을 때", () => {
     expect(compareRemote(record({ notionLastEditedBy: BOT }), page(BOT), BOT)).toBe("unchanged");
+    const fingerprintOnly = record({
+      notionLastEditedBy: BOT,
+      notionBodyFingerprint: remoteBodyFingerprint("본문"),
+    });
+    expect(compareRemote(fingerprintOnly, page(BOT), BOT)).toBe("unchanged");
+  });
+
+  // 같은 토큰을 쓰는 다른 기기의 같은 분 쓰기도 편집자가 이 봇이다(P7) — 견줄 것이 있으면 내용으로 확인한다.
+  it("봇이 쓴 것이라도 지난 지문 · 사본이 있으면 확인 안 됨", () => {
+    const seen = record({
+      notionLastEditedBy: BOT,
+      notionBodyFingerprint: remoteBodyFingerprint("본문"),
+      baseSnapshot: Buffer.from("본문\n", "utf-8"),
+    });
+    expect(compareRemote(seen, page(BOT), BOT)).toBe("unverified");
   });
 
   it("봇 id 를 모르면 봇 규칙을 쓰지 않는다", () => {

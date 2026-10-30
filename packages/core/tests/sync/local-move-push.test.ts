@@ -82,7 +82,10 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     );
     const content = `---\ntitle: ${title}\nstatus: todo\n---\n${body}`;
     vault.write(path, content);
-    const page = notion.add(DB_ID, title);
+    // pull 이 받은 그대로 — 원격의 본문 · 속성이 지난 사본과 같다(같은 분이면 내용으로 확인한다).
+    const page = notion.add(DB_ID, title, body.trimEnd(), {
+      properties: { status: { select: { name: "todo" } } },
+    });
     const stat = vault.stat(path)!;
     db.upsert({
       obsidianPath: path,
@@ -90,9 +93,9 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
       notionParentId: DB_ID,
       contentHash: computeHash(content),
       notionLastEdited: page.lastEdited,
-      // pull 이 남기는 원격 관측 — 이 통합이 쓴 그대로이고 본문은 비었다.
+      // pull 이 남기는 원격 관측 — 이 통합이 쓴 그대로다.
       notionLastEditedBy: page.lastEditedBy,
-      notionBodyFingerprint: remoteBodyFingerprint(""),
+      notionBodyFingerprint: remoteBodyFingerprint(body),
       localLastModified: stat.mtime,
       syncDirection: "both",
       fileType: "db-row",
