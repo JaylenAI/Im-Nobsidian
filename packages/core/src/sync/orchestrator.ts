@@ -531,11 +531,15 @@ export class SyncOrchestrator {
     const plannedRenames = renames.planned.map(({ folder, from, to }) => ({ folder, from, to }));
 
     if (options?.dryRun) {
+      // 실제 push 가 원격을 보고 거절할 고침 · 지움은 실패로 보이고 세지 않는다 — 원격을 읽기만 한다.
+      await this.observation.resolveBotUserId();
+      const remoteRefusals = await this.pusher.previewRemoteRefusals(applicable);
+      const remoteRefused = new Set(remoteRefusals.map((failure) => failure.path));
       // deleteSync 가 꺼져 있으면 실제 push 는 지운 노트를 대기로 적기만 한다 — 지우지도 세지도
       // 않는다(N-02). dry-run 도 지울 것으로 보이지 않는다.
-      const planned = this.config.sync.deleteSync
-        ? applicable
-        : applicable.filter((c) => c.type !== "deleted");
+      const planned = (
+        this.config.sync.deleteSync ? applicable : applicable.filter((c) => c.type !== "deleted")
+      ).filter((change) => !remoteRefused.has(change.path));
       const items: ProgressItem[] = [
         ...movableFolders.map(({ to }) => ({ path: to, operation: "move" as const })),
         ...planned.map((change) => ({ path: change.path, operation: pushOperationOf(change) })),
@@ -570,7 +574,7 @@ export class SyncOrchestrator {
         updated: count("update") - convertedUpdates,
         deleted: count("delete"),
         moved: count("move") + preparedConversions.length + movableDatabases.length,
-        failed: [...refusedFailures, ...refusedDatabaseMoves],
+        failed: [...refusedFailures, ...refusedDatabaseMoves, ...remoteRefusals],
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
