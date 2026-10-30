@@ -84,7 +84,11 @@ import { detectMissingLocalFiles, restoredWhenMissing } from "./missing-local-fi
 import { RemoteDriftChecker } from "./remote-drift.js";
 import { randomUUID } from "node:crypto";
 import { DatabaseCreator } from "./database-creator.js";
-import { prepareFolderDatabase, type FolderDatabaseReport } from "./folder-database.js";
+import {
+  loadPreparedDatabases,
+  prepareFolderDatabase,
+  type FolderDatabaseReport,
+} from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
 import type { GatedOperation } from "./operation-gate.js";
@@ -425,7 +429,9 @@ export class SyncOrchestrator {
     const viewPlan = await this.viewEdits.plan(inScope);
     const plannedViews = viewPlan.planned.flatMap((file) => file.views.map((view) => view.edit));
 
-    if (filtered.length === 0 && folderMoves.length === 0) {
+    // 이미 올린 노트가 든 채로 DB 로 준비한 폴더는 노트가 그대로여도 DB 를 만들고 행으로 옮긴다(ADR-047).
+    const preparedDatabases = loadPreparedDatabases(this.stateDb).size > 0;
+    if (filtered.length === 0 && folderMoves.length === 0 && !preparedDatabases) {
       // 올릴 노트가 없어도 앞선 push 가 끝내지 못한 DB 의 속성 · 보기는 마저 붙인다.
       if (!options?.dryRun) await this.completeDatabaseSchemas();
       const edited = options?.dryRun
@@ -499,13 +505,24 @@ export class SyncOrchestrator {
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
       const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
-      const placementChanges = await this.pusher.previewPlacementChanges(applicable);
+      // 실제 push 처럼 — 옮김 · 지움이 걸린 노트는 다음 push 에, 고친 노트는 옮기며 함께 보낸다(고침이 아니라 옮김으로 센다).
+      const preparedConversions = this.pusher.previewPreparedConversions(
+        newDatabases,
+        leavingPaths(planned),
+      );
+      const convertedUpdates = preparedConversions.filter((change) =>
+        items.some((item) => item.path === change.path),
+      ).length;
+      const placementChanges = [
+        ...(await this.pusher.previewPlacementChanges(applicable)),
+        ...preparedConversions,
+      ];
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
-        updated: count("update"),
+        updated: count("update") - convertedUpdates,
         deleted: count("delete"),
-        moved: count("move"),
+        moved: count("move") + preparedConversions.length,
         failed: refusedFailures,
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
@@ -594,8 +611,13 @@ export class SyncOrchestrator {
     // 폴더의 자리부터 — 새 폴더 노트는 여기서 먼저 올린다(S-15).
     const pushedEarly = await this.placement.prepareFolders(pushing, firstAttempt, !options?.paths);
     await this.completeDatabaseSchemas();
+    // 준비한 폴더가 DB 가 됐으면 그 안의 이미 올린 페이지를 행으로 — 그 노트의 다른 변경은 옮기며 함께 보낸다.
+    const converted = new Set(
+      await this.pusher.convertPreparedFolders(leavingPaths(pushing), failed),
+    );
+    counts.moved += converted.size;
     await runPool(
-      pushing.filter((c) => !pushedEarly.has(c.path)),
+      pushing.filter((c) => !pushedEarly.has(c.path) && !converted.has(c.path)),
       firstAttempt,
       { concurrency: this.config.advanced.concurrency, signal: options?.signal },
     );
@@ -1623,6 +1645,15 @@ export class SyncOrchestrator {
   generateConflictDiff(conflict: Conflict): string {
     return this.conflictWorkflow.generateConflictDiff(conflict);
   }
+}
+
+/** 이번 push 에 옮기거나 지우는 노트의 경로(옮긴 곳 · 옮기기 전) — 준비한 폴더의 변환이 다음 push 로 미룬다. */
+function leavingPaths(changes: readonly LocalChange[]): Set<string> {
+  return new Set(
+    changes
+      .filter((c) => c.type === "deleted" || c.type === "moved")
+      .flatMap((c) => [c.path, ...(c.movedFrom ? [c.movedFrom] : [])]),
+  );
 }
 
 /** 로컬 변경을 Notion 에 반영하는 일 — 진행 표시 · 결과 수 · 실패가 같은 이름을 쓴다. */

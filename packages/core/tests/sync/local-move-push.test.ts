@@ -9,7 +9,7 @@
  * 이어 쓴다 — 레코드를 손으로 심으면 증명하려는 상태를 가정으로 깐다(push-idempotency). DB 행만
  * pull 이 만들었을 상태를 심는다 — 행을 만드는 경로(스키마 · 행 생성)는 여기서 보지 않는다.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -594,5 +594,120 @@ describe("로컬 이동 · 이름 변경 push (S-11)", () => {
     orchestrator.recordLocalDelete("notes/b.md");
 
     expect(db.getMeta("local_rename_hints")).toBe("");
+  });
+
+  describe("이미 올린 노트 폴더를 DB 로 (ADR-047)", () => {
+    const NEW_DB = "dbdbdbdb-0000-4000-8000-0000000000aa";
+    const BOOKS_SCHEMA = {
+      Name: { id: "title", type: "title" },
+      저자: { id: "au", type: "select" },
+    };
+
+    beforeEach(() => {
+      notion.client.createDatabase = vi.fn(async () => ({
+        databaseId: NEW_DB,
+        dataSourceId: NEW_DB,
+      })) as never;
+      notion.client.primaryDataSourceId = vi.fn(async (id: string) => id) as never;
+      notion.client.listDatabaseViews = vi.fn(async () => []) as never;
+      notion.client.getDatabaseMeta.mockImplementation(async (id: string) => ({
+        ...mockDatabaseMeta(id),
+        dataSources: [{ id, name: "" }],
+      }));
+      notion.client.getDatabaseSchema.mockImplementation(async () => BOOKS_SCHEMA);
+    });
+
+    it("push 가 DB 를 만들고 페이지를 같은 페이지째 행으로 옮긴 뒤 빈 폴더 페이지를 휴지통에 넣는다", async () => {
+      await seed({
+        "Books/가.md": "---\n저자: 한강\n---\n가 본문\n",
+        "Books/나.md": "---\n저자: 김\n---\n나 본문\n",
+        "keep.md": "# Keep\n",
+      });
+      const folderPage = db.getByPath("Books")!.notionPageId!;
+      const pageA = db.getByPath("Books/가.md")!.notionPageId!;
+
+      const report = await orchestrator.prepareFolderDatabase("Books");
+      expect(report).toMatchObject({ rows: 2, pagesToRows: 2 });
+
+      const preview = await orchestrator.push({ dryRun: true });
+      expect(preview).toMatchObject({ createdDatabases: 1, moved: 2, updated: 0, failed: [] });
+      expect(preview.placementChanges).toEqual([
+        { path: "Books/가.md", becomes: "row" },
+        { path: "Books/나.md", becomes: "row" },
+      ]);
+      expect(notion.client.createDatabase).not.toHaveBeenCalled();
+
+      const result = await orchestrator.push();
+
+      expect(result).toMatchObject({ moved: 2, created: 0, failed: [] });
+      expect(notion.client.createDatabase).toHaveBeenCalledTimes(1);
+      expect(notion.client.createDatabase.mock.calls[0]![0]).toMatchObject({ parentPageId: ROOT });
+      const record = db.getByPath("Books/가.md")!;
+      expect(record).toMatchObject({
+        notionPageId: pageA,
+        fileType: "db-row",
+        notionParentId: NEW_DB,
+      });
+      expect(notion.pages.get(pageA)!).toMatchObject({ parent: NEW_DB, parentType: "database" });
+      expect(notion.client.movePageToDataSource).toHaveBeenCalledTimes(2);
+      // 다 옮겨 빈 폴더 페이지는 휴지통으로 · 준비 표시는 지운다.
+      expect(notion.client.archivePage).toHaveBeenCalledWith(folderPage);
+      expect(db.getByPath("Books")).toBeNull();
+      expect(db.getMeta("prepared_dbs")).toBe("[]");
+      expect(incompleteOps()).toEqual([]);
+
+      const again = await orchestrator.push();
+      expect(again).toMatchObject({ created: 0, updated: 0, moved: 0, deleted: 0, failed: [] });
+    });
+
+    it("폴더 노트도 행이 된다 — DB 는 폴더 노트의 부모 아래에 서고, 행 아래 페이지는 행을 따라간다", async () => {
+      await seed({
+        "Books/Books.md": "# 책장\n",
+        "Books/가.md": "# 가\n",
+        "Books/가/메모.md": "# 메모\n",
+      });
+      const notePage = db.getByPath("Books/Books.md")!.notionPageId!;
+      const memo = db.getByPath("Books/가/메모.md")!.notionPageId!;
+      await orchestrator.prepareFolderDatabase("Books");
+
+      const result = await orchestrator.push();
+
+      expect(result).toMatchObject({ moved: 2, failed: [] });
+      expect(notion.client.createDatabase.mock.calls[0]![0]).toMatchObject({ parentPageId: ROOT });
+      expect(notion.pages.get(notePage)!.parent).toBe(NEW_DB);
+      expect(db.getByPath("Books/Books.md")!.fileType).toBe("db-row");
+      expect(notion.pages.get(memo)!.parent).toBe(db.getByPath("Books/가.md")!.notionPageId);
+      expect(notion.client.archivePage).not.toHaveBeenCalled();
+      expect(await orchestrator.push()).toMatchObject({
+        created: 0,
+        updated: 0,
+        moved: 0,
+        failed: [],
+      });
+    });
+
+    it("옮기다 멈추면 다음 push 가 남은 페이지를 마저 옮긴다", async () => {
+      await seed({ "Books/가.md": "# 가\n", "Books/나.md": "# 나\n" });
+      await orchestrator.prepareFolderDatabase("Books");
+      let calls = 0;
+      const move = notion.client.movePageToDataSource.getMockImplementation()!;
+      notion.client.movePageToDataSource.mockImplementation(async (...args: unknown[]) => {
+        if (++calls === 2) throw new Error("network down");
+        return (move as (...a: unknown[]) => Promise<void>)(...args);
+      });
+
+      const first = await orchestrator.push();
+      expect(first.failed).toEqual([
+        expect.objectContaining({ path: "Books/나.md", operation: "move" }),
+      ]);
+      expect(db.getByPath("Books")).not.toBeNull();
+      expect(db.getMeta("prepared_dbs")).not.toBe("[]");
+
+      const second = await orchestrator.push();
+      expect(second).toMatchObject({ moved: 1, failed: [] });
+      expect(db.getByPath("Books/나.md")!.fileType).toBe("db-row");
+      expect(db.getByPath("Books")).toBeNull();
+      expect(notion.client.createDatabase).toHaveBeenCalledTimes(1);
+    });
   });
 });

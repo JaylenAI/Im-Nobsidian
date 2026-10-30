@@ -73,6 +73,7 @@ describe("prepare-db command", () => {
       properties: [{ name: "별점", type: "number", reason: "값 3개가 모두 수" }],
       views: ["전체"],
       skipped: [{ what: "보기 표지 의 필터", reason: "Bases 식은 Notion 필터로 바꾸지 못한다" }],
+      pagesToRows: 2,
     });
 
     await run("Books");
@@ -81,6 +82,7 @@ describe("prepare-db command", () => {
     expect(mockPrepare).toHaveBeenCalledWith("Books", expect.stringMatching(/\.obsidian$/));
     expect(lines).toEqual([
       "  ✓ Books/Books.notion.json — 행 3개",
+      "    이미 올린 노트 2개는 push 가 같은 페이지째 이 DB 의 행으로 옮깁니다",
       "    별점: number (값 3개가 모두 수)",
       "    보기: 전체",
       "    옮기지 않음 — 보기 표지 의 필터: Bases 식은 Notion 필터로 바꾸지 못한다",

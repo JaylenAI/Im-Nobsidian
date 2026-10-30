@@ -30,7 +30,13 @@ import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
-import { folderContainer, isFolderNotePath, parentFolderOf } from "./folder-container.js";
+import {
+  folderContainer,
+  isFolderNotePath,
+  isFolderRecord,
+  parentFolderOf,
+} from "./folder-container.js";
+import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js";
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
@@ -668,6 +674,125 @@ export class PagePusher {
       });
     }
     return planned.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * 준비한 폴더(ADR-047)가 DB 가 된 뒤 그 폴더 바로 아래의 이미 올린 페이지를 같은 페이지째 그 DB 의 행으로 옮긴다. 다
+   * 옮기면 push 가 만든 빈 폴더 페이지를 휴지통에 넣고 준비 표시를 지운다. 옮기지 못한 노트는 실패로 남고 다음 push 가
+   * 다시 옮긴다.
+   *
+   * @param skip 이번 push 의 다른 변경이 다룰 노트(옮김 · 지움) — 그 폴더는 다음 push 에 마저 본다.
+   * @returns 행으로 옮긴 노트.
+   */
+  async convertPreparedFolders(
+    skip: ReadonlySet<string>,
+    failed: FailedOperation[],
+  ): Promise<string[]> {
+    const converted: string[] = [];
+    for (const { source, folder, databaseId } of this.preparedDatabaseFolders()) {
+      let complete = true;
+      for (const record of this.strandedPages(folder)) {
+        const path = record.obsidianPath;
+        if (skip.has(path) || this.stateDb.getIncompleteOpByState(record.id, "move")) {
+          complete = false;
+          continue;
+        }
+        try {
+          await this.changePlacement(record, { path, from: path, databaseId, opId: null });
+          converted.push(path);
+        } catch (error) {
+          complete = false;
+          failed.push({
+            path,
+            operation: "move",
+            error: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
+      if (!complete) continue;
+      await this.retireFolderPage(folder);
+      setPreparedDatabase(this.stateDb, source, false);
+    }
+    return converted;
+  }
+
+  /**
+   * dry-run 이 알릴 준비한 폴더의 변환 — 이번 push 가 만들 DB(`newFolders`)와 앞서 만든 DB 의 폴더 바로 아래의 이미 올린
+   * 페이지.
+   */
+  previewPreparedConversions(
+    newFolders: ReadonlyMap<string, { readonly schema: { readonly databaseId: string } }>,
+    skip: ReadonlySet<string>,
+  ): PlacementChange[] {
+    const prepared = loadPreparedDatabases(this.stateDb);
+    if (prepared.size === 0) return [];
+    const folders = new Set(this.preparedDatabaseFolders().map((entry) => entry.folder));
+    for (const [folder, target] of newFolders) {
+      if (prepared.has(compactNotionId(target.schema.databaseId))) folders.add(folder);
+    }
+    return [...folders]
+      .flatMap((folder) => this.strandedPages(folder))
+      .filter((record) => !skip.has(record.obsidianPath))
+      .map((record) => ({ path: record.obsidianPath, becomes: "row" as const }))
+      .sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** 준비 표시가 남은, push 가 만든 DB 와 그 폴더 — 지금도 그 DB 의 폴더인 것만. */
+  private preparedDatabaseFolders(): Array<{
+    readonly source: string;
+    readonly folder: string;
+    readonly databaseId: string;
+  }> {
+    const prepared = loadPreparedDatabases(this.stateDb);
+    if (prepared.size === 0) return [];
+    const lookup = this.placement.folderLookup();
+    const found: Array<{ source: string; folder: string; databaseId: string }> = [];
+    for (const [source, entry] of loadCreatedDatabases(this.stateDb)) {
+      if (!prepared.has(compactNotionId(source)) || !entry.databaseId) continue;
+      const at = lookup.databaseAt(entry.folder);
+      if (at && notionIdsEqual(at, entry.databaseId)) {
+        found.push({ source, folder: entry.folder, databaseId: entry.databaseId });
+      }
+    }
+    return found;
+  }
+
+  /** DB 폴더 바로 아래에 있지만 아직 페이지인 노트 — 준비한 폴더에서 행으로 옮길 것. */
+  private strandedPages(folder: string): SyncRecord[] {
+    return this.stateDb
+      .getAll()
+      .filter(
+        (record) =>
+          record.notionPageId !== null &&
+          record.fileType !== "db-row" &&
+          !isFolderRecord(record) &&
+          parentFolderOf(record.obsidianPath) === folder,
+      )
+      .sort((a, b) => a.obsidianPath.localeCompare(b.obsidianPath));
+  }
+
+  /**
+   * DB 가 된 폴더의 옛 폴더 페이지(push 가 만든 것)를 휴지통에 넣고 추적을 놓는다 — 노트가 모두 행으로 빠져 비었다. 아래에
+   * 다른 블록이 남아 있으면(Notion 에서 더한 것) 두고 알린다.
+   */
+  private async retireFolderPage(folder: string): Promise<void> {
+    const record = this.stateDb.getByPath(folder);
+    if (!record?.notionPageId || !isFolderRecord(record)) return;
+    const pageId = record.notionPageId;
+    const children = await this.notionClient.fetchAllChildren(pageId);
+    if (children.length > 0) {
+      getLogger().warn(
+        `[Im-Nobsidian] DB 가 된 폴더(${folder})의 옛 폴더 페이지에 블록 ${children.length}개가 남아 휴지통에 넣지 않음 — ` +
+          `Notion 에서 정리하세요`,
+      );
+      return;
+    }
+    await this.notionClient.archivePage(pageId);
+    this.stateDb.transaction(() => {
+      this.stateDb.delete(record.id);
+      this.stateDb.deleteWikilink(folder);
+    });
+    getLogger().info(`[Im-Nobsidian] DB 가 된 폴더의 빈 폴더 페이지를 휴지통에 넣음: ${folder}`);
   }
 
   /** 이번 실행에서 페이지 ↔ 행 · 다른 DB 의 행이 된 노트를 넘기고 비운다. */
