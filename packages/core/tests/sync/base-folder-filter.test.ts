@@ -5,6 +5,8 @@
 import { describe, it, expect } from "vitest";
 import {
   BASE_FOLDER_FILTER_UPGRADED_META_KEY,
+  pendingUserBaseFilterFixes,
+  resolveUserBaseFilterFixes,
   retargetBaseFiles,
   upgradeBaseFolderFilters,
 } from "../../src/sync/db-folder-moves.js";
@@ -102,5 +104,73 @@ describe("retargetBaseFiles", () => {
     expect(m.map.get("A/T/T.base")).toBe(current("B/A/T"));
     expect(m.map.get("A/U/U.base")).toBe(current("B/A/U"));
     expect(m.map.get("C/V/V.base")).toBe(current("C/V"));
+  });
+});
+
+describe("직접 만든 .base 의 폴더 필터 — 묻고 고침", () => {
+  const mine = (folder: string) =>
+    `filters:\n  and:\n    - file.inFolder("${folder}")\nviews:\n  - type: table\n    name: 내 보기\n`;
+  const mineCurrent = (folder: string) =>
+    `filters:\n  and:\n    - file.folder == "${folder}"\nviews:\n  - type: table\n    name: 내 보기\n`;
+
+  it("옮길 때 고치지 않고 물을 것으로 남긴다 — 옮긴 폴더 밖을 가리키면 남기지 않는다", async () => {
+    const m = memory({ "내/할일.base": mine("A/T"), "내/다른.base": mine("C/V") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/T", to: "A/T2" }], m.stateDb);
+    expect(m.map.get("내/할일.base")).toBe(mine("A/T"));
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([
+      { path: "내/할일.base", from: "A/T", to: "A/T2" },
+    ]);
+  });
+
+  it("고치면 쓴 꼴 그대로 새 폴더로 — 두 꼴 모두, 그 밖의 줄은 그대로, 다시 묻지 않는다", async () => {
+    const m = memory({ "내/a.base": mine("A/T"), "내/b.base": mineCurrent("A/T") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A", to: "B" }], m.stateDb);
+    expect(await resolveUserBaseFilterFixes(m.vaultFs, m.stateDb, true)).toEqual([
+      "내/a.base",
+      "내/b.base",
+    ]);
+    expect(m.map.get("내/a.base")).toBe(mine("B/T"));
+    expect(m.map.get("내/b.base")).toBe(mineCurrent("B/T"));
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([]);
+  });
+
+  it("두면 고치지 않고 다시 묻지 않는다", async () => {
+    const m = memory({ "내/a.base": mine("A/T") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/T", to: "A/U" }], m.stateDb);
+    expect(await resolveUserBaseFilterFixes(m.vaultFs, m.stateDb, false)).toEqual([]);
+    expect(m.map.get("내/a.base")).toBe(mine("A/T"));
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([]);
+  });
+
+  it("묻기 전에 또 옮기면 마지막 자리로 — 그 .base 를 함께 옮겼어도, 제자리로 돌아오면 묻지 않는다", async () => {
+    // 부르기 전에 파일은 이미 옮겨져 있다 — 목록은 새 자리를 보인다.
+    const m = memory({ "A/U/내.base": mine("A/T") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/T", to: "A/U" }], m.stateDb);
+    expect(pendingUserBaseFilterFixes(m.stateDb)[0]!.path).toBe("A/U/내.base");
+    m.map.set("A/W/내.base", m.map.get("A/U/내.base")!);
+    m.map.delete("A/U/내.base");
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/U", to: "A/W" }], m.stateDb);
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([
+      { path: "A/W/내.base", from: "A/T", to: "A/W" },
+    ]);
+    m.map.set("A/T/내.base", m.map.get("A/W/내.base")!);
+    m.map.delete("A/W/내.base");
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/W", to: "A/T" }], m.stateDb);
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([]);
+  });
+
+  it("동기화가 만든 .base 는 묻지 않고 고친다", async () => {
+    const m = memory({ "A/T/T.base": current("A/T") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/T", to: "A/U" }], m.stateDb);
+    expect(m.map.get("A/T/T.base")).toBe(current("A/U"));
+    expect(pendingUserBaseFilterFixes(m.stateDb)).toEqual([]);
+  });
+
+  it("고치기 전에 지웠으면 건너뛴다", async () => {
+    const m = memory({ "내/a.base": mine("A/T") });
+    await retargetBaseFiles(m.vaultFs, [{ from: "A/T", to: "A/U" }], m.stateDb);
+    m.map.delete("내/a.base");
+    m.vaultFs.readFile = async () => Promise.reject(new Error("ENOENT"));
+    expect(await resolveUserBaseFilterFixes(m.vaultFs, m.stateDb, true)).toEqual([]);
   });
 });
