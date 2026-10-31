@@ -4,6 +4,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { SyncLogModal, syncLogItems } from "../src/sync-log-modal.js";
 import type { SyncLogEntry } from "../src/sync/sync-controller.js";
+import type { WarningLogEntry } from "../src/sync/warning-log.js";
 
 function entry(at: string, label: string, overrides: Partial<SyncLogEntry> = {}): SyncLogEntry {
   return { at, label, summary: `${label} 완료`, details: [], failed: [], ...overrides };
@@ -59,8 +60,8 @@ describe("syncLogItems", () => {
 });
 
 describe("SyncLogModal", () => {
-  function opened(logs: Parameters<typeof syncLogItems>[0]) {
-    const modal = new SyncLogModal({} as never, logs);
+  function opened(logs: Parameters<typeof syncLogItems>[0], warnings: WarningLogEntry[] = []) {
+    const modal = new SyncLogModal({} as never, logs, warnings);
     const createEl = vi.spyOn(modal.contentEl as { createEl: () => unknown }, "createEl");
     const createDiv = vi.spyOn(modal.contentEl as { createDiv: () => unknown }, "createDiv");
     modal.onOpen();
@@ -93,5 +94,14 @@ describe("SyncLogModal", () => {
       "im-nobsidian-sync-log-entry mod-failed",
       "im-nobsidian-sync-log-entry",
     ]);
+  });
+
+  it("엔진 경고가 있으면 동기화 기록이 없어도 따로 보인다", () => {
+    const { texts, entries } = opened(
+      [{ label: "볼트", entries: [] }],
+      [{ at: "2026-10-31T08:00:00Z", level: "warn", message: "올리지 않은 첨부 1개: a.ipynb" }],
+    );
+    expect(texts[1]).toContain("이 세션에서 끝난 동기화가 아직 없습니다");
+    expect(entries).toEqual(["im-nobsidian-sync-log-warnings"]);
   });
 });

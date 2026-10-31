@@ -1,6 +1,7 @@
 import { Modal } from "obsidian";
 import type { App } from "obsidian";
 import type { SyncLogEntry } from "./sync/sync-controller.js";
+import type { WarningLogEntry } from "./sync/warning-log.js";
 
 /** 연결 하나의 기록 — 연결이 둘 이상이면 어느 연결의 것인지 함께 보인다. */
 export interface ConnectionSyncLog {
@@ -45,9 +46,14 @@ export function syncLogItems(logs: readonly ConnectionSyncLog[]): SyncLogItem[] 
  * 페이지 · 미룬 삭제를 여기서 다시 본다(P8). Obsidian 을 다시 열면 비어 있다.
  */
 export class SyncLogModal extends Modal {
+  /**
+   * @param warnings 엔진이 낸 경고 · 오류 로그(최근 것이 앞) — 결과에 싣지 않는 사정(올리지 못한 첨부 · 접근할 수 없는 DB …)을
+   *   CLI 는 터미널에 보이지만 플러그인은 여기서만 보인다.
+   */
   constructor(
     app: App,
     private readonly logs: readonly ConnectionSyncLog[],
+    private readonly warnings: readonly WarningLogEntry[] = [],
   ) {
     super(app);
   }
@@ -63,7 +69,6 @@ export class SyncLogModal extends Modal {
       contentEl.createEl("p", {
         text: "이 세션에서 끝난 동기화가 아직 없습니다. Obsidian 을 다시 열면 기록이 비워집니다.",
       });
-      return;
     }
     for (const item of items) {
       const entry = contentEl.createDiv({
@@ -75,6 +80,20 @@ export class SyncLogModal extends Modal {
         const list = entry.createEl("ul");
         for (const line of item.lines) list.createEl("li", { text: line });
       }
+    }
+    if (this.warnings.length > 0) this.warningSection(contentEl);
+  }
+
+  /** 엔진 경고 — 동기화 결과에 싣지 않는 사정. 어느 연결 · 작업의 것인지는 시각으로 맞춘다. */
+  private warningSection(contentEl: HTMLElement): void {
+    const section = contentEl.createDiv({ cls: "im-nobsidian-sync-log-warnings" });
+    section.createEl("h4", { text: `엔진 경고 (${this.warnings.length})` });
+    const list = section.createEl("ul");
+    for (const warning of this.warnings) {
+      const time = new Date(warning.at).toLocaleTimeString();
+      list.createEl("li", {
+        text: `${time} · ${warning.level === "error" ? "오류 — " : ""}${warning.message}`,
+      });
     }
   }
 

@@ -6,6 +6,7 @@ import {
   connectionFolderOf,
   findConnectionFolders,
   getLogger,
+  setLogger,
   isMarkdownPath,
   normalizeVaultPath,
   notionIdFromInput,
@@ -14,6 +15,7 @@ import {
 import type {
   Config,
   Conflict,
+  Logger,
   LocalChange,
   RemoteChange,
   ResolutionChoice,
@@ -34,6 +36,7 @@ import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
 import { EMPTY_DASHBOARD_STATE, newestFirst } from "./sync/sync-controller.js";
+import { collectingLogger, type WarningLogEntry } from "./sync/warning-log.js";
 import { directionBlock } from "./sync/direction.js";
 import type { SyncLogEntry, SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
 import type { SidebarPatch } from "./views/sync-sidebar-view.js";
@@ -135,6 +138,10 @@ export default class ImNobsidianPlugin extends Plugin {
   private activeFolder = "";
   /** 연결마다 패널에 보낸 상태 — 패널에서 연결을 바꾸면 그 연결의 것을 다시 보인다. */
   private readonly panelStates = new Map<ConnectionEngine, SyncStatePatch>();
+  /** 이 세션에 엔진이 낸 경고 · 오류 로그 — 「동기화 기록」 이 보인다(CLI 는 터미널에 보인다). */
+  private readonly warnings: WarningLogEntry[] = [];
+  /** 불러오기 전의 로거 — 내릴 때 되돌린다. */
+  private baseLogger: Logger | null = null;
   /** 연결 폴더마다 이 세션의 동기화 기록 — 설정을 바꿔 다시 연결해도 이어진다. */
   private readonly syncLogs = new Map<string, SyncLogEntry[]>();
   /** 연결마다 상태바 단계 — 상태바는 하나라 모아서 보인다. */
@@ -241,6 +248,8 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    this.baseLogger = getLogger();
+    setLogger(collectingLogger(this.baseLogger, this.warnings));
     await this.loadSettings();
     this.addSettingTab(new ImNobsidianSettingTab(this.app, this));
 
@@ -365,10 +374,11 @@ export default class ImNobsidianPlugin extends Plugin {
       // 연결이 열리지 않았어도 그 전의 기록은 보인다 — 「없습니다」 로 바꾸지 않는다
       entries: newestFirst(this.syncLogs.get(engine.folder) ?? []),
     }));
-    new SyncLogModal(this.app, logs).open();
+    new SyncLogModal(this.app, logs, newestFirst(this.warnings)).open();
   }
 
   onunload(): void {
+    if (this.baseLogger) setLogger(this.baseLogger);
     this.stopAutoSync();
     this.clearVaultDebounce();
     // 도는 초기화가 있으면 그것이 연 DB 까지 닫는다. 다시 불러온 플러그인은 이 닫기가 끝난 뒤에 DB 를 연다.
