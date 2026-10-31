@@ -27,6 +27,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **push 로 만든 DB 의 이름을 Notion 에서 바꾸면 폴더도 따른다**(`sync.renameOnTitleChange`) — 처음 받기 전에는 견줄 옛 제목이 없어 폴더는
+  두고 안의 `.base` · DB 정의 파일만 새 이름이 됐다. 이제 만들 때의 제목과 견준다.
 - **사람이 붙인 「(16진 글자)」 이름을 pull 이 붙인 이름으로 보지 않는다** — 동명을 가르는 id 조각은 8 · 16 · 32 자뿐인데 8~32 자를
   모두 그렇게 봐, 「회의 (2026abcd12)」 같은 노트 · DB 폴더 이름이 제목 변경 · DB 이름 변경 때 pull 이 붙인 이름으로 다뤄졌다.
 - **읽기 전용 속성만 고친 행을 「수정」 으로 세지 않는다** — 수식 · 롤업만 고친 행은 Notion 에 보낸 것이 없는데 push · dry-run 이
