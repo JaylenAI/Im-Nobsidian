@@ -310,7 +310,8 @@ export class PagePusher {
     const readOnly = mapper.readOnlyKeys(unsent);
     if (readOnly.length > 0) {
       this.readOnlySkips.set(path, readOnly);
-      getLogger().warn(
+      // 결과(`readOnlySkipped`)로 화면이 알린다 — 경고 로그까지 내면 같은 말이 두 번 나온다.
+      getLogger().info(
         `[Im-Nobsidian] 읽기 전용 속성 ${readOnly.length}개는 Notion 이 값을 정해 올리지 않음 — 다음 pull 이 ` +
           `Notion 값으로 되돌린다: ${path} — ${readOnly.join(", ")}`,
       );
