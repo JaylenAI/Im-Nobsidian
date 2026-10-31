@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-31
+
+> 플러그인이 CLI 와 같은 설정 · 명령을 갖고(P8), macOS 의 NFD 한글 이름과 대소문자만 다른 이름을 바르게 다루며(ADR-050), Canvas ·
+> Excalidraw · 템플릿 폴더를 기본으로 빼고(ADR-051), 큰 볼트의 첫 push 가 429 없이 끝난다(ADR-052). 기본으로 동기화하는 대상이
+> 바뀌는 동작 변경이라 마이너를 올린다.
+
 ### Added
 
 - **플러그인 설정의 「Notion 확인」**(P8) — 토큰이 맞는지, 루트 페이지(DB 모드면 DB)를 이 통합이 읽을 수 있는지 Notion 에 물어
@@ -32,6 +38,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **읽기 전용 속성만 고친 행이 push 진행에 「updated」 로 찍혔다** — 요약은 수정 0 인데 진행 줄은 고친 것으로 보여 같은 push 가 두
+  말을 했다(dry-run 도). 이제 고침은 보낸 뒤에 알리고, 보낸 것이 없으면 줄을 찍지 않는다(0.16 릴리스 회귀에서 발견).
 - **요청이 요청 간격보다 빨리 나갔다**(P10) — 동시 요청 칸(`advanced.concurrency`, 기본 3)마다 마지막 요청 시각을 같이 읽고 같이
   기다린 뒤 한꺼번에 나가, 기본 350ms 간격(분당 약 171회)이 실제로는 초당 8회 남짓이었다. 큰 볼트의 첫 push 가 429 를 거듭 맞고
   `Retry-After` 40초씩 멈췄다(1,000 노트 실측). 이제 요청마다 나갈 시각을 먼저 잡고 기다린다 — 같은 1,000 노트 첫 push 가 429 없이
