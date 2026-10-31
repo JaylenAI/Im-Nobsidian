@@ -33,6 +33,7 @@ import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import {
   inClaimOrder,
+  withoutPageIdSuffix,
   pagePathCandidates,
   resolveDbRowPath,
   type PathOwner,
@@ -2015,7 +2016,7 @@ export class DatabaseSyncer {
     if (!this.config.sync.renameOnTitleChange || !title) return null;
     const previous = this.baseFileInfo.get(databaseId)?.title;
     if (!previous || previous === title) return null;
-    const name = baseName(folder).replace(/ \([0-9a-f]{8,32}\)$/, "");
+    const name = withoutPageIdSuffix(baseName(folder));
     for (const style of [databaseFolderName, sanitizeFileName]) {
       if (style(previous) !== name) continue;
       const next = style(title);

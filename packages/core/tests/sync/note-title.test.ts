@@ -120,6 +120,10 @@ describe("followsFileName — pull 이 이 제목으로 그 파일 이름을 붙
     expect(followsFileName("회의록", "notes/회의록 (1a2b3c4d).md")).toBe(true);
     // 접미사가 id 모양이 아니면 사람이 붙인 이름이다.
     expect(followsFileName("회의록", "notes/회의록 (초안).md")).toBe(false);
+    // pull 은 8 · 16 · 32 자만 붙인다 — 그 사이 길이의 16진 글자는 사람이 붙인 것이다.
+    expect(followsFileName("회의록", `notes/회의록 (${"a1".repeat(8)}).md`)).toBe(true);
+    expect(followsFileName("회의록", `notes/회의록 (${"a1".repeat(16)}).md`)).toBe(true);
+    expect(followsFileName("회의록", "notes/회의록 (2026abcd12).md")).toBe(false);
   });
 
   it("0.12 전의 규칙으로 받은 이름도 따르는 것이다 — 규칙이 바뀌어도 제목 변경으로 보지 않는다", () => {
