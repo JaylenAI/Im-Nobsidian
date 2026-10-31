@@ -20,6 +20,9 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       fullReconcileInterval?: number;
       downloadMedia?: boolean;
       preferMarkdownApi?: boolean;
+      syncFiles?: boolean;
+      createDatabases?: boolean;
+      notifications?: string;
       databaseId?: string;
       databases?: { databaseId: string; localFolder: string }[];
       includePaths?: string[];
@@ -316,6 +319,27 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       await control("Notion 의 그림 받기").change(false);
       await control("Notion Markdown API 쓰기").change(false);
       expect(plugin.settings).toMatchObject({ downloadMedia: false, preferMarkdownApi: false });
+    });
+
+    it("첨부 올리기 · DB 만들기 · 알림 — 없으면 CLI 기본값으로 보이고, 바꾸면 적는다", async () => {
+      const { row, control } = display();
+      expect(control("첨부 파일 올리기").value).toBe(true);
+      expect(control("DB 정의가 있는 폴더를 Notion DB 로 만들기").value).toBe(true);
+      expect(row("DB 정의가 있는 폴더를 Notion DB 로 만들기").desc).toContain(".notion.json");
+      expect(control("동기화가 쓴 페이지의 알림").options.map(([v]) => v)).toEqual([
+        "silent",
+        "default",
+      ]);
+      expect(control("동기화가 쓴 페이지의 알림").value).toBe("silent");
+
+      await control("첨부 파일 올리기").change(false);
+      await control("DB 정의가 있는 폴더를 Notion DB 로 만들기").change(false);
+      await control("동기화가 쓴 페이지의 알림").change("default");
+      expect(plugin.settings).toMatchObject({
+        syncFiles: false,
+        createDatabases: false,
+        notifications: "default",
+      });
     });
 
     it("DB 모드 — 주소를 붙여 넣으면 ID 로 적고, 알아볼 수 없으면 페이지 모드라고 알린다", async () => {

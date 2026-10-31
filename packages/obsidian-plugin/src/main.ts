@@ -71,6 +71,12 @@ export interface ImNobsidianSettings {
   downloadMedia?: boolean;
   /** 본문을 Notion Markdown API 로 주고받는다(`conversion.preferMarkdownApi`) — 끄면 블록 API. 없으면 쓴다. */
   preferMarkdownApi?: boolean;
+  /** 볼트의 첨부 파일을 폴더의 Notion 페이지에 올린다(`sync.syncFiles`). 없으면 올린다. */
+  syncFiles?: boolean;
+  /** DB 정의 파일(사이드카)이 있는 새 폴더를 Notion DB 로 만든다(`sync.createDatabases`, ADR-036). 없으면 만든다. */
+  createDatabases?: boolean;
+  /** 동기화가 쓴 페이지가 사람에게 알림을 보내나(`sync.notifications`). 없으면 보내지 않는다(silent). */
+  notifications?: Config["sync"]["notifications"];
   /** DB 모드 — 볼트의 노트를 이 Notion DB 의 행으로 둔다(`notion.parentMode: database`). 비면 페이지 모드. 볼트 연결에만. */
   databaseId?: string;
   attachments: string;

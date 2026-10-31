@@ -146,6 +146,9 @@ export class ConnectionEngine {
           settings.fullReconcileInterval ?? DEFAULT_CONFIG.sync.fullReconcileInterval,
         renameOnTitleChange:
           settings.renameOnTitleChange ?? DEFAULT_CONFIG.sync.renameOnTitleChange,
+        syncFiles: settings.syncFiles ?? DEFAULT_CONFIG.sync.syncFiles,
+        createDatabases: settings.createDatabases ?? DEFAULT_CONFIG.sync.createDatabases,
+        notifications: settings.notifications ?? DEFAULT_CONFIG.sync.notifications,
       },
       paths: {
         ...DEFAULT_CONFIG.paths,

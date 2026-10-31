@@ -5,6 +5,7 @@ import {
   DEFAULT_CONFIG,
   DEFAULT_WATCH_DEBOUNCE_MS,
   IGNORE_FILE,
+  SIDECAR_SUFFIX,
   notionIdFromInput,
   parseIgnorePatterns,
   systemTimeZone,
@@ -171,6 +172,53 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
           await this.changeConnection();
         }),
       );
+
+    new Setting(containerEl)
+      .setName("첨부 파일 올리기")
+      .setDesc(
+        "볼트의 PDF · 그림 · 동영상 같은 파일을 그 폴더의 Notion 페이지에 파일 블록으로 올립니다. 끄면 올리지 않습니다 — " +
+          "노트 본문에 넣은 그림 · 파일은 이 설정과 상관없이 노트와 함께 올라갑니다.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.syncFiles ?? DEFAULT_CONFIG.sync.syncFiles)
+          .onChange(async (value) => {
+            settings.syncFiles = value;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("DB 정의가 있는 폴더를 Notion DB 로 만들기")
+      .setDesc(
+        `폴더에 DB 정의 파일(…${SIDECAR_SUFFIX})이 있으면 Push 가 그 폴더를 Notion DB 로, 안의 노트를 행으로 만듭니다. ` +
+          "끄면 일반 폴더처럼 페이지로 올립니다. DB 모드에서는 쓰지 않습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.createDatabases ?? DEFAULT_CONFIG.sync.createDatabases)
+          .onChange(async (value) => {
+            settings.createDatabases = value;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("동기화가 쓴 페이지의 알림")
+      .setDesc(
+        "보내지 않으면 동기화가 고친 페이지 · @멘션 · 사람 속성으로 Notion 이 사람들에게 알림을 보내지 않습니다 — 볼트를 " +
+          "새 워크스페이스로 올릴 때 행마다 알림이 가는 것을 막습니다. DB 자동화 · 리마인더는 그대로입니다.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("silent", "보내지 않음 (기본)");
+        dropdown.addOption("default", "Notion 이 정한 대로 보냄");
+        dropdown
+          .setValue(settings.notifications ?? DEFAULT_CONFIG.sync.notifications)
+          .onChange(async (value) => {
+            settings.notifications = value === "default" ? "default" : "silent";
+            await this.changeConnection();
+          });
+      });
 
     new Setting(containerEl)
       .setName("자동 동기화")

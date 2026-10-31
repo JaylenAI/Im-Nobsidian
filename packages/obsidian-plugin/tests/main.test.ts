@@ -1164,7 +1164,13 @@ describe("ImNobsidianPlugin", () => {
       const built = () => orchestratorArgs[0]![0] as Built;
       orchestratorArgs.splice(0);
       await plugin.initOrchestrator();
-      expect(built().sync).toMatchObject({ deleteSync: true, fullReconcileInterval: 3600 });
+      expect(built().sync).toMatchObject({
+        deleteSync: true,
+        fullReconcileInterval: 3600,
+        syncFiles: true,
+        createDatabases: true,
+        notifications: "silent",
+      });
       expect(built().conversion).toMatchObject({
         imageDownload: "immediate",
         preferMarkdownApi: true,
@@ -1178,6 +1184,9 @@ describe("ImNobsidianPlugin", () => {
         fullReconcileInterval: 0,
         downloadMedia: false,
         preferMarkdownApi: false,
+        syncFiles: false,
+        createDatabases: false,
+        notifications: "default",
         databaseId: "https://www.notion.so/team/Tasks-35a13b18d38280cf9057e37e6e473e41?v=1",
         databases: [
           { databaseId: "1fa13b18d38280cf9057e37e6e473e41", localFolder: "/Projects/Tasks/" },
@@ -1192,6 +1201,9 @@ describe("ImNobsidianPlugin", () => {
         conflictStrategy: "remote-first",
         deleteSync: false,
         fullReconcileInterval: 0,
+        syncFiles: false,
+        createDatabases: false,
+        notifications: "default",
       });
       expect(built().conversion).toMatchObject({ imageDownload: "skip", preferMarkdownApi: false });
       expect(built().notion).toMatchObject({
