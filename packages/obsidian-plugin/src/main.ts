@@ -28,6 +28,7 @@ import { ConflictModal } from "./conflict-modal.js";
 import { ChangeDiffModal } from "./change-diff-modal.js";
 import { BaseFilterFixModal } from "./base-filter-modal.js";
 import { DiscardConfirmModal } from "./discard-confirm-modal.js";
+import { SyncLogModal } from "./sync-log-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
@@ -258,6 +259,13 @@ export default class ImNobsidianPlugin extends Plugin {
       callback: () => this.resolveConflicts(),
     });
 
+    // 알림은 사라지고 자동 동기화는 알리지 않는다 — 처리하지 못한 노트의 까닭 · 받지 않은 페이지를 다시 본다(P8).
+    this.addCommand({
+      id: "im-nobsidian-sync-log",
+      name: "동기화 기록",
+      callback: () => this.showSyncLog(),
+    });
+
     this.addCommand({
       id: "im-nobsidian-db-view",
       name: "DB 뷰 열기",
@@ -319,6 +327,15 @@ export default class ImNobsidianPlugin extends Plugin {
     this.registerDesignRenderer();
     this.registerFolderMenu();
     this.registerVaultEvents();
+  }
+
+  /** 이 세션에서 끝난 동기화의 기록 — 연결마다 모아 최근 것부터. */
+  private showSyncLog(): void {
+    const logs = this.engines.map((engine) => ({
+      label: engine.label,
+      entries: engine.controller?.syncLog() ?? [],
+    }));
+    new SyncLogModal(this.app, logs).open();
   }
 
   onunload(): void {
