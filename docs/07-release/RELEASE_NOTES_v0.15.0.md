@@ -54,7 +54,19 @@
 
 ### 🧪 Verified against the real Notion API
 
-RESULTS_TABLE
+Two vaults (A, B) against one probe page, CLI built from `dev`. Every scenario ends with push and pull on both
+sides reporting no changes.
+
+| Scenario                                                                                                | Result                                                                                   |
+| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| A pushes notes, attachments, a database and a 200-byte title; B pulls; A pulls back                     | ✅ 10 created on B · notes identical on both sides                                       |
+| Formula edited locally · note deleted with `deleteSync` off · page trashed in Notion                    | ✅ formula not sent · note restored · trashed page removed · `verify` complete           |
+| Block deleted in Notion without changing the page's edit time                                           | ✅ now picked up by a plain pull (0.14 needed `--rerender`)                              |
+| Property renamed in Notion · `.base` view edited · sidecar property added · new database under the root | ✅ followed on both vaults                                                               |
+| Select option renamed in the sidecar                                                                    | ✅ rows keep the value under the new name (0.14 left them empty)                         |
+| Notes moved into, out of and between databases                                                          | ✅ columns added to the target · both vaults identical after `pull --force`              |
+| `merge`: B and Notion change different lines                                                            | ✅ `push --dry-run` shows the refusal · pull merges · push sends · A gets both lines     |
+| B's state database deleted                                                                              | ✅ push stops (`UnlinkedVaultError`) · pull relinks 8 notes · no file created or changed |
 
 ### Known limitations
 
@@ -65,6 +77,7 @@ RESULTS_TABLE
   edit.
 - Linked-view edits are picked up when the source database is pulled or at the full scan.
 - Option renames in the sidecar go through add, move and delete — the option's id changes.
+- Text on the same line as a file embed (`![[file.pdf]]text`) comes back on its own line: Notion files are blocks.
 
 ---
 
