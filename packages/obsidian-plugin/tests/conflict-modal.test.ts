@@ -212,6 +212,22 @@ describe("ConflictModal", () => {
     expect(onResolve).toHaveBeenCalledWith("local");
   });
 
+  it("남은 충돌이 있으면 「남은 충돌도 같은 것으로」 를 보이고, 켜면 그 뜻을 둔다 — 없으면 보이지 않는다", () => {
+    const names = vi.spyOn(Setting.prototype, "setName");
+    const toggles = vi.spyOn(Setting.prototype, "addToggle");
+    const withRest = new ConflictModal({} as never, mockConflict, vi.fn(), true, 2);
+    withRest.onOpen();
+    expect(names.mock.calls.map(([name]) => name)).toContain("남은 충돌 2개도 같은 것으로");
+    expect(toggles).toHaveBeenCalledTimes(1);
+    expect(withRest.forRest).toBe(false);
+
+    names.mockClear();
+    modal.onOpen();
+    expect(names.mock.calls.map(([name]) => name)).not.toContain(
+      expect.stringContaining("남은 충돌"),
+    );
+  });
+
   it("다른 충돌 데이터로도 생성 가능", () => {
     const anotherConflict = {
       ...mockConflict,

@@ -262,7 +262,10 @@ When both sides change the same file, `pull`/`sync` flags it as a conflict inste
 
 Interactive mode adds a **merge** option (3-way auto-merge with conflict markers). The default `sync.conflictStrategy` is `manual` — conflicts are flagged and left for you to resolve.
 
-Set `sync.conflictStrategy` to `merge` (plugin: **다른 줄을 고친 충돌은 합치기**) to merge automatically on `pull`/`sync`: when the
+In the plugin, the **충돌 해결** command asks per note; turn on **남은 충돌 N개도 같은 것으로** in the dialog to apply your choice to
+the rest (notes where that choice can't apply — e.g. merging a note deleted in Notion — are still asked).
+
+Set `sync.conflictStrategy` to `merge` (plugin: **둘 다 바뀐 노트 → 다른 줄이면 합치기**) to merge automatically on `pull`/`sync`: when the
 note and the Notion page changed different lines since the last sync, both changes are combined (3-way, against the last synced
 copy) and written to the vault; `sync` uploads the result in the same run, `pull` leaves it as a local edit for the next `push`.
 When both sides changed the same lines it stays a conflict as with `manual` — no conflict markers are written into the note.
@@ -345,6 +348,10 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   },
 }
 ```
+
+The plugin also has **Sync 미리 보기 (반영하지 않음)** (like `nobsi sync --dry-run`: what would be pulled, pushed, left as a
+conflict or refused) and **빠짐없이 받았는지 확인** (like `nobsi verify`) in the command palette, and **동기화 기록** for this session's
+results and engine warnings.
 
 The plugin's settings tab has the same options as this file: **둘 다 바뀐 노트** (`conflictStrategy`), **지운 것을 반대쪽에서도
 지우기** (`deleteSync`, on by default in the plugin), **첨부 파일 올리기** (`syncFiles`), **DB 정의가 있는 폴더를 Notion DB 로

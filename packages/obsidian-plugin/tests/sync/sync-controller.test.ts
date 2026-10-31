@@ -1457,6 +1457,49 @@ describe("SyncController", () => {
       expect(onStatusBar).toHaveBeenLastCalledWith("ready");
     });
 
+    it("「남은 충돌도 같은 것으로」 — 그 선택을 쓸 수 있는 충돌은 묻지 않고, 쓸 수 없는 충돌만 묻는다", async () => {
+      const a = conflictAt("a.md");
+      const deleted = conflictAt("지움.md", "deleted");
+      const c = conflictAt("c.md");
+      mock.listConflicts.mockResolvedValue([a, deleted, c]);
+      const choose = vi.fn(async (conflict: Conflict, _signal: AbortSignal, remaining: number) =>
+        conflict === a
+          ? { choice: "merge" as const, forRest: true }
+          : remaining >= 0
+            ? ("remote" as const)
+            : null,
+      );
+      const { hooks } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      // Notion 에서 지운 노트는 병합할 수 없다 — 그것만 물었다
+      expect(choose.mock.calls.map(([conflict, , remaining]) => [conflict, remaining])).toEqual([
+        [a, 2],
+        [deleted, 1],
+      ]);
+      expect(mock.resolveConflict.mock.calls).toEqual([
+        [a, "merge"],
+        [deleted, "remote"],
+        [c, "merge"],
+      ]);
+    });
+
+    it("남은 것에 쓰지 않으면 하나씩 묻고, 고르지 않고 닫은 충돌은 남긴다", async () => {
+      const a = conflictAt("a.md");
+      const b = conflictAt("b.md");
+      mock.listConflicts.mockResolvedValue([a, b]);
+      const choose = vi.fn(async (conflict: Conflict) =>
+        conflict === a ? { choice: "local" as const, forRest: false } : null,
+      );
+      const { hooks } = createHooks();
+
+      await makeController(mock, hooks).resolveConflicts(choose);
+
+      expect(choose).toHaveBeenCalledTimes(2);
+      expect(mock.resolveConflict.mock.calls).toEqual([[a, "local"]]);
+    });
+
     it("양쪽이 이미 같은 충돌은 묻지 않고 표시만 푼다", async () => {
       const same = conflictAt("same.md");
       const real = conflictAt("real.md");
@@ -1468,7 +1511,7 @@ describe("SyncController", () => {
       await makeController(mock, hooks).resolveConflicts(choose);
 
       expect(choose).toHaveBeenCalledTimes(1);
-      expect(choose).toHaveBeenCalledWith(real, expect.any(AbortSignal));
+      expect(choose).toHaveBeenCalledWith(real, expect.any(AbortSignal), 0);
       expect(onNotice).toHaveBeenLastCalledWith(
         "Im-Nobsidian: 충돌 해결 — 해결 1건 · 남음 0건 · 양쪽이 이미 같아 표시만 푼 1건",
       );
@@ -1920,5 +1963,71 @@ describe("SyncController", () => {
       expect(warn).toHaveBeenCalledTimes(2);
       expect(warn.mock.calls[0]![0]).toContain("database is locked");
     });
+  });
+});
+
+describe("미리 보기 · 빠짐없이 받았는지 (P8)", () => {
+  it("미리 보기는 dry-run Sync 를 부르고 진행으로 온 할 일과 결과를 넘긴다 — 기록에 남기지 않는다", async () => {
+    const mock = createMockOrchestrator();
+    mock.sync.mockImplementation(
+      async (options: { onProgress: (c: number, t: number, item: object) => void }) => {
+        options.onProgress(1, 2, { path: "a.md", operation: "create", direction: "pull" });
+        options.onProgress(2, 2, { path: "b.md", operation: "update", direction: "push" });
+        return {
+          pull: { created: 1, updated: 0, deleted: 0, failed: [] },
+          push: { created: 0, updated: 1, deleted: 0, moved: 0, failed: [] },
+          conflicts: [],
+          duration: 0,
+        };
+      },
+    );
+    const { hooks } = createHooks();
+    const controller = makeController(mock, hooks);
+    const show = vi.fn();
+
+    await controller.preview(show);
+
+    expect(mock.sync).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+    expect(show.mock.calls[0]![0].items.map((item: { path: string }) => item.path)).toEqual([
+      "a.md",
+      "b.md",
+    ]);
+    expect(controller.syncLog()).toEqual([]);
+  });
+
+  it("미리 보지 못하면 까닭을 알리고 창을 열지 않는다", async () => {
+    const mock = createMockOrchestrator();
+    mock.sync.mockRejectedValue(new Error("Notion 401"));
+    const { hooks, onNotice } = createHooks();
+    const show = vi.fn();
+
+    await makeController(mock, hooks).preview(show);
+
+    expect(show).not.toHaveBeenCalled();
+    expect(onNotice.mock.calls.map(([text]) => text)).toContain(
+      "Im-Nobsidian: 미리 보지 못함 — Notion 401",
+    );
+  });
+
+  it("빠짐없이 받았는지 확인한 결과를 넘긴다 — 확인하지 못하면 「없다」 가 아니라 실패로 알린다", async () => {
+    const mock = createMockOrchestrator() as MockOrchestrator & {
+      verifyCompleteness: ReturnType<typeof vi.fn>;
+    };
+    const report = { complete: true };
+    mock.verifyCompleteness = vi
+      .fn()
+      .mockResolvedValueOnce(report)
+      .mockRejectedValueOnce(new Error("Notion 429"));
+    const { hooks, onNotice } = createHooks();
+    const controller = makeController(mock, hooks);
+    const show = vi.fn();
+
+    await controller.verify(show);
+    await controller.verify(show);
+
+    expect(show.mock.calls).toEqual([[report]]);
+    expect(onNotice.mock.calls.map(([text]) => text)).toContain(
+      "Im-Nobsidian: 확인하지 못함 — Notion 429",
+    );
   });
 });
