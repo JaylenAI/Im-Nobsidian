@@ -82,6 +82,11 @@ export interface SyncLogEntry {
 /** 동기화 기록을 이만큼만 둔다 — 오래된 것부터 버린다. */
 const SYNC_LOG_LIMIT = 50;
 
+/** 오래된 것이 앞인 기록을 최근 것부터. */
+export function newestFirst(log: readonly SyncLogEntry[]): SyncLogEntry[] {
+  return [...log].reverse();
+}
+
 /** 끝난 작업을 화면에 어떻게 알릴지. */
 interface OperationReport {
   readonly summary: string;
@@ -188,20 +193,23 @@ export class SyncController {
    * 「준비됨」 으로 덮지 않게 한다.
    */
   private failure: string | null = null;
-  /** 끝난 작업의 기록 — 오래된 것이 앞이다({@link syncLog}). */
-  private readonly log: SyncLogEntry[] = [];
 
+  /**
+   * @param log 끝난 작업의 기록을 이어 적을 자리(오래된 것이 앞) — 플러그인이 연결마다 가진다. 설정을 바꿔 다시 연결하면
+   *   컨트롤러는 새로 만들어지지만 기록은 이어진다.
+   */
   constructor(
     private readonly orchestrator: SyncOrchestrator,
     private readonly hooks: SyncControllerHooks = {},
     direction: SyncDirection = "both",
+    private readonly log: SyncLogEntry[] = [],
   ) {
     this.blocked = directionBlocks(direction);
   }
 
   /** 이 세션의 동기화 기록 — 최근 것이 앞이다. */
   syncLog(): readonly SyncLogEntry[] {
-    return [...this.log].reverse();
+    return newestFirst(this.log);
   }
 
   /** 끝난 작업을 기록에 남긴다. */

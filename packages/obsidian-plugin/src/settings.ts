@@ -1,13 +1,17 @@
 import type { App } from "obsidian";
 import { PluginSettingTab, SecretComponent, Setting } from "obsidian";
 import {
+  CONFLICT_STRATEGIES,
+  DEFAULT_CONFIG,
   DEFAULT_WATCH_DEBOUNCE_MS,
   IGNORE_FILE,
+  SIDECAR_SUFFIX,
   notionIdFromInput,
   parseIgnorePatterns,
   systemTimeZone,
 } from "@im-nobsidian/core";
-import { AUTO_SYNC_INTERVAL_MINUTES } from "./constants.js";
+import { AUTO_SYNC_INTERVAL_MINUTES, FULL_RECONCILE_INTERVAL_MINUTES } from "./constants.js";
+import { CONFLICT_STRATEGY_TEXT } from "./conflict-choices.js";
 import type ImNobsidianPlugin from "./main.js";
 import type { FolderConnectionSettings, ImNobsidianSettings } from "./main.js";
 
@@ -23,6 +27,19 @@ const DIRECTIONS: readonly { value: Direction; label: string }[] = [
 /** 간격(초)을 사람이 읽는 말로 — 목록에 없는 예전 값(예: 45초)도 그대로 보인다. */
 function intervalLabel(seconds: number): string {
   return seconds % 60 === 0 ? `${seconds / 60}분` : `${seconds}초`;
+}
+
+/** 원격 전체 확인 주기(초)를 사람이 읽는 말로 — 0 은 Pull 마다, 큰 값은 시간 · 일로. */
+function reconcileLabel(seconds: number): string {
+  if (seconds === 0) return "Pull 마다";
+  if (seconds % 86400 === 0) return `${seconds / 86400}일`;
+  if (seconds % 3600 === 0) return `${seconds / 3600}시간`;
+  return intervalLabel(seconds);
+}
+
+/** 볼트 안 폴더 경로 — 앞뒤 빈칸과 빗금을 뗀다. */
+function folderPath(value: string): string {
+  return value.trim().replace(/^\/+|\/+$/g, "");
 }
 
 /**
@@ -122,18 +139,86 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
         }),
       );
 
+    const strategyRow = new Setting(containerEl).setName("둘 다 바뀐 노트");
+    const showStrategy = () =>
+      strategyRow.setDesc(
+        "노트와 Notion 페이지가 지난 동기화 뒤 둘 다 바뀌었을 때. " +
+          CONFLICT_STRATEGY_TEXT[settings.conflictStrategy].description,
+      );
+    showStrategy();
+    strategyRow.addDropdown((dropdown) => {
+      for (const strategy of Object.keys(
+        CONFLICT_STRATEGY_TEXT,
+      ) as (keyof typeof CONFLICT_STRATEGY_TEXT)[])
+        dropdown.addOption(strategy, CONFLICT_STRATEGY_TEXT[strategy].label);
+      dropdown.setValue(settings.conflictStrategy).onChange(async (value) => {
+        // 손으로 고친 data.json 의 낯선 값은 고르개가 보이지 못한다 — 엔진의 목록에 있는 것만 적는다.
+        if (!(CONFLICT_STRATEGIES as readonly string[]).includes(value)) return;
+        settings.conflictStrategy = value as ImNobsidianSettings["conflictStrategy"];
+        showStrategy();
+        await this.changeConnection();
+      });
+    });
+
     new Setting(containerEl)
-      .setName("다른 줄을 고친 충돌은 합치기")
+      .setName("지운 것을 반대쪽에서도 지우기")
       .setDesc(
-        "노트와 Notion 이 둘 다 바뀌었어도 서로 다른 줄을 고쳤으면 두 변경을 합쳐 양쪽에 씁니다. 같은 줄을 다르게 " +
-          "고쳤으면 예전처럼 충돌로 남겨 사이드바에서 고르게 합니다. 끄면 둘 다 바뀐 노트는 모두 충돌로 남습니다.",
+        "노트를 지우면 Notion 페이지를 휴지통으로, Notion 에서 지운 페이지의 노트는 볼트에서 지웁니다. 끄면 지운 쪽만 " +
+          "사라집니다 — 볼트에서 지운 노트는 다음 Pull 이 Notion 에서 다시 받습니다.",
       )
       .addToggle((toggle) =>
-        toggle.setValue(settings.conflictStrategy === "merge").onChange(async (value) => {
-          settings.conflictStrategy = value ? "merge" : "manual";
+        toggle.setValue(settings.deleteSync ?? true).onChange(async (value) => {
+          settings.deleteSync = value;
           await this.changeConnection();
         }),
       );
+
+    new Setting(containerEl)
+      .setName("첨부 파일 올리기")
+      .setDesc(
+        "볼트의 PDF · 그림 · 동영상 같은 파일을 그 폴더의 Notion 페이지에 파일 블록으로 올립니다. 끄면 올리지 않습니다 — " +
+          "노트 본문에 넣은 그림 · 파일은 이 설정과 상관없이 노트와 함께 올라갑니다.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.syncFiles ?? DEFAULT_CONFIG.sync.syncFiles)
+          .onChange(async (value) => {
+            settings.syncFiles = value;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("DB 정의가 있는 폴더를 Notion DB 로 만들기")
+      .setDesc(
+        `폴더에 DB 정의 파일(…${SIDECAR_SUFFIX})이 있으면 Push 가 그 폴더를 Notion DB 로, 안의 노트를 행으로 만듭니다. ` +
+          "끄면 일반 폴더처럼 페이지로 올립니다. DB 모드에서는 쓰지 않습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.createDatabases ?? DEFAULT_CONFIG.sync.createDatabases)
+          .onChange(async (value) => {
+            settings.createDatabases = value;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("동기화가 쓴 페이지의 알림")
+      .setDesc(
+        "보내지 않으면 동기화가 고친 페이지 · @멘션 · 사람 속성으로 Notion 이 사람들에게 알림을 보내지 않습니다 — 볼트를 " +
+          "새 워크스페이스로 올릴 때 행마다 알림이 가는 것을 막습니다. DB 자동화 · 리마인더는 그대로입니다.",
+      )
+      .addDropdown((dropdown) => {
+        dropdown.addOption("silent", "보내지 않음 (기본)");
+        dropdown.addOption("default", "Notion 이 정한 대로 보냄");
+        dropdown
+          .setValue(settings.notifications ?? DEFAULT_CONFIG.sync.notifications)
+          .onChange(async (value) => {
+            settings.notifications = value === "default" ? "default" : "silent";
+            await this.changeConnection();
+          });
+      });
 
     new Setting(containerEl)
       .setName("자동 동기화")
@@ -167,10 +252,61 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
         });
       });
 
+    new Setting(containerEl)
+      .setName("Notion 전체 확인 주기")
+      .setDesc(
+        "그 사이의 Pull 은 Notion 에서 바뀐 페이지 · DB 만 봅니다. Notion 에서 옮긴 페이지와 범위 밖으로 나간 페이지는 " +
+          "전체 확인 때 알아봅니다 — 짧을수록 빨리 알지만 큰 볼트는 Pull 이 오래 걸립니다.",
+      )
+      .addDropdown((dropdown) => {
+        const current = settings.fullReconcileInterval ?? DEFAULT_CONFIG.sync.fullReconcileInterval;
+        const choices: number[] = FULL_RECONCILE_INTERVAL_MINUTES.map((minutes) => minutes * 60);
+        if (!choices.includes(current)) choices.push(current);
+        for (const seconds of choices.sort((a, b) => a - b))
+          dropdown.addOption(String(seconds), reconcileLabel(seconds));
+        dropdown.setValue(String(current)).onChange(async (value) => {
+          settings.fullReconcileInterval = Number(value);
+          await this.changeConnection();
+        });
+      });
+
     new Setting(containerEl).setName("동기화 범위").setHeading();
     this.pathPatterns(containerEl, "", settings);
 
+    this.databaseSettings(containerEl);
+
     new Setting(containerEl).setName("변환").setHeading();
+
+    new Setting(containerEl)
+      .setName("첨부 폴더")
+      .setDesc(
+        `Notion 에서 받은 그림 · 파일을 둘 볼트 폴더(볼트 연결 기준). 비우면 「${DEFAULT_CONFIG.paths.attachments}」. ` +
+          "바꿔도 이미 받은 파일은 옮기지 않습니다.",
+      )
+      .addText((text) =>
+        text
+          .setPlaceholder(DEFAULT_CONFIG.paths.attachments)
+          .setValue(
+            settings.attachments === DEFAULT_CONFIG.paths.attachments ? "" : settings.attachments,
+          )
+          .onChange(async (value) => {
+            settings.attachments = folderPath(value) || DEFAULT_CONFIG.paths.attachments;
+            await this.changeConnection();
+          }),
+      );
+
+    new Setting(containerEl)
+      .setName("Notion 의 그림 받기")
+      .setDesc(
+        "Notion 에 올린 그림을 첨부 폴더로 받아 노트에 볼트 경로로 적습니다. 끄면 Notion 의 주소를 그대로 둡니다 — 그 " +
+          "주소는 한 시간쯤 뒤 열리지 않습니다. 외부 주소(https://…)로 넣은 그림은 켜도 받지 않고, PDF 같은 파일은 꺼도 받습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.downloadMedia ?? true).onChange(async (value) => {
+          settings.downloadMedia = value;
+          await this.changeConnection();
+        }),
+      );
 
     new Setting(containerEl)
       .setName("날짜시각 시간대")
@@ -189,6 +325,23 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
           await this.changeConnection();
         });
       });
+
+    new Setting(containerEl).setName("고급").setHeading();
+
+    new Setting(containerEl)
+      .setName("Notion Markdown API 쓰기")
+      .setDesc(
+        "본문을 Notion 의 Markdown API 로 주고받습니다(권장). 끄면 블록 API 로만 주고받습니다 — 요청이 많아 느리고, " +
+          "Markdown API 가 거절하는 페이지를 따로 살펴볼 때만 끄세요.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.preferMarkdownApi ?? DEFAULT_CONFIG.conversion.preferMarkdownApi)
+          .onChange(async (value) => {
+            settings.preferMarkdownApi = value;
+            await this.changeConnection();
+          }),
+      );
   }
 
   /** 닫을 때 — 연결 설정이 바뀌었으면 한 번 다시 연결한다. */
@@ -353,6 +506,109 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
       );
 
     this.pathPatterns(containerEl, `폴더 연결 ${index + 1} — `, connection);
+  }
+
+  /**
+   * Notion DB — DB 모드(`notion.parentMode: database`)와 루트 페이지 밖에서 더 받는 DB(`notion.databases`). 둘 다 볼트
+   * 연결의 설정이다 — 폴더 연결은 제 루트 페이지만 동기화한다. 루트 페이지 아래의 DB 는 적지 않아도 받는다.
+   */
+  private databaseSettings(containerEl: HTMLElement): void {
+    const { settings } = this.plugin;
+    new Setting(containerEl).setName("Notion DB").setHeading();
+
+    const modeRow = new Setting(containerEl).setName("DB 모드");
+    const showMode = (value: string) => {
+      const id = notionIdFromInput(value);
+      modeRow.setDesc(
+        id !== null
+          ? `볼트 연결의 노트를 Notion DB ${id} 의 행으로 둡니다 — frontmatter 가 그 DB 의 속성이 됩니다.`
+          : value === ""
+            ? "비우면 노트를 루트 페이지 아래 페이지로 둡니다(기본). DB 주소를 넣으면 노트를 그 DB 의 행으로 둡니다 — " +
+              "이미 동기화한 볼트라면 바꾸기 전에 새 볼트에서 먼저 해 보세요."
+            : "주소나 ID 에서 Notion DB ID(32자리)를 찾지 못했습니다 — 페이지 모드로 동기화합니다.",
+      );
+      modeRow.descEl.toggleClass("mod-warning", id === null && value !== "");
+    };
+    showMode(settings.databaseId ?? "");
+    modeRow.addText((text) =>
+      text
+        .setPlaceholder("https://www.notion.so/… 또는 DB ID")
+        .setValue(settings.databaseId ?? "")
+        .onChange(async (value) => {
+          const trimmed = value.trim();
+          settings.databaseId = notionIdFromInput(trimmed) ?? trimmed;
+          showMode(trimmed);
+          await this.changeConnection();
+        }),
+    );
+
+    const databases = (settings.databases ??= []);
+    databases.forEach((database, index) => {
+      const name = `더 받는 DB ${index + 1}`;
+      const idRow = new Setting(containerEl).setName(name);
+      const showId = () => {
+        const id = notionIdFromInput(database.databaseId);
+        idRow.setDesc(
+          id === null
+            ? "Notion DB 주소나 ID 를 넣으세요 — 비어 있거나 알아볼 수 없으면 이 줄은 쓰지 않습니다."
+            : database.localFolder === ""
+              ? "행 노트를 둘 볼트 폴더를 아래에 적으세요 — 비어 있으면 이 줄은 쓰지 않습니다."
+              : `DB ${id} 의 행을 「${database.localFolder}」 폴더에 둡니다.`,
+        );
+        idRow.descEl.toggleClass("mod-warning", id === null || database.localFolder === "");
+      };
+      showId();
+      idRow.addText((text) =>
+        text
+          .setPlaceholder("https://www.notion.so/… 또는 DB ID")
+          .setValue(database.databaseId)
+          .onChange(async (value) => {
+            const trimmed = value.trim();
+            database.databaseId = notionIdFromInput(trimmed) ?? trimmed;
+            showId();
+            await this.changeConnection();
+          }),
+      );
+      idRow.addButton((button) =>
+        button
+          .setButtonText("지우기")
+          .setWarning()
+          .onClick(async () => {
+            databases.splice(index, 1);
+            await this.changeConnection();
+            this.display();
+          }),
+      );
+      new Setting(containerEl)
+        .setName(`${name} — 볼트 폴더`)
+        .setDesc(
+          "볼트 연결 기준 경로. 없으면 Pull 이 만듭니다. 지워도 이미 받은 노트는 볼트에 남습니다.",
+        )
+        .addText((text) =>
+          text
+            .setPlaceholder("Projects/Tasks")
+            .setValue(database.localFolder)
+            .onChange(async (value) => {
+              database.localFolder = folderPath(value);
+              showId();
+              await this.changeConnection();
+            }),
+        );
+    });
+
+    new Setting(containerEl)
+      .setName("더 받는 DB 추가")
+      .setDesc(
+        "루트 페이지 밖에 있는 Notion DB 를 볼트 폴더로 받습니다 — 그 DB 를 통합(Integration)에 공유해 두세요. 루트 " +
+          "페이지 아래의 DB 는 추가하지 않아도 받습니다.",
+      )
+      .addButton((button) =>
+        button.setButtonText("추가").onClick(async () => {
+          databases.push({ databaseId: "", localFolder: "" });
+          await this.changeConnection();
+          this.display();
+        }),
+      );
   }
 
   /**
