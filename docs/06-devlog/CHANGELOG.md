@@ -12,6 +12,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`notion.databases` 줄의 `propertyMapping` · `titleProperty` 가 아무것도 바꾸지 않던 것**(P12) — 엔진이 읽지 않았다.
   스키마에서 빼고, 바꾸려고 적어 둔 값이면 읽을 때 알린다(`titleProperty: "Name"` 은 기본값이라 알리지 않는다).
 
+### Documentation
+
+- **README 지원표가 되는 것을 「—」 로 적던 것** — 볼트의 첨부 · 아이콘 · 커버는 push 로 올라간다(P12 실 Notion 회귀로 확인).
+  Notion 버튼 · 폼 · 동기화 블록은 「API 한계」 로 적는다. 같은 토큰의 다른 기기 편집은 「None yet」 이 아니라 0.15 부터 내용으로
+  확인한다.
+- **설정 가이드에 없던 키 13개**(`notion.databases` · `fullReconcileInterval` · `syncFiles` · `createDatabases` · `notifications` ·
+  `imageDownload` · `timeZone` · 재시도 · 미디어 동시성 등)와 0.16 에 없앤 키. `imageDownload: "lazy"` 는 `"skip"` 과 같다.
+- README · ROADMAP 의 로드맵을 v0.17 까지.
+
 ## [0.17.0] - 2026-11-01
 
 > 플러그인이 모바일(iOS · Android)의 Obsidian 에서 뜨고 동기화한다(P11 · ADR-053). 예전에는 데스크톱 전용이었다 — 켤 수 있는
