@@ -2,6 +2,7 @@ import esbuild from "esbuild";
 import builtins from "builtin-modules";
 import sveltePlugin from "esbuild-svelte";
 import { copyFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { svelteCompilerOptions } from "./svelte-options.mjs";
 
 const prod = process.argv[2] === "production";
@@ -35,7 +36,8 @@ const vfileProcShim = {
   setup(build) {
     build.onResolve({ filter: /^\.\/minproc(\.js)?$/ }, (args) =>
       /[\\/]vfile[\\/]/.test(args.importer)
-        ? { path: new URL("./src/platform/shims/vfile-proc.ts", import.meta.url).pathname }
+        ? // Windows 에서 `URL.pathname` 은 `/D:/…` 라 esbuild 가 절대 경로로 받지 않는다
+          { path: fileURLToPath(new URL("./src/platform/shims/vfile-proc.ts", import.meta.url)) }
         : undefined,
     );
   },
