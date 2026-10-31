@@ -3,6 +3,7 @@ import { plainFrontmatterValue } from "../utils/frontmatter.js";
 import { legacySanitizeFileName, sanitizeFileName } from "../utils/sanitize.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { noteNameFromPath } from "../utils/markdown-path.js";
+import { withoutPageIdSuffix } from "../utils/db-row-path.js";
 
 /**
  * 노트의 Notion 제목을 정하는 규칙 — 페이지와 DB 행이 같은 규칙을 쓴다.
@@ -39,9 +40,7 @@ export function noteTitle(frontmatter: Frontmatter, path: string): string {
  */
 function isFileNameOf(title: string, fileName: string): boolean {
   return [sanitizeFileName(title), legacySanitizeFileName(title)].some(
-    (safe) =>
-      fileName === safe ||
-      (fileName.startsWith(safe) && /^ \([0-9a-f]{8,32}\)$/i.test(fileName.slice(safe.length))),
+    (safe) => fileName === safe || withoutPageIdSuffix(fileName) === safe,
   );
 }
 

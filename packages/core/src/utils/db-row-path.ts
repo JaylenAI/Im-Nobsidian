@@ -45,6 +45,20 @@ export function selectDbRowFiles<T extends VaultPathRef>(
 export const PAGE_ID_SUFFIX_LENGTHS = [8, 16, 32] as const;
 
 /**
+ * 이름 끝의 ` (id 조각)` — 붙이는 길이({@link PAGE_ID_SUFFIX_LENGTHS})만. 예전에는 8~32 자를 모두 받아, 사람이 붙인
+ * 「회의 (2026abcd12)」 같은 이름도 pull 이 가른 이름으로 봤다.
+ */
+const PAGE_ID_SUFFIX = new RegExp(
+  ` \\((?:${PAGE_ID_SUFFIX_LENGTHS.map((length) => `[0-9a-f]{${length}}`).join("|")})\\)$`,
+  "i",
+);
+
+/** 동명을 가르려 붙인 ` (id 조각)` 을 뗀 이름 — 없으면 그대로. */
+export function withoutPageIdSuffix(name: string): string {
+  return name.replace(PAGE_ID_SUFFIX, "");
+}
+
+/**
  * 동명 충돌을 풀 때 시도할 경로 후보를 **결정적 순서**로 만든다.
  *
  * 자연 이름 → 페이지 ID 조각 8 → 16 → 32 글자 순. 순번(`(1)`, `(2)` …)이 아니라 ID 를

@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { resolveDbRowPath, selectDbRowFiles, type PathOwner } from "../../src/utils/db-row-path.js";
+import {
+  pagePathCandidates,
+  resolveDbRowPath,
+  selectDbRowFiles,
+  withoutPageIdSuffix,
+  type PathOwner,
+} from "../../src/utils/db-row-path.js";
 
 /**
  * 결함11 회귀: 같은 DB 의 동명 페이지가 8 글자 ID prefix 를 공유하면 단일 8 글자
@@ -144,5 +150,17 @@ describe("selectDbRowFiles (rank21 직속 행만 — 중첩 DB 오포함 차단)
     expect(rows).toEqual(["databases/tasks/Z.md", "databases/tasks/A.md"]);
     // 원본 불변.
     expect(files.map((f) => f.path)).toEqual(snapshot);
+  });
+});
+
+describe("withoutPageIdSuffix — 동명을 가르려 붙인 ` (id 조각)` 을 뗀다", () => {
+  it("pull 이 붙이는 길이의 조각만 뗀다 — 그 사이 길이 · 16진이 아닌 것은 사람이 붙인 이름이다", () => {
+    const id = "1a2b3c4d5e6f708192a3b4c5d6e7f809";
+    for (const candidate of pagePathCandidates("", "회의", id).slice(1)) {
+      expect(withoutPageIdSuffix(candidate.replace(/\.md$/, ""))).toBe("회의");
+    }
+    expect(withoutPageIdSuffix("회의 (2026abcd12)")).toBe("회의 (2026abcd12)");
+    expect(withoutPageIdSuffix("회의 (초안)")).toBe("회의 (초안)");
+    expect(withoutPageIdSuffix("회의")).toBe("회의");
   });
 });
