@@ -32,7 +32,8 @@
     "imageDownload": "immediate", // "immediate" | "lazy"
   },
   "advanced": {
-    "concurrency": 3, // 동시 API 요청 수
+    "concurrency": 3, // 동시에 기다리는 API 요청 수
+    "rateLimitIntervalMs": 350, // 요청 사이 최소 간격 (ms)
     "maxRetries": 5, // API 재시도 횟수
     "timeoutMs": 30000, // API 타임아웃 (ms)
     "batchSize": 100, // 배치 처리 크기
@@ -206,7 +207,16 @@ Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입
 
 ### concurrency
 
-동시 API 요청 수. Notion rate limit (3 req/s) 이내로 설정하세요.
+동시에 응답을 기다리는 요청 수(기본 3) — 느린 요청 하나 뒤에 다른 요청이 줄 서지 않게 합니다. 요청이 **나가는 빠르기**는
+`rateLimitIntervalMs` 가 정합니다. 칸을 늘려도 초당 요청 수는 늘지 않습니다(0.16 부터 — 그 전에는 칸 수만큼 한꺼번에 나가
+기본값이 초당 8회 남짓이 되었고, 큰 볼트의 첫 동기화가 429 를 거듭 맞았습니다).
+
+### rateLimitIntervalMs
+
+요청이 나가는 최소 간격(ms, 기본 350 — 분당 약 171회). Notion 의 한도는 2026-09-09 부터 60초 고정 창에 Business · Enterprise
+분당 600회, 그 밖의 플랜 분당 180회입니다. 기본값은 모든 플랜에 맞춘 값입니다. Business 이상 워크스페이스라면 `120`(분당 500회)
+쯤으로 낮춰 큰 볼트의 첫 동기화를 줄일 수 있습니다 — Business 워크스페이스에서는 실측하지 않았습니다. 429 가 자주 보이면 이
+값을 올리세요.
 
 ### maxRetries
 

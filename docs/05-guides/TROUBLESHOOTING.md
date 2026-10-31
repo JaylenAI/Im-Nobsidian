@@ -70,14 +70,16 @@ Error: 설정 파일 검증 실패: invalid_type, expected object...
 Error: Rate limited - too many requests
 ```
 
-**원인**: Notion API는 3 req/s 제한이 있습니다
+**원인**: Notion API 의 요청 한도(Business · Enterprise 분당 600회, 그 밖의 플랜 분당 180회)를 넘었습니다. 같은 워크스페이스의
+다른 통합 · 다른 기기의 동기화도 같은 한도를 씁니다.
 
-**해결**: 자동으로 재시도됩니다 (지수 백오프 + 지터). 대규모 볼트에서는 시간이 걸릴 수 있습니다.
-`advanced.concurrency`를 낮추면 더 안정적입니다:
+**해결**: 자동으로 재시도됩니다(Notion 이 말한 `Retry-After` 만큼 모두 함께 쉰 뒤). 자주 보이면 요청 간격을 넓히세요:
 
 ```jsonc
-{ "advanced": { "concurrency": 2 } }
+{ "advanced": { "rateLimitIntervalMs": 500 } }
 ```
+
+`advanced.concurrency` 를 낮춰도 초당 요청 수는 줄지 않습니다(0.16 부터 — 빠르기는 간격이 정합니다).
 
 ### "타임아웃"
 
@@ -108,9 +110,13 @@ Error: notionhq_client_request_timeout
 Notion API 재시도 1/5 — 3750ms 대기 (status 429 · rate_limited · ...)
 ```
 
-이 줄이 계속 보이면 정지가 아니라 **속도 조절 중**입니다. 자주 뜬다면 동시성을 낮추세요
-(`advanced.concurrency`, 기본 3). 429는 워크스페이스 전체에 걸리는 신호라 한 건이라도
+이 줄이 계속 보이면 정지가 아니라 **속도 조절 중**입니다. 자주 뜬다면 요청 간격을 넓히세요
+(`advanced.rateLimitIntervalMs`, 기본 350). 429는 워크스페이스 전체에 걸리는 신호라 한 건이라도
 맞으면 나머지 요청도 같은 시간만큼 함께 쉽니다 — 이게 재시도 폭풍을 막습니다.
+
+**원인 1-1 — 첫 pull 의 인라인 DB 찾기**: 볼트를 처음 올린 뒤의 첫 pull(과 `pull --force`)은 추적하는 페이지마다 Notion 에 안에
+DB 가 있는지 한 번씩 묻습니다. 바뀐 것이 없어도 1,000 페이지에 10분쯤 걸리고 그동안 출력이 없습니다(2026-10-31 실측). 한 번
+끝나면 다음 pull 부터는 바뀐 페이지만 봅니다.
 
 **원인 2 — 멈춘 연결**: 특정 페이지 처리 중 응답이 오다 멈춘 연결에 걸린 경우입니다.
 이때 프로세스는 CPU도 쓰지 않고 오류도 내지 않아, 겉으로는 "느린 것"과 구분되지 않습니다.
