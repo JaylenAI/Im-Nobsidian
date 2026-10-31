@@ -47,9 +47,12 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
   let dbs = 0;
+  // 연 상태 DB 는 모두 닫고 지운다 — Windows 는 열린 파일을 지우지 못한다(EBUSY).
+  let opened: StateDB[] = [];
 
   const open = (sync: Partial<Config["sync"]> = {}) => {
     const db = StateDB.open(join(tempDir, `state-${++dbs}.db`));
+    opened.push(db);
     return {
       db,
       orchestrator: new SyncOrchestrator(config(sync), db, notion.client as never, vault.fs()),
@@ -95,6 +98,14 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    for (const db of opened) {
+      try {
+        db.close();
+      } catch {
+        // 시험이 이미 닫았다
+      }
+    }
+    opened = [];
     await rm(tempDir, { recursive: true, force: true });
   });
 
