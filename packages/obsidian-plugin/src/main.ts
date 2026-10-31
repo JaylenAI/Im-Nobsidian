@@ -98,6 +98,11 @@ export interface ImNobsidianSettings {
    */
   includePaths?: string[];
   excludePaths?: string[];
+  /**
+   * Canvas · Excalidraw · 템플릿 폴더(Obsidian 의 템플릿 · Templater 설정)를 동기화하지 않는다(`paths.excludeObsidianOnly`).
+   * 없으면 뺀다. 모든 연결에 같다.
+   */
+  excludeObsidianOnly?: boolean;
   /** Notion 에서 바꾼 제목으로 노트 이름을 바꾸고 링크를 고친다(`sync.renameOnTitleChange`). 없으면 끈다. */
   renameOnTitleChange?: boolean;
   databases?: DatabaseConfig[];

@@ -22,7 +22,10 @@ import {
   ViewDataProvider,
   getLogger,
   notionIdFromInput,
+  obsidianOnlyExcludes,
   parseIgnorePatterns,
+  TEMPLATE_FOLDER_SETTINGS,
+  templateFolders,
   type Config,
   type DatabaseSyncConfig,
   type VaultFS,
@@ -154,6 +157,8 @@ export class ConnectionEngine {
         ...DEFAULT_CONFIG.paths,
         include: [...(options.paths?.include ?? DEFAULT_CONFIG.paths.include)],
         exclude: [...(options.paths?.exclude ?? DEFAULT_CONFIG.paths.exclude)],
+        excludeObsidianOnly:
+          settings.excludeObsidianOnly ?? DEFAULT_CONFIG.paths.excludeObsidianOnly,
         attachments: settings.attachments,
       },
       conversion: {
@@ -171,7 +176,10 @@ export class ConnectionEngine {
     const syncFs = await this.filtered(
       this.scoped(vaultAdapter, options.connections),
       config.paths.include,
-      config.paths.exclude,
+      [
+        ...config.paths.exclude,
+        ...(config.paths.excludeObsidianOnly ? await this.obsidianOnlyPatterns() : []),
+      ],
     );
     // 이 연결이 볼트 전체를 보지 않으면 나머지 노트의 링크도 고친다. 쓰기의 볼트 이벤트를 가리지 않는 어댑터라 그 노트를
     // 맡은 연결이 바뀐 노트로 받는다.
@@ -218,6 +226,27 @@ export class ConnectionEngine {
       : [];
     const filter = new PathFilter(include, [...exclude, ...ignored]);
     return filter.isEmpty() ? fs : new FilteredVaultFS(fs, filter);
+  }
+
+  /**
+   * Obsidian 에서만 쓰는 것의 제외 패턴(`paths.excludeObsidianOnly`, D10) — 템플릿 폴더는 이 볼트의 설정 폴더
+   * (`vault.configDir` — 사용자가 바꿀 수 있다)에서 읽는다. CLI 와 같은 규칙(core `obsidianOnlyExcludes`).
+   */
+  private async obsidianOnlyPatterns(): Promise<string[]> {
+    const vault = this.host.app.vault;
+    const contents = new Map<string, string>();
+    for (const { file } of TEMPLATE_FOLDER_SETTINGS) {
+      const path = `${vault.configDir}/${file}`;
+      try {
+        if (await vault.adapter.exists(path)) contents.set(file, await vault.adapter.read(path));
+      } catch {
+        // 읽지 못한 설정은 없는 것으로 — 템플릿 폴더를 빼지 못할 뿐이다.
+      }
+    }
+    return obsidianOnlyExcludes(
+      templateFolders((file) => contents.get(file) ?? null),
+      this.folder,
+    );
   }
 
   /** 이 연결 폴더만 보는 볼트 — 볼트 맨 위이고 안쪽 연결이 없으면 어댑터 그대로(예전과 같다). */
