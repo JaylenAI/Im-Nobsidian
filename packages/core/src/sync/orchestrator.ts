@@ -393,6 +393,22 @@ export class SyncOrchestrator {
   }
 
   /**
+   * 볼트의 첨부(노트가 아닌 파일)를 폴더 페이지에 올린다(`sync.syncFiles`). 올리지 못한 첨부는 `failed` 에 담는다. 올릴 노트가
+   * 있든 없든 push 마다 부른다 — 바뀌지 않은 첨부는 파일 기록이 건너뛴다.
+   */
+  private async pushVaultFiles(failed: FailedOperation[]): Promise<void> {
+    if (this.config.sync.syncFiles === false) return;
+    try {
+      const fileResults = await this.fileHandler.pushAllFiles(failed);
+      if (fileResults.length > 0) {
+        getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
+      }
+    } catch (error) {
+      getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
+    }
+  }
+
+  /**
    * @param mergedByPull sync dry-run 만 — 앞선 pull dry-run 이 합칠 노트. 실제 sync 는 합친 뒤 원격을 본 것으로
    *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
    */
@@ -516,18 +532,21 @@ export class SyncOrchestrator {
       const viewed = options?.dryRun
         ? { applied: plannedViews, failed: [] }
         : await this.viewEdits.apply(viewPlan.planned);
+      const failed: FailedOperation[] = [
+        ...unverifiedFailures,
+        ...sidecarPlan.refused,
+        ...edited.failed,
+        ...viewPlan.refused,
+        ...viewed.failed,
+      ];
+      // 노트는 그대로여도 새로 넣은 첨부는 올린다 — 예전엔 여기서 돌아가 노트를 하나 고칠 때까지 첨부가 올라가지 않았다.
+      if (!options?.dryRun && !options?.signal?.aborted) await this.pushVaultFiles(failed);
       return {
         created: 0,
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [
-          ...unverifiedFailures,
-          ...sidecarPlan.refused,
-          ...edited.failed,
-          ...viewPlan.refused,
-          ...viewed.failed,
-        ],
+        failed,
         duration: Date.now() - startTime,
         ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
         ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
@@ -850,16 +869,7 @@ export class SyncOrchestrator {
       });
     }
 
-    if (this.config.sync.syncFiles !== false) {
-      try {
-        const fileResults = await this.fileHandler.pushAllFiles(failed);
-        if (fileResults.length > 0) {
-          getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
-        }
-      } catch (error) {
-        getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
-      }
-    }
+    await this.pushVaultFiles(failed);
 
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
