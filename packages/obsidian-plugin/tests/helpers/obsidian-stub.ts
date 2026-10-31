@@ -19,6 +19,7 @@ export class Plugin {
     return { setText: () => {} };
   }
   registerEvent() {}
+  registerDomEvent() {}
 }
 
 function createMockElement(): Record<string, unknown> {
@@ -273,3 +274,13 @@ export const editorLivePreviewField = StateField.define<boolean>({
 export function requireApiVersion(): boolean {
   return true;
 }
+
+/** 앱 종류 — 기본은 데스크톱(Electron · Node 있음). 모바일 시험은 `isDesktopApp` 을 끈다(P11). */
+export const Platform = {
+  isDesktop: true,
+  isMobile: false,
+  isDesktopApp: true,
+  isMobileApp: false,
+  isIosApp: false,
+  isAndroidApp: false,
+};

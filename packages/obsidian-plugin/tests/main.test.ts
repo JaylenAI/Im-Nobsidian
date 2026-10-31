@@ -58,6 +58,9 @@ vi.mock("@im-nobsidian/core", async () => ({
     .then((core) => ({
       getLogger: core.getLogger,
       setLogger: core.setLogger,
+      // 모듈을 읽을 때 정규식을 만든다(design/visible-text)
+      LookbehindRegExp: core.LookbehindRegExp,
+      charBefore: core.charBefore,
       StateDbUnavailableError: core.StateDbUnavailableError,
       SavedStateDbError: core.SavedStateDbError,
       StateDbLockedError: core.StateDbLockedError,
@@ -779,12 +782,14 @@ describe("ImNobsidianPlugin", () => {
       registerDesignRenderer: () => void;
       registerFolderMenu: () => void;
       registerVaultEvents: () => void;
+      registerBackgroundFlush: () => void;
     };
     internals.addCommand = (command) => commands.set(command.id, command.callback);
-    // 볼트 · 편집기에 거는 것은 이 시험의 관심 밖이다 — 스텁 앱에는 없다.
+    // 볼트 · 편집기 · 문서에 거는 것은 이 시험의 관심 밖이다 — 스텁 앱에는 없다.
     internals.registerDesignRenderer = () => {};
     internals.registerFolderMenu = () => {};
     internals.registerVaultEvents = () => {};
+    internals.registerBackgroundFlush = () => {};
     const executePull = vi.fn(async () => {});
     internals.executePull = executePull;
 
@@ -804,12 +809,14 @@ describe("ImNobsidianPlugin", () => {
       registerDesignRenderer: () => void;
       registerFolderMenu: () => void;
       registerVaultEvents: () => void;
+      registerBackgroundFlush: () => void;
       warnings: { level: string; message: string }[];
     };
     internals.addCommand = () => {};
     internals.registerDesignRenderer = () => {};
     internals.registerFolderMenu = () => {};
     internals.registerVaultEvents = () => {};
+    internals.registerBackgroundFlush = () => {};
     const previous = getLogger();
     const base = { ...previous, warn: vi.fn(), error: vi.fn(), info: vi.fn() };
     setLogger(base);

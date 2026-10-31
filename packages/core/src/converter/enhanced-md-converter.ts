@@ -72,6 +72,7 @@ import { quotedCodeToChildren } from "./quote-code.js";
 import { unescapeSafeLiteralDollars } from "./literal-dollar.js";
 import { unescapeAngleBrackets } from "./literal-angles.js";
 import { isNotionHostedFileUrl } from "../utils/notion-file-url.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
 
 const NOTION_CALLOUT_RE = /^::: callout\n([\s\S]*?)\n:::/gm;
 const NOTION_PAGE_MENTION_RE = /<mention-page id="([^"]+)">([\s\S]*?)<\/mention-page>/g;
@@ -231,8 +232,12 @@ export function obsidianToNotionEnhanced(obsidian: string): string {
  *
  * `_` 는 낱말 안에서 기울임을 열고 닫지 못한다 — 앞뒤가 글자 · 숫자인 기울임과 `_` 가 든 기울임은 그대로 둔다.
  */
-const ITALIC_WITH_ESCAPED_STAR_RE =
-  /(?<![\\*\p{L}\p{N}])\*(?![\s*])((?:[^*_\n\\]|\\[^\n])*?\\\*(?:[^*_\n\\]|\\[^\n])*?)(?<![\s\\])\*(?![*\p{L}\p{N}])/gu;
+const ITALIC_WITH_ESCAPED_STAR_RE = new LookbehindRegExp(
+  // 닫는 `*` 앞 글자가 공백 · `\\` 가 아니다 — 예전 `(?<![\s\\])` 를 마지막 조각(`[^…\s]` · `\\[^…\s\\]`)으로
+  /\*(?![\s*])((?:[^*_\n\\]|\\[^\n])*?\\\*(?:(?:[^*_\n\\]|\\[^\n])*?(?:[^*_\n\\\s]|\\[^\n\s\\]))??)\*(?![*\p{L}\p{N}])/gu,
+  undefined,
+  notAfter(/[\\*\p{L}\p{N}]/u),
+);
 
 function underscoreItalicsWithStar(content: string): string {
   if (!content.includes("\\*")) return content;

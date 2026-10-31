@@ -1,5 +1,6 @@
 import { inlineCodeRanges, mapOutsideCode, mapOutsideCodeFences } from "../utils/md-regions.js";
 import { mathCloseAt } from "./literal-dollar.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
 
 /**
  * 글 백슬래시 · 글 백틱을 Notion markdown API 와 볼트 사이에서 그대로 옮긴다.
@@ -263,7 +264,7 @@ function mapOutsideRanges(
  * (2026-10-24 실측). 돌려줄 때 기울임은 `*a*` 로 주어, `[[가 _a_]]` 가 `[[가 *a*]]` 로 돌아와 링크 대상이 바뀌었다
  * (실데이터 재왕복 1 노트). escape 해 보내면 글자 그대로 남는다.
  */
-const WIKILINK_FORMAT_CHAR_RE = /(?<!\\)([*_~`$])/g;
+const WIKILINK_FORMAT_CHAR_RE = new LookbehindRegExp(/([*_~`$])/g, undefined, notAfter(/\\/));
 
 /** push — 글로 남는 위키링크의 대상 · 별칭을 Notion 이 글자 그대로 두게. 이미 escape 된 글자는 둔다. */
 export function sendWikilinkText(text: string): string {
@@ -280,7 +281,11 @@ const WIKILINK_ESCAPED_RE = /\\([*_~`$<>])/g;
  * 글로 받은 위키링크 — 이미지 임베드는 뺀다. 대괄호 escape 를 푼 뒤의 모양이다. `[[notion:<id>|…]]` 은 Notion 링크를
  * 바꾼 것이라 뺀다 — 그 별칭은 링크 글자(markdown)라 escape 가 뜻을 갖는다.
  */
-const PLAIN_WIKILINK_RE = /(?<!!)\[\[(?!notion:)([^[\]\n]+)\]\]/g;
+const PLAIN_WIKILINK_RE = new LookbehindRegExp(
+  /\[\[(?!notion:)([^[\]\n]+)\]\]/g,
+  undefined,
+  notAfter(/!/),
+);
 
 /**
  * pull — 위키링크 안의 escape 를 푼다. Notion 은 글 `*` · `` ` `` · `$` · `\` 를 escape 해 돌려주는데, Obsidian 은

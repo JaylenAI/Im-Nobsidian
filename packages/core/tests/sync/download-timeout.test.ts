@@ -68,6 +68,18 @@ describe("R9a 다운로드 시간 상한", () => {
       ).rejects.toThrow();
     });
 
+    it("AbortSignal.timeout 이 없는 곳(iOS 16 앞 WebView)에서도 상한 시점에 TimeoutError 로 끊는다", async () => {
+      const timeout = AbortSignal.timeout;
+      Object.defineProperty(AbortSignal, "timeout", { value: undefined, configurable: true });
+      try {
+        await expect(
+          fetchForDownload(hangingFetch(), "https://example.com/a.bin", 40),
+        ).rejects.toMatchObject({ name: "TimeoutError" });
+      } finally {
+        Object.defineProperty(AbortSignal, "timeout", { value: timeout, configurable: true });
+      }
+    });
+
     it("상한 0 이하는 탈출구 — signal 없이 호출한다", async () => {
       const spy = vi.fn(okFetch());
       await fetchForDownload(spy, "https://example.com/a.bin", 0);

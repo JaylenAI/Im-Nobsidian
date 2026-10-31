@@ -1,7 +1,8 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { mapOutsideCodeFences } from "../../utils/md-regions.js";
+import { LookbehindRegExp, notAfter } from "../../utils/lookbehind.js";
 
-const FOOTNOTE_TOKEN_REGEX = /(?<!\\)\[\^([^\]\s]+)\]/g;
+const FOOTNOTE_TOKEN_REGEX = new LookbehindRegExp(/\[\^([^\]\s]+)\]/g, undefined, notAfter(/\\/));
 
 /**
  * 각주(`[^1]` 참조 + `[^1]: 내용` 정의)는 remark(각주 확장 없음)가 참조 링크로

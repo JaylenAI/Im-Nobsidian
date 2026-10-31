@@ -4,7 +4,7 @@
  *
  * 상태 DB 는 예전에 어댑터 `writeBinary`(`fs.writeFile`) 로 파일을 바로 덮었다. 파일을 비우고 처음부터 쓰므로
  * 도중에 죽으면 잘린 파일이 남고, 동기화 기록을 잃는다. Obsidian 어댑터의 이름 바꾸기는 대상이 있으면 던져 덮어
- * 쓰지 못하므로 Node 의 `fs` 로 쓴다 — 플러그인은 데스크톱 전용이다(manifest `isDesktopOnly`).
+ * 쓰지 못하므로 Node 의 `fs` 로 쓴다 — 데스크톱만. 모바일은 `adapter-state-db-file.ts`.
  */
 import { mkdir, open, rename, type FileHandle } from "node:fs/promises";
 import { dirname } from "node:path";

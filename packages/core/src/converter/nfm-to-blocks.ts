@@ -35,6 +35,10 @@ import { normalizeNotionId } from "../utils/id.js";
 import { notionCodeLanguage } from "./code-language.js";
 import { apiColor, nfmInlineToRichText, type NfmRichText } from "./nfm-inline.js";
 import { nfmAttrValue, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
+
+/** 앞에 `\\` 가 없는 파이프 — 칸 경계. */
+const UNESCAPED_PIPE_RE = new LookbehindRegExp(/\|/, undefined, notAfter(/\\/));
 
 /** 만들 블록 — 블록 API 요청 모양이다. 자식은 몸통의 `children` 에 깊이 제한 없이 담는다. */
 export type NfmBlock = BlockRequest;
@@ -521,8 +525,8 @@ function pipeCells(line: string): NfmRichText[][] {
   const body = line
     .trim()
     .replace(/^\|/, "")
-    .replace(/(?<!\\)\|$/, "");
-  return body.split(/(?<!\\)\|/).map((cell) => nfmInlineToRichText(cell.trim()));
+    .replace(new LookbehindRegExp(/\|$/, undefined, notAfter(/\\/)), "");
+  return body.split(UNESCAPED_PIPE_RE).map((cell) => nfmInlineToRichText(cell.trim()));
 }
 
 function emptyParagraph(): NfmBlock {
