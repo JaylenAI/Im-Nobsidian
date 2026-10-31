@@ -611,7 +611,8 @@ export class SyncOrchestrator {
       const unsentDeletions = applicable
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
-      const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
+      const { skips: readOnlySkipped, nothingSent } =
+        await this.pusher.previewReadOnlySkips(applicable);
       // 실제 push 처럼 — 옮김 · 지움이 걸린 노트는 다음 push 에, 고친 노트는 옮기며 함께 보낸다(고침이 아니라 옮김으로 센다).
       const preparedConversions = this.pusher.previewPreparedConversions(
         newDatabases,
@@ -627,7 +628,7 @@ export class SyncOrchestrator {
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
-        updated: count("update") - convertedUpdates,
+        updated: count("update") - convertedUpdates - nothingSent.length,
         deleted: count("delete"),
         moved: count("move") + preparedConversions.length + movableDatabases.length,
         failed: [
@@ -694,8 +695,8 @@ export class SyncOrchestrator {
           pushedBodies.add(change.path);
           break;
         case "modified":
-          await this.pusher.pushUpdate(change.path);
-          counts.updated++;
+          // 읽기 전용 속성만 고친 행은 보낸 것이 없다 — 고침으로 세지 않고 `readOnlySkipped` 로만 알린다.
+          if (await this.pusher.pushUpdate(change.path)) counts.updated++;
           pushedBodies.add(change.path);
           break;
         case "moved":

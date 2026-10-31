@@ -203,8 +203,11 @@ export class PagePusher {
    * 정하는 것. 원격은 읽지 않고 지난 동기화 사본과 견준다 — 원격도 바뀌었으면 실제 push 와 다를 수 있다. 사본이
    * 없거나 frontmatter · 스키마를 읽지 못하면 그 노트는 건너뛴다(실제 push 가 이유와 함께 알린다).
    */
-  async previewReadOnlySkips(changes: readonly LocalChange[]): Promise<ReadOnlySkip[]> {
+  async previewReadOnlySkips(
+    changes: readonly LocalChange[],
+  ): Promise<{ skips: ReadOnlySkip[]; nothingSent: string[] }> {
     const skips: ReadOnlySkip[] = [];
+    const nothingSent: string[] = [];
     for (const change of changes) {
       const row = this.previewRow(change);
       if (!row) continue;
@@ -212,15 +215,23 @@ export class PagePusher {
         const current = parseFrontmatter(await this.vaultFs.readFile(change.path));
         const { changed, cleared } = diffRowProperties(row.base, current.data);
         const mapper = await this.rowSchemas.mapperFor(row.databaseId);
-        const readOnly = mapper.readOnlyKeys(
-          withoutDecorations([...Object.keys(changed), ...cleared]),
-        );
-        if (readOnly.length > 0) skips.push({ path: change.path, properties: readOnly });
+        const keys = [...Object.keys(changed), ...cleared];
+        const readOnly = mapper.readOnlyKeys(withoutDecorations(keys));
+        if (readOnly.length === 0) continue;
+        skips.push({ path: change.path, properties: readOnly });
+        // 고친 행에서 바뀐 것이 읽기 전용 속성뿐이면 실제 push 도 보낼 것이 없다(pushRowUpdate) — 고침으로 세지 않는다.
+        if (
+          change.type === "modified" &&
+          row.baseBody === current.body &&
+          keys.every((key) => readOnly.includes(key))
+        ) {
+          nothingSent.push(change.path);
+        }
       } catch {
         continue;
       }
     }
-    return skips.sort((a, b) => a.path.localeCompare(b.path));
+    return { skips: skips.sort((a, b) => a.path.localeCompare(b.path)), nothingSent };
   }
 
   /**
@@ -282,18 +293,20 @@ export class PagePusher {
   }
 
   /** dry-run 이 견줄 행 — 새 행은 기준 없이, 고친 행은 지난 동기화 사본과. 행이 아니거나 사본이 없으면 null. */
-  private previewRow(
-    change: LocalChange,
-  ): { databaseId: string; base: Readonly<Record<string, unknown>> | null } | null {
+  private previewRow(change: LocalChange): {
+    databaseId: string;
+    base: Readonly<Record<string, unknown>> | null;
+    baseBody: string | null;
+  } | null {
     if (change.type === "created") {
       const databaseId = this.placement.newRowDatabaseOf(change.path);
-      return databaseId ? { databaseId, base: null } : null;
+      return databaseId ? { databaseId, base: null, baseBody: null } : null;
     }
     if (change.type !== "modified") return null;
     const record = this.stateDb.getByPath(change.path);
     const databaseId = record ? rowDatabaseOf(this.config, record) : null;
     const base = record && databaseId ? this.baseRowState(record) : null;
-    return databaseId && base ? { databaseId, base: base.properties } : null;
+    return databaseId && base ? { databaseId, base: base.properties, baseBody: base.body } : null;
   }
 
   /**
@@ -558,18 +571,18 @@ export class PagePusher {
    * @param options.overwriteRemote 원격을 로컬 내용으로 맞춘다(충돌 해소 결과 전파 · 입양한 행).
    *   원격이 바뀌었는지 확인하지 않고 덮어쓴다({@link RemoteDriftChecker.overwritesRemote}). DB 행은
    *   비교 기준도 달라진다(pushRowUpdate).
+   * @returns Notion 에 무언가 보냈나 — 행에서 읽기 전용 속성만 고쳤으면 보낸 것이 없다(고침으로 세지 않는다).
    */
-  async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<void> {
+  async pushUpdate(path: string, options?: { overwriteRemote?: boolean }): Promise<boolean> {
     const content = await this.vaultFs.readFile(path);
     const record = this.stateDb.getByPath(path);
-    if (!record?.notionPageId) return;
+    if (!record?.notionPageId) return false;
 
     const rowDatabaseId = rowDatabaseOf(this.config, record);
     if (rowDatabaseId) {
-      await this.pushRowUpdate(path, record, rowDatabaseId, content, {
+      return this.pushRowUpdate(path, record, rowDatabaseId, content, {
         overwriteRemote: options?.overwriteRemote === true,
       });
-      return;
     }
 
     const updatePath = this.pipeline.selectPath(content);
@@ -672,6 +685,8 @@ export class PagePusher {
         aliases,
       });
     });
+    // 페이지는 본문을 늘 보낸다.
+    return true;
   }
 
   /**
@@ -1387,7 +1402,7 @@ export class PagePusher {
     databaseId: string,
     content: string,
     options: { overwriteRemote: boolean },
-  ): Promise<void> {
+  ): Promise<boolean> {
     const pageId = record.notionPageId!;
     // frontmatter 를 못 읽으면 멈춘다. 파이프라인은 읽지 못한 frontmatter 를 «속성 없음» 으로
     // 넘기므로, 그대로 견주면 모든 속성을 지우라는 요청이 된다.
@@ -1551,6 +1566,7 @@ export class PagePusher {
     // 보고 받지 않으면 둘이 영영 다르다. 다음 pull 이 내용으로 견주어 Notion 값으로 되돌리게 한다(알림과 같은 말).
     if (mapper.readOnlyKeys(withoutDecorations(skipped)).length > 0)
       this.markRemoteUnverified([pageId]);
+    return bodyChanged || Object.keys(properties).length > 0 || decorated !== null;
   }
 
   /**
