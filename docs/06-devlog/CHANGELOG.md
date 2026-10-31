@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **설정의 `sync.autoSync` · `sync.autoSyncInterval` 이 아무것도 바꾸지 않던 것**(P12) — `nobsi watch` 는 `--interval` 만 보고
+  플러그인은 제 설정을 써서, 설정 파일에 켜 두어도 주기 sync 가 돌지 않았다. 이제 `watch` 가 `--interval` 이 없으면 이 둘을 따른다.
+
 ## [0.17.0] - 2026-11-01
 
 > 플러그인이 모바일(iOS · Android)의 Obsidian 에서 뜨고 동기화한다(P11 · ADR-053). 예전에는 데스크톱 전용이었다 — 켤 수 있는
