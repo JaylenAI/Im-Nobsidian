@@ -9,6 +9,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 - **설정의 `sync.autoSync` · `sync.autoSyncInterval` 이 아무것도 바꾸지 않던 것**(P12) — `nobsi watch` 는 `--interval` 만 보고
   플러그인은 제 설정을 써서, 설정 파일에 켜 두어도 주기 sync 가 돌지 않았다. 이제 `watch` 가 `--interval` 이 없으면 이 둘을 따른다.
+- **`notion.databases` 줄의 `propertyMapping` · `titleProperty` 가 아무것도 바꾸지 않던 것**(P12) — 엔진이 읽지 않았다.
+  스키마에서 빼고, 바꾸려고 적어 둔 값이면 읽을 때 알린다(`titleProperty: "Name"` 은 기본값이라 알리지 않는다).
 
 ## [0.17.0] - 2026-11-01
 
