@@ -18,6 +18,7 @@ import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoint
 import { PropertyMapper, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
+import { sameAsPendingLinks } from "../converter/notion-id-links.js";
 import type { PullOutcome } from "./pull-outcome.js";
 import { UpdateJournal } from "./update-journal.js";
 import {
@@ -203,6 +204,15 @@ export class DatabaseSyncer {
   private readonly journal: UpdateJournal;
   /** merge 전략이 받은 행에 로컬 편집을 합친 행 — {@link takeMergedRows}. */
   private mergedRows: string[] = [];
+  /** 상태 기록에 없던 같은 자리의 행 노트를 다시 이은 것(P7) — {@link takeRelinkedRows}. */
+  private relinkedRows: string[] = [];
+  /**
+   * 이번 pull 을 시작할 때 Notion 과 이은 노트가 하나도 없었다 — 그때는 자연 이름에 있는 행 노트의 글이 달라도 다시
+   * 잇는다({@link relinkExistingRow}). 오케스트레이터가 pull 을 시작할 때 정한다({@link beginPull}).
+   */
+  private unlinkedVault = false;
+  /** 이번 pull 에서 다시 이으려고 고른 행 노트 경로 — 같은 이름의 두 행이 한 노트를 고르지 않게. */
+  private readonly relinkClaims = new Set<string>();
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
   private schemaFollowed: SchemaFollowed[] = [];
   /** pull 이 마지막으로 쓴 사이드카 — 볼트에서 고친 것은 덮어쓰지 않는다(ADR-045). */
@@ -453,7 +463,12 @@ export class DatabaseSyncer {
           `pull ${dbConfig.localFolder}/${page.id}`,
         );
 
-        if (!record) {
+        if (!record && outcome.relinked) {
+          // 이미 있던 노트를 이었다 — 새로 받은 것이 아니다(P7).
+          this.relinkedRows.push(outcome.path!);
+          if (outcome.action === "written") writtenPaths.push(outcome.path);
+          else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
+        } else if (!record) {
           created++;
           if (outcome.action === "written") writtenPaths.push(outcome.path);
         } else if (outcome.action === "written") {
@@ -474,6 +489,10 @@ export class DatabaseSyncer {
         opts?.progress?.done({
           path: outcome.path ?? record?.obsidianPath ?? `${dbConfig.localFolder}/${page.id}`,
           operation: record ? "update" : "create",
+          // 다시 이은 행은 쓴 것이 없으면 만든 것이 아니다(P7).
+          ...(!record && outcome.relinked && outcome.action !== "written"
+            ? { unchanged: true }
+            : {}),
         });
       } catch (error) {
         failed.push(rowFailure(page, error));
@@ -1618,7 +1637,8 @@ export class DatabaseSyncer {
   async renderRow(
     page: PageObjectResponse,
     filePath: string,
-    options?: { downloadMedia?: boolean; localPath?: string },
+    /** `adoptFrom` — 다시 잇는 행 노트의 글(P7). 받은 미디어가 노트의 볼트 파일과 같으면 그 임베드로 되살린다. */
+    options?: { downloadMedia?: boolean; localPath?: string; adoptFrom?: string },
   ): Promise<{
     content: string;
     title: string;
@@ -1652,7 +1672,12 @@ export class DatabaseSyncer {
     let markdown = await notionBodyToObsidian(this.notionClient, mdResult.markdown, page.id);
     // 이 행이 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 페이지와 같다. 행 id 와
     // 행 경로를 넘겨야 그 행이 올린 것(과 옛 캡션의 파일)을 찾는다.
-    markdown = await this.imageHandler.restoreUploadedMedia(markdown, page.id, filePath);
+    markdown = await this.imageHandler.restoreUploadedMedia(
+      markdown,
+      page.id,
+      filePath,
+      options?.adoptFrom,
+    );
 
     if (downloadMedia && this.config.conversion.imageDownload === "immediate" && markdown) {
       try {
@@ -1755,6 +1780,118 @@ export class DatabaseSyncer {
     const rows = this.restoredRows;
     this.restoredRows = [];
     return rows;
+  }
+
+  /** pull 을 시작한다 — 이은 노트가 하나도 없는 볼트인지 적고 다시 잇기 장부를 비운다. */
+  beginPull(unlinkedVault: boolean): void {
+    this.unlinkedVault = unlinkedVault;
+    this.relinkClaims.clear();
+  }
+
+  /** 이번 받기에서 다시 이은 행의 경로를 가져가고 비운다. */
+  takeRelinkedRows(): string[] {
+    const rows = this.relinkedRows;
+    this.relinkedRows = [];
+    return rows;
+  }
+
+  /**
+   * 상태 기록에 없는 행 노트가 이 행이 놓일 자리에 이미 있다 — 이 행 id 를 단 이름이 먼저, 그 다음 자연 이름. 페이지의
+   * `claimExistingNote` 와 같은 규칙이다.
+   */
+  private async claimExistingRow(
+    localFolder: string,
+    safeName: string,
+    pageId: string,
+  ): Promise<{ readonly path: string; readonly existing: "own" | "name" } | null> {
+    const [natural, ...suffixed] = pagePathCandidates(localFolder, safeName, pageId);
+    const order: Array<[string, "own" | "name"]> = [
+      ...suffixed.map((path): [string, "own"] => [path, "own"]),
+      [natural!, "name"],
+    ];
+    for (const [candidate, existing] of order) {
+      if (this.relinkClaims.has(candidate) || this.stateDb.getByPath(candidate)) continue;
+      if (!(await this.vaultFs.exists(candidate))) continue;
+      this.relinkClaims.add(candidate);
+      return { path: candidate, existing };
+    }
+    return null;
+  }
+
+  /**
+   * 상태 기록에 없던 행 노트를 이 행과 다시 잇는다(P7) — 페이지의 `relinkExistingNote` 와 같은 규칙. 글이 같으면 잇고, 다르면
+   * 이 행 id 를 단 이름은 충돌 전략을 따르고 · 자연 이름은 이은 노트가 없는 볼트에서만 충돌로 잇는다. 잇지 않으면 null.
+   * remote-first 는 `"write"` — 호출측이 받은 행으로 덮는다.
+   */
+  private async relinkExistingRow(
+    filePath: string,
+    existing: "own" | "name",
+    local: string,
+    finalContent: string,
+    page: PageObjectResponse,
+    dbConfig: DatabaseSyncConfig,
+    rendered: { readonly title: string; readonly properties: Record<string, unknown> },
+    bodyFingerprint: string | null,
+  ): Promise<PullOutcome | "write" | null> {
+    const same = sameNoteContent(local, finalContent) || sameAsPendingLinks(local, finalContent);
+    if (!same && existing === "name" && !this.unlinkedVault) return null;
+    // 자연 이름의 다른 글은 정말 이 행의 노트인지 모른다 — 덮거나 올리지 않고 고르게 한다.
+    const strategy = existing === "own" ? this.config.sync.conflictStrategy : "manual";
+    if (!same && strategy === "remote-first") return "write";
+    const conflicted = !same && strategy !== "local-first";
+    // 글이 다르면 stat 을 적지 않는다 — 적으면 변경 확인이 stat 만 보고 바뀐 노트를 읽지 않는다(B5).
+    const stat = same ? await this.vaultFs.getFileStat(filePath) : null;
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        notionParentId: dbConfig.databaseId,
+        // 같으면 로컬 글로 적어 바뀐 것이 없게 · local-first 는 받은 글로 적어 다음 push 가 로컬을 올리게.
+        contentHash: computeHash(same ? local : finalContent),
+        ...observedRecordFields(page, this.observation().seenAt, bodyFingerprint),
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: "db-row",
+        status: conflicted ? "conflict" : "synced",
+        // 충돌로 이으면 공통 조상을 모른다 — merge 도 합치지 않는다.
+        baseSnapshot: conflicted ? null : Buffer.from(finalContent, "utf-8"),
+        localMtime: stat?.mtime ?? null,
+        localFileSize: stat?.size ?? null,
+      });
+      this.stateDb.upsertWikilink({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        title: rendered.title,
+        aliases: extractAliases(rendered.properties),
+      });
+    });
+    if (!conflicted) return { action: "unchanged", path: filePath, relinked: true };
+    const record = this.stateDb.getByPath(filePath)!;
+    return {
+      action: "conflict",
+      path: filePath,
+      relinked: true,
+      conflict: {
+        syncRecord: record,
+        localChange: {
+          path: filePath,
+          type: "modified",
+          currentHash: computeHash(local),
+          previousHash: record.contentHash,
+        },
+        remoteChange: {
+          pageId: page.id,
+          type: "modified",
+          lastEdited: page.last_edited_time,
+          previousEdited: null,
+          path: filePath,
+          title: rendered.title,
+        },
+        baseContent: null,
+        localContent: local,
+        remoteContent: finalContent,
+      },
+    };
   }
 
   /** 이번 받기에서 로컬 편집을 합친 행의 경로를 가져가고 비운다. */
@@ -1977,18 +2114,24 @@ export class DatabaseSyncer {
         : null;
     let filePath: string;
     let childFolderMove: RemoteMove | null = null;
+    // 상태 기록에 없는 행 노트가 이미 있는 자리(P7) — 받은 글과 견줘 다시 이을지 정한다.
+    let adopt: { readonly path: string; readonly existing: "own" | "name" } | null = null;
     if (retitle && "to" in retitle) {
       filePath = retitle.to;
       childFolderMove = retitle.children;
     } else if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
       filePath = recordPath;
     } else {
-      filePath = resolveDbRowPath(
-        dbConfig.localFolder,
-        safeName,
-        page.id,
-        await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
-      );
+      filePath =
+        (!existingRecord
+          ? (adopt = await this.claimExistingRow(dbConfig.localFolder, safeName, page.id))?.path
+          : undefined) ??
+        resolveDbRowPath(
+          dbConfig.localFolder,
+          safeName,
+          page.id,
+          await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
+        );
     }
     if (retitle && "reason" in retitle) {
       getLogger().warn(
@@ -2024,7 +2167,40 @@ export class DatabaseSyncer {
       }
     }
 
-    const rendered = await this.renderRow(page, filePath, { localPath: recordPath ?? filePath });
+    // 다시 잇는 노트는 먼저 읽는다 — 그 노트가 가리키는 볼트 파일과 같은 미디어는 사본을 받지 않는다.
+    const local = adopt ? await readLocalNote(this.vaultFs, filePath) : undefined;
+    let rendered = await this.renderRow(page, filePath, {
+      localPath: recordPath ?? filePath,
+      ...(local !== undefined ? { adoptFrom: local } : {}),
+    });
+    let relinked = false;
+    if (adopt) {
+      const outcome =
+        local === undefined
+          ? null
+          : await this.relinkExistingRow(
+              filePath,
+              adopt.existing,
+              local,
+              rendered.content,
+              page,
+              dbConfig,
+              rendered,
+              rendered.bodyFingerprint,
+            );
+      if (outcome === "write") relinked = true;
+      else if (outcome) return outcome;
+      else {
+        // 자연 이름에 있던 다른 노트다 — 예전처럼 id 를 붙인 새 이름으로 받는다.
+        filePath = resolveDbRowPath(
+          dbConfig.localFolder,
+          safeName,
+          page.id,
+          await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
+        );
+        rendered = await this.renderRow(page, filePath, { localPath: filePath });
+      }
+    }
     const { title, properties, bodyFingerprint } = rendered;
     // 행이 된 페이지 — 볼트 frontmatter 의 값을 비어 있는 열이 지우지 않는다(Notion 은 페이지의 속성을 모른다).
     const finalContent = becomesRow
@@ -2210,7 +2386,7 @@ export class DatabaseSyncer {
 
     return merged !== null
       ? { action: "merged", path: filePath }
-      : { action: "written", path: filePath };
+      : { action: "written", path: filePath, ...(relinked ? { relinked: true as const } : {}) };
   }
 }
 

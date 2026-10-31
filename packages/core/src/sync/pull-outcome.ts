@@ -12,10 +12,13 @@ import type { Conflict } from "../types/index.js";
  * - `merged` — 양쪽이 다른 줄을 고쳐 합친 글을 썼다(merge 전략). 원격을 받았지만 로컬 편집이 남아 있어
  *   `sync` 는 이 파일을 push 에서 빼지 않는다 — 이어지는 push 가 합친 글을 올린다.
  * - `conflict` — 양쪽이 바뀌어 사용자가 고른다.
+ *
+ * `relinked` 는 상태 기록에 없던 같은 자리의 노트를 이 페이지와 다시 이었다는 뜻이다(P7) — 새로 받은 것으로 세지 않는다.
  */
-export type PullOutcome =
+export type PullOutcome = (
   | { readonly action: "written"; readonly path: string }
   | { readonly action: "unchanged"; readonly path?: string }
   | { readonly action: "skipped"; readonly path: string }
   | { readonly action: "merged"; readonly path: string }
-  | { readonly action: "conflict"; readonly path: string; readonly conflict: Conflict };
+  | { readonly action: "conflict"; readonly path: string; readonly conflict: Conflict }
+) & { readonly relinked?: true };

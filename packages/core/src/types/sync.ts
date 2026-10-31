@@ -321,6 +321,16 @@ export interface PullResult {
    */
   readonly mergedPaths?: readonly string[];
   /**
+   * 상태 기록에 없던 같은 자리의 노트 · 행을 그 Notion 페이지와 다시 이은 것(P7) — 상태 DB 를 잃었거나 처음 잇는 볼트.
+   * 새로 받은 것({@link created})에 세지 않는다. 글이 달라 충돌로 이은 것은 {@link conflicts} 에도 든다. 없으면 생략.
+   */
+  readonly relinkedPaths?: readonly string[];
+  /**
+   * dry-run 만 — 상태 기록에 Notion 과 이은 노트가 없어 실제 pull 은 같은 자리의 노트를 먼저 다시 잇는다(P7). 미리 보기는
+   * 노트 글을 받아 견주지 않아 그 노트들도 {@link created} 로 센다. 이을 노트가 없으면 생략.
+   */
+  readonly relinkPending?: true;
+  /**
    * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
    */
   readonly heldSidecars?: readonly string[];
