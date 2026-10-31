@@ -347,7 +347,8 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 ```
 
 The plugin's settings tab has the same options as this file: **둘 다 바뀐 노트** (`conflictStrategy`), **지운 것을 반대쪽에서도
-지우기** (`deleteSync`, on by default in the plugin), **Notion 전체 확인 주기** (`fullReconcileInterval`), **첨부 폴더**
+지우기** (`deleteSync`, on by default in the plugin), **첨부 파일 올리기** (`syncFiles`), **DB 정의가 있는 폴더를 Notion DB 로
+만들기** (`createDatabases`), **동기화가 쓴 페이지의 알림** (`notifications`), **Notion 전체 확인 주기** (`fullReconcileInterval`), **첨부 폴더**
 (`attachments`), **Notion 의 그림 받기** (`imageDownload`), **Notion Markdown API 쓰기** (`preferMarkdownApi`), and under
 **Notion DB** the database mode and extra databases (`notion.databases`). Database settings belong to the vault connection only.
 
