@@ -6,6 +6,7 @@ import {
 } from "../constants/markers.js";
 import { NOTION_COLOR_NAMES } from "../view/color-map.js";
 import type { NotionColor } from "../view/types.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
 
 /**
  * 디자인 마커 읽기 — 볼트 노트 한 줄에 실린 마커가 «무엇을 어디에» 칠하는지 (U-01).
@@ -115,7 +116,7 @@ function inlineCodeRanges(line: string): LineRange[] {
   const open = /`+/g;
   let start: RegExpExecArray | null;
   while ((start = open.exec(line)) !== null) {
-    const close = new RegExp(`(?<!\`)${"`".repeat(start[0].length)}(?!\`)`, "g");
+    const close = new LookbehindRegExp(`${"`".repeat(start[0].length)}(?!\`)`, "g", notAfter(/`/));
     close.lastIndex = start.index + start[0].length;
     const end = close.exec(line);
     if (end === null) continue;

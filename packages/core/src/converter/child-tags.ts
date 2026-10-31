@@ -5,6 +5,10 @@ import { databaseTagId } from "../utils/inline-db-refs.js";
 import { codeLineMask } from "../utils/md-regions.js";
 import { decodeMarkerTarget } from "./marker-url.js";
 import { stripMarkdownExtension } from "../utils/markdown-path.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
+
+/** 앞에 `\\` 가 없는 `_`. */
+const UNESCAPED_UNDERSCORE_RE = new LookbehindRegExp(/_/g, undefined, notAfter(/\\/));
 
 /**
  * Notion Markdown API 가 본문 속 자식 페이지를 싣는 태그 — `<page url="…/<32hex>">제목</page>`.
@@ -205,7 +209,7 @@ function sendableTag(child: ChildTag): string {
   if (child.kind !== "page" || !child.title.includes("_")) return child.tag;
   const close = "</page>";
   const head = child.tag.slice(0, child.tag.length - close.length - child.title.length);
-  return `${head}${child.title.replace(/(?<!\\)_/g, "\\_")}${close}`;
+  return `${head}${child.title.replace(UNESCAPED_UNDERSCORE_RE, "\\_")}${close}`;
 }
 
 /** NFM 컨테이너를 여는 줄 · 닫는 줄 — 줄에 컨테이너 태그만 있을 때. 그룹 1 = 종류. */

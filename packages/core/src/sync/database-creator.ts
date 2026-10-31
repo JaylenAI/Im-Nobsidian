@@ -41,6 +41,14 @@ import { isDatabaseMode } from "./parent-mode.js";
 import { addPendingDatabases } from "./remote-scan.js";
 import type { VaultFS } from "./vault-fs.js";
 import { loadPreparedDatabases } from "./folder-database.js";
+import { LookbehindRegExp, notAfterText } from "../utils/lookbehind.js";
+
+/** 수식의 `prop("이름")` — 다른 DB 를 가리키는 `current.prop(…)` 은 뺀다. */
+const PROP_REFERENCE_RE = new LookbehindRegExp(
+  /prop\("([^"]+)"\)/g,
+  undefined,
+  notAfterText("current."),
+);
 
 /** 사이드카 파일인가 — 확장자 대소문자는 가리지 않는다. */
 function isSidecarPath(path: string): boolean {
@@ -769,7 +777,7 @@ export function dependentHint(
 ): string {
   const expression = (dependent.body.formula as { expression?: unknown } | undefined)?.expression;
   if (typeof expression === "string") {
-    const referenced = [...expression.matchAll(/(?<!current\.)prop\("([^"]+)"\)/g)]
+    const referenced = [...expression.matchAll(PROP_REFERENCE_RE)]
       .map((m) => m[1]!)
       .filter((name) => name !== dependent.name);
     const blocked = referenced.filter(schema.stillMissing);

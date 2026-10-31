@@ -11,6 +11,7 @@
  * - 페이지의 맨 위 블록만 본다 — 콜아웃 · 토글 · 목록 자식 속 제목 · 블록 id 는 찾지 않는다(링크를 글자로 남긴다).
  */
 import { compactNotionId, notionPageUrl } from "../utils/id.js";
+import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
 
 /** 링크 대상을 노트와 앵커로 가른다 — `#` 가 없으면 null. 노트 이름에는 `#` 를 쓸 수 없다(Obsidian). */
 export function splitAnchor(target: string): { note: string; anchor: string } | null {
@@ -118,7 +119,11 @@ export function anchorBlockOf(block: {
 }
 
 /** `#` 가 든 위키링크(임베드 아님)의 대상 — 그룹 1. 표 칸의 `\|` 별칭 구분자를 받는다. */
-const ANCHORED_WIKILINK_RE = /(?<!!)\[\[([^[\]|]*#[^[\]|]*?)\\?(?:\|[^[\]]+)?\]\]/g;
+const ANCHORED_WIKILINK_RE = new LookbehindRegExp(
+  /\[\[([^[\]|]*#[^[\]|]*?)\\?(?:\|[^[\]]+)?\]\]/g,
+  undefined,
+  notAfter(/!/),
+);
 
 /** 노트의 제목 · 블록 링크의 대상(`노트#제목`) — 코드 안의 것도 든다(대상 페이지를 한 번 더 읽을 뿐이다). */
 export function anchoredWikilinkTargets(markdown: string): string[] {
