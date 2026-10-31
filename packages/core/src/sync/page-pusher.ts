@@ -320,7 +320,8 @@ export class PagePusher {
     }
     const others = unsent.filter((key) => !readOnly.includes(key));
     if (others.length > 0) {
-      getLogger().info(
+      // 결과에 싣지 않는 것이라 경고로 알린다 — 정보 로그는 CLI 가 기본으로 숨긴다.
+      getLogger().warn(
         `[Im-Nobsidian] ${what} ${others.length}개는 보내지 않음(DB 에 없는 속성 · 비울 수 없는 속성 · ` +
           `변환 불가): ${path} — ${others.join(", ")}`,
       );

@@ -638,7 +638,9 @@ export class NotionClient {
     );
     if (refetched > 0) {
       const left = response.unknown_block_ids.length;
-      getLogger().info(
+      // 자리표시로 남긴 블록이 있으면 받지 못한 것이라 경고 — 다 채웠으면 정보.
+      const logger = getLogger();
+      (left > 0 ? logger.warn.bind(logger) : logger.info.bind(logger))(
         `[Im-Nobsidian] Markdown API 가 잘라 보낸 블록 ${refetched}개를 다시 받아 채움 (${pageId})` +
           (left > 0 ? ` — 권한이 없어 ${left}개는 자리표시로 남김` : ""),
       );

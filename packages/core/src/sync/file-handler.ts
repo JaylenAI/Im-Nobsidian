@@ -10,6 +10,7 @@ import type { NotionBlockType } from "../utils/mime.js";
 import { fetchForDownload } from "../utils/download-fetch.js";
 import { withDeadline } from "../utils/deadline.js";
 import { DEFAULT_CONFIG } from "../types/config.js";
+import type { FailedOperation } from "../types/sync.js";
 
 /** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface FileHandlerOptions {
@@ -100,11 +101,14 @@ export class FileHandler {
    * 호출이 늘어나는 **합성 경로**라 전체로는 여전히 무한대다. 상한을 넘긴 첨부는 경고만
    * 남기고 나머지 첨부는 계속 올린다 — 첨부 하나가 push 전체를 멎게 하지 않는다.
    *
+   * @param failed 실패를 결과로 알릴 곳 — 있으면 실패를 여기 담고 경고 로그는 내지 않는다(화면이 결과로 알린다. 둘 다
+   *   내면 같은 말이 두 번 나온다). 없으면 경고 로그로만 남는다.
    * @returns 업로드 결과. 변경 없음(스킵)이거나 실패했으면 null.
    */
   private async pushSingleFile(
     file: NonMdFileInfo,
     folderPageId: string,
+    failed?: FailedOperation[],
   ): Promise<FileUploadResult | null> {
     const existing = this.stateDb.getFileRegistry(file.path);
     if (existing) {
@@ -125,7 +129,16 @@ export class FileHandler {
     } catch (error) {
       // 사유만 남긴다 — 오류 객체를 통째로 넘기면 응답 헤더까지 쏟아져 사유가 묻힌다.
       const reason = error instanceof Error ? error.message : String(error);
-      getLogger().warn(`파일 업로드 실패 (${file.path}): ${reason}`);
+      if (failed) {
+        failed.push({
+          path: file.path,
+          operation: existing ? "update" : "create",
+          error: `첨부 업로드 실패 — ${reason}`,
+        });
+        getLogger().info(`파일 업로드 실패 (${file.path}): ${reason}`);
+      } else {
+        getLogger().warn(`파일 업로드 실패 (${file.path}): ${reason}`);
+      }
       return null;
     } finally {
       this.sema.release();
@@ -153,12 +166,19 @@ export class FileHandler {
     return { uploadable, unsupported };
   }
 
-  async pushAllFiles(): Promise<FileUploadResult[]> {
+  /**
+   * 볼트의 첨부를 폴더 페이지마다 올린다.
+   *
+   * @param failed 올리지 못한 첨부를 담을 곳 — push 결과의 `failed` 를 넘기면 CLI · 플러그인이 처리하지 못한 것으로
+   *   보인다. 예전엔 경고 로그로만 남아 push 가 「실패 0」 으로 끝났다.
+   */
+  async pushAllFiles(failed?: FailedOperation[]): Promise<FileUploadResult[]> {
     const { uploadable: allFiles, unsupported } = await this.listUploadableFiles();
     if (unsupported.length > 0) {
       const names = unsupported.slice(0, LOGGED_NAMES).map((f) => f.path);
       const rest = unsupported.length - names.length;
-      getLogger().info(
+      // 올리지 못한 것이라 경고 — CLI 는 정보 로그를 기본으로 숨기고, 플러그인은 경고를 동기화 기록에 모은다.
+      getLogger().warn(
         `[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 첨부 ${unsupported.length}개: ` +
           `${names.join(", ")}${rest > 0 ? ` 외 ${rest}개` : ""}`,
       );
@@ -191,7 +211,7 @@ export class FileHandler {
       }
 
       for (const file of files) {
-        const result = await this.pushSingleFile(file, folderPageId);
+        const result = await this.pushSingleFile(file, folderPageId, failed);
         if (result) results.push(result);
       }
     }

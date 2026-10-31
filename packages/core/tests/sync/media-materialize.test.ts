@@ -367,10 +367,11 @@ describe("ImageHandler.materializeLocalMedia — 자리표시자 제자리 교�
 
     beforeEach(() => {
       info = [];
+      // 올리지 못한 것이라 경고로 낸다 — CLI 는 정보 로그를 기본으로 숨긴다.
       setLogger({
-        warn: () => {},
+        warn: (msg) => info.push(msg),
         error: () => {},
-        info: (msg) => info.push(msg),
+        info: () => {},
         debug: () => {},
       });
     });
