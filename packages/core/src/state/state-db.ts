@@ -166,6 +166,13 @@ export class StateDB implements IStateDB {
     return row ? this.mapRow(row) : null;
   }
 
+  getByPathKey(path: string): SyncRecord[] {
+    const rows = this.db
+      .prepare("SELECT * FROM sync_state WHERE obsidian_path = ? COLLATE NOCASE")
+      .all(path) as RawSyncRow[];
+    return rows.map((r) => this.mapRow(r));
+  }
+
   getByNotionId(pageId: string): SyncRecord | null {
     const row = this.db.prepare("SELECT * FROM sync_state WHERE notion_page_id = ?").get(pageId) as
       RawSyncRow | undefined;
