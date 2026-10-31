@@ -54,6 +54,8 @@ export const pushCommand = new Command("push")
         onProgress: json
           ? undefined
           : (current, total, item) => {
+              // 보낼 것이 없던 노트 — 읽기 전용 속성만 고친 행. 결과의 경고가 알린다.
+              if (item.unchanged) return;
               const icon = operationIcon(item.operation);
               const label = operationLabel(item.operation);
               const prog = progress(current, total);

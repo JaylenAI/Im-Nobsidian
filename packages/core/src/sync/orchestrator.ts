@@ -614,9 +614,17 @@ export class SyncOrchestrator {
       const planned = (
         this.config.sync.deleteSync ? applicable : applicable.filter((c) => c.type !== "deleted")
       ).filter((change) => !remoteRefused.has(change.path));
+      const { skips: readOnlySkipped, nothingSent } =
+        await this.pusher.previewReadOnlySkips(applicable);
+      // 읽기 전용 속성만 고친 행은 보낼 것이 없다 — 실제 push 처럼 진행에 바뀌지 않은 것으로 알린다.
+      const unsent = new Set(nothingSent);
       const items: ProgressItem[] = [
         ...movableFolders.map(({ to }) => ({ path: to, operation: "move" as const })),
-        ...planned.map((change) => ({ path: change.path, operation: pushOperationOf(change) })),
+        ...planned.map((change) => ({
+          path: change.path,
+          operation: pushOperationOf(change),
+          ...(unsent.has(change.path) ? { unchanged: true } : {}),
+        })),
       ];
       items.forEach((item, index) => options?.onProgress?.(index + 1, items.length, item));
       const count = (operation: ProgressItem["operation"]): number =>
@@ -629,8 +637,6 @@ export class SyncOrchestrator {
       const unsentDeletions = applicable
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
-      const { skips: readOnlySkipped, nothingSent } =
-        await this.pusher.previewReadOnlySkips(applicable);
       // 실제 push 처럼 — 옮김 · 지움이 걸린 노트는 다음 push 에, 고친 노트는 옮기며 함께 보낸다(고침이 아니라 옮김으로 센다).
       const preparedConversions = this.pusher.previewPreparedConversions(
         newDatabases,
@@ -705,18 +711,21 @@ export class SyncOrchestrator {
     // 이번 push 가 본문을 보낸 노트 — 링크 패스가 이 노트의 실패를 실패로 알린다.
     const pushedBodies = new Set<string>();
     // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
-    const applyPushChange = async (change: LocalChange): Promise<void> => {
+    // 보낸 것이 없으면 false — 읽기 전용 속성만 고친 행.
+    const applyPushChange = async (change: LocalChange): Promise<boolean> => {
       switch (change.type) {
         case "created":
           await this.pusher.pushCreate(change.path);
           counts.created++;
           pushedBodies.add(change.path);
           break;
-        case "modified":
+        case "modified": {
           // 읽기 전용 속성만 고친 행은 보낸 것이 없다 — 고침으로 세지 않고 `readOnlySkipped` 로만 알린다.
-          if (await this.pusher.pushUpdate(change.path)) counts.updated++;
+          const sent = await this.pusher.pushUpdate(change.path);
+          if (sent) counts.updated++;
           pushedBodies.add(change.path);
-          break;
+          return sent;
+        }
         case "moved":
           await this.pusher.pushMove(change);
           counts.moved++;
@@ -728,23 +737,28 @@ export class SyncOrchestrator {
           break;
         }
       }
+      return true;
     };
 
     // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패분은 변경 객체째 재시도 큐로.
     const retryQueue: LocalChange[] = [];
     const firstAttempt = async (change: LocalChange): Promise<void> => {
       if (options?.signal?.aborted) return;
-      options?.onProgress?.(++completed, total, {
-        path: change.path,
-        operation: pushOperationOf(change),
-      });
+      const item = { path: change.path, operation: pushOperationOf(change) };
+      // 고침은 보낸 뒤에 알린다 — 읽기 전용 속성만 고친 행은 보낸 것이 없어 「updated」 로 찍으면 요약(수정 0)과 어긋났다.
+      const reportAfter = change.type === "modified";
+      if (!reportAfter) options?.onProgress?.(++completed, total, item);
       try {
-        await withDeadline(
+        const sent = await withDeadline(
           () => applyPushChange(change),
           this.config.advanced.itemTimeoutMs,
           `push ${change.path}`,
         );
+        if (reportAfter) {
+          options?.onProgress?.(++completed, total, sent ? item : { ...item, unchanged: true });
+        }
       } catch {
+        if (reportAfter) options?.onProgress?.(++completed, total, item);
         retryQueue.push(change);
       }
     };
