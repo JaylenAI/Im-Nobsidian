@@ -3,6 +3,7 @@ import {
   IGNORE_FILE,
   inAnyPathScope,
   isMarkdownPath,
+  applicableChoices,
   isRemoteDeletion,
   notionIdsEqual,
   SyncBusyError,
@@ -12,6 +13,7 @@ import type {
   SyncOrchestrator,
   GatedOperation,
   ProgressCallback,
+  ProgressItem,
   ChangeDiff,
   LocalChange,
   FolderMoveChange,
@@ -29,8 +31,10 @@ import type {
   SyncRecord,
   SyncResult,
   UserBaseFilterFix,
+  VaultCompletenessReport,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
+import type { SyncPreview } from "../preview-modal.js";
 import { directionBlocks, type DirectionBlocks } from "./direction.js";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
@@ -158,10 +162,21 @@ interface ActiveTask {
 }
 
 /** 충돌 하나를 무엇으로 풀지 묻는다. 고르지 않으면 null. 신호가 취소되면 묻기를 닫는다. */
+/** 고른 것과, 남은 충돌에도 같은 것을 쓸지. */
+export interface ConflictAnswer {
+  readonly choice: ResolutionChoice;
+  /** 남은 충돌 가운데 그 선택이 가능한 것은 묻지 않고 같은 것으로 푼다 — 가능하지 않은 것(Notion 에서 지운 노트의 병합)은 묻는다. */
+  readonly forRest: boolean;
+}
+
+/**
+ * 충돌 하나를 무엇으로 풀지 묻는다 — 고르지 않으면 null. `remaining` 은 이 뒤에 물을 충돌 수(「남은 것도 같은 것으로」 를 보일지).
+ */
 export type ConflictChooser = (
   conflict: Conflict,
   signal: AbortSignal,
-) => Promise<ResolutionChoice | null>;
+  remaining: number,
+) => Promise<ResolutionChoice | ConflictAnswer | null>;
 
 export class SyncController {
   /**
@@ -469,6 +484,50 @@ export class SyncController {
       syncReport,
       (result) => this.dropPulled(result.pull),
     );
+  }
+
+  /**
+   * 반영하지 않고 Sync 가 무엇을 할지 본다(dry-run) — 받을 것 · 올릴 것 · 충돌 · 처리하지 못할 것. 볼트 · Notion · 상태 기록을
+   * 바꾸지 않으므로 기록에 남기지 않는다. 결과는 `show` 가 보인다.
+   */
+  async preview(show: (preview: SyncPreview) => void): Promise<void> {
+    if (!this.admit("sync")) return;
+    await this.exclusive("sync", async (signal) => {
+      this.hooks.onNotice?.(`${NOTICE_PREFIX}: Sync 미리 보기...`);
+      const items: ProgressItem[] = [];
+      try {
+        const result = await this.orchestrator.sync({
+          dryRun: true,
+          signal,
+          onProgress: (_current, _total, item) => items.push(item),
+        });
+        if (!signal.aborted) show({ result, items });
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: 미리 보지 못함 — ${errorMessage(error)}`,
+          ACTIONABLE_NOTICE_MS,
+        );
+      }
+    });
+  }
+
+  /**
+   * 빠짐없이 받았는지 — Notion 의 DB 행 · 페이지를 상태 기록과 견준다(CLI `verify`). 결과는 `show` 가 보인다.
+   */
+  async verify(show: (report: VaultCompletenessReport) => void): Promise<void> {
+    if (!this.admit("verify")) return;
+    await this.exclusive("verify", async (signal) => {
+      this.hooks.onNotice?.(`${NOTICE_PREFIX}: 빠짐없이 받았는지 확인하는 중...`);
+      try {
+        const report = await this.orchestrator.verifyCompleteness();
+        if (!signal.aborted) show(report);
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: 확인하지 못함 — ${errorMessage(error)}`,
+          ACTIONABLE_NOTICE_MS,
+        );
+      }
+    });
   }
 
   /**
@@ -838,13 +897,23 @@ export class SyncController {
     }
 
     const cleared = new Set(this.orchestrator.clearStaleConflicts(conflicts));
+    const pending = conflicts.filter((conflict) => !cleared.has(conflict.syncRecord.obsidianPath));
     let resolved = 0;
     let remaining = 0;
     let failed = 0;
-    for (const conflict of conflicts) {
+    let forRest: ResolutionChoice | null = null;
+    for (const [index, conflict] of pending.entries()) {
       const path = conflict.syncRecord.obsidianPath;
-      if (cleared.has(path)) continue;
-      const choice = signal.aborted ? null : await choose(conflict, signal);
+      let choice: ResolutionChoice | null = null;
+      if (signal.aborted) {
+        // 플러그인을 내렸다 — 「남은 것도 같은 것으로」 도 더 풀지 않는다.
+      } else if (forRest && applicableChoices(conflict).includes(forRest)) {
+        choice = forRest;
+      } else {
+        const answer = await choose(conflict, signal, pending.length - index - 1);
+        choice = typeof answer === "object" && answer ? answer.choice : answer;
+        if (typeof answer === "object" && answer?.forRest) forRest = answer.choice;
+      }
       if (!choice) {
         remaining++;
         continue;

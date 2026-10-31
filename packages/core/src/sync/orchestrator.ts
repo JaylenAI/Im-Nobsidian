@@ -1699,6 +1699,11 @@ export class SyncOrchestrator {
    * 열거와 맞대 봐야 의미가 있다.
    */
   async verifyCompleteness(): Promise<VaultCompletenessReport> {
+    // 도는 pull 이 상태 기록을 쓰는 중에 견주면 받는 중인 페이지를 빠진 것으로 본다.
+    return this.gate.run("verify", () => this.executeVerifyCompleteness());
+  }
+
+  private async executeVerifyCompleteness(): Promise<VaultCompletenessReport> {
     const ids: string[] = [];
     if (isDatabaseMode(this.config)) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);

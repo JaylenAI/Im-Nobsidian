@@ -12,14 +12,7 @@ import {
   notionIdFromInput,
   sectionLinesWithHeadingMarkers,
 } from "@im-nobsidian/core";
-import type {
-  Config,
-  Conflict,
-  Logger,
-  LocalChange,
-  RemoteChange,
-  ResolutionChoice,
-} from "@im-nobsidian/core";
+import type { Config, Conflict, Logger, LocalChange, RemoteChange } from "@im-nobsidian/core";
 import { DEFAULT_WATCH_DEBOUNCE_MS, StateDbUnavailableError } from "@im-nobsidian/core";
 import { NOTICE_PREFIX, TOKEN_SECRET_ID, withoutNoticePrefix } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
@@ -32,13 +25,20 @@ import { ChangeDiffModal } from "./change-diff-modal.js";
 import { BaseFilterFixModal } from "./base-filter-modal.js";
 import { DiscardConfirmModal } from "./discard-confirm-modal.js";
 import { SyncLogModal } from "./sync-log-modal.js";
+import { PreviewModal, type ConnectionPreview } from "./preview-modal.js";
+import { VerifyModal, type ConnectionVerify } from "./verify-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
 import { EMPTY_DASHBOARD_STATE, newestFirst } from "./sync/sync-controller.js";
 import { collectingLogger, type WarningLogEntry } from "./sync/warning-log.js";
 import { directionBlock } from "./sync/direction.js";
-import type { SyncLogEntry, SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
+import type {
+  ConflictAnswer,
+  SyncLogEntry,
+  SyncPhase,
+  SyncStatePatch,
+} from "./sync/sync-controller.js";
 import type { SidebarPatch } from "./views/sync-sidebar-view.js";
 import { ConnectionEngine, type EngineHost } from "./connection/connection-engine.js";
 
@@ -298,6 +298,19 @@ export default class ImNobsidianPlugin extends Plugin {
     });
 
     // 알림은 사라지고 자동 동기화는 알리지 않는다 — 처리하지 못한 노트의 까닭 · 받지 않은 페이지를 다시 본다(P8).
+    // 반영하지 않고 무엇을 할지 · 빠짐없이 받았는지 — CLI 의 `sync --dry-run` · `verify`(P8).
+    this.addCommand({
+      id: "im-nobsidian-preview",
+      name: "Sync 미리 보기 (반영하지 않음)",
+      callback: () => this.previewSync(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-verify",
+      name: "빠짐없이 받았는지 확인",
+      callback: () => this.verifyCompleteness(),
+    });
+
     this.addCommand({
       id: "im-nobsidian-sync-log",
       name: "동기화 기록",
@@ -955,6 +968,51 @@ export default class ImNobsidianPlugin extends Plugin {
     await this.eachEngine(engines, (controller) => controller.sync());
   }
 
+  /** 반영하지 않고 Sync 가 무엇을 할지 — 연결마다 본 것을 창 하나에 모은다. */
+  private async previewSync(): Promise<void> {
+    const engines = this.commandEngines();
+    if (engines.every((engine) => !engine.controller)) {
+      new Notice(this.notReadyReason(engines[0]));
+      return;
+    }
+    const previews: ConnectionPreview[] = [];
+    for (const engine of engines) {
+      if (!engine.controller) {
+        new Notice(this.notReadyReason(engine));
+        continue;
+      }
+      await engine.controller.preview((preview) => previews.push({ label: engine.label, preview }));
+    }
+    if (previews.length > 0) new PreviewModal(this.app, previews).open();
+  }
+
+  /** Notion 의 DB 행 · 페이지를 빠짐없이 받았는지 — 연결마다 견준 것을 창 하나에 모은다. */
+  private async verifyCompleteness(): Promise<void> {
+    const engines = this.commandEngines();
+    if (engines.every((engine) => !engine.controller)) {
+      new Notice(this.notReadyReason(engines[0]));
+      return;
+    }
+    const results: ConnectionVerify[] = [];
+    for (const engine of engines) {
+      if (!engine.controller) {
+        new Notice(this.notReadyReason(engine));
+        continue;
+      }
+      await engine.controller.verify((report) =>
+        results.push({
+          label: engine.label,
+          report,
+          pathOf: (notionId) => {
+            const path = engine.stateDb?.getByNotionId(notionId)?.obsidianPath;
+            return path ? engine.toVault(path) : null;
+          },
+        }),
+      );
+    }
+    if (results.length > 0) new VerifyModal(this.app, results).open();
+  }
+
   private async showStatus(): Promise<void> {
     const engines = this.commandEngines();
     if (engines.every((engine) => !engine.controller)) {
@@ -1075,7 +1133,9 @@ export default class ImNobsidianPlugin extends Plugin {
       return;
     }
     await this.eachEngine(engines, (controller) =>
-      controller.resolveConflicts((conflict, signal) => this.askConflictChoice(conflict, signal)),
+      controller.resolveConflicts((conflict, signal, remaining) =>
+        this.askConflictChoice(conflict, signal, remaining),
+      ),
     );
   }
 
@@ -1086,13 +1146,15 @@ export default class ImNobsidianPlugin extends Plugin {
   private askConflictChoice(
     conflict: Conflict,
     signal: AbortSignal,
-  ): Promise<ResolutionChoice | null> {
+    remaining: number,
+  ): Promise<ConflictAnswer | null> {
     return new Promise((resolve) => {
-      const modal = new ConflictModal(
+      const modal: ConflictModal = new ConflictModal(
         this.app,
         conflict,
-        resolve,
+        (choice) => resolve(choice && { choice, forRest: modal.forRest }),
         this.settings.syncDirection !== "pull",
+        remaining,
       );
       signal.addEventListener("abort", () => modal.close(), { once: true });
       modal.open();
