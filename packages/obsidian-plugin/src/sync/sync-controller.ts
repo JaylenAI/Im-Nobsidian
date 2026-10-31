@@ -371,6 +371,7 @@ export class SyncController {
           heldSidecarText(result.heldSidecars ?? []),
           heldBaseText(result.heldBases ?? []),
           restoredText(result),
+          relinkedText(result),
           mergedText(result, "pull"),
         ),
       }),
@@ -389,6 +390,7 @@ export class SyncController {
         warning: warnings(
           schemaFollowedText(result.pull),
           restoredText(result.pull),
+          relinkedText(result.pull),
           mergedText(result.pull, "sync"),
           renamedPropertyText(result.push),
           schemaEditText(result.push),
@@ -946,6 +948,16 @@ function restoredText(result: PullResult): string | null {
   if (paths.length === 0) return null;
   return (
     `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — 새로 받지 않았다. */
+function relinkedText(result: PullResult): string | null {
+  const paths = result.relinkedPaths ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `상태 기록에 없던 노트 ${paths.length}개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다: ` +
     listedPaths(paths)
   );
 }

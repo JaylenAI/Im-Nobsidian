@@ -349,6 +349,28 @@ describe("SyncController", () => {
       );
     });
 
+    it("상태 기록을 잃은 볼트에서 다시 이은 노트를 알린다 (P7)", async () => {
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        restored: 0,
+        relinkedPaths: ["가.md", "나.md"],
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 상태 기록에 없던 노트 2개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다: 가.md, 나.md",
+        expect.any(Number),
+      );
+    });
+
     it("옮긴 노트 · 폴더는 수정과 따로 「이동」 으로 요약한다", async () => {
       mock.push.mockResolvedValue({
         created: 0,

@@ -202,6 +202,11 @@ describe("--json 출력 계약", () => {
     mockPull.mockResolvedValueOnce(pullResult);
     await run(pullCommand, "pull", "--json");
     expect(stdoutJson(write)).toMatchObject({ restoredPaths: [] });
+
+    write.mockClear();
+    mockPull.mockResolvedValueOnce({ ...pullResult, relinkedPaths: ["가.md"] });
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ relinkedPaths: ["가.md"], relinkPending: false });
   });
 
   it("sync: Pull 이 무변경이어도 Push 변경을 churn 으로 센다", async () => {

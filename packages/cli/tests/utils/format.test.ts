@@ -30,6 +30,7 @@ import {
   remoteDeletionHint,
   restoredLines,
   mergedLines,
+  relinkedLines,
   plannedConflictLines,
   schemaFollowedLines,
   renamedPropertyLines,
@@ -341,6 +342,16 @@ describe("dry-run 이 미리 본 합침 · 충돌", () => {
       "합쳤습니다 — 합친 글을 Notion 에 올립니다",
     );
     expect(mergedLines([], "push", true)).toEqual([]);
+  });
+
+  it("다시 이은 노트는 경로와 함께 · dry-run 은 다시 이을 것이라고만 — 없으면 아무 줄도 없다 (P7)", () => {
+    expect(relinkedLines(["가.md"], undefined)).toEqual([
+      "↻ 상태 기록에 없던 노트 1개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다:",
+      "  가.md",
+    ]);
+    expect(relinkedLines(undefined, true)).toHaveLength(1);
+    expect(relinkedLines(undefined, true)[0]).toContain("다시 잇습니다");
+    expect(relinkedLines([], undefined)).toEqual([]);
   });
 
   it("충돌로 남을 노트는 경로와 함께 — 없으면 아무 줄도 없다", () => {
