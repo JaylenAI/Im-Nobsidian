@@ -14,6 +14,14 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       autoSync: boolean;
       autoSyncInterval: number;
       timeZone: string;
+      conflictStrategy: string;
+      attachments: string;
+      deleteSync?: boolean;
+      fullReconcileInterval?: number;
+      downloadMedia?: boolean;
+      preferMarkdownApi?: boolean;
+      databaseId?: string;
+      databases?: { databaseId: string; localFolder: string }[];
       includePaths?: string[];
       excludePaths?: string[];
       connections?: {
@@ -43,6 +51,8 @@ describe("ImNobsidianSettingTab (U-03)", () => {
         autoSync: false,
         autoSyncInterval: 300,
         timeZone: "",
+        conflictStrategy: "manual",
+        attachments: "attachments",
       },
       saveSettings: vi.fn().mockResolvedValue(undefined),
       initOrchestrator: vi.fn().mockResolvedValue(undefined),
@@ -236,6 +246,114 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     expect(plugin.initOrchestrator).not.toHaveBeenCalled();
     settingTab.hide();
     expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
+  describe("CLI 와 같은 설정 (P8)", () => {
+    it("둘 다 바뀐 노트 — 엔진의 전략 다섯 가지를 고르고, 설명이 고른 것을 따라 바뀐다", async () => {
+      const { row, control } = display();
+      expect(control("둘 다 바뀐 노트").options.map(([v]) => v)).toEqual([
+        "manual",
+        "merge",
+        "local-first",
+        "remote-first",
+        "duplicate",
+      ]);
+      expect(row("둘 다 바뀐 노트").desc).toContain("사이드바에서 하나씩 고릅니다");
+
+      await control("둘 다 바뀐 노트").change("remote-first");
+      expect(plugin.settings.conflictStrategy).toBe("remote-first");
+      expect(row("둘 다 바뀐 노트").desc).toContain("노트에서 고친 것은 사라집니다");
+      // 엔진 목록에 없는 값은 적지 않는다
+      await control("둘 다 바뀐 노트").change("newest");
+      expect(plugin.settings.conflictStrategy).toBe("remote-first");
+      expect(plugin.initOrchestrator).not.toHaveBeenCalled();
+      settingTab.hide();
+      expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+    });
+
+    it("지운 것을 반대쪽에서도 지우기 — 없으면 켜져 보이고(예전 플러그인 동작), 끄면 false 로 적는다", async () => {
+      const { row, control } = display();
+      expect(control("지운 것을 반대쪽에서도 지우기").value).toBe(true);
+      expect(row("지운 것을 반대쪽에서도 지우기").desc).toContain(
+        "다음 Pull 이 Notion 에서 다시 받습니다",
+      );
+      await control("지운 것을 반대쪽에서도 지우기").change(false);
+      expect(plugin.settings.deleteSync).toBe(false);
+    });
+
+    it("Notion 전체 확인 주기 — Pull 마다부터 7일까지, 목록 밖의 예전 값도 보인다", async () => {
+      plugin.settings.fullReconcileInterval = 7200;
+      const { control } = display();
+      expect(control("Notion 전체 확인 주기").options).toEqual([
+        ["0", "Pull 마다"],
+        ["600", "10분"],
+        ["1800", "30분"],
+        ["3600", "1시간"],
+        ["7200", "2시간"],
+        ["21600", "6시간"],
+        ["86400", "1일"],
+        ["604800", "7일"],
+      ]);
+      expect(control("Notion 전체 확인 주기").value).toBe("7200");
+      await control("Notion 전체 확인 주기").change("0");
+      expect(plugin.settings.fullReconcileInterval).toBe(0);
+    });
+
+    it("첨부 폴더 — 기본값은 빈 칸으로 보이고, 비우면 기본값 · 빗금은 뗀다", async () => {
+      const { control } = display();
+      expect(control("첨부 폴더").value).toBe("");
+      await control("첨부 폴더").change(" /Media/Notion/ ");
+      expect(plugin.settings.attachments).toBe("Media/Notion");
+      await control("첨부 폴더").change("  ");
+      expect(plugin.settings.attachments).toBe("attachments");
+    });
+
+    it("그림 받기 · Markdown API — 없으면 켜져 보이고, 끄면 false 로 적는다", async () => {
+      const { row, control } = display();
+      expect(control("Notion 의 그림 받기").value).toBe(true);
+      expect(row("Notion 의 그림 받기").desc).toContain("PDF 같은 파일은 꺼도 받습니다");
+      expect(control("Notion Markdown API 쓰기").value).toBe(true);
+      await control("Notion 의 그림 받기").change(false);
+      await control("Notion Markdown API 쓰기").change(false);
+      expect(plugin.settings).toMatchObject({ downloadMedia: false, preferMarkdownApi: false });
+    });
+
+    it("DB 모드 — 주소를 붙여 넣으면 ID 로 적고, 알아볼 수 없으면 페이지 모드라고 알린다", async () => {
+      const { row, control } = display();
+      expect(row("DB 모드").desc).toContain("루트 페이지 아래 페이지로 둡니다(기본)");
+      await control("DB 모드").change(
+        "https://www.notion.so/team/Tasks-35a13b18d38280cf9057e37e6e473e41?v=abc",
+      );
+      expect(plugin.settings.databaseId).toBe("35a13b18-d382-80cf-9057-e37e6e473e41");
+      expect(row("DB 모드").desc).toContain("의 행으로 둡니다");
+      await control("DB 모드").change("Tasks");
+      expect(row("DB 모드").desc).toContain("페이지 모드로 동기화합니다");
+      expect(row("DB 모드").descEl.classes.has("mod-warning")).toBe(true);
+    });
+
+    it("더 받는 DB — 추가 · ID · 폴더를 적고, 덜 채운 줄은 까닭을 보이고, 지우기는 그 줄만 뺀다", async () => {
+      const { control } = display();
+      await control("더 받는 DB 추가").click();
+      expect(plugin.settings.databases).toEqual([{ databaseId: "", localFolder: "" }]);
+
+      const { row, control: again } = display();
+      expect(row("더 받는 DB 1").descEl.classes.has("mod-warning")).toBe(true);
+      await again("더 받는 DB 1").change(
+        "https://www.notion.so/x/1fa13b18d38280cf9057e37e6e473e41",
+      );
+      expect(row("더 받는 DB 1").desc).toContain("볼트 폴더를 아래에 적으세요");
+      await again("더 받는 DB 1 — 볼트 폴더").change("/Projects/Tasks/");
+      expect(plugin.settings.databases).toEqual([
+        { databaseId: "1fa13b18-d382-80cf-9057-e37e6e473e41", localFolder: "Projects/Tasks" },
+      ]);
+      expect(row("더 받는 DB 1").desc).toContain("「Projects/Tasks」 폴더에 둡니다");
+      expect(row("더 받는 DB 1").descEl.classes.has("mod-warning")).toBe(false);
+
+      await row("더 받는 DB 1").controls[1]!.click();
+      expect(plugin.settings.databases).toEqual([]);
+      settingTab.hide();
+      expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe("폴더 연결 (ADR-038)", () => {

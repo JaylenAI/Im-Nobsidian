@@ -25,3 +25,6 @@ export function withoutNoticePrefix(message: string): string {
 
 /** 자동 동기화 간격으로 고를 수 있는 값(분). 설정은 초로 적는다. */
 export const AUTO_SYNC_INTERVAL_MINUTES = [1, 5, 10, 15, 30, 60] as const;
+
+/** 원격 전체 확인 주기로 고를 수 있는 값(분). 0 은 Pull 마다. 설정은 초로 적는다 — 엔진 상한은 7일. */
+export const FULL_RECONCILE_INTERVAL_MINUTES = [0, 10, 30, 60, 360, 1440, 10080] as const;

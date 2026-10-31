@@ -10,6 +10,7 @@ import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_TITLE_PROPERTY,
   EntryEditor,
   FilteredVaultFS,
   IGNORE_FILE,
@@ -23,14 +24,19 @@ import {
   notionIdFromInput,
   parseIgnorePatterns,
   type Config,
+  type DatabaseSyncConfig,
   type VaultFS,
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../state/sqljs-state-db.js";
 import { previousStateDbClosed } from "../state/state-db-handoff.js";
 import { StateDbCopyStaleError, StateDbFile } from "../state/state-db-file.js";
 import { ObsidianVaultAdapter } from "../vault-adapter.js";
-import { SyncController, type SyncControllerHooks } from "../sync/sync-controller.js";
-import type { ImNobsidianSettings } from "../main.js";
+import {
+  SyncController,
+  type SyncControllerHooks,
+  type SyncLogEntry,
+} from "../sync/sync-controller.js";
+import type { DatabaseConfig, ImNobsidianSettings } from "../main.js";
 
 /** 엔진이 플러그인에게 받는 것 — 앱 · 알림 · 다시 연결. */
 export interface EngineHost {
@@ -40,6 +46,8 @@ export interface EngineHost {
   hooks(engine: ConnectionEngine): SyncControllerHooks;
   /** 쓸 수 없게 된 사본을 버리고 다시 연다 — 플러그인의 초기화 줄에 선다. */
   reopen(): void;
+  /** 이 연결 폴더의 동기화 기록 — 다시 연결하면 엔진 · 컨트롤러가 새로 만들어지므로 플러그인이 가진다. */
+  syncLog(folder: string): SyncLogEntry[];
 }
 
 /** 연결 하나를 여는 데 드는 것. */
@@ -51,6 +59,21 @@ export interface EngineOptions {
   readonly paths?: { readonly include?: readonly string[]; readonly exclude?: readonly string[] };
   /** 볼트의 연결 폴더 전부 — 이 연결은 안쪽 것을 비켜 간다. */
   readonly connections: readonly string[];
+  /** 루트 페이지 밖에서 더 받는 Notion DB(`notion.databases`) — ID 와 폴더를 다 채운 것만 쓴다. */
+  readonly databases?: readonly DatabaseConfig[];
+  /** DB 모드의 Notion DB — 있으면 노트를 그 DB 의 행으로 둔다(`notion.parentMode: database`). */
+  readonly databaseId?: string;
+}
+
+/** 설정의 더 받는 DB → 엔진 설정. 덜 채운 줄은 뺀다 — 설정 화면에서 적는 중일 수 있다. */
+export function databaseSyncConfigs(databases: readonly DatabaseConfig[]): DatabaseSyncConfig[] {
+  return databases.flatMap((database) => {
+    const databaseId = notionIdFromInput(database.databaseId.trim());
+    const localFolder = database.localFolder.trim().replace(/^\/+|\/+$/g, "");
+    return databaseId && localFolder
+      ? [{ databaseId, localFolder, titleProperty: DEFAULT_TITLE_PROPERTY }]
+      : [];
+  });
 }
 
 export class ConnectionEngine {
@@ -108,15 +131,19 @@ export class ConnectionEngine {
         token: options.token,
         // 예전 버전은 붙여 넣은 주소를 그대로 적었다 — 연결할 때 ID 로 읽는다(부른 쪽이 읽을 수 있는지 봤다).
         rootPageId: notionIdFromInput(options.rootPageId)!,
-        parentMode: "page" as const,
-        databases: [],
+        ...(options.databaseId && notionIdFromInput(options.databaseId)
+          ? { parentMode: "database" as const, databaseId: notionIdFromInput(options.databaseId)! }
+          : { parentMode: "page" as const }),
+        databases: databaseSyncConfigs(options.databases ?? []),
       },
       sync: {
         ...DEFAULT_CONFIG.sync,
         direction: settings.syncDirection,
         conflictStrategy: settings.conflictStrategy,
-        // 플러그인은 늘 삭제를 맞춘다(README 의 deleteSync 설명) — CLI 기본값(false)과 다르다.
-        deleteSync: true,
+        // 플러그인은 따로 정하지 않으면 삭제를 맞춘다(예전엔 늘 그랬다) — CLI 기본값(false)과 다르다.
+        deleteSync: settings.deleteSync ?? true,
+        fullReconcileInterval:
+          settings.fullReconcileInterval ?? DEFAULT_CONFIG.sync.fullReconcileInterval,
         renameOnTitleChange:
           settings.renameOnTitleChange ?? DEFAULT_CONFIG.sync.renameOnTitleChange,
       },
@@ -128,6 +155,11 @@ export class ConnectionEngine {
       },
       conversion: {
         ...DEFAULT_CONFIG.conversion,
+        preferMarkdownApi:
+          settings.preferMarkdownApi ?? DEFAULT_CONFIG.conversion.preferMarkdownApi,
+        // 받지 않으면 노트에 Notion 의 임시 주소가 남는다 — 그 주소는 한 시간 뒤 열리지 않는다.
+        imageDownload:
+          settings.downloadMedia === false ? "skip" : DEFAULT_CONFIG.conversion.imageDownload,
         ...(settings.timeZone ? { timeZone: settings.timeZone } : {}),
       },
     };
@@ -157,6 +189,7 @@ export class ConnectionEngine {
       orchestrator,
       this.host.hooks(this),
       settings.syncDirection,
+      this.host.syncLog(this.folder),
     );
     const viewVault = this.scoped(
       new ObsidianVaultAdapter(this.host.app.vault),

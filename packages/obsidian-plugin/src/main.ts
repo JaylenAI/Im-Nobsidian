@@ -1,6 +1,7 @@
 import { Plugin, Notice, MarkdownRenderChild, requireApiVersion, TFile, TFolder } from "obsidian";
 import {
   DEFAULT_CONFIG,
+  compactNotionId,
   configDirFrom,
   connectionFolderOf,
   findConnectionFolders,
@@ -32,14 +33,17 @@ import { SyncLogModal } from "./sync-log-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
-import { EMPTY_DASHBOARD_STATE } from "./sync/sync-controller.js";
+import { EMPTY_DASHBOARD_STATE, newestFirst } from "./sync/sync-controller.js";
 import { directionBlock } from "./sync/direction.js";
-import type { SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
+import type { SyncLogEntry, SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
 import type { SidebarPatch } from "./views/sync-sidebar-view.js";
 import { ConnectionEngine, type EngineHost } from "./connection/connection-engine.js";
 
-interface DatabaseConfig {
+/** 루트 페이지 밖에서 더 받는 Notion DB 하나(`notion.databases`) — 볼트 연결에만. */
+export interface DatabaseConfig {
+  /** Notion DB ID — 주소를 붙여 넣으면 그 안의 ID 로 적는다. */
   databaseId: string;
+  /** 행 노트를 둘 볼트 폴더. */
   localFolder: string;
 }
 
@@ -55,8 +59,20 @@ export interface ImNobsidianSettings {
   syncDirection: Config["sync"]["direction"];
   autoSync: boolean;
   autoSyncInterval: number;
-  /** 설정 화면은 manual(충돌은 사이드바에서 하나씩 푼다)과 merge(다른 줄을 고친 충돌은 합침)만 고른다. */
   conflictStrategy: Config["sync"]["conflictStrategy"];
+  /**
+   * 지운 것을 반대쪽에서도 지운다(`sync.deleteSync`). 없으면 켠다 — 예전 플러그인은 늘 켰다(CLI 기본값은 끔). 끄면 볼트에서 지운
+   * 노트는 다음 Pull 이 Notion 에서 되살리고, Notion 에서 지운 페이지의 노트는 볼트에 남는다.
+   */
+  deleteSync?: boolean;
+  /** 원격 전체 확인 주기(초, `sync.fullReconcileInterval`) — 그 사이의 Pull 은 바뀐 것만 본다. 0 이면 Pull 마다. 없으면 기본값. */
+  fullReconcileInterval?: number;
+  /** Notion 에 올린 그림을 받아 볼트에 둔다(`conversion.imageDownload`) — 파일은 늘 받는다. 없으면 받는다. */
+  downloadMedia?: boolean;
+  /** 본문을 Notion Markdown API 로 주고받는다(`conversion.preferMarkdownApi`) — 끄면 블록 API. 없으면 쓴다. */
+  preferMarkdownApi?: boolean;
+  /** DB 모드 — 볼트의 노트를 이 Notion DB 의 행으로 둔다(`notion.parentMode: database`). 비면 페이지 모드. 볼트 연결에만. */
+  databaseId?: string;
   attachments: string;
   /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */
   timeZone: string;
@@ -113,6 +129,8 @@ export default class ImNobsidianPlugin extends Plugin {
   private activeFolder = "";
   /** 연결마다 패널에 보낸 상태 — 패널에서 연결을 바꾸면 그 연결의 것을 다시 보인다. */
   private readonly panelStates = new Map<ConnectionEngine, SyncStatePatch>();
+  /** 연결 폴더마다 이 세션의 동기화 기록 — 설정을 바꿔 다시 연결해도 이어진다. */
+  private readonly syncLogs = new Map<string, SyncLogEntry[]>();
   /** 연결마다 상태바 단계 — 상태바는 하나라 모아서 보인다. */
   private readonly phases = new Map<ConnectionEngine, SyncPhase>();
   private statusBarEl: HTMLElement | null = null;
@@ -183,6 +201,11 @@ export default class ImNobsidianPlugin extends Plugin {
           new Promise((resolve) => new BaseFilterFixModal(this.app, fixes, resolve).open()),
       }),
       reopen: () => void this.initOrchestrator(),
+      syncLog: (folder) => {
+        let log = this.syncLogs.get(folder);
+        if (!log) this.syncLogs.set(folder, (log = []));
+        return log;
+      },
     };
   }
 
@@ -333,7 +356,8 @@ export default class ImNobsidianPlugin extends Plugin {
   private showSyncLog(): void {
     const logs = this.engines.map((engine) => ({
       label: engine.label,
-      entries: engine.controller?.syncLog() ?? [],
+      // 연결이 열리지 않았어도 그 전의 기록은 보인다 — 「없습니다」 로 바꾸지 않는다
+      entries: newestFirst(this.syncLogs.get(engine.folder) ?? []),
     }));
     new SyncLogModal(this.app, logs).open();
   }
@@ -537,6 +561,9 @@ export default class ImNobsidianPlugin extends Plugin {
         rootPageId: this.settings.rootPageId,
         settings: this.settings,
         paths: { include: this.settings.includePaths, exclude: this.settings.excludePaths },
+        // 폴더 연결은 자기 루트 페이지만 — 더 받는 DB 와 DB 모드는 볼트 연결의 설정이다.
+        databases: this.settings.databases ?? [],
+        ...(this.settings.databaseId ? { databaseId: this.settings.databaseId } : {}),
         connections: await connections(),
       });
       this.onEnginePhase(this.primary, "ready");
@@ -1101,7 +1128,10 @@ export default class ImNobsidianPlugin extends Plugin {
     const databaseId = found.databaseIds[0]!;
     const dbConfig =
       engine === this.primary
-        ? this.settings.databases?.find((d) => d.databaseId === databaseId)
+        ? // 설정은 대시가 든 ID 를, 보기 설정은 받은 그대로의 ID 를 적는다 — 모양을 맞춰 견준다
+          this.settings.databases?.find(
+            (d) => compactNotionId(d.databaseId) === compactNotionId(databaseId),
+          )
         : undefined;
     const folderPath = dbConfig?.localFolder ?? "";
 

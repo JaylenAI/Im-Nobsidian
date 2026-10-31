@@ -67,6 +67,8 @@ vi.mock("@im-nobsidian/core", async () => ({
       pendingWalBytes: core.pendingWalBytes,
       stateDbWalPath: core.stateDbWalPath,
       notionIdFromInput: core.notionIdFromInput,
+      DEFAULT_TITLE_PROPERTY: core.DEFAULT_TITLE_PROPERTY,
+      compactNotionId: core.compactNotionId,
       isMarkdownPath: core.isMarkdownPath,
       // 볼트 안 연결 폴더(ADR-038) — 찾기 · 경로 나누기는 진짜를 쓴다
       findConnectionFolders: core.findConnectionFolders,
@@ -139,6 +141,7 @@ import {
   getLogger,
   setLogger,
   stateDbLockPath,
+  type Config,
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { ConnectionEngine } from "../src/connection/connection-engine.js";
@@ -1069,6 +1072,10 @@ describe("ImNobsidianPlugin", () => {
       plugin.settings.connections = [
         { folder: "Work/", tokenSecret: "work", rootPageId: WORK_ROOT },
       ];
+      plugin.settings.databases = [
+        { databaseId: "1fa13b18d38280cf9057e37e6e473e41", localFolder: "Tasks" },
+      ];
+      plugin.settings.databaseId = "35a13b18d38280cf9057e37e6e473e41";
       onTestFinished(() => own.closeExtras());
       orchestratorArgs.splice(0);
 
@@ -1078,6 +1085,11 @@ describe("ImNobsidianPlugin", () => {
         "ntn_test",
         "ntn_work",
       ]);
+      // 더 받는 DB · DB 모드는 볼트 연결의 설정이다 — 폴더 연결은 제 루트 페이지만
+      expect(fromConfig.mock.calls[1]![0].notion).toMatchObject({
+        parentMode: "page",
+        databases: [],
+      });
       const [rootFs, workFs] = orchestratorArgs.map((args) => args[3] as ScopedVaultFS);
       expect(rootFs).toBeInstanceOf(ScopedVaultFS);
       expect(rootFs!.ownsPath("Work/회의.md")).toBe(false);
@@ -1144,6 +1156,87 @@ describe("ImNobsidianPlugin", () => {
         (orchestratorArgs[0]![0] as { sync: { renameOnTitleChange: boolean } }).sync
           .renameOnTitleChange,
       ).toBe(true);
+    });
+
+    it("CLI 와 같은 설정을 엔진에 건다 — 없으면 예전 플러그인 동작(삭제 맞춤 · 그림 받기 · Markdown API) (P8)", async () => {
+      const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      type Built = Pick<Config, "notion" | "sync" | "conversion">;
+      const built = () => orchestratorArgs[0]![0] as Built;
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      expect(built().sync).toMatchObject({ deleteSync: true, fullReconcileInterval: 3600 });
+      expect(built().conversion).toMatchObject({
+        imageDownload: "immediate",
+        preferMarkdownApi: true,
+      });
+      expect(built().notion).toMatchObject({ parentMode: "page", databases: [] });
+      expect(built().notion.databaseId).toBeUndefined();
+
+      Object.assign(plugin.settings, {
+        conflictStrategy: "remote-first",
+        deleteSync: false,
+        fullReconcileInterval: 0,
+        downloadMedia: false,
+        preferMarkdownApi: false,
+        databaseId: "https://www.notion.so/team/Tasks-35a13b18d38280cf9057e37e6e473e41?v=1",
+        databases: [
+          { databaseId: "1fa13b18d38280cf9057e37e6e473e41", localFolder: "/Projects/Tasks/" },
+          // 설정 화면에서 적는 중인 줄은 쓰지 않는다
+          { databaseId: "", localFolder: "Half" },
+          { databaseId: "2fa13b18d38280cf9057e37e6e473e41", localFolder: " " },
+        ],
+      });
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      expect(built().sync).toMatchObject({
+        conflictStrategy: "remote-first",
+        deleteSync: false,
+        fullReconcileInterval: 0,
+      });
+      expect(built().conversion).toMatchObject({ imageDownload: "skip", preferMarkdownApi: false });
+      expect(built().notion).toMatchObject({
+        parentMode: "database",
+        databaseId: "35a13b18-d382-80cf-9057-e37e6e473e41",
+        databases: [
+          {
+            databaseId: "1fa13b18-d382-80cf-9057-e37e6e473e41",
+            localFolder: "Projects/Tasks",
+            titleProperty: "Name",
+          },
+        ],
+      });
+    });
+
+    it("설정을 바꿔 다시 연결해도 동기화 기록이 이어진다 — 새 컨트롤러가 같은 기록에 적는다 (P8 실측)", async () => {
+      const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      type Recorder = {
+        record: (label: string, report: { summary: string; phase: string }) => void;
+        syncLog: () => readonly { label: string }[];
+      };
+      const controller = () =>
+        (plugin as unknown as { primary: { controller: Recorder } }).primary.controller;
+      await plugin.initOrchestrator();
+      controller().record("Pull", { summary: "Pull 완료", phase: "ready" });
+      const first = controller();
+
+      await plugin.initOrchestrator();
+      expect(controller()).not.toBe(first);
+      controller().record("Push", { summary: "Push 완료", phase: "ready" });
+      expect(
+        controller()
+          .syncLog()
+          .map((e) => e.label),
+      ).toEqual(["Push", "Pull"]);
+    });
+
+    it("알아볼 수 없는 DB 모드 ID 는 페이지 모드로 연다", async () => {
+      const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      plugin.settings.databaseId = "Tasks";
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      const { notion } = orchestratorArgs[0]![0] as Pick<Config, "notion">;
+      expect(notion.parentMode).toBe("page");
+      expect(notion.databaseId).toBeUndefined();
     });
 
     it("패턴도 제외 파일도 없으면 감싸지 않는다", async () => {
