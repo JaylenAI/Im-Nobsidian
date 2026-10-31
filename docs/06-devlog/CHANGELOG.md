@@ -5,6 +5,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.16.0] - 2026-10-31
+
+> 플러그인이 CLI 와 같은 설정 · 명령을 갖고(P8), macOS 의 NFD 한글 이름과 대소문자만 다른 이름을 바르게 다루며(ADR-050), Canvas ·
+> Excalidraw · 템플릿 폴더를 기본으로 빼고(ADR-051), 큰 볼트의 첫 push 가 429 없이 끝난다(ADR-052). 기본으로 동기화하는 대상이
+> 바뀌는 동작 변경이라 마이너를 올린다.
+
 ### Added
 
 - **플러그인 설정의 「Notion 확인」**(P8) — 토큰이 맞는지, 루트 페이지(DB 모드면 DB)를 이 통합이 읽을 수 있는지 Notion 에 물어
