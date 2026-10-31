@@ -2,7 +2,15 @@ export type SyncDirection = "push" | "pull" | "both";
 export type FileType = "file" | "folder-note" | "folder-only" | "db-row";
 export type SyncStatus = "synced" | "pending" | "conflict" | "error";
 export type OperationType = "create" | "update" | "delete" | "move";
-export type ConflictStrategy = "local-first" | "remote-first" | "manual" | "duplicate";
+/** 양쪽이 바뀌었을 때 무엇이 이기나 — 설정 검증(`ConfigSchema`)이 이 목록을 읽는다. */
+export const CONFLICT_STRATEGIES = [
+  "local-first",
+  "remote-first",
+  "manual",
+  "duplicate",
+  "merge",
+] as const;
+export type ConflictStrategy = (typeof CONFLICT_STRATEGIES)[number];
 
 export interface SyncRecord {
   readonly id: string;
@@ -206,7 +214,9 @@ export interface ViewEdit {
   readonly view: string;
   /** 이름을 바꿨으면 옛 이름. */
   readonly from?: string;
-  /** 올린 것 — 이름 · 열 · 정렬 · 필터. */
+  /** 볼트에서 더해 Notion 에 만든 보기 · 지워 Notion 에서 지운 보기. 없으면 고친 보기. */
+  readonly action?: "created" | "deleted";
+  /** 올린 것 — 이름 · 열 · 정렬 · 필터. 만들고 지운 보기는 비었다. */
   readonly changed: readonly ("name" | "columns" | "sort" | "filter")[];
 }
 
@@ -223,10 +233,11 @@ export interface SchemaEdit {
   /** 설정(수식 · 숫자 형식 · 옵션)을 바꾼 속성. */
   readonly redefined: readonly string[];
   /**
-   * 지운 선택 옵션 — 속성 이름 → 옵션 이름. Notion 은 그 옵션을 가진 행의 값을 비운다(옵션 이름을 바꾼 것도 지우고
-   * 새로 만든 것이다). 없으면 지운 옵션이 없다.
+   * 지운 선택 옵션 — 속성 이름 → 옵션 이름. Notion 은 그 옵션을 가진 행의 값을 비운다. 없으면 지운 옵션이 없다.
    */
   readonly droppedOptions?: ReadonlyArray<readonly [string, readonly string[]]>;
+  /** 이름을 바꾼 선택 옵션 — 속성 이름 · 옛 이름 · 새 이름. 그 값을 가진 Notion 행도 새 이름으로 옮긴다. */
+  readonly renamedOptions?: ReadonlyArray<readonly [string, string, string]>;
 }
 
 /** 볼트에서 바꾼 DB 속성 이름 하나 — {@link PushResult.renamedProperties}. */
@@ -305,11 +316,26 @@ export interface PullResult {
   /** 되살린(dry-run 은 되살릴) 노트 · 행의 경로 — {@link restored} 의 목록. 없으면 생략. */
   readonly restoredPaths?: readonly string[];
   /**
+   * 양쪽이 다른 줄을 고쳐 받은 원격에 로컬 편집을 합친 노트 · 행(`sync.conflictStrategy: "merge"`) — {@link updated} 에도 센다.
+   * 합친 글은 아직 Notion 에 없다 — 이어지는 push(`sync` 는 같은 실행)가 올린다. 없으면 생략.
+   */
+  readonly mergedPaths?: readonly string[];
+  /**
+   * 상태 기록에 없던 같은 자리의 노트 · 행을 그 Notion 페이지와 다시 이은 것(P7) — 상태 DB 를 잃었거나 처음 잇는 볼트.
+   * 새로 받은 것({@link created})에 세지 않는다. 글이 달라 충돌로 이은 것은 {@link conflicts} 에도 든다. 없으면 생략.
+   */
+  readonly relinkedPaths?: readonly string[];
+  /**
+   * dry-run 만 — 상태 기록에 Notion 과 이은 노트가 없어 실제 pull 은 같은 자리의 노트를 먼저 다시 잇는다(P7). 미리 보기는
+   * 노트 글을 받아 견주지 않아 그 노트들도 {@link created} 로 센다. 이을 노트가 없으면 생략.
+   */
+  readonly relinkPending?: true;
+  /**
    * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
    */
   readonly heldSidecars?: readonly string[];
   /**
-   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올린다(ADR-046).
+   * 볼트에서 보기를 고쳐 덮어쓰지 않은 `.base` — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올린다(ADR-046).
    * 없으면 생략.
    */
   readonly heldBases?: readonly string[];
@@ -328,7 +354,7 @@ export interface PullResult {
   readonly moved?: readonly RemoteMove[];
   /** Notion 에서 옮겼지만 볼트에서 옮기지 않은 것과 그 까닭. */
   readonly moveSkipped?: readonly RemoteMoveSkip[];
-  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. */
+  /** 옮기거나 이름을 바꾼 노트를 가리키던 링크를 고친 노트 — 없으면 고친 것이 없다. 이 연결이 보지 않는 노트는 볼트 맨 위 기준 경로다. */
   readonly relinked?: readonly string[];
   /**
    * Notion 에 새로 생겼지만 동기화에서 뺀 자리(paths · `.im-nobsidian-ignore`)에 놓일 것이라 받지 않은 페이지 —

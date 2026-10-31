@@ -1,6 +1,14 @@
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import { Sema } from "async-sema";
 import { vaultBookmarks } from "../converter/bookmark.js";
+import {
+  anchorBlockId,
+  anchorBlockOf,
+  anchoredWikilinkTargets,
+  splitAnchor,
+  type AnchorBlock,
+  type AnchorLookup,
+} from "../converter/anchor-links.js";
 import { obsidianToNotionEnhanced } from "../converter/enhanced-md-converter.js";
 import { encodeMarkerTarget } from "../converter/marker-url.js";
 import {
@@ -30,6 +38,7 @@ import { getLogger } from "../utils/logger.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { loadCreatedDatabases } from "./database-creator.js";
 import { loadLinkedDbMap } from "./discovered-databases.js";
+import { DbBaseFiles } from "./db-base-files.js";
 import {
   folderContainer,
   isFolderNotePath,
@@ -70,6 +79,7 @@ import {
   type RemoteDrift,
   type RemoteDriftChecker,
 } from "./remote-drift.js";
+import { UpdateJournal } from "./update-journal.js";
 import { remoteBodyFingerprint, type RemotePageStamp } from "./remote-observation.js";
 import { columnsAddedByMove } from "./row-move-columns.js";
 import { diffRowProperties, withUnsentProperties } from "./row-properties.js";
@@ -140,10 +150,14 @@ export class PagePusher {
     private readonly drift: RemoteDriftChecker,
     private readonly placement: FolderPlacement,
     private readonly recovery: InterruptedSyncRecovery,
-  ) {}
+  ) {
+    this.journal = new UpdateJournal(stateDb);
+  }
 
   /** 이번 실행에서 relation 을 보내지 못한 행 — 대상 노트가 아직 Notion 에 없었다. */
   private readonly unsentRelations = new Set<string>();
+  /** 본문을 쓰다 끊긴 노트를 다음 실행이 알게 — {@link UpdateJournal}. */
+  private readonly journal: UpdateJournal;
 
   /** 이번 실행에서 페이지 ↔ 행 · 다른 DB 의 행이 된 노트({@link takePlacementChanges}). */
   private readonly placementChanges: PlacementChange[] = [];
@@ -207,6 +221,64 @@ export class PagePusher {
       }
     }
     return skips.sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /**
+   * dry-run 이 알릴, 실제 push 가 원격을 보고 거절할 고침 · 지움 — {@link pushUpdate} · {@link pushDelete} 와 같은
+   * 판정이다(Notion 에서 지운 페이지 · pull 하지 않은 Notion 편집). 원격을 읽기만 하고 상태 DB 는 바꾸지 않는다 —
+   * 실제 push 는 지운 페이지를 충돌로 남기지만 dry-run 은 이유만 보인다. 원격을 읽지 못했으면 그 실패를 보인다.
+   *
+   * 옮김은 보지 않는다 — 옮기는 노트는 옮길 자리 판정을 먼저 받는다(S-11).
+   */
+  async previewRemoteRefusals(changes: readonly LocalChange[]): Promise<FailedOperation[]> {
+    const refused: FailedOperation[] = [];
+    for (const change of changes) {
+      const operation =
+        change.type === "modified" ? "update" : change.type === "deleted" ? "delete" : null;
+      if (operation === null) continue;
+      if (operation === "delete" && !this.config.sync.deleteSync) continue;
+      const record = this.stateDb.getByPath(change.path);
+      if (!record?.notionPageId) continue;
+      try {
+        if (operation === "update") await this.previewUpdate(change.path, record);
+        else await this.previewDelete(change.path, record);
+      } catch (error) {
+        refused.push({
+          path: change.path,
+          operation,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    return refused;
+  }
+
+  /** 실제 고침이 원격을 보고 거절하면 그 오류를 던진다({@link pushUpdate} · {@link pushRowUpdate}). */
+  private async previewUpdate(path: string, record: SyncRecord): Promise<void> {
+    const presence = await remotePresence(this.notionClient, record.notionPageId!);
+    if (presence.kind !== "alive") throw new Error(trashedPageRefusal(path));
+    if (this.drift.overwritesRemote(record, false)) return;
+    const content = await this.vaultFs.readFile(path);
+    if (this.drift.interruptedOwnWrite(record, presence.page, content)) return;
+    if (rowDatabaseOf(this.config, record)) {
+      // 행은 본문을 고쳤을 때만 원격 본문 편집을 거절한다 — 속성만 고친 행은 그 속성만 보낸다.
+      const base = this.baseRowState(record);
+      let body: string;
+      try {
+        body = parseFrontmatter(content).body;
+      } catch {
+        return; // 실제 push 가 frontmatter 를 읽지 못한 이유로 알린다
+      }
+      if (base?.body != null && base.body === body) return;
+    }
+    refuseUnpulledBody(await this.drift.remoteDrift(record, presence.page), path);
+  }
+
+  /** 실제 지움이 원격을 보고 거절하면 그 오류를 던진다({@link pushDelete}). 이미 사라진 원격은 추적만 놓는다. */
+  private async previewDelete(path: string, record: SyncRecord): Promise<void> {
+    const presence = await remotePresence(this.notionClient, record.notionPageId!);
+    if (presence.kind !== "alive" || this.drift.overwritesRemote(record, false)) return;
+    refuseUnpulledDeletion(await this.drift.remoteDrift(record, presence.page), path);
   }
 
   /** dry-run 이 견줄 행 — 새 행은 기준 없이, 고친 행은 지난 동기화 사본과. 행이 아니거나 사본이 없으면 null. */
@@ -292,6 +364,7 @@ export class PagePusher {
       path: selectedPath,
       filePath: path,
       parentMode: this.config.notion.parentMode,
+      anchors: await this.anchorLookup(content, null),
     });
     // 제목은 frontmatter `title` 이 먼저다 — 갱신(changedPageTitle) · 이동(titleAfterMove)과 같은
     // 규칙이어야 만든 뒤 첫 갱신에서 제목이 뒤집히지 않는다. 행도 같다(pushRowUpdate).
@@ -436,14 +509,47 @@ export class PagePusher {
     return uploads;
   }
 
+  /**
+   * 노트의 제목 · 블록 링크(`[[노트#제목]]`)가 가리키는 페이지의 맨 위 블록을 읽어 둔다 — 변환은 기다리지 않는다
+   * (anchor-links). 그런 링크가 없으면 읽지 않는다. 읽지 못한 페이지의 링크는 예전처럼 간다.
+   *
+   * @param selfPageId 이 노트의 페이지 — `[[#제목]]` 의 대상. 새로 만드는 노트는 아직 없다(그 링크는 다음 push 에 걸린다).
+   */
+  private async anchorLookup(
+    content: string,
+    selfPageId: string | null,
+  ): Promise<AnchorLookup | undefined> {
+    const pages = new Set<string>();
+    for (const target of anchoredWikilinkTargets(content)) {
+      const { note } = splitAnchor(target)!;
+      const pageId =
+        note === "" ? selfPageId : (this.stateDb.resolveWikilink(note)?.notionPageId ?? null);
+      if (pageId) pages.add(compactNotionId(pageId));
+    }
+    if (pages.size === 0) return undefined;
+    const blocks = new Map<string, AnchorBlock[]>();
+    for (const pageId of pages) {
+      try {
+        blocks.set(pageId, (await this.notionClient.fetchAllChildren(pageId)).map(anchorBlockOf));
+      } catch (error) {
+        getLogger().debug(
+          `[Im-Nobsidian] 제목 링크의 대상 페이지 블록을 읽지 못함 (${pageId}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+    return {
+      selfPageId,
+      blockOf: (pageId, anchor) => anchorBlockId(blocks.get(compactNotionId(pageId)) ?? [], anchor),
+    };
+  }
+
   private async livePage(record: SyncRecord): Promise<PageObjectResponse> {
     const presence = await remotePresence(this.notionClient, record.notionPageId!);
     if (presence.kind === "alive") return presence.page;
     this.stateDb.updateStatus(record.id, "conflict");
-    throw new Error(
-      `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남겼다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
-        `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${record.obsidianPath}`,
-    );
+    throw new Error(trashedPageRefusal(record.obsidianPath));
   }
 
   /**
@@ -476,20 +582,22 @@ export class PagePusher {
       path: updatePath,
       filePath: path,
       parentMode: this.config.notion.parentMode,
+      anchors: await this.anchorLookup(content, record.notionPageId),
     });
 
     // 덮어쓰기 전에 pull 하지 않은 Notion 편집이 없는지 본다(N-05). 본문 밖만 바뀌었으면 본문은
     // 쓰되 수정 시각을 올리지 않는다 — 원격의 제목 변경은 다음 pull 이 받는다.
     const remote = await this.livePage(record);
-    const drift: RemoteDrift = this.drift.overwritesRemote(
-      record,
-      options?.overwriteRemote === true,
-    )
-      ? "none"
-      : await this.drift.remoteDrift(record, remote);
+    const drift: RemoteDrift =
+      this.drift.overwritesRemote(record, options?.overwriteRemote === true) ||
+      this.drift.interruptedOwnWrite(record, remote, content)
+        ? "none"
+        : await this.drift.remoteDrift(record, remote);
     refuseUnpulledBody(drift, path);
     const settles = drift === "none";
 
+    const hash = computeHash(content);
+    this.journal.begin(record.id, hash);
     const pushed = await this.pushUpdatePage(record.notionPageId, conversionResult.content, path);
     let bodyFingerprint = pushed.fingerprint;
 
@@ -539,11 +647,11 @@ export class PagePusher {
       written = await this.notionClient.getPage(record.notionPageId);
     }
 
-    const hash = computeHash(content);
     const fileStat = await this.vaultFs.getFileStat(path);
     const title = extractTitle(path);
     const aliases = extractAliases(conversionResult.properties);
     this.stateDb.transaction(() => {
+      this.journal.finish(record.id);
       this.stateDb.updateHash(record.id, hash, Buffer.from(content, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
@@ -815,6 +923,10 @@ export class PagePusher {
    * ({@link RemoteDriftChecker.overwritesRemote}).
    *
    * 다시 보내면 Notion 을 덮으므로, 받지 않은 Notion 편집이 있으면 옮기지 않는다.
+   *
+   * 옮기기 전에 보낼 노트를 갱신 WAL 에 적는다(P7). 옮긴 뒤 응답을 잃으면 같은 실행의 재시도 · 다음 push 는 이미 그
+   * 자리에 있고 마지막 편집자가 이 봇인 페이지를 본다 — 우리가 옮기다 끊긴 것이므로 옮기기를 건너뛰고 마저 보낸다.
+   * 예전에는 옮기며 바뀐 수정 시각을 Notion 편집으로 보고 «pull 을 먼저 하라» 고 거절했다.
    */
   private async changePlacement(
     record: SyncRecord,
@@ -828,9 +940,11 @@ export class PagePusher {
   ): Promise<void> {
     const { path, databaseId } = move;
     const pageId = record.notionPageId!;
+    let content: string;
     let current: Record<string, unknown>;
     try {
-      current = parseFrontmatter(await this.vaultFs.readFile(path)).data;
+      content = await this.vaultFs.readFile(path);
+      current = parseFrontmatter(content).data;
     } catch (error) {
       // 다시 보내는 것이 모든 속성을 지우라는 요청이 된다(pushRowUpdate).
       throw new Error(
@@ -840,7 +954,12 @@ export class PagePusher {
       );
     }
     const remote = await this.livePage(record);
+    const pageParentId = databaseId ? null : this.placement.moveParentOf(path);
+    const resumed =
+      placedAt(remote, databaseId ?? pageParentId!, databaseId !== null) &&
+      this.drift.interruptedOwnWrite(record, remote, content);
     if (
+      !resumed &&
       !this.drift.overwritesRemote(record, false) &&
       (await this.drift.remoteDrift(record, remote)) !== "none"
     ) {
@@ -865,11 +984,17 @@ export class PagePusher {
         );
         addedColumns = columnsAddedByMove(pagePropertiesOf(remote), schema);
       }
-      await this.notionClient.movePageToDataSource(pageId, source.id);
+      if (!resumed) {
+        this.journal.begin(record.id, computeHash(content));
+        await this.notionClient.movePageToDataSource(pageId, source.id);
+      }
       parentId = databaseId;
     } else {
-      parentId = this.placement.moveParentOf(path);
-      await this.notionClient.movePage(pageId, parentId);
+      parentId = pageParentId!;
+      if (!resumed) {
+        this.journal.begin(record.id, computeHash(content));
+        await this.notionClient.movePage(pageId, parentId);
+      }
     }
 
     this.stateDb.transaction(() => {
@@ -1060,6 +1185,7 @@ export class PagePusher {
       path: selectedPath,
       filePath: path,
       parentMode: "database",
+      anchors: await this.anchorLookup(content, null),
     });
 
     const placeholder = this.stateDb.upsert({
@@ -1281,9 +1407,10 @@ export class PagePusher {
     const remote = await this.livePage(record);
     // 행이 사는 data source 의 스키마로 — 합친 스키마는 다른 소스에만 있는 속성까지 보내 행 전체가 거절된다.
     const mapper = await this.rowSchemas.mapperFor(databaseId, dataSourceIdOf(remote));
-    const drift: RemoteDrift = options.overwriteRemote
-      ? "none"
-      : await this.drift.remoteDrift(record, remote);
+    const drift: RemoteDrift =
+      options.overwriteRemote || this.drift.interruptedOwnWrite(record, remote, content)
+        ? "none"
+        : await this.drift.remoteDrift(record, remote);
     const against = options.overwriteRemote
       ? this.remoteRowState(mapper, remote)
       : this.baseRowState(record);
@@ -1329,7 +1456,9 @@ export class PagePusher {
         path: selectedPath,
         filePath: path,
         parentMode: "database",
+        anchors: await this.anchorLookup(content, pageId),
       });
+      this.journal.begin(record.id, computeHash(content));
       const pushed = await this.pushUpdatePage(pageId, conversionResult.content, path);
       bodyFingerprint = pushed.fingerprint;
       let touched = await this.fillDeferredBlocks(
@@ -1395,6 +1524,7 @@ export class PagePusher {
     const hash = computeHash(snapshot);
     const fileStat = unsent.length > 0 ? null : await this.vaultFs.getFileStat(path);
     this.stateDb.transaction(() => {
+      this.journal.finish(record.id);
       this.stateDb.updateHash(record.id, hash, Buffer.from(snapshot, "utf-8"));
       this.stateDb.updateStatus(record.id, "synced");
       if (written !== null && settles) {
@@ -1629,11 +1759,13 @@ export class PagePusher {
   }
 
   /**
-   * `.base` 가 나타내는 Notion DB id 들 — 옆 사이드카(`<이름>.notion.json`)의 DB 와, 그 DB 를
-   * 원본으로 둔 링크드 뷰 컨테이너(pull 이 `.base` 를 원본 DB 로 몰아 만든다). 사이드카가
-   * 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
+   * `.base` 가 나타내는 Notion DB id 들 — 링크드 뷰의 `.base` 면 그 컨테이너. 아니면 옆 사이드카(`<이름>.notion.json`)의
+   * DB 와, 그 DB 를 원본으로 둔 링크드 뷰 컨테이너(예전 pull 은 링크드 뷰를 원본의 `.base` 로 몰아 넣었다 — 그 노트를
+   * 올릴 때도 링크드 뷰 블록을 지킨다). 사이드카가 없거나 읽지 못하면 빈 목록 — 호출측이 제목으로 맞춘다.
    */
   private async databaseIdsOfBase(basePath: string): Promise<string[]> {
+    const container = new DbBaseFiles(this.stateDb).linkedContainerAt(basePath);
+    if (container) return [container];
     // 부르는 쪽(child-tags)이 `.base` 로 끝나는 경로만 넘긴다.
     const sidecarPath = basePath.slice(0, -BASE_SUFFIX.length) + SIDECAR_SUFFIX;
     let databaseId: unknown;
@@ -1772,4 +1904,27 @@ function blockModeBody(markdownContent: string): { nfm: string; blocks: NfmBlock
 /** 보내지 않은 행 속성 가운데 아이콘 · 커버는 뺀다 — 속성이 아니라 페이지의 아이콘 · 커버로 따로 보낸다. */
 function withoutDecorations(skipped: readonly string[]): string[] {
   return skipped.filter((key) => key !== "icon" && key !== "cover");
+}
+
+/** Notion 에서 지운 페이지를 고치지 않는 이유 — 실제 push 는 충돌로 남기고, dry-run 은 이유만 보인다. */
+function trashedPageRefusal(path: string): string {
+  return (
+    `Notion 에서 지운 페이지라 올리지 않음 — 충돌로 남긴다. 충돌 해결에서 로컬 유지(새 페이지로 ` +
+    `다시 만들기)나 원격 유지(볼트에서 지우기)를 고르세요: ${path}`
+  );
+}
+
+/**
+ * 페이지가 이미 그 자리에 있나 — 행이면 그 DB, 페이지면 그 부모 페이지. 옮기다 끊긴 것을 알아보는 데 쓴다.
+ */
+function placedAt(page: PageObjectResponse, targetId: string, asRow: boolean): boolean {
+  const parent = page.parent as { type?: string; page_id?: string; database_id?: string };
+  const at = asRow
+    ? parent.type === "data_source_id" || parent.type === "database_id"
+      ? parent.database_id
+      : undefined
+    : parent.type === "page_id"
+      ? parent.page_id
+      : undefined;
+  return at !== undefined && notionIdsEqual(at, targetId);
 }

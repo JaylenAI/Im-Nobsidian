@@ -241,6 +241,25 @@ describe("Notion 에서 바꾼 제목으로 노트 이름을 바꾼다", () => {
       });
     });
 
+    it("status · dry-run 도 다음 pull 이 바꿀 행 이름을 보인다 — 끄면 보이지 않는다", async () => {
+      const row = notion.add(DB_ID, "옛 행", "행 본문", { properties: {} });
+      notion.add(row.id, "하위", "하위 본문");
+      expect((await rows().pull()).failed).toEqual([]);
+      notion.edit(row.id, (page) => {
+        page.title = "새 행";
+      });
+      const rename = { from: "Tasks/옛 행.md", to: "Tasks/새 행.md", renamed: true };
+
+      expect((await rows().status()).remoteMoves).toEqual([rename]);
+      expect((await rows(false).status()).remoteMoves).toEqual([]);
+      expect((await rows().pull({ force: true, dryRun: true })).moved).toEqual([rename]);
+      expect((await rows(false).pull({ force: true, dryRun: true })).moved ?? []).toEqual([]);
+      expect(notes()).toEqual(["Tasks/옛 행.md", "Tasks/옛 행/하위.md"]);
+
+      expect((await rows().pull({ force: true })).moved).toEqual([rename]);
+      expect(notes()).toEqual(["Tasks/새 행.md", "Tasks/새 행/하위.md"]);
+    });
+
     it("끄면(기본) 행 이름은 두고 제목만 받는다", async () => {
       const row = notion.add(DB_ID, "옛 행", "행 본문", { properties: {} });
       expect((await rows(false).pull()).failed).toEqual([]);

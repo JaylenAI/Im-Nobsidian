@@ -224,7 +224,8 @@ nobsi resolve --strategy remote-first # 항상 Notion 우선
 - Im-Nobsidian은 **절대로 데이터를 자동 삭제하지 않습니다** (`deleteSync: false` 기본값)
 - 충돌 시 **양쪽 버전을 모두 보존**합니다
 - `push`·`pull`·`sync` 는 `--dry-run`으로 **미리 확인**할 수 있습니다
-- 상태 DB (`.im-nobsidian/sync.db`)를 삭제하면 전체 재동기화됩니다
+- 상태 DB (`.im-nobsidian/sync.db`)를 잃으면 push 보다 pull 을 먼저 합니다 — 같은 자리의 노트를 다시 잇고, 글이 다르면 충돌로
+  남깁니다. 그 상태의 push 는 Notion 에 같은 이름이 있으면 멈춥니다(ADR-049)
 
 ## 지원 및 문의
 

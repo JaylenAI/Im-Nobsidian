@@ -24,6 +24,7 @@ import type {
   StatusResult,
   SyncDirection,
   SyncRecord,
+  UserBaseFilterFix,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
 import { directionBlocks, type DirectionBlocks } from "./direction.js";
@@ -91,6 +92,11 @@ export interface SyncControllerHooks {
   onNotice?: (message: string, durationMs?: number) => void;
   /** 상태바 표시 갱신. */
   onStatusBar?: (state: SyncPhase) => void;
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 직접 만든 `.base` 의 폴더 필터를 고칠지 묻는다 — 고치면 true, 두면 false, 답하지 않고
+   * 닫으면 null(다음에 다시 묻는다).
+   */
+  confirmBaseFilterFixes?: (fixes: readonly UserBaseFilterFix[]) => Promise<boolean | null>;
 }
 
 /**
@@ -286,6 +292,33 @@ export class SyncController {
         this.fail(label, error);
       }
     });
+    // 작업이 끝난 뒤에 묻는다 — 묻는 창이 열린 동안 자동 sync 를 막지 않는다.
+    await this.askBaseFilterFixes();
+  }
+
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 직접 만든 `.base` 의 폴더 필터 — 고칠지 묻는다. 동기화가 만든 `.base` 는 말없이 고치지만
+   * 직접 만든 것은 무엇을 보려고 만든 필터인지 모른다. 답하지 않고 닫으면 다음 작업 뒤에 다시 묻는다.
+   */
+  private async askBaseFilterFixes(): Promise<void> {
+    const ask = this.hooks.confirmBaseFilterFixes;
+    if (!ask || this.closed) return;
+    const fixes = this.orchestrator.userBaseFilterFixes();
+    if (fixes.length === 0) return;
+    const accept = await ask(fixes);
+    if (accept === null || !this.admit("base-filters")) return;
+    await this.exclusive("base-filters", async () => {
+      try {
+        const fixed = await this.orchestrator.resolveUserBaseFilterFixes(accept);
+        if (accept) {
+          this.hooks.onNotice?.(
+            `${NOTICE_PREFIX}: .base ${fixed.length}개의 폴더 필터를 고쳤습니다`,
+          );
+        }
+      } catch (error) {
+        this.fail(".base 폴더 필터 고치기", error);
+      }
+    });
   }
 
   /** Push. `paths` 를 주면 그 노트만 올린다 — 변경 패널의 항목별 올리기. */
@@ -338,6 +371,8 @@ export class SyncController {
           heldSidecarText(result.heldSidecars ?? []),
           heldBaseText(result.heldBases ?? []),
           restoredText(result),
+          relinkedText(result),
+          mergedText(result, "pull"),
         ),
       }),
       (result) => this.dropPulled(result, paths),
@@ -355,6 +390,8 @@ export class SyncController {
         warning: warnings(
           schemaFollowedText(result.pull),
           restoredText(result.pull),
+          relinkedText(result.pull),
+          mergedText(result.pull, "sync"),
           renamedPropertyText(result.push),
           schemaEditText(result.push),
           viewEditText(result.push),
@@ -834,6 +871,7 @@ function schemaEditText(result: PushResult): string | null {
     ...edit.renamed.map(([from, to]) => `${from} → ${to}`),
     ...edit.retyped.map(([name, type]) => `${name} 타입 ${type}`),
     ...edit.redefined.map((name) => `${name} 설정`),
+    ...(edit.renamedOptions ?? []).map(([name, from, to]) => `${name} 옵션 ${from} → ${to}`),
     ...(edit.droppedOptions ?? []).map(
       ([name, options]) => `${name} 옵션 ${options.join(", ")} 지움(그 값의 행은 빈 값)`,
     ),
@@ -848,7 +886,15 @@ function schemaEditText(result: PushResult): string | null {
 function viewEditText(result: PushResult): string | null {
   const edits = result.viewEdits ?? [];
   if (edits.length === 0) return null;
-  const names = edits.map((edit) => (edit.from ? `${edit.from} → ${edit.view}` : edit.view));
+  const names = edits.map((edit) =>
+    edit.action === "created"
+      ? `${edit.view}(새 보기)`
+      : edit.action === "deleted"
+        ? `${edit.view}(지움)`
+        : edit.from
+          ? `${edit.from} → ${edit.view}`
+          : edit.view,
+  );
   return (
     `.base 에서 고친 보기를 Notion 에 올렸습니다: ` +
     `${names.slice(0, 3).join(", ")}${names.length > 3 ? " …" : ""}`
@@ -877,7 +923,7 @@ function placementChangeText(result: PushResult): string | null {
 /** 볼트에서 보기를 고쳐 Pull 이 덮어쓰지 않은 `.base`(ADR-046) — Push 해야 Notion 에 간다. */
 function heldBaseText(paths: readonly string[]): string | null {
   if (paths.length === 0) return null;
-  return `보기를 고친 .base 는 덮어쓰지 않았습니다 — Push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다: ${listedPaths(paths)}`;
+  return `보기를 고친 .base 는 덮어쓰지 않았습니다 — Push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다: ${listedPaths(paths)}`;
 }
 
 /** 볼트에서 고쳐 Pull 이 덮어쓰지 않은 사이드카(ADR-045) — Push 해야 Notion 에 간다. */
@@ -902,6 +948,29 @@ function restoredText(result: PullResult): string | null {
   if (paths.length === 0) return null;
   return (
     `볼트에서 지운 노트 ${paths.length}개를 Notion 에서 되살렸습니다 — 삭제 동기화가 꺼져 있어 Notion 에 보내지 않습니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — 새로 받지 않았다. */
+function relinkedText(result: PullResult): string | null {
+  const paths = result.relinkedPaths ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `상태 기록에 없던 노트 ${paths.length}개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다: ` +
+    listedPaths(paths)
+  );
+}
+
+/** 받은 원격에 로컬 편집을 합친 노트(merge 전략) — Pull 만 했으면 합친 글은 Push 가 올린다. */
+function mergedText(result: PullResult, operation: "pull" | "sync"): string | null {
+  const paths = result.mergedPaths ?? [];
+  if (paths.length === 0) return null;
+  return (
+    `양쪽이 다른 줄을 고친 노트 ${paths.length}개를 합쳤습니다 — ` +
+    (operation === "pull"
+      ? "Push 하면 합친 글을 Notion 에 올립니다: "
+      : "합친 글을 Notion 에 올렸습니다: ") +
     listedPaths(paths)
   );
 }

@@ -21,12 +21,14 @@ import {
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pushDbChangeCount, pushJson } from "../utils/json-output.js";
 import { openVaultFs, vaultArgPath } from "../utils/vault.js";
+import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const pushCommand = new Command("push")
   .description("로컬 변경사항을 Notion에 반영")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("-p, --path <paths...>", "특정 경로만 push")
   .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
+  .option("-y, --yes", "직접 만든 .base 의 폴더 필터를 묻지 않고 고침 (비대화형/CI)")
   .action(async (options) => {
     const json = options.json === true;
     if (json) enableJsonMode();
@@ -103,6 +105,7 @@ export const pushCommand = new Command("push")
         // 종료 코드까지 실패로 남긴다 — push 가 반쯤 실패한 걸 자동화가 성공으로 보면 안 된다.
         process.exitCode = 1;
       }
+      await askUserBaseFilterFixes(orchestrator, options);
     } finally {
       stateDb.close();
     }

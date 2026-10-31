@@ -497,6 +497,24 @@ function baseName(path: string): string {
   return path.split("/").pop() ?? path;
 }
 
+function sha256Of(buffer: Buffer): string {
+  return createHash("sha256").update(buffer).digest("hex");
+}
+
+/** 노트의 임베드 대상 — `![[경로|별칭]]` 과 상대 경로의 `![](경로)`. */
+function localEmbedTargets(note: string): string[] {
+  const targets = [...note.matchAll(/!\[\[([^\]\n]+)\]\]/g)].map((match) => match[1]!.trim());
+  for (const link of scanMarkdownLinks(note)) {
+    if (!link.isEmbed || /^[a-z][a-z0-9+.-]*:/i.test(link.url)) continue;
+    try {
+      targets.push(decodeURI(link.url));
+    } catch {
+      targets.push(link.url);
+    }
+  }
+  return targets;
+}
+
 /** 노트 경로에서 그 노트가 사는 폴더만 뽑는다(루트 노트면 undefined). */
 function folderOf(notePath?: string): string | undefined {
   return notePath?.includes("/") ? notePath.slice(0, notePath.lastIndexOf("/")) : undefined;
@@ -684,11 +702,13 @@ export class ImageHandler {
    *
    * @param pageId 본문을 받은 페이지 — 그 페이지에 올린 것만 되찾는다
    * @param notePath 노트 경로 — 옛 캡션의 파일을 push 와 같은 사다리로 찾는다
+   * @param adoptFrom 상태 기록에 없던 같은 자리의 노트 글(P7 다시 잇기) — {@link adoptLocalEmbed}
    */
   async restoreUploadedMedia(
     markdown: string,
     pageId?: string,
     notePath?: string,
+    adoptFrom?: string,
   ): Promise<string> {
     const spans = notionMediaSpans(markdown);
     if (spans.length === 0) return markdown;
@@ -700,11 +720,61 @@ export class ImageHandler {
       const uploadedName = this.uploadedNameOf(span.url);
       const target =
         (await this.knownEmbedTarget(known, span, uploadedName)) ??
-        (await this.resolveOriginalTarget(span.label, uploadedName, noteFolder));
+        (await this.resolveOriginalTarget(span.label, uploadedName, noteFolder)) ??
+        (adoptFrom !== undefined && pageId
+          ? await this.adoptLocalEmbed(span, uploadedName, adoptFrom, noteFolder, pageId)
+          : null);
       // 대상에 `$` 가 있어도(`가격$1.png`) 치환 패턴으로 읽지 않도록 함수로 넘긴다.
       if (target) result = result.replace(span.full, () => `![[${target}]]`);
     }
     return result;
+  }
+
+  /**
+   * 상태 DB 를 잃고 다시 잇는 노트(P7, ADR-049)의 미디어 — 올린 미디어 기록도 함께 잃어, push 가 올린 그림을 사본으로 받아
+   * 노트가 달라졌다(실측: `![[img/blue.png]]` → `![[attachments/blue-<해시>.png]]` 로 충돌). 받은 미디어의 이름과 바이트가
+   * 노트가 가리키는 볼트 파일과 같으면 그 임베드로 되살리고 받은 것으로 적는다 — 다음 push 가 그 블록을 둔다. 바이트를
+   * 견주므로 Notion 에서 같은 이름의 다른 파일로 바꾼 것은 되살리지 않는다. 받지 못하거나 다르면 null — 사본을 받는다.
+   */
+  private async adoptLocalEmbed(
+    span: NotionMediaSpan,
+    uploadedName: string,
+    local: string,
+    noteFolder: string | undefined,
+    pageId: string,
+  ): Promise<string | null> {
+    if (!uploadedName || INTERNAL_FILE_URL_RE.test(span.url)) return null;
+    const targets = localEmbedTargets(local).filter(
+      (target) => baseName(stripAlias(target)) === uploadedName,
+    );
+    if (targets.length === 0) return null;
+    let remoteHash: string;
+    try {
+      const response = await this.fetchForDownload(span.url);
+      if (!response.ok) return null;
+      remoteHash = sha256Of(Buffer.from(await response.arrayBuffer()));
+    } catch {
+      return null;
+    }
+    for (const target of targets) {
+      for (const candidate of this.vaultCandidates(stripAlias(target), noteFolder)) {
+        let localHash: string;
+        try {
+          localHash = sha256Of(await this.vaultFs.readBinary(candidate));
+        } catch {
+          continue;
+        }
+        if (localHash !== remoteHash) continue;
+        const fileId = notionFileIdOf(span.url);
+        if (fileId && this.stateDb) {
+          rememberReceivedMedia(this.stateDb, pageId, [
+            { fileId, target, localPath: candidate, fileHash: remoteHash },
+          ]);
+        }
+        return target;
+      }
+    }
+    return null;
   }
 
   /** 적어 둔 업로드면 되살릴 임베드 대상. 볼트에서 그 파일이 사라졌으면 null — 사본을 받는다. */

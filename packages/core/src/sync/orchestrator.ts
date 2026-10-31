@@ -15,6 +15,8 @@ import type {
   ChangeDiff,
   ProgressCallback,
   ProgressItem,
+  RemoteMove,
+  RemoteMoveSkip,
 } from "../types/sync.js";
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
@@ -39,7 +41,7 @@ import { inAnyPathScope } from "../utils/path-scope.js";
 import { runPool, type AbortLike } from "../utils/pool.js";
 import { computeHash } from "../utils/hash.js";
 import { withDeadline } from "../utils/deadline.js";
-import { notionIdsEqual } from "../utils/id.js";
+import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import type { VaultFS } from "./vault-fs.js";
 import { ConnectionBoundaryError, ConnectionScopeError } from "./connection-folders.js";
@@ -55,7 +57,7 @@ import {
 import { OperationAbortedError, throwIfAborted } from "../utils/abort.js";
 import { VaultSchemaRenames } from "./schema-push.js";
 import { SidecarSchemaEdits } from "./sidecar-schema-edit.js";
-import { BaseViewEdits } from "./base-view-push.js";
+import { BaseViewEdits, plannedViewEdits } from "./base-view-push.js";
 import { RowSchemaCache } from "./row-schema-cache.js";
 import { OperationGate } from "./operation-gate.js";
 import { RunObservation } from "./run-observation.js";
@@ -64,6 +66,7 @@ import {
   PULL_IN_PROGRESS_META_KEY,
   PUSH_IN_PROGRESS_META_KEY,
 } from "./interrupted-sync.js";
+import { assertVaultLinked } from "./lost-state-guard.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
@@ -71,7 +74,8 @@ import { LocalPlanner, type LocalPlan, type PendingFolderMove } from "./local-pl
 import { DatabaseMover, mergeDatabaseMoves } from "./database-moves.js";
 import { RemoteMoveFollower, type RemoteMoveResult } from "./remote-moves.js";
 import { RemoteRenameFollower, type RemoteRenameResult } from "./remote-renames.js";
-import { LinkUpdater } from "./link-updater.js";
+import { LinkUpdater, type OutsideVault } from "./link-updater.js";
+import { readBlockAnchors } from "./block-anchors.js";
 import { ChangeInspector } from "./change-inspector.js";
 import { ConflictWorkflow } from "./conflict-workflow.js";
 import { PagePusher } from "./page-pusher.js";
@@ -92,7 +96,12 @@ import {
 } from "./folder-database.js";
 import { PageDecorations } from "./page-decorations.js";
 import { DISCOVERED_DBS_META_KEY, parseDiscoveredDbs } from "./discovered-databases.js";
-import { upgradeBaseFolderFilters } from "./db-folder-moves.js";
+import {
+  pendingUserBaseFilterFixes,
+  resolveUserBaseFilterFixes,
+  upgradeBaseFolderFilters,
+  type UserBaseFilterFix,
+} from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
 import {
   forgetRenameHint,
@@ -167,6 +176,8 @@ export class SyncOrchestrator {
     private readonly notionClient: NotionClient,
     private readonly vaultFs: VaultFS,
     customFetch?: typeof globalThis.fetch,
+    /** 볼트 전체 — 이 연결이 보지 않는 노트에서도 옮긴 노트로 가는 링크를 고친다(연결 폴더 · 경로 패턴). */
+    outside?: OutsideVault,
   ) {
     this.observation = new RunObservation(stateDb, notionClient);
     this.recovery = new InterruptedSyncRecovery(stateDb, notionClient);
@@ -305,7 +316,7 @@ export class SyncOrchestrator {
         this.detector.discoveredPage(pageId) ?? (await notionClient.getPage(pageId)),
       config.notion.databases ?? [],
     );
-    this.linkUpdater = new LinkUpdater(stateDb, vaultFs);
+    this.linkUpdater = new LinkUpdater(stateDb, vaultFs, outside);
     this.puller = new PagePuller(
       config,
       stateDb,
@@ -381,7 +392,19 @@ export class SyncOrchestrator {
     if (foreign.length > 0) throw new ConnectionScopeError(foreign);
   }
 
-  private async executePush(options?: PushOptions): Promise<PushResult> {
+  /**
+   * @param mergedByPull sync dry-run 만 — 앞선 pull dry-run 이 합칠 노트. 실제 sync 는 합친 뒤 원격을 본 것으로
+   *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
+   */
+  /**
+   * @param relinkedByPull 같은 sync 의 dry-run pull 이 다시 이을 것이라고 미리 봤다 — 실제 sync 는 받으며 먼저 잇고 올리므로
+   *   상태 기록이 비었어도 막지 않는다({@link assertVaultLinked}).
+   */
+  private async executePush(
+    options?: PushOptions,
+    mergedByPull: ReadonlySet<string> = new Set(),
+    relinkedByPull = false,
+  ): Promise<PushResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
 
@@ -421,9 +444,25 @@ export class SyncOrchestrator {
     const eligible = options?.force ? changes : changes.filter((c) => !conflictPaths.has(c.path));
 
     const excludeSet = options?.excludePaths ? new Set(options.excludePaths) : null;
-    const filtered = (
+    const scoped = (
       options?.paths ? eligible.filter((c) => inAnyPathScope(c.path, options.paths)) : eligible
     ).filter((c) => !excludeSet || !excludeSet.has(c.path));
+    // 상태 DB 를 잃었으면 올리기 전에 받아 다시 잇게 한다 — 그대로 올리면 모든 노트 · DB 를 또 만든다(P7). 확인하지 못한
+    // 노트는 그것만 실패로 남긴다.
+    const unverified = relinkedByPull
+      ? new Map<string, string>()
+      : await assertVaultLinked(
+          this.config,
+          this.stateDb,
+          this.notionClient,
+          scoped.filter((c) => c.type === "created").map((c) => c.path),
+        );
+    const filtered = scoped.filter((c) => !unverified.has(c.path));
+    const unverifiedFailures: FailedOperation[] = [...unverified].map(([path, error]) => ({
+      path,
+      operation: "create",
+      error,
+    }));
     // 범위를 좁힌 push 는 그 범위 안의 폴더만 옮긴다. 노트의 부모는 폴더 레코드의 페이지라, 폴더
     // 페이지를 옮기기 전에도 노트는 맞는 자리로 간다.
     const folderMoves = this.planner
@@ -437,7 +476,7 @@ export class SyncOrchestrator {
     const plannedEdits = sidecarPlan.planned.map((edit) => edit.edit);
     // 고친 `.base` 의 보기 — 사이드카처럼 노트가 아니다. 속성을 바꾼 뒤에 보기를 바꾼다(ADR-046).
     const viewPlan = await this.viewEdits.plan(inScope);
-    const plannedViews = viewPlan.planned.flatMap((file) => file.views.map((view) => view.edit));
+    const plannedViews = viewPlan.planned.flatMap(plannedViewEdits);
 
     // 이미 올린 노트가 든 채로 DB 로 준비한 폴더는 노트가 그대로여도 DB 를 만들고 행으로 옮긴다(ADR-047).
     const preparedDatabases = loadPreparedDatabases(this.stateDb).size > 0;
@@ -482,7 +521,13 @@ export class SyncOrchestrator {
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [...sidecarPlan.refused, ...edited.failed, ...viewPlan.refused, ...viewed.failed],
+        failed: [
+          ...unverifiedFailures,
+          ...sidecarPlan.refused,
+          ...edited.failed,
+          ...viewPlan.refused,
+          ...viewed.failed,
+        ],
         duration: Date.now() - startTime,
         ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
         ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
@@ -521,11 +566,17 @@ export class SyncOrchestrator {
     const plannedRenames = renames.planned.map(({ folder, from, to }) => ({ folder, from, to }));
 
     if (options?.dryRun) {
+      // 실제 push 가 원격을 보고 거절할 고침 · 지움은 실패로 보이고 세지 않는다 — 원격을 읽기만 한다.
+      await this.observation.resolveBotUserId();
+      const remoteRefusals = await this.pusher.previewRemoteRefusals(
+        applicable.filter((change) => !mergedByPull.has(change.path)),
+      );
+      const remoteRefused = new Set(remoteRefusals.map((failure) => failure.path));
       // deleteSync 가 꺼져 있으면 실제 push 는 지운 노트를 대기로 적기만 한다 — 지우지도 세지도
       // 않는다(N-02). dry-run 도 지울 것으로 보이지 않는다.
-      const planned = this.config.sync.deleteSync
-        ? applicable
-        : applicable.filter((c) => c.type !== "deleted");
+      const planned = (
+        this.config.sync.deleteSync ? applicable : applicable.filter((c) => c.type !== "deleted")
+      ).filter((change) => !remoteRefused.has(change.path));
       const items: ProgressItem[] = [
         ...movableFolders.map(({ to }) => ({ path: to, operation: "move" as const })),
         ...planned.map((change) => ({ path: change.path, operation: pushOperationOf(change) })),
@@ -560,7 +611,12 @@ export class SyncOrchestrator {
         updated: count("update") - convertedUpdates,
         deleted: count("delete"),
         moved: count("move") + preparedConversions.length + movableDatabases.length,
-        failed: [...refusedFailures, ...refusedDatabaseMoves],
+        failed: [
+          ...unverifiedFailures,
+          ...refusedFailures,
+          ...refusedDatabaseMoves,
+          ...remoteRefusals,
+        ],
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
@@ -578,7 +634,7 @@ export class SyncOrchestrator {
     await this.observation.resolveBotUserId();
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
-    const failed: FailedOperation[] = [...refusedFailures];
+    const failed: FailedOperation[] = [...unverifiedFailures, ...refusedFailures];
     const edited = await this.sidecarEdits.apply(sidecarPlan.planned);
     failed.push(...edited.failed);
     const viewed = await this.viewEdits.apply(viewPlan.planned);
@@ -931,8 +987,10 @@ export class SyncOrchestrator {
     const startTime = Date.now();
     this.assertConnectionScope();
     this.puller.beginPull();
+    this.databaseSyncer.beginPull(this.puller.unlinkedVaultAtStart);
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
+    this.databaseSyncer.takeMergedRows();
     this.databaseSyncer.takeSchemaFollowed();
     this.databaseSyncer.takeHeldSidecars();
     this.databaseSyncer.takeHeldBases();
@@ -984,6 +1042,10 @@ export class SyncOrchestrator {
     const writtenPaths: string[] = [];
     // 볼트에서 사라져 Notion 에서 되살린 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다(D8).
     const restoredPaths: string[] = [];
+    // merge 전략이 받은 원격에 로컬 편집을 합친 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다.
+    const mergedPaths: string[] = [];
+    // 상태 기록에 없던 같은 자리의 노트를 다시 이은 것(P7) — 행은 마감에서 DB 동기화가 모은 것을 더한다.
+    const relinkedPaths: string[] = [];
     // 동기화에서 뺀 자리에 놓일 새 원격 페이지 — 받지 않고 알린다.
     const excluded: string[] = [];
     const failed: FailedOperation[] = [];
@@ -1048,10 +1110,15 @@ export class SyncOrchestrator {
       await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
+      mergedPaths.push(...this.databaseSyncer.takeMergedRows());
+      relinkedPaths.push(...this.databaseSyncer.takeRelinkedRows());
       const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
       const heldSidecars = this.databaseSyncer.takeHeldSidecars();
       const heldBases = this.databaseSyncer.takeHeldBases();
-      const relinked = await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied]);
+      const relinked = [
+        ...(await this.linkUpdater.apply([...relocated.applied, ...renamedRows.applied])),
+        ...(await this.linkUpdater.dropEmbeds(this.databaseSyncer.takeRetiredBases())),
+      ];
       const linkCount = writtenPaths.length > 0 ? await this.resolveNotionLinks(writtenPaths) : 0;
       // 기준 시각은 pull 을 시작한 때로, 받지 못한 변경(재시도까지 실패 · 중단으로 건너뜀)이
       // 있으면 그 수정 시각 앞으로 묶는다. 경로를 좁힌 pull 은 범위 밖을 받지 않았으므로
@@ -1081,6 +1148,8 @@ export class SyncOrchestrator {
         deleted,
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
+        ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
+        ...(relinkedPaths.length > 0 ? { relinkedPaths } : {}),
         ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
         ...(heldSidecars.length > 0 ? { heldSidecars } : {}),
         ...(heldBases.length > 0 ? { heldBases } : {}),
@@ -1177,6 +1246,9 @@ export class SyncOrchestrator {
         moved: [...relocated.moved, ...(plan.moved ?? [])],
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
+        ...(this.puller.unlinkedVaultAtStart && plan.created > 0
+          ? { relinkPending: true as const }
+          : {}),
       };
     }
 
@@ -1287,6 +1359,15 @@ export class SyncOrchestrator {
             excluded.push(created.path);
             return { path: created.path, unchanged: true };
           }
+          if (created.folderExisted) return { path: created.path, unchanged: true };
+          if (created.relinked) {
+            // 새로 받은 것이 아니다 — 이미 있던 노트를 이었다. 충돌이면 노트는 그대로다.
+            relinkedPaths.push(created.path);
+            if (created.conflict) conflicts.push(created.conflict);
+            if (!created.written) return { path: created.path, unchanged: true };
+            writtenPaths.push(created.path);
+            return { path: created.path, unchanged: false };
+          }
           writtenPaths.push(created.path);
           counts.created++;
           return { path: created.path, unchanged: false };
@@ -1295,6 +1376,10 @@ export class SyncOrchestrator {
           const outcome = await this.puller.pullUpdate(change);
           if (outcome.action === "conflict") {
             conflicts.push(outcome.conflict);
+          } else if (outcome.action === "merged") {
+            // 받았지만 합친 로컬 편집이 남았다 — writtenPaths 에 넣지 않아 sync 의 push 가 올린다.
+            counts.updated++;
+            mergedPaths.push(outcome.path);
           } else if (outcome.action === "written") {
             writtenPaths.push(outcome.path);
             if (restoreIds.has(change.pageId)) {
@@ -1432,12 +1517,20 @@ export class SyncOrchestrator {
     const tagged = (direction: "pull" | "push"): ProgressCallback | undefined =>
       onProgress && ((current, total, item) => onProgress(current, total, { ...item, direction }));
     const pullResult = await this.executePull({ ...options, onProgress: tagged("pull") });
-    const pushResult = await this.executePush({
-      ...options,
-      onProgress: tagged("push"),
-      paths: options?.paths,
-      excludePaths: pullResult.writtenPaths,
-    });
+    // dry-run 의 pull 은 충돌을 적지 않는다 — 실제 sync 의 push 처럼 충돌로 남을 노트는 뺀다.
+    const conflicted = options?.dryRun
+      ? pullResult.conflicts.map((conflict) => conflict.syncRecord.obsidianPath)
+      : [];
+    const pushResult = await this.executePush(
+      {
+        ...options,
+        onProgress: tagged("push"),
+        paths: options?.paths,
+        excludePaths: [...pullResult.writtenPaths, ...conflicted],
+      },
+      new Set(options?.dryRun ? (pullResult.mergedPaths ?? []) : []),
+      pullResult.relinkPending === true,
+    );
 
     return {
       pull: pullResult,
@@ -1471,6 +1564,7 @@ export class SyncOrchestrator {
     // 다음 pull 이 볼트에서 옮기거나 이름을 바꿀 것(ADR-039 · ADR-040)과 뺀 자리라 받지 않을 새 페이지 — 바꾸지 않고 본다.
     const moves = await this.followRemoteMoves({ dryRun: true }, plan);
     const renames = await this.followRemoteRenames(detected, { dryRun: true });
+    const rowRenames = await this.previewRowRenames(detected, signal);
     const exclusions = await this.plannedExclusions(detected);
     const remoteChanges = detected.filter((change) => !exclusions.has(change.pageId));
     const conflictRecords = this.stateDb.getByStatus("conflict");
@@ -1493,10 +1587,51 @@ export class SyncOrchestrator {
       lastSyncAt,
       lastFullScanAt,
       remoteScan: remoteScanInfo(scan, lastFullScanAt, this.config.sync.deleteSync),
-      remoteMoves: [...moves.moved, ...renames.renamed],
-      remoteMoveSkipped: [...moves.skipped, ...renames.skipped],
+      remoteMoves: [...moves.moved, ...renames.renamed, ...rowRenames.renamed],
+      remoteMoveSkipped: [...moves.skipped, ...renames.skipped, ...rowRenames.skipped],
       remoteExcluded: [...exclusions.values()],
     };
+  }
+
+  /**
+   * 다음 pull 이 Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 바꾸지 않고 본다. 행 이름은 DB 받기가 바꾸므로
+   * 페이지 이름 바꾸기({@link followRemoteRenames})에 없다. 판정은 받기와 같다(`retitledRowTarget`).
+   */
+  private async previewRowRenames(
+    changes: readonly RemoteChange[],
+    signal?: AbortLike,
+  ): Promise<{ renamed: RemoteMove[]; skipped: RemoteMoveSkip[] }> {
+    const renamed: RemoteMove[] = [];
+    const skipped: RemoteMoveSkip[] = [];
+    if (!this.config.sync.renameOnTitleChange) return { renamed, skipped };
+    const folders = new Map<string, string>();
+    for (const db of [
+      ...(this.config.notion.databases ?? []),
+      ...parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY)),
+    ]) {
+      if (db.databaseId) folders.set(compactNotionId(db.databaseId), db.localFolder);
+    }
+    for (const change of changes) {
+      throwIfAborted(signal);
+      if (change.type !== "modified") continue;
+      const record = this.stateDb.getByNotionId(change.pageId);
+      if (record?.fileType !== "db-row" || !record.notionParentId) continue;
+      if (this.vaultFs.excludesPath?.(record.obsidianPath)) continue;
+      const folder = folders.get(compactNotionId(record.notionParentId));
+      if (folder === undefined) continue;
+      try {
+        const page =
+          this.detector.discoveredPage(change.pageId) ??
+          (await this.notionClient.getPage(change.pageId));
+        const target = await this.databaseSyncer.retitledRowTarget(folder, record, page);
+        if (target === null) continue;
+        if ("reason" in target) skipped.push({ path: record.obsidianPath, reason: target.reason });
+        else renamed.push({ from: record.obsidianPath, to: target.to, renamed: true });
+      } catch {
+        // 미리 보기만 한다 — 읽지 못한 행은 다음 pull 이 받으며 가른다.
+      }
+    }
+    return { renamed, skipped };
   }
 
   /**
@@ -1612,8 +1747,12 @@ export class SyncOrchestrator {
 
   /** pull 이 쓴 노트의 Notion 링크를 볼트 링크로 푼다 — 푼 링크 수를 돌려준다. */
   private async resolveNotionLinks(paths: string[]): Promise<number> {
-    return resolveNotionLinks(this.stateDb, this.vaultFs, paths, async (pageId) =>
-      this.notionClient.extractTitle(await this.notionClient.getPage(pageId)),
+    return resolveNotionLinks(
+      this.stateDb,
+      this.vaultFs,
+      paths,
+      async (pageId) => this.notionClient.extractTitle(await this.notionClient.getPage(pageId)),
+      (blockIds) => readBlockAnchors(this.notionClient, blockIds),
     );
   }
 
@@ -1682,6 +1821,20 @@ export class SyncOrchestrator {
    */
   async discardLocalChange(path: string): Promise<void> {
     return this.gate.run("discard", () => this.inspector.discardLocalChange(path));
+  }
+
+  /**
+   * 동기화가 옮긴 폴더를 가리키는 사용자 `.base` 의 폴더 필터 — 말없이 고치지 않고 고칠지 묻는다. 없으면 빈 목록.
+   */
+  userBaseFilterFixes(): UserBaseFilterFix[] {
+    return pendingUserBaseFilterFixes(this.stateDb);
+  }
+
+  /** {@link userBaseFilterFixes} 를 물은 답대로 — 고치면 고친 `.base` 경로. 어느 쪽이든 다시 묻지 않는다. */
+  async resolveUserBaseFilterFixes(accept: boolean): Promise<string[]> {
+    return this.gate.run("base-filters", () =>
+      resolveUserBaseFilterFixes(this.vaultFs, this.stateDb, accept),
+    );
   }
 
   /**

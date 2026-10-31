@@ -1,3 +1,4 @@
+import { splitFrontmatter } from "../utils/frontmatter.js";
 import { parentFolderOf } from "./folder-container.js";
 
 /**
@@ -14,6 +15,9 @@ import { parentFolderOf } from "./folder-container.js";
  * 2. **입양해 둔 이동의 옛 자리** — 이동을 상태 DB 에 옮겨 적고 Notion 에 아직 반영하지 못한
  *    레코드가 원래 자리로 돌아온 경우.
  * 3. **같은 내용** — 같은 파일 이름을 먼저, 그다음 경로 순으로 정해 결과가 매번 같다.
+ * 4. **비슷한 내용** — 위로 짝을 찾지 못한 것끼리, 같은 폴더(이름 바꾸기)나 같은 파일 이름(옮기기)이면서
+ *    본문이 {@link SIMILAR_CONTENT_THRESHOLD} 넘게 겹칠 때. CLI 가 이름과 내용을 함께 바꾼 노트를 새 페이지 +
+ *    옛 페이지 삭제로 보던 것을 같은 페이지로 잇는다. 겹침이 같은 후보가 둘이면 짓지 않는다.
  */
 
 /** 이름 변경 힌트를 두는 상태 메타 키. */
@@ -155,12 +159,16 @@ export interface MissingNote {
   readonly hash: string;
   /** 이동을 입양만 하고 Notion 에 반영하지 못했으면 마지막으로 반영한 경로. */
   readonly origin?: string;
+  /** 마지막으로 동기화한 내용 — 비슷한 내용으로 짝지을 때 쓴다. 모르면 그 근거로는 짓지 않는다. */
+  readonly text?: string;
 }
 
 /** 추적하지 않는 파일. */
 export interface UntrackedNote {
   readonly path: string;
   readonly hash: string;
+  /** 지금 내용 — 비슷한 내용으로 짝지을 때 쓴다. */
+  readonly text?: string;
 }
 
 /** 짝 — 레코드가 적고 있는 경로(`from`)의 노트가 지금 `to` 에 있다. */
@@ -227,7 +235,96 @@ export function pairLocalMoves(
     pairs.push({ from: note.path, to: file!.path });
   }
 
+  const pairedTo = new Set(pairs.map((pair) => pair.to));
+  pairs.push(
+    ...pairSimilarContent(
+      missing.filter((note) => !paired.has(note.path)),
+      unmatched.filter((file) => !pairedTo.has(file.path)),
+    ),
+  );
   return pairs;
+}
+
+/** 본문 겹침(낱말 두 개씩의 Dice 계수)이 이 값 이상이어야 이름과 내용을 함께 바꾼 것으로 본다. */
+export const SIMILAR_CONTENT_THRESHOLD = 0.6;
+/** 본문 낱말이 이보다 적으면 비슷한지 가르지 않는다 — 짧은 노트는 우연히 겹친다. */
+const MIN_SIMILAR_WORDS = 8;
+
+/** 본문(frontmatter 빼고)의 낱말 두 개씩 — 같은 쌍이 여럿이면 그 수만큼. 너무 짧으면 null. */
+function wordPairs(text: string): Map<string, number> | null {
+  let body = text;
+  try {
+    body = splitFrontmatter(text).content;
+  } catch {
+    // YAML 이 깨졌으면 글 전체로 본다.
+  }
+  const words = body.split(/\s+/).filter((word) => word.length > 0);
+  if (words.length < MIN_SIMILAR_WORDS) return null;
+  const counts = new Map<string, number>();
+  for (let i = 1; i < words.length; i++) {
+    const key = `${words[i - 1]} ${words[i]}`;
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function diceOf(a: ReadonlyMap<string, number>, b: ReadonlyMap<string, number>): number {
+  let shared = 0;
+  let sizeA = 0;
+  let sizeB = 0;
+  for (const count of a.values()) sizeA += count;
+  for (const count of b.values()) sizeB += count;
+  for (const [key, count] of a) shared += Math.min(count, b.get(key) ?? 0);
+  return (2 * shared) / (sizeA + sizeB);
+}
+
+/** 비슷한 내용으로 짝짓는다 — 같은 폴더나 같은 파일 이름인 것끼리, 겹침이 큰 쌍부터. 겹침이 같은 후보가 있으면 짓지 않는다. */
+function pairSimilarContent(
+  missing: readonly MissingNote[],
+  untracked: readonly UntrackedNote[],
+): LocalMovePair[] {
+  const files = untracked
+    .map((file) => ({ file, pairs: file.text === undefined ? null : wordPairs(file.text) }))
+    .filter((entry): entry is { file: UntrackedNote; pairs: Map<string, number> } => !!entry.pairs);
+  if (files.length === 0) return [];
+  const candidates: { from: string; to: string; score: number }[] = [];
+  for (const note of missing) {
+    const notePairs = note.text === undefined ? null : wordPairs(note.text);
+    if (!notePairs) continue;
+    for (const { file, pairs } of files) {
+      const near =
+        parentFolderOf(note.path) === parentFolderOf(file.path) ||
+        fileNameOf(note.path) === fileNameOf(file.path);
+      if (!near) continue;
+      const score = diceOf(notePairs, pairs);
+      if (score >= SIMILAR_CONTENT_THRESHOLD)
+        candidates.push({ from: note.path, to: file.path, score });
+    }
+  }
+  candidates.sort(
+    (a, b) =>
+      b.score - a.score ||
+      byPath({ path: a.from }, { path: b.from }) ||
+      byPath({ path: a.to }, { path: b.to }),
+  );
+  const taken = new Set<string>();
+  const result: LocalMovePair[] = [];
+  for (const candidate of candidates) {
+    if (taken.has(candidate.from) || taken.has(candidate.to)) continue;
+    // 아직 짝이 없는 다른 후보가 같은 겹침이면 어느 쪽인지 모른다 — 둘 다 짓지 않는다.
+    const tied = candidates.some(
+      (other) =>
+        other !== candidate &&
+        other.score === candidate.score &&
+        (other.from === candidate.from || other.to === candidate.to) &&
+        !taken.has(other.from) &&
+        !taken.has(other.to),
+    );
+    taken.add(candidate.from);
+    taken.add(candidate.to);
+    if (!tied) result.push({ from: candidate.from, to: candidate.to });
+  }
+  return result;
 }
 
 /** 폴더 이동 — 상태 DB 가 적고 있는 폴더(`from`)가 지금 `to` 에 있다. */

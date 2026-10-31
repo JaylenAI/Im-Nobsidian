@@ -9,6 +9,7 @@ import {
   obsidianConfigDir,
   openVaultFs,
   outerConnectionTracking,
+  outsideVault,
   vaultArgPath,
 } from "../../src/utils/vault.js";
 
@@ -43,6 +44,23 @@ describe("openVaultFs · obsidianConfigDir", () => {
     ]);
     expect(obsidianConfigDir(work)).toBe("../.obsidian");
     expect(obsidianConfigDir(vault)).toBe(".obsidian");
+  });
+
+  it("볼트 전체를 그대로 보지 않는 연결에만 볼트 전체를 준다 — 다른 연결의 노트에서 링크를 고친다", async () => {
+    await writeFile(join(vault, ".im-nobsidian-ignore"), "Notes/**\n");
+    const outside = await outsideVault(join(vault, "Work"), {});
+    expect(outside?.folder).toBe("Work");
+    // 맡은 연결의 제외 목록은 따르지 않는다 — 볼트 맨 위에서 본 노트 전부(.im-nobsidian 은 숨은 폴더라 빠진다).
+    expect((await outside!.fs.listMarkdownFiles()).map((f) => f.path).sort()).toEqual([
+      "Notes/n.md",
+      "Work/w.md",
+    ]);
+    expect((await outsideVault(vault, {}))?.folder).toBe("");
+    await rm(join(vault, "Work/.im-nobsidian"), { recursive: true });
+    expect((await outsideVault(vault, {}))?.folder).toBe("");
+    await rm(join(vault, ".im-nobsidian-ignore"));
+    expect(await outsideVault(vault, {})).toBeUndefined();
+    expect((await outsideVault(vault, { exclude: ["Notes/**"] }))?.folder).toBe("");
   });
 
   it("바깥 연결이 이미 동기화하는 폴더를 알아본다 — init 이 막는다", async () => {

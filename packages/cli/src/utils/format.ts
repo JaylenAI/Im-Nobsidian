@@ -205,6 +205,66 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
 }
 
 /**
+ * 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — 상태 DB 를 잃었거나 처음 잇는 볼트. 새로 받은 것으로
+ * 세지 않는다. dry-run 은 노트 글을 받아 견주지 않아 목록 없이 다시 이을 것이라고만 알린다(`relinkPending`).
+ */
+export function relinkedLines(
+  paths: readonly string[] | undefined,
+  pending: boolean | undefined,
+): string[] {
+  if (pending) {
+    return [
+      chalk.cyan(
+        "↻ 상태 기록에 Notion 과 이은 노트가 없습니다 — 받으면 같은 자리에 있는 노트는 새로 만들지 않고 그 페이지와 다시 " +
+          "잇습니다(글이 다르면 충돌). 미리 보기는 그 노트들도 생성으로 셉니다",
+      ),
+    ];
+  }
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.cyan(
+      `↻ 상태 기록에 없던 노트 ${paths.length}개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다:`,
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
+ * merge 전략이 받은 원격에 로컬 편집을 합친 노트 · 행. pull 만 했으면 합친 글은 아직 볼트에만 있다 — push 가 올린다.
+ * sync 는 같은 실행의 push 가 올린다.
+ */
+export function mergedLines(
+  paths: readonly string[] | undefined,
+  then: "push" | "pushed",
+  dryRun = false,
+): string[] {
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.cyan(
+      `↻ 양쪽이 다른 줄을 고친 노트 ${paths.length}개를 ${dryRun ? "합칩니다" : "합쳤습니다"} — ` +
+        (then === "push"
+          ? "push 하면 합친 글을 Notion 에 올립니다:"
+          : "합친 글을 Notion 에 올립니다:"),
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
+ * dry-run 이 미리 본 충돌 — 받으면 충돌로 남을 노트(양쪽이 같은 줄을 고쳤거나 전략이 manual · duplicate). 실제 pull 은
+ * 충돌 수만 알리고 `nobsi resolve` 가 목록을 보인다 — dry-run 은 아직 충돌로 적지 않아 여기서 경로를 보인다.
+ */
+export function plannedConflictLines(paths: readonly string[]): string[] {
+  if (paths.length === 0) return [];
+  return [
+    chalk.magenta(
+      `⚠ 양쪽을 고친 노트 ${paths.length}개는 받으면 충돌로 남습니다 — 받은 뒤 nobsi resolve 로 고르세요:`,
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
  * Notion 에서 이름을 바꾸거나 지운 DB 속성을 행 노트의 키에 옮긴 것(ADR-045) — 노트의 키가 말없이 바뀌지 않게. 지운 속성에
  * 올리지 않은 값이 있어 남긴 키는 경고로 — 그 값을 받을 열이 Notion 에 없다.
  */
@@ -263,6 +323,9 @@ export function schemaEditLines(
         ? [`타입 ${edit.retyped.map(([name, type]) => `${name} → ${type}`).join(", ")}`]
         : []),
       ...(edit.redefined.length > 0 ? [`설정 ${edit.redefined.join(", ")}`] : []),
+      ...(edit.renamedOptions ?? []).map(
+        ([name, from, to]) => `${name} 옵션 이름 ${from} → ${to}(그 값을 가진 행도 옮깁니다)`,
+      ),
       ...(edit.droppedOptions ?? []).map(
         ([name, options]) =>
           `${name} 옵션 지움 ${options.join(", ")}(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)`,
@@ -275,6 +338,12 @@ export function schemaEditLines(
 /** 고친 `.base` 의 보기를 Notion 보기에 올린 것(ADR-046). */
 export function viewEditLines(edits: readonly ViewEdit[] | undefined, dryRun = false): string[] {
   return (edits ?? []).map((edit) => {
+    if (edit.action === "created") {
+      return `${icons.success} .base 에서 더한 보기를 Notion 에 ${dryRun ? "만듭니다" : "만들었습니다"} — ${edit.path}: ${edit.view}`;
+    }
+    if (edit.action === "deleted") {
+      return `${icons.success} .base 에서 지운 보기를 Notion 에서 ${dryRun ? "지웁니다" : "지웠습니다"} — ${edit.path}: ${edit.view}`;
+    }
     const name = edit.from ? `${edit.from} → ${edit.view}` : edit.view;
     return `${icons.success} .base 에서 고친 보기를 Notion 에 ${dryRun ? "올립니다" : "올렸습니다"} — ${edit.path}: ${name} (${edit.changed.map((field) => VIEW_FIELD_LABELS[field]).join(" · ")})`;
   });
@@ -328,7 +397,7 @@ export function heldBaseLines(paths: readonly string[] | undefined): string[] {
   if (!paths || paths.length === 0) return [];
   return [
     chalk.yellow(
-      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:`,
+      `⚠ 보기를 고친 .base ${paths.length}개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다:`,
     ),
     ...pathLines(paths),
   ];

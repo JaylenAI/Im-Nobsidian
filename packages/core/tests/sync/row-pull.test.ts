@@ -210,8 +210,14 @@ describe("DB 행 받기 (Phase 4)", () => {
 
   describe("같은 이름의 추적하지 않는 로컬 파일", () => {
     const LOCAL = "---\n진척: 9\n---\n아직 올리지 않은 내 글\n";
+    /** 이미 Notion 과 이은 볼트 — 이은 노트가 없는 볼트는 같은 자리의 노트를 다시 잇는다(ADR-049, 아래). */
+    const linked = async () => {
+      vault.write("이은 노트.md", "이미 올림\n");
+      expect(await build().push()).toMatchObject({ created: 1, failed: [] });
+    };
 
     it("새 행은 그 파일을 덮어쓰지 않고 ID 조각을 붙인 경로를 얻는다", async () => {
+      await linked();
       vault.write("Tasks/같은.md", LOCAL);
       const row = addRow("같은", 1);
 
@@ -240,6 +246,7 @@ describe("DB 행 받기 (Phase 4)", () => {
     });
 
     it("다음 push 는 그 로컬 파일을 새 행으로 올리고, 받은 행은 그대로다", async () => {
+      await linked();
       vault.write("Tasks/같은.md", LOCAL);
       const row = addRow("같은", 1);
       await build().pull();
@@ -248,6 +255,21 @@ describe("DB 행 받기 (Phase 4)", () => {
 
       expect(db.getByPath("Tasks/같은.md")!.notionPageId).not.toBe(row.id);
       expect(vault.read("Tasks/같은.md")).toBe(LOCAL);
+    });
+
+    it("이은 노트가 없는 볼트는 그 파일을 행과 충돌로 잇는다 — 덮지 않고 두 벌도 만들지 않는다 (ADR-049)", async () => {
+      vault.write("Tasks/같은.md", LOCAL);
+      const row = addRow("같은", 1);
+
+      const pulled = await build().pull();
+      expect(pulled).toMatchObject({ created: 0, failed: [], relinkedPaths: ["Tasks/같은.md"] });
+      expect(pulled.conflicts.map((c) => c.localChange.path)).toEqual(["Tasks/같은.md"]);
+      expect(vault.read("Tasks/같은.md")).toBe(LOCAL);
+      expect(db.getByPath("Tasks/같은.md")).toMatchObject({
+        notionPageId: row.id,
+        status: "conflict",
+      });
+      expect(await build().push()).toMatchObject({ created: 0, updated: 0 });
     });
   });
 

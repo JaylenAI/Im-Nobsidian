@@ -14,7 +14,7 @@
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
-    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate"
+    "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate" | "merge"
     "autoSync": false, // watch 모드 시 자동 동기화
     "autoSyncInterval": 300, // 자동 동기화 간격 (초)
     "deleteSync": false, // 삭제 동기화 여부
@@ -78,7 +78,10 @@ https://www.notion.so/My-Page-abc123def456...
 
 - `"local-first"` — 항상 Obsidian 버전 유지
 - `"remote-first"` — 항상 Notion 버전 유지
-- `"manual"` — 충돌 마커 삽입 후 수동 해결 (기본값)
+- `"manual"` — 충돌로 표시하고 노트는 그대로 둔다 — `nobsi resolve` · 플러그인 사이드바에서 고른다 (기본값)
+- `"merge"` — 서로 다른 줄을 고쳤으면 지난 동기화 사본을 공통 조상으로 3-way 병합해 볼트에 쓰고(sync 는 같은 실행에서
+  Notion 에 올린다 · pull 은 다음 push 가 올린다), 같은 줄을 고쳤으면 manual 처럼 충돌로 남긴다. 노트에 충돌 표시를
+  넣지 않는다. 플러그인 설정의 「다른 줄을 고친 충돌은 합치기」
 - `"duplicate"` — 양쪽 버전을 모두 보존 (`노트.conflict.md` 사본 생성 — 이 사본은 Notion 에 올리지 않습니다.
   올리려면 이름을 바꾸세요)
 

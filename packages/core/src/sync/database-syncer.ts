@@ -1,7 +1,7 @@
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
-import type { DatabaseMeta, NotionClient } from "../notion/client.js";
+import { isNotionObjectNotFound, type DatabaseMeta, type NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type {
@@ -18,7 +18,9 @@ import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoint
 import { PropertyMapper, RANGE_END_SUFFIX } from "../notion/property-mapper.js";
 import type { ImageHandler } from "./image-handler.js";
 import { resolvePullConflict, sameNoteContent } from "./conflict-detector.js";
+import { sameAsPendingLinks } from "../converter/notion-id-links.js";
 import type { PullOutcome } from "./pull-outcome.js";
+import { UpdateJournal } from "./update-journal.js";
 import {
   applyRemoteDeletion,
   decideRemoteDeletion,
@@ -35,7 +37,11 @@ import {
   resolveDbRowPath,
   type PathOwner,
 } from "../utils/db-row-path.js";
-import { isDirectDbRowPath } from "../utils/db-folder-path.js";
+import {
+  databaseFolderName,
+  isDirectDbRowPath,
+  resolveDbFolderPath,
+} from "../utils/db-folder-path.js";
 import { childFolderOf, isFolderRecord, parentFolderOf } from "./folder-container.js";
 import { loadDatabaseMoves } from "./database-moves.js";
 import {
@@ -43,7 +49,7 @@ import {
   ROOT_DATABASES_FOLDER,
   parseDiscoveredDbs,
 } from "./discovered-databases.js";
-import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
+import { compactNotionId, normalizeNotionId, notionIdsEqual } from "../utils/id.js";
 import { inAnyPathScope, matchesPathScope } from "../utils/path-scope.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { stripMarkdownExtension } from "../utils/markdown-path.js";
@@ -134,7 +140,17 @@ export interface PlannedRow {
   readonly restore?: boolean;
   /** Notion 에서 DB 안으로 옮긴 페이지가 행이 되며 옮길 것 — 노트와 하위 페이지 폴더 · 옮긴 DB 의 폴더(ADR-047). */
   readonly moves?: readonly RemoteMove[];
+  /** 로컬도 고친 행을 실제 pull 이 받지 않는 까닭 — 없으면 받는다. */
+  readonly resolution?: PlannedResolution;
 }
+
+/**
+ * 로컬도 고친 노트를 실제 pull 이 어떻게 처리하나 — 충돌로 남김 · 합침(merge) · 받지 않음(원격이 그대로거나
+ * local-first). dry-run 이 미리 알린다.
+ */
+export type PlannedResolution =
+  | { readonly action: "conflict"; readonly conflict: Conflict }
+  | { readonly action: "merge" | "skip" };
 
 /**
  * 행을 받는 진행 — 진행 표시가 페이지와 행을 한 목록 · 한 수로 보이게 한다. 행은 DB 를 조회해야 몇
@@ -184,6 +200,19 @@ export class DatabaseSyncer {
   };
   /** 볼트에서 사라져 되살린 행의 경로 — pull 마감이 가져가 화면에 알린다(D8). */
   private restoredRows: string[] = [];
+  /** 쓰다 끊긴 행을 알아본다 — {@link UpdateJournal}. */
+  private readonly journal: UpdateJournal;
+  /** merge 전략이 받은 행에 로컬 편집을 합친 행 — {@link takeMergedRows}. */
+  private mergedRows: string[] = [];
+  /** 상태 기록에 없던 같은 자리의 행 노트를 다시 이은 것(P7) — {@link takeRelinkedRows}. */
+  private relinkedRows: string[] = [];
+  /**
+   * 이번 pull 을 시작할 때 Notion 과 이은 노트가 하나도 없었다 — 그때는 자연 이름에 있는 행 노트의 글이 달라도 다시
+   * 잇는다({@link relinkExistingRow}). 오케스트레이터가 pull 을 시작할 때 정한다({@link beginPull}).
+   */
+  private unlinkedVault = false;
+  /** 이번 pull 에서 다시 이으려고 고른 행 노트 경로 — 같은 이름의 두 행이 한 노트를 고르지 않게. */
+  private readonly relinkClaims = new Set<string>();
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 것 — pull 마감이 가져가 화면에 알린다(ADR-045). */
   private schemaFollowed: SchemaFollowed[] = [];
   /** pull 이 마지막으로 쓴 사이드카 — 볼트에서 고친 것은 덮어쓰지 않는다(ADR-045). */
@@ -192,6 +221,10 @@ export class DatabaseSyncer {
   private heldSidecars = new Set<string>();
   /** 이번 pull 이 볼트에서 고친 것이라 덮어쓰지 않은 `.base` 경로(ADR-046). */
   private heldBases = new Set<string>();
+  /** 이번 pull 이 치운 링크드 뷰의 `.base`({@link takeRetiredBases}). */
+  private readonly retiredBases = new Set<string>();
+  /** 이번 실행에서 받은 DB(줄인 id)의 기간 날짜 짝 키 — 그 DB 를 원본으로 둔 링크드 뷰의 `.base` 도 같게 쓴다. */
+  private readonly rangeEnds = new Map<string, ReadonlyMap<string, string>>();
 
   /**
    * 실제로 기록한 .base 경로/DB 제목 — placeholder 임베드 재작성(F22)의 SSOT. 이번 pull 이 조회하지
@@ -224,6 +257,7 @@ export class DatabaseSyncer {
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
+    this.journal = new UpdateJournal(stateDb);
     this.sidecarBases = new SidecarBases(stateDb);
     this.schemaLedger = new SchemaLedger(stateDb);
     this.relocator = new NoteRelocator(stateDb, vaultFs, config.notion.databases ?? []);
@@ -339,11 +373,8 @@ export class DatabaseSyncer {
         opts.onFolderMoved(move);
       }
     }
+    // 링크드 뷰의 `.base` 는 부른 쪽이 원본 DB 폴더에 쓴다({@link pullLinkedView}) — 이 컨테이너의 폴더는 행이 없다.
     if (target.kind === "linked") {
-      if (target.wholeDbInScope) {
-        const viewsConfig = await this.pullDatabaseViews(dbConfig);
-        await this.generateBaseFile(dbConfig, viewsConfig, target.meta, target.ownerFolder);
-      }
       return { ...emptyDatabaseSyncResult(), linkedOriginalDbId: target.ownerDbId };
     }
     const { pages, wholeDbInScope, meta } = target;
@@ -363,7 +394,9 @@ export class DatabaseSyncer {
     // 보기(`.base`)는 DB 폴더 전체를 받을 때만 다시 만든다 — 행 하나를 받는 데 쓰지 않는다.
     if (wholeDbInScope) {
       const viewsConfig = await this.pullDatabaseViews(dbConfig);
-      await this.generateBaseFile(dbConfig, viewsConfig, meta, undefined, this.rangeEndsOf(pages));
+      const rangeEnds = this.rangeEndsOf(pages);
+      this.rangeEnds.set(compactNotionId(dbConfig.databaseId), rangeEnds);
+      await this.generateBaseFile(dbConfig, viewsConfig, meta, undefined, rangeEnds);
     }
 
     let created = 0;
@@ -430,7 +463,12 @@ export class DatabaseSyncer {
           `pull ${dbConfig.localFolder}/${page.id}`,
         );
 
-        if (!record) {
+        if (!record && outcome.relinked) {
+          // 이미 있던 노트를 이었다 — 새로 받은 것이 아니다(P7).
+          this.relinkedRows.push(outcome.path!);
+          if (outcome.action === "written") writtenPaths.push(outcome.path);
+          else if (outcome.action === "conflict") conflicts.push(outcome.conflict);
+        } else if (!record) {
           created++;
           if (outcome.action === "written") writtenPaths.push(outcome.path);
         } else if (outcome.action === "written") {
@@ -440,6 +478,10 @@ export class DatabaseSyncer {
             this.restoredRows.push(outcome.path);
           } else if (!followed.rekeyed.has(record.id)) updated++;
           writtenPaths.push(outcome.path);
+        } else if (outcome.action === "merged") {
+          // 받은 행에 로컬 편집을 합쳤다 — 받은 것으로 세되 push 에서 빼지 않는다(합친 글을 올려야 한다).
+          updated++;
+          this.mergedRows.push(outcome.path);
         } else if (outcome.action === "conflict") {
           conflicts.push(outcome.conflict);
         }
@@ -447,6 +489,14 @@ export class DatabaseSyncer {
         opts?.progress?.done({
           path: outcome.path ?? record?.obsidianPath ?? `${dbConfig.localFolder}/${page.id}`,
           operation: record ? "update" : "create",
+          // 받아 보니 그대로 · local-first 가 지킨 행은 받은 것이 아니다 — 페이지와 같다. 같은 분 봇 쓰기 뒤에는 행을
+          // 다시 읽어 견주므로(ADR-017 보강) 바뀌지 않은 행이 «updated» 로 찍혔다(0.15 회귀). 다시 이은 행은 쓴 것이
+          // 없으면 만든 것이 아니다(P7).
+          ...(outcome.action === "unchanged" ||
+          outcome.action === "skipped" ||
+          (!record && outcome.relinked && outcome.action !== "written")
+            ? { unchanged: true }
+            : {}),
         });
       } catch (error) {
         failed.push(rowFailure(page, error));
@@ -530,6 +580,94 @@ export class DatabaseSyncer {
     ];
   }
 
+  /**
+   * 받은 행이 지난 사본 그대로인가 — 렌더한 글이 달라도 받을 것이 없으면 그 사이 로컬 편집을 충돌로 올리지 않는다
+   * (N-05). 본문은 지문으로, 본문 밖은 지난 사본의 속성과 견준다. 이 도구가 이 행을 쓰다 끊긴 원격도 받을 것이
+   * 없다 — push 가 마저 올린다({@link UpdateJournal}).
+   */
+  private rowRemoteUnchanged(
+    record: SyncRecord,
+    page: PageObjectResponse,
+    bodyFingerprint: string | null,
+    localContent: string,
+  ): boolean {
+    const base = snapshotFrontmatter(record.baseSnapshot);
+    return (
+      (base !== null &&
+        bodyFingerprint === record.notionBodyFingerprint &&
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, record.obsidianPath)) ||
+      this.journal.wroteRemote(
+        record,
+        page,
+        computeHash(localContent),
+        this.observation().botUserId,
+      )
+    );
+  }
+
+  /**
+   * dry-run 이 알릴, 로컬도 고친 행을 실제 pull 이 어떻게 처리할지 — 받은 행과 견주는 판정은 실제 pull 과 같다.
+   * 첨부를 내려받지 않고 렌더하며 상태 DB 를 바꾸지 않는다. 로컬을 고치지 않았거나 읽지 못하면 null(받는다).
+   */
+  private async previewRowResolution(
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<PlannedResolution | null> {
+    let localContent: string;
+    try {
+      localContent = await this.vaultFs.readFile(record.obsidianPath);
+    } catch {
+      return null;
+    }
+    if (computeHash(localContent) === record.contentHash) return null;
+    const rendered = await this.renderRow(page, record.obsidianPath, { downloadMedia: false });
+    const resolution = resolvePullConflict({
+      record,
+      localContent,
+      remoteContent: rendered.content,
+      remoteUnchanged: this.rowRemoteUnchanged(
+        record,
+        page,
+        rendered.bodyFingerprint,
+        localContent,
+      ),
+      remoteChange: {
+        pageId: page.id,
+        type: "modified",
+        lastEdited: page.last_edited_time,
+        previousEdited: record.notionLastEdited,
+      },
+      strategy: this.config.sync.conflictStrategy,
+    });
+    if (resolution.action === "conflict")
+      return { action: "conflict", conflict: resolution.conflict! };
+    return resolution.action === "write" ? null : { action: resolution.action };
+  }
+
+  /**
+   * 수정 시각 · 편집자로 가르지 못한 행이 지난 사본 그대로인가 — 본문 지문과 본문 밖 속성으로({@link rowRemoteUnchanged}).
+   * dry-run 이 실제 pull 처럼 받을 것이 없는 행을 세지 않게. 견줄 사본 · 지문이 없거나 본문을 읽지 못하면 아니다.
+   */
+  private async unverifiedRowUnchanged(
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<boolean> {
+    if (this.remoteVerdict(record, page) !== "unverified") return false;
+    const base = snapshotFrontmatter(record.baseSnapshot);
+    if (base === null || record.notionBodyFingerprint === null) return false;
+    try {
+      const fingerprint = remoteBodyFingerprint(
+        (await this.notionClient.getPageMarkdown(page.id)).markdown,
+      );
+      return (
+        fingerprint === record.notionBodyFingerprint &&
+        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, record.obsidianPath)
+      );
+    } catch {
+      return false;
+    }
+  }
+
   private async planRows(
     dbConfig: DatabaseSyncConfig,
     target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
@@ -582,11 +720,24 @@ export class DatabaseSyncer {
           moves: [{ from: record.obsidianPath, to: path }, ...(children ? [children] : [])],
         });
       } else {
+        // 수정 시각 · 편집자로 가르지 못한 행 — 실제 pull 은 받아 견주고 그대로면 세지 않는다.
+        if (action === "pull" && (await this.unverifiedRowUnchanged(record, page))) continue;
+        // Notion 에서 바꾼 제목으로 이름을 바꿀 행 — 실제 pull 과 같은 판정으로 새 이름을 보인다.
+        const retitle = await this.retitledRowTarget(dbConfig.localFolder, record, page);
+        const renamed = retitle && "to" in retitle ? retitle : null;
+        // 로컬도 고친 행 — 실제 pull 이 충돌로 남기거나 · 합치거나 · 받지 않는다. 사라진 행은 되살린다.
+        const resolution =
+          action === "restore" ? null : await this.previewRowResolution(record, page);
         planned.push({
           pageId: page.id,
-          path: record.obsidianPath,
+          path: renamed?.to ?? record.obsidianPath,
           operation: "update",
           restore: action === "restore",
+          ...(resolution ? { resolution } : {}),
+          // 실제 pull 이 알리는 것과 같게 행만 — 하위 페이지 폴더는 함께 옮기지만 따로 알리지 않는다.
+          ...(renamed
+            ? { moves: [{ from: record.obsidianPath, to: renamed.to, renamed: true }] }
+            : {}),
         });
       }
     }
@@ -716,6 +867,17 @@ export class DatabaseSyncer {
     // 원격도 바뀐 행이라도 볼트에서 사라진 것이면 되살린 것이다 — 받는 일은 같고 세는 칸만 다르다.
     // 예전에는 «업데이트» 로 세어, 지운 파일이 돌아온다는 것을 결과가 말하지 않았다.
     if (this.config.sync.deleteSync || (await this.vaultFs.exists(record.obsidianPath))) {
+      // deleteSync 로 볼트에서 지운 행은 원격이 바뀌었을 때만 받는다(되살린다). 수정 시각 · 편집자로 가르지 못했으면
+      // 내용으로 — 받아 견줄 로컬이 없어, 받으면 그대로인 원격으로 지운 파일을 되살린다.
+      if (
+        changed &&
+        !misplaced &&
+        this.config.sync.deleteSync &&
+        !(await this.vaultFs.exists(record.obsidianPath)) &&
+        (await this.unverifiedRowUnchanged(record, page))
+      ) {
+        return "skip";
+      }
       return changed ? "pull" : "skip";
     }
     return "restore";
@@ -1047,10 +1209,13 @@ export class DatabaseSyncer {
     rowsFolder?: string,
     /** 받은 행 가운데 기간이 있는 날짜 속성의 짝 키 — `BaseFileOptions.rangeEnds`. */
     rangeEnds?: ReadonlyMap<string, string>,
+    /** 링크드 뷰 컨테이너의 `.base` — 행을 가진 원본 DB 와 파일 이름({@link pullLinkedView}). */
+    linked?: { readonly ownerId: string; readonly name: string },
   ): Promise<void> {
     try {
       const schemaFull = await this.notionClient.getDatabaseSchemaFull(dbConfig.databaseId, meta);
       const dbName =
+        linked?.name ||
         viewsConfig?.databaseName ||
         (await this.notionClient.getDatabaseTitle(dbConfig.databaseId, meta)) ||
         dbConfig.localFolder.split("/").pop() ||
@@ -1083,6 +1248,7 @@ export class DatabaseSyncer {
         hash: computeHash(baseContent),
         // Notion 보기를 받지 못해 기본 표 하나를 쓴 파일은 올릴 보기가 없다.
         ...(viewsConfig ? recordBaseViews(baseContent, generated.views, viewsConfig.views) : null),
+        ...(linked ? { linkedTo: compactNotionId(linked.ownerId) } : null),
       };
       // Obsidian 은 보기를 고치면 `.base` 를 다시 쓰며 머리 주석을 지운다(1.13.7 실측) — 보기를 기록해 둔 경로면
       // 머리가 없어도 pull 이 쓴 파일이다.
@@ -1092,7 +1258,7 @@ export class DatabaseSyncer {
         (previous?.basePath === basePath && previous.views !== undefined);
       if (!ours) {
         // 직접 만든 `.base` 의 보기는 Notion 보기에서 온 것이 아니다 — 보기를 기록하지 않아 push 도 올리지 않는다.
-        record = { basePath, title: dbName, hash: record.hash };
+        record = { basePath, title: dbName, hash: record.hash, linkedTo: record.linkedTo };
         if (!this.keptUserBases.has(basePath)) {
           this.keptUserBases.add(basePath);
           // 알림이 아니다 — 볼트에서 만든 폴더를 DB 로 올리면(#75) 사용자의 `.base` 가 늘 이 자리에 있다.
@@ -1115,6 +1281,21 @@ export class DatabaseSyncer {
       this.baseFileInfo.set(dbConfig.databaseId, record);
       getLogger().debug(`[DB Sync] .base 파일 생성: ${basePath}`);
 
+      if (linked) {
+        // 사이드카는 원본 DB 의 것이 있다. 이름이 바뀌었으면(원본 제목 · 첫 보기 이름) 옛 `.base` 를 치운다 — 원본의
+        // 산출물 정리는 이 파일을 지키므로 여기서 지운다.
+        if (previous && previous.basePath !== basePath) {
+          await this.removeLinkedBase(previous);
+          if (
+            !(await this.vaultFs.exists(previous.basePath)) &&
+            (await this.vaultFs.exists(basePath))
+          ) {
+            this.renamedRows.applied.push({ from: previous.basePath, to: basePath });
+          }
+        }
+        return;
+      }
+
       await this.generateSidecar(
         dbConfig,
         dbName,
@@ -1124,7 +1305,21 @@ export class DatabaseSyncer {
         meta.isInline,
         await this.appearanceOf(meta, safeName),
       );
-      await this.cleanupStaleDbArtifacts(dbConfig.localFolder, safeName, previous);
+      await this.cleanupStaleDbArtifacts(
+        dbConfig.databaseId,
+        dbConfig.localFolder,
+        safeName,
+        previous,
+      );
+      // DB 제목이 바뀌어 `.base` 이름이 바뀌었다 — 옛 `.base` 를 지웠으면 그것을 넣은 노트의 임베드 · 링크를 고친다.
+      if (
+        previous &&
+        previous.basePath !== basePath &&
+        !(await this.vaultFs.exists(previous.basePath)) &&
+        (await this.vaultFs.exists(basePath))
+      ) {
+        this.renamedRows.applied.push({ from: previous.basePath, to: basePath });
+      }
     } catch (error) {
       getLogger().warn(`[DB Sync] .base 파일 생성 실패 (계속 진행):`, error);
     }
@@ -1159,13 +1354,107 @@ export class DatabaseSyncer {
     };
   }
 
+  /**
+   * 링크드 뷰 컨테이너의 `.base` 를 그 컨테이너의 보기(이름 · 필터 · 정렬)로 원본 DB 폴더에 쓴다. 행은 원본 DB 가
+   * 갖는다(F25) — 폴더 필터도 원본 폴더를 가리킨다. 예전에는 링크드 뷰를 원본의 `.base` 로 몰아, 링크드 뷰가 고른
+   * 보기가 볼트에 오지 않았다.
+   *
+   * 이름은 Notion 이 그 블록 위에 보이는 것처럼 「원본 제목 - 첫 보기 이름」 이다. 컨테이너 제목은 비어 온다.
+   *
+   * @returns `gone` — Notion 에서 컨테이너를 지웠다. 쓴 `.base` 를 치웠으니 부른 쪽이 연결을 잊는다.
+   *   `failed` — 읽지 못했다. 쓴 `.base` 는 그대로 두고 다음 pull 이 다시 본다.
+   */
+  async pullLinkedView(
+    containerId: string,
+    owner: DatabaseSyncConfig,
+  ): Promise<"written" | "gone" | "failed"> {
+    let meta: DatabaseMeta;
+    try {
+      meta = await this.notionClient.getDatabaseMeta(containerId);
+    } catch (error) {
+      if (isNotionObjectNotFound(error)) {
+        await this.retireLinkedView(containerId);
+        return "gone";
+      }
+      getLogger().warn(
+        `[DB Sync] 링크드 뷰 ${containerId} 를 읽지 못함 (다음 pull 이 다시 봄):`,
+        error,
+      );
+      return "failed";
+    }
+    if (meta.inTrash) {
+      await this.retireLinkedView(containerId);
+      return "gone";
+    }
+    const container = { ...owner, databaseId: containerId };
+    const views = await this.pullDatabaseViews(container);
+    // 보기를 받지 못했으면 쓰지 않는다 — 기본 표를 쓰면 원본 DB 의 `.base` 와 같은 것이 하나 더 생긴다.
+    if (!views || views.views.length === 0) return "failed";
+    await this.generateBaseFile(
+      container,
+      views,
+      meta,
+      owner.localFolder,
+      this.rangeEnds.get(compactNotionId(owner.databaseId)),
+      { ownerId: owner.databaseId, name: this.linkedBaseName(containerId, owner, views) },
+    );
+    return "written";
+  }
+
+  /** 링크드 뷰 `.base` 의 이름 — 같은 폴더의 다른 `.base` 가 쓰는 이름이면 컨테이너 id 앞 네 자리를 붙인다. */
+  private linkedBaseName(
+    containerId: string,
+    owner: DatabaseSyncConfig,
+    views: DatabaseViewsConfig,
+  ): string {
+    const ownerTitle =
+      this.baseFileInfo.get(owner.databaseId)?.title ||
+      owner.localFolder.split("/").pop() ||
+      "Database";
+    const name = `${ownerTitle} - ${views.views[0]?.name || "View"}`;
+    const self = compactNotionId(containerId);
+    const taken = new Set(
+      this.baseFileInfo
+        .all()
+        .filter(([id]) => id !== self)
+        .map(([, file]) => file.basePath),
+    );
+    return taken.has(`${owner.localFolder}/${sanitizeFileName(name)}${BASE_SUFFIX}`)
+      ? `${name} (${self.slice(0, 4)})`
+      : name;
+  }
+
+  /** Notion 에서 지운 링크드 뷰 — 쓴 `.base` 를 치우고 기록을 잊는다. */
+  private async retireLinkedView(containerId: string): Promise<void> {
+    const record = this.baseFileInfo.get(containerId);
+    if (!record) return;
+    if (await this.removeLinkedBase(record)) this.retiredBases.add(record.basePath);
+    this.baseFileInfo.delete(containerId);
+    getLogger().info(`[DB Sync] Notion 에서 지운 링크드 뷰의 .base 를 치움: ${record.basePath}`);
+  }
+
+  /**
+   * pull 이 쓴 그대로인 링크드 뷰 `.base` 를 지운다 — 볼트에서 고쳤으면 두고 알린다.
+   * @returns 지웠나.
+   */
+  private async removeLinkedBase(record: DbBaseFile): Promise<boolean> {
+    const content = await this.vaultFs.readFile(record.basePath).catch(() => null);
+    if (content === null || !isGeneratedDbArtifact(record.basePath, content)) return false;
+    if (editedSince(record, record.basePath, content)) {
+      this.warnEditedBase(record.basePath);
+      return false;
+    }
+    await this.vaultFs.deleteFile(record.basePath);
+    return true;
+  }
+
   /** 볼트에서 고친 `.base` 를 덮어쓰거나 지우지 않았다고 한 번 알린다. */
   private warnEditedBase(path: string): void {
     this.heldBases.add(path);
     if (this.keptUserBases.has(path)) return;
     this.keptUserBases.add(path);
     getLogger().warn(
-      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다. Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
+      `[DB Sync] 볼트에서 고친 .base 라 Notion 보기로 덮어쓰지 않음: ${path} — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다. Notion 의 보기를 다시 받으려면 이 파일을 지우세요`,
     );
   }
 
@@ -1175,6 +1464,7 @@ export class DatabaseSyncer {
    * 아닌 것을 삭제해 멱등을 보장한다. 하위 폴더(중첩 DB)의 산출물은 보호한다.
    */
   private async cleanupStaleDbArtifacts(
+    databaseId: string,
     localFolder: string,
     safeName: string,
     /** 이 DB 의 `.base` 를 지난번에 쓴 기록 — 제목이 바뀌어 옛 이름이 된 것을 볼트에서 고쳤으면 지우지 않는다. */
@@ -1184,6 +1474,8 @@ export class DatabaseSyncer {
       const keep = new Set([
         `${localFolder}/${safeName}${BASE_SUFFIX}`,
         `${localFolder}/${safeName}${SIDECAR_SUFFIX}`,
+        // 이 DB 를 원본으로 둔 링크드 뷰의 `.base` — 같은 폴더에 놓인다.
+        ...this.baseFileInfo.linkedBasesOf(databaseId),
       ]);
       const files = await this.vaultFs.listNonMarkdownFiles();
       const stale = selectStaleDbArtifacts(files, localFolder, keep);
@@ -1349,7 +1641,8 @@ export class DatabaseSyncer {
   async renderRow(
     page: PageObjectResponse,
     filePath: string,
-    options?: { downloadMedia?: boolean; localPath?: string },
+    /** `adoptFrom` — 다시 잇는 행 노트의 글(P7). 받은 미디어가 노트의 볼트 파일과 같으면 그 임베드로 되살린다. */
+    options?: { downloadMedia?: boolean; localPath?: string; adoptFrom?: string },
   ): Promise<{
     content: string;
     title: string;
@@ -1383,7 +1676,12 @@ export class DatabaseSyncer {
     let markdown = await notionBodyToObsidian(this.notionClient, mdResult.markdown, page.id);
     // 이 행이 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 페이지와 같다. 행 id 와
     // 행 경로를 넘겨야 그 행이 올린 것(과 옛 캡션의 파일)을 찾는다.
-    markdown = await this.imageHandler.restoreUploadedMedia(markdown, page.id, filePath);
+    markdown = await this.imageHandler.restoreUploadedMedia(
+      markdown,
+      page.id,
+      filePath,
+      options?.adoptFrom,
+    );
 
     if (downloadMedia && this.config.conversion.imageDownload === "immediate" && markdown) {
       try {
@@ -1488,6 +1786,125 @@ export class DatabaseSyncer {
     return rows;
   }
 
+  /** pull 을 시작한다 — 이은 노트가 하나도 없는 볼트인지 적고 다시 잇기 장부를 비운다. */
+  beginPull(unlinkedVault: boolean): void {
+    this.unlinkedVault = unlinkedVault;
+    this.relinkClaims.clear();
+  }
+
+  /** 이번 받기에서 다시 이은 행의 경로를 가져가고 비운다. */
+  takeRelinkedRows(): string[] {
+    const rows = this.relinkedRows;
+    this.relinkedRows = [];
+    return rows;
+  }
+
+  /**
+   * 상태 기록에 없는 행 노트가 이 행이 놓일 자리에 이미 있다 — 이 행 id 를 단 이름이 먼저, 그 다음 자연 이름. 페이지의
+   * `claimExistingNote` 와 같은 규칙이다.
+   */
+  private async claimExistingRow(
+    localFolder: string,
+    safeName: string,
+    pageId: string,
+  ): Promise<{ readonly path: string; readonly existing: "own" | "name" } | null> {
+    const [natural, ...suffixed] = pagePathCandidates(localFolder, safeName, pageId);
+    const order: Array<[string, "own" | "name"]> = [
+      ...suffixed.map((path): [string, "own"] => [path, "own"]),
+      [natural!, "name"],
+    ];
+    for (const [candidate, existing] of order) {
+      if (this.relinkClaims.has(candidate) || this.stateDb.getByPath(candidate)) continue;
+      if (!(await this.vaultFs.exists(candidate))) continue;
+      this.relinkClaims.add(candidate);
+      return { path: candidate, existing };
+    }
+    return null;
+  }
+
+  /**
+   * 상태 기록에 없던 행 노트를 이 행과 다시 잇는다(P7) — 페이지의 `relinkExistingNote` 와 같은 규칙. 글이 같으면 잇고, 다르면
+   * 이 행 id 를 단 이름은 충돌 전략을 따르고 · 자연 이름은 이은 노트가 없는 볼트에서만 충돌로 잇는다. 잇지 않으면 null.
+   * remote-first 는 `"write"` — 호출측이 받은 행으로 덮는다.
+   */
+  private async relinkExistingRow(
+    filePath: string,
+    existing: "own" | "name",
+    local: string,
+    finalContent: string,
+    page: PageObjectResponse,
+    dbConfig: DatabaseSyncConfig,
+    rendered: { readonly title: string; readonly properties: Record<string, unknown> },
+    bodyFingerprint: string | null,
+  ): Promise<PullOutcome | "write" | null> {
+    const same = sameNoteContent(local, finalContent) || sameAsPendingLinks(local, finalContent);
+    if (!same && existing === "name" && !this.unlinkedVault) return null;
+    // 자연 이름의 다른 글은 정말 이 행의 노트인지 모른다 — 덮거나 올리지 않고 고르게 한다.
+    const strategy = existing === "own" ? this.config.sync.conflictStrategy : "manual";
+    if (!same && strategy === "remote-first") return "write";
+    const conflicted = !same && strategy !== "local-first";
+    // 글이 다르면 stat 을 적지 않는다 — 적으면 변경 확인이 stat 만 보고 바뀐 노트를 읽지 않는다(B5).
+    const stat = same ? await this.vaultFs.getFileStat(filePath) : null;
+    this.stateDb.transaction(() => {
+      this.stateDb.upsert({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        notionParentId: dbConfig.databaseId,
+        // 같으면 로컬 글로 적어 바뀐 것이 없게 · local-first 는 받은 글로 적어 다음 push 가 로컬을 올리게.
+        contentHash: computeHash(same ? local : finalContent),
+        ...observedRecordFields(page, this.observation().seenAt, bodyFingerprint),
+        localLastModified: new Date().toISOString(),
+        syncDirection: "both",
+        fileType: "db-row",
+        status: conflicted ? "conflict" : "synced",
+        // 충돌로 이으면 공통 조상을 모른다 — merge 도 합치지 않는다.
+        baseSnapshot: conflicted ? null : Buffer.from(finalContent, "utf-8"),
+        localMtime: stat?.mtime ?? null,
+        localFileSize: stat?.size ?? null,
+      });
+      this.stateDb.upsertWikilink({
+        obsidianPath: filePath,
+        notionPageId: page.id,
+        title: rendered.title,
+        aliases: extractAliases(rendered.properties),
+      });
+    });
+    if (!conflicted) return { action: "unchanged", path: filePath, relinked: true };
+    const record = this.stateDb.getByPath(filePath)!;
+    return {
+      action: "conflict",
+      path: filePath,
+      relinked: true,
+      conflict: {
+        syncRecord: record,
+        localChange: {
+          path: filePath,
+          type: "modified",
+          currentHash: computeHash(local),
+          previousHash: record.contentHash,
+        },
+        remoteChange: {
+          pageId: page.id,
+          type: "modified",
+          lastEdited: page.last_edited_time,
+          previousEdited: null,
+          path: filePath,
+          title: rendered.title,
+        },
+        baseContent: null,
+        localContent: local,
+        remoteContent: finalContent,
+      },
+    };
+  }
+
+  /** 이번 받기에서 로컬 편집을 합친 행의 경로를 가져가고 비운다. */
+  takeMergedRows(): string[] {
+    const rows = this.mergedRows;
+    this.mergedRows = [];
+    return rows;
+  }
+
   /**
    * Notion 에서 다른 페이지 아래로 옮긴 DB 의 폴더를 볼트에서도 옮긴다 — 옮겼으면 그 이동. 옮기지 못하면 까닭을 남기고
    * 옛 자리에서 받는다.
@@ -1504,7 +1921,7 @@ export class DatabaseSyncer {
     this.renamedRows.renamed.push(move);
     this.renamedRows.applied.push(move);
     getLogger().info(
-      `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮김: ${move.from} → ${move.to}`,
+      `[Im-Nobsidian] Notion 에서 ${move.renamed ? "이름을 바꾼" : "옮긴"} DB 의 폴더를 볼트에서 옮김: ${move.from} → ${move.to}`,
     );
     return move;
   }
@@ -1514,7 +1931,7 @@ export class DatabaseSyncer {
     if (!outcome) return null;
     if ("reason" in outcome) {
       getLogger().warn(
-        `[Im-Nobsidian] Notion 에서 옮긴 DB 의 폴더를 볼트에서 옮기지 않음 (${outcome.path}): ${outcome.reason}`,
+        `[Im-Nobsidian] Notion 에서 옮기거나 이름을 바꾼 DB 의 폴더를 볼트에서 옮기지 않음 (${outcome.path}): ${outcome.reason}`,
       );
       return null;
     }
@@ -1531,13 +1948,14 @@ export class DatabaseSyncer {
   }
 
   /**
-   * Notion 에서 다른 페이지 아래로 옮긴 발견 DB 의 폴더를 옮길 곳(ADR-047) — 제자리면 null.
+   * Notion 에서 다른 페이지 아래로 옮기거나 이름을 바꾼 발견 DB 의 폴더를 옮길 곳(ADR-047 · {@link retitledFolderName})
+   * — 제자리면 null.
    *
    * Notion 에서 DB 를 옮겨도 DB · 행의 수정 시각이 그대로라 받은 DB 의 부모로만 안다 — 전체 대조는 모든 DB 를 받으니
    * 거기서 보인다. 새 자리는 처음 발견할 때와 같다 — 부모 페이지의 하위 폴더 이름 그대로, 루트면 `databases` 선반.
    * 맨 위 폴더도 루트 아래로 본다(볼트에서 옮긴 DB 를 push 가 루트 아래에 둔다 — {@link DatabaseMover}).
    * 다음은 옮기지 않는다.
-   *   - 부모가 블록(토글 · 열) 안 · 볼트가 모르는 페이지 — 볼트에 그 자리가 없다
+   *   - 부모가 블록(토글 · 열) 안 · 볼트가 모르는 페이지 — 볼트에 그 자리가 없다(이름만 따른다)
    *   - 볼트에서 옮긴 DB 폴더 · 부모 노트를 아직 올리지 않았다 — 볼트가 먼저다(push 가 Notion 을 옮긴다)
    */
   private placementMoveOf(
@@ -1545,8 +1963,6 @@ export class DatabaseSyncer {
     meta: DatabaseMeta,
     movingInVault: ReadonlySet<string> = new Set(),
   ): RemoteMove | RemoteMoveSkip | null {
-    const parentId = meta.parentPageId;
-    if (!parentId) return null;
     const id = dbConfig.databaseId;
     if ((this.config.notion.databases ?? []).some((db) => notionIdsEqual(db.databaseId, id))) {
       return null;
@@ -1555,24 +1971,57 @@ export class DatabaseSyncer {
       return null;
     }
     const folder = dbConfig.localFolder;
-    let places: string[];
-    if (notionIdsEqual(parentId, this.config.notion.rootPageId)) {
-      places = [ROOT_DATABASES_FOLDER, ""];
-    } else {
-      const parent = this.stateDb.getByNotionId(parentId);
-      if (!parent) return null;
-      if (this.movedInVault(parent, movingInVault)) {
-        return {
-          path: folder,
-          reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
-        };
+    const current = parentFolderOf(folder);
+    let place = current;
+    const parentId = meta.parentPageId;
+    if (parentId) {
+      let places: string[] | null = null;
+      if (notionIdsEqual(parentId, this.config.notion.rootPageId)) {
+        places = [ROOT_DATABASES_FOLDER, ""];
+      } else {
+        const parent = this.stateDb.getByNotionId(parentId);
+        if (parent && this.movedInVault(parent, movingInVault)) {
+          return {
+            path: folder,
+            reason: "볼트에서 옮긴 부모 노트를 아직 올리지 않았다 — 다음 push 가 Notion 을 맞춘다",
+          };
+        }
+        if (parent) {
+          places = [childFolderOf(parent, { databaseAt: (path) => this.databaseAt(path) })];
+          // 처음 발견할 때는 폴더로 추적하는 페이지면 그 폴더 안에 두었다(`DatabaseDiscovery`).
+          if (isFolderRecord(parent)) places.push(parent.obsidianPath);
+        }
       }
-      places = [childFolderOf(parent, { databaseAt: (path) => this.databaseAt(path) })];
-      // 처음 발견할 때는 폴더로 추적하는 페이지면 그 폴더 안에 두었다(`DatabaseDiscovery`).
-      if (isFolderRecord(parent)) places.push(parent.obsidianPath);
+      if (places && !places.includes(current)) place = places[0]!;
     }
-    if (places.includes(parentFolderOf(folder))) return null;
-    return { from: folder, to: joinPath(places[0]!, baseName(folder)) };
+    const renamed = this.retitledFolderName(folder, dbConfig.databaseId, meta.title);
+    const to =
+      renamed === null
+        ? joinPath(place, baseName(folder))
+        : resolveDbFolderPath(joinPath(place, renamed), id, (path) => this.databaseAt(path));
+    if (to === folder) return null;
+    return { from: folder, to, ...(renamed !== null ? { renamed: true } : {}) };
+  }
+
+  /**
+   * Notion 에서 바꾼 DB 제목을 따른 폴더 이름(`sync.renameOnTitleChange`) — 바꿀 것이 없으면 null.
+   *
+   * 지난번에 받은 제목({@link DbBaseFiles})과 달라졌고, 폴더 이름이 그 옛 제목을 따르고 있을 때만 — 폴더를 만든 규칙
+   * (`databaseFolderName`) 이나 `.base` 이름 규칙(`sanitizeFileName`, 볼트에서 바꿔 올린 이름) 그대로일 때다. 사용자가
+   * 따로 정한 이름이면 두고, 새 이름도 지금 이름과 같은 규칙으로 짓는다. 같은 이름 DB 와 가르려 붙인 ` (id 조각)` 은
+   * 떼고 견준다(F24) — 새 자리에서 다시 가른다.
+   */
+  private retitledFolderName(folder: string, databaseId: string, title: string): string | null {
+    if (!this.config.sync.renameOnTitleChange || !title) return null;
+    const previous = this.baseFileInfo.get(databaseId)?.title;
+    if (!previous || previous === title) return null;
+    const name = baseName(folder).replace(/ \([0-9a-f]{8,32}\)$/, "");
+    for (const style of [databaseFolderName, sanitizeFileName]) {
+      if (style(previous) !== name) continue;
+      const next = style(title);
+      return next && next !== name ? next : null;
+    }
+    return null;
   }
 
   /** 이 폴더가 받는 DB — 설정한 DB 와 발견한 DB 에서. */
@@ -1585,6 +2034,13 @@ export class DatabaseSyncer {
   }
 
   /** 이름을 바꾼 행을 가져가고 비운다. */
+  /** 이번 pull 이 Notion 에서 지운 링크드 뷰라 치운 `.base` — 그것을 넣은 노트의 임베드를 뺀다({@link LinkUpdater.dropEmbeds}). */
+  takeRetiredBases(): string[] {
+    const paths = [...this.retiredBases];
+    this.retiredBases.clear();
+    return paths;
+  }
+
   takeRenamedRows(): { renamed: RemoteMove[]; applied: RemoteMove[] } {
     const rows = this.renamedRows;
     this.renamedRows = { renamed: [], applied: [] };
@@ -1606,6 +2062,43 @@ export class DatabaseSyncer {
     return hasChildren ? { from, to: stripMarkdownExtension(rowPath) } : null;
   }
 
+  /**
+   * Notion 에서 바꾼 제목으로 행 이름을 바꿀 자리(`sync.renameOnTitleChange`) — 바꿀 것이 없으면 null.
+   * 받기 · pull dry-run · status 가 같은 판정을 쓴다. 행의 하위 페이지 폴더(`행/`)도 새 이름으로 옮기며, 옮길 수
+   * 없으면 이름을 바꾸지 않는다(예전처럼 제목만 받는다) — 그 까닭을 돌려준다.
+   */
+  async retitledRowTarget(
+    localFolder: string,
+    record: SyncRecord,
+    page: PageObjectResponse,
+  ): Promise<{ to: string; children: RemoteMove | null } | { reason: string } | null> {
+    const recordPath = record.obsidianPath;
+    const title = this.notionClient.extractTitle(page);
+    if (
+      !this.config.sync.renameOnTitleChange ||
+      !isDirectDbRowPath(localFolder, recordPath) ||
+      !retitledInNotion(snapshotFrontmatter(record.baseSnapshot), null, recordPath, title) ||
+      this.stateDb.getIncompleteOpByState(record.id, "move")
+    ) {
+      return null;
+    }
+    const safeName = sanitizeFileName(title);
+    const to = resolveDbRowPath(
+      localFolder,
+      safeName,
+      page.id,
+      await this.rowPathOwners(localFolder, safeName, page.id),
+    );
+    if (to === recordPath) return null;
+    const from = stripMarkdownExtension(recordPath);
+    if (!this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
+      return { to, children: null };
+    }
+    const children = { from, to: stripMarkdownExtension(to) };
+    const blocked = await this.relocator.blocked(children);
+    return blocked ? { reason: `하위 페이지 폴더 — ${blocked}` } : { to, children };
+  }
+
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
@@ -1618,47 +2111,38 @@ export class DatabaseSyncer {
     // local-first 스킵/충돌이면 원위치를 보존한다. 재산정은 resolveDbRowPath 를 그대로
     // 타므로 충돌 시절 붙은 id 접미사도 새 폴더에서 자연 이름으로 되돌아온다.
     const recordPath = existingRecord?.obsidianPath;
-    let filePath: string;
     // Notion 에서 제목을 바꿨으면(sync.renameOnTitleChange) 새 이름의 자리로 — 옮기는 것은 아래 재배치와 같다.
-    const retitled =
-      !!existingRecord &&
-      !!recordPath &&
-      this.config.sync.renameOnTitleChange &&
-      isDirectDbRowPath(dbConfig.localFolder, recordPath) &&
-      retitledInNotion(
-        snapshotFrontmatter(existingRecord.baseSnapshot),
-        null,
-        recordPath,
-        this.notionClient.extractTitle(page),
-      ) &&
-      !this.stateDb.getIncompleteOpByState(existingRecord.id, "move");
-    if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath) && !retitled) {
+    const retitle =
+      existingRecord && recordPath
+        ? await this.retitledRowTarget(dbConfig.localFolder, existingRecord, page)
+        : null;
+    let filePath: string;
+    let childFolderMove: RemoteMove | null = null;
+    // 상태 기록에 없는 행 노트가 이미 있는 자리(P7) — 받은 글과 견줘 다시 이을지 정한다.
+    let adopt: { readonly path: string; readonly existing: "own" | "name" } | null = null;
+    if (retitle && "to" in retitle) {
+      filePath = retitle.to;
+      childFolderMove = retitle.children;
+    } else if (recordPath && isDirectDbRowPath(dbConfig.localFolder, recordPath)) {
       filePath = recordPath;
     } else {
-      filePath = resolveDbRowPath(
-        dbConfig.localFolder,
-        safeName,
-        page.id,
-        await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
+      filePath =
+        (!existingRecord
+          ? (adopt = await this.claimExistingRow(dbConfig.localFolder, safeName, page.id))?.path
+          : undefined) ??
+        resolveDbRowPath(
+          dbConfig.localFolder,
+          safeName,
+          page.id,
+          await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
+        );
+    }
+    if (retitle && "reason" in retitle) {
+      getLogger().warn(
+        `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꾸지 않음 (${recordPath}): ${retitle.reason}`,
       );
     }
-    // 행의 하위 페이지 폴더(`행/`)도 새 이름으로 — 옮길 수 없으면 이름을 바꾸지 않는다(예전처럼 제목만 받는다).
-    let childFolderMove: RemoteMove | null = null;
-    if (retitled) {
-      const from = stripMarkdownExtension(recordPath);
-      if (this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
-        childFolderMove = { from, to: stripMarkdownExtension(filePath) };
-        const blocked = await this.relocator.blocked(childFolderMove);
-        if (blocked) {
-          getLogger().warn(
-            `[Im-Nobsidian] Notion 에서 바꾼 제목으로 행 이름을 바꾸지 않음 (${recordPath}): 하위 페이지 폴더 — ${blocked}`,
-          );
-          filePath = recordPath;
-          childFolderMove = null;
-        }
-      }
-    }
-    const renaming = retitled && filePath !== recordPath;
+    const renaming = retitle !== null && "to" in retitle;
     // Notion 에서 DB 안으로 옮긴 페이지가 행이 된다(ADR-047) — 폴더 노트의 폴더 · 노트 옆 자식 폴더는 행의 하위
     // 페이지 폴더(`행/`)로 함께 옮긴다. 볼트에서 옮긴 것을 아직 올리지 않았으면 볼트가 먼저다(push 가 Notion 을 옮긴다).
     const becomesRow = !!existingRecord && !!recordPath && wasPage(existingRecord);
@@ -1687,7 +2171,40 @@ export class DatabaseSyncer {
       }
     }
 
-    const rendered = await this.renderRow(page, filePath, { localPath: recordPath ?? filePath });
+    // 다시 잇는 노트는 먼저 읽는다 — 그 노트가 가리키는 볼트 파일과 같은 미디어는 사본을 받지 않는다.
+    const local = adopt ? await readLocalNote(this.vaultFs, filePath) : undefined;
+    let rendered = await this.renderRow(page, filePath, {
+      localPath: recordPath ?? filePath,
+      ...(local !== undefined ? { adoptFrom: local } : {}),
+    });
+    let relinked = false;
+    if (adopt) {
+      const outcome =
+        local === undefined
+          ? null
+          : await this.relinkExistingRow(
+              filePath,
+              adopt.existing,
+              local,
+              rendered.content,
+              page,
+              dbConfig,
+              rendered,
+              rendered.bodyFingerprint,
+            );
+      if (outcome === "write") relinked = true;
+      else if (outcome) return outcome;
+      else {
+        // 자연 이름에 있던 다른 노트다 — 예전처럼 id 를 붙인 새 이름으로 받는다.
+        filePath = resolveDbRowPath(
+          dbConfig.localFolder,
+          safeName,
+          page.id,
+          await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
+        );
+        rendered = await this.renderRow(page, filePath, { localPath: filePath });
+      }
+    }
     const { title, properties, bodyFingerprint } = rendered;
     // 행이 된 페이지 — 볼트 frontmatter 의 값을 비어 있는 열이 지우지 않는다(Notion 은 페이지의 속성을 모른다).
     const finalContent = becomesRow
@@ -1695,6 +2212,8 @@ export class DatabaseSyncer {
       : rendered.content;
     const seenAt = this.observation().seenAt;
 
+    // merge 전략이 합친 글 — 있으면 받은 행 대신 이것을 쓰고, 지난 사본은 받은 행으로 적는다.
+    let merged: string | null = null;
     // 기존 추적 레코드가 있으면 무조건 덮어쓰기 전에 로컬 수정 여부를 검사한다.
     // (신규 페이지는 existingRecord 가 없으므로 충돌 검사 없이 바로 기록 — 로컬 파일 미존재)
     if (existingRecord) {
@@ -1712,14 +2231,9 @@ export class DatabaseSyncer {
         localExists = await this.vaultFs.exists(readPath);
       }
 
-      // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 렌더한 글이
-      // 달라도 받을 것이 없으면, 그 사이 로컬 편집을 충돌로 올리지 않는다. 사라진 행은 되살린다.
-      const base = snapshotFrontmatter(existingRecord.baseSnapshot);
+      // 받은 행이 지난 사본 그대로인지 내용으로 가른다 — push 와 같은 규칙(N-05). 사라진 행은 되살린다.
       const remoteUnchanged =
-        localExists &&
-        base !== null &&
-        bodyFingerprint === existingRecord.notionBodyFingerprint &&
-        this.rowOutsideBodyUnchanged(this.propertyMapper, page, base, existingRecord.obsidianPath);
+        localExists && this.rowRemoteUnchanged(existingRecord, page, bodyFingerprint, localContent);
 
       const resolution = resolvePullConflict({
         record: existingRecord,
@@ -1779,11 +2293,14 @@ export class DatabaseSyncer {
         });
         return { action: "unchanged", path: filePath };
       }
+      // merge: 양쪽이 다른 줄을 고쳤다 — 합친 글을 쓴다. 지난 사본 · 해시는 받은 행이라 합친 글의
+      // 로컬 편집이 바뀐 행으로 남아 이어지는 push 가 올린다.
+      if (resolution.action === "merge") merged = resolution.merged!;
       // resolution.action === "write" → 아래로 진행하여 덮어쓰기
     }
 
     await this.vaultFs.ensureFolder(dbConfig.localFolder);
-    await this.vaultFs.writeFile(filePath, finalContent);
+    await this.vaultFs.writeFile(filePath, merged ?? finalContent);
 
     const rehomed = existingRecord && recordPath && recordPath !== filePath;
     // 행이 된 페이지의 frontmatter 는 비어 있는 열에 지워지지 않고 남는다(mergeRowFrontmatter) — Notion 의 행과
@@ -1825,9 +2342,9 @@ export class DatabaseSyncer {
         fileType: "db-row",
         status: "synced",
         baseSnapshot: Buffer.from(finalContent, "utf-8"),
-        // 비운 해시를 변경 확인이 보게 — stat 이 맞으면 내용을 읽지 않는다(B5).
-        localMtime: outOfStep ? null : (stat?.mtime ?? null),
-        localFileSize: outOfStep ? null : (stat?.size ?? null),
+        // 비운 해시 · 합친 글을 변경 확인이 보게 — stat 이 맞으면 내용을 읽지 않는다(B5).
+        localMtime: outOfStep || merged !== null ? null : (stat?.mtime ?? null),
+        localFileSize: outOfStep || merged !== null ? null : (stat?.size ?? null),
         // 빈 해시와 함께 — push 가 지난 사본 대신 원격의 지금 값과 견줘 다른 속성을 모두 보낸다(overwritesRemote).
         ...(outOfStep ? { notionBodyFingerprint: null } : {}),
       });
@@ -1871,7 +2388,9 @@ export class DatabaseSyncer {
       }
     }
 
-    return { action: "written", path: filePath };
+    return merged !== null
+      ? { action: "merged", path: filePath }
+      : { action: "written", path: filePath, ...(relinked ? { relinked: true as const } : {}) };
   }
 }
 

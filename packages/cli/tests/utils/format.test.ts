@@ -29,6 +29,9 @@ import {
   readOnlySkipLines,
   remoteDeletionHint,
   restoredLines,
+  mergedLines,
+  relinkedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   renamedPropertyLines,
   schemaEditLines,
@@ -214,12 +217,13 @@ describe("schemaEditLines · heldSidecarLines — 사이드카에서 고친 속�
             retyped: [],
             redefined: ["상태"],
             droppedOptions: [["상태", ["끝"]]],
+            renamedOptions: [["상태", "진행", "진행중"]],
           },
         ],
         true,
       ),
     ).toEqual([
-      "✓ 사이드카에서 고친 속성을 Notion 에 올립니다 — a.notion.json: 설정 상태 · 상태 옵션 지움 끝(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)",
+      "✓ 사이드카에서 고친 속성을 Notion 에 올립니다 — a.notion.json: 설정 상태 · 상태 옵션 이름 진행 → 진행중(그 값을 가진 행도 옮깁니다) · 상태 옵션 지움 끝(그 값을 가진 행은 Notion 에서 빈 값이 됩니다)",
     ]);
     expect(heldSidecarLines(["할 일/할 일.notion.json"])).toEqual([
       "⚠ 고친 사이드카 1개는 덮어쓰지 않았습니다 — push 하면 고친 속성을 Notion 에 올립니다:",
@@ -264,8 +268,17 @@ describe("viewEditLines · heldBaseLines — .base 에서 고친 보기 (ADR-046
       "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 표 → 점수표 (이름 · 열)",
       "✓ .base 에서 고친 보기를 Notion 에 올립니다 — 할 일/할 일.base: 보드 (정렬 · 필터)",
     ]);
+    expect(
+      viewEditLines([
+        { path: "할 일/할 일.base", view: "목록", action: "created", changed: [] },
+        { path: "할 일/할 일.base", view: "보드", action: "deleted", changed: [] },
+      ]),
+    ).toEqual([
+      "✓ .base 에서 더한 보기를 Notion 에 만들었습니다 — 할 일/할 일.base: 목록",
+      "✓ .base 에서 지운 보기를 Notion 에서 지웠습니다 — 할 일/할 일.base: 보드",
+    ]);
     expect(heldBaseLines(["할 일/할 일.base"])).toEqual([
-      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터를 Notion 에 올립니다:",
+      "⚠ 보기를 고친 .base 1개는 덮어쓰지 않았습니다 — push 하면 고친 보기 이름 · 열 · 정렬 · 필터와 더하고 지운 보기를 Notion 에 올립니다:",
       "  할 일/할 일.base",
     ]);
     expect(heldBaseLines([])).toEqual([]);
@@ -316,5 +329,37 @@ describe("databaseMoveLines — 옮긴 DB 폴더 (ADR-047)", () => {
       "⚠ DB 폴더를 옮겼습니다 — databases/밖 → B/밖 (Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로)",
     ]);
     expect(databaseMoveLines(undefined)).toEqual([]);
+  });
+});
+
+describe("dry-run 이 미리 본 합침 · 충돌", () => {
+  it("합칠 노트는 합칩니다 · 합친 노트는 합쳤습니다로 — 경로를 늘어놓는다", () => {
+    expect(mergedLines(["가.md"], "push", true)).toEqual([
+      "↻ 양쪽이 다른 줄을 고친 노트 1개를 합칩니다 — push 하면 합친 글을 Notion 에 올립니다:",
+      "  가.md",
+    ]);
+    expect(mergedLines(["가.md"], "pushed")[0]).toContain(
+      "합쳤습니다 — 합친 글을 Notion 에 올립니다",
+    );
+    expect(mergedLines([], "push", true)).toEqual([]);
+  });
+
+  it("다시 이은 노트는 경로와 함께 · dry-run 은 다시 이을 것이라고만 — 없으면 아무 줄도 없다 (P7)", () => {
+    expect(relinkedLines(["가.md"], undefined)).toEqual([
+      "↻ 상태 기록에 없던 노트 1개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다:",
+      "  가.md",
+    ]);
+    expect(relinkedLines(undefined, true)).toHaveLength(1);
+    expect(relinkedLines(undefined, true)[0]).toContain("다시 잇습니다");
+    expect(relinkedLines([], undefined)).toEqual([]);
+  });
+
+  it("충돌로 남을 노트는 경로와 함께 — 없으면 아무 줄도 없다", () => {
+    expect(plannedConflictLines(["가.md", "나.md"])).toEqual([
+      "⚠ 양쪽을 고친 노트 2개는 받으면 충돌로 남습니다 — 받은 뒤 nobsi resolve 로 고르세요:",
+      "  가.md",
+      "  나.md",
+    ]);
+    expect(plannedConflictLines([])).toEqual([]);
   });
 });

@@ -21,13 +21,17 @@ import {
   failedCountText,
   remoteScanLines,
   restoredLines,
+  mergedLines,
+  relinkedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   heldSidecarLines,
   heldBaseLines,
   LISTED_ITEMS,
 } from "../utils/format.js";
 import { enableJsonMode, printJson, pullJson } from "../utils/json-output.js";
-import { openVaultFs, vaultArgPath } from "../utils/vault.js";
+import { openVaultFs, outsideVault, vaultArgPath } from "../utils/vault.js";
+import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const pullCommand = new Command("pull")
   .description("Notion 변경사항을 로컬에 반영")
@@ -45,6 +49,7 @@ export const pullCommand = new Command("pull")
     ).conflicts("dryRun"),
   )
   .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
+  .option("-y, --yes", "직접 만든 .base 의 폴더 필터를 묻지 않고 고침 (비대화형/CI)")
   .action(async (options) => {
     const json = options.json === true;
     if (json) enableJsonMode();
@@ -56,7 +61,14 @@ export const pullCommand = new Command("pull")
     try {
       const client = NotionClient.fromConfig(config);
       const vaultFs = await openVaultFs(cwd, config.paths);
-      const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
+      const orchestrator = new SyncOrchestrator(
+        config,
+        stateDb,
+        client,
+        vaultFs,
+        undefined,
+        await outsideVault(cwd, config.paths),
+      );
 
       if (!json) {
         console.log(`\n${header("  Pulling from Notion...")}`);
@@ -116,6 +128,12 @@ export const pullCommand = new Command("pull")
       for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
+      for (const line of relinkedLines(result.relinkedPaths, result.relinkPending)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of mergedLines(result.mergedPaths, "push", options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       // Notion 에서 옮긴 페이지 · 바꾼 제목 — 볼트의 노트가 어디로 갔는지 경로로 알린다(ADR-039 · ADR-040).
       for (const move of result.moved ?? []) {
         const verb = move.renamed ? "rename" : "move";
@@ -146,7 +164,13 @@ export const pullCommand = new Command("pull")
         for (const line of remoteScanLines(result.remoteScan)) console.log(`  ${line}`);
       }
 
-      if (result.conflicts.length > 0) {
+      if (options.dryRun) {
+        const planned = plannedConflictLines(
+          result.conflicts.map((conflict) => conflict.syncRecord.obsidianPath),
+        );
+        if (planned.length > 0) console.log("");
+        for (const line of planned) console.log(`  ${line}`);
+      } else if (result.conflicts.length > 0) {
         console.log(
           `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );
@@ -160,6 +184,7 @@ export const pullCommand = new Command("pull")
         // 종료 코드까지 실패로 남긴다 — 자동화가 pull 실패를 성공으로 집계하면 안 된다.
         process.exitCode = 1;
       }
+      await askUserBaseFilterFixes(orchestrator, options);
     } finally {
       stateDb.close();
     }

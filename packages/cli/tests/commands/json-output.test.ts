@@ -39,11 +39,13 @@ vi.mock("@im-nobsidian/core", () => ({
       const push = await mockPush(options);
       return { pull, push, conflicts: pull.conflicts, duration: pull.duration + push.duration };
     },
+    userBaseFilterFixes: () => [],
   })),
   findConnectionFolders: vi.fn().mockResolvedValue([]),
   ScopedVaultFS: vi.fn(),
   NodeVaultFS: vi.fn().mockImplementation(() => ({})),
   IGNORE_FILE: ".im-nobsidian-ignore",
+  OBSIDIAN_CONFIG_DIR: ".obsidian",
   setLogger: (...args: unknown[]) => mockSetLogger(...args),
 }));
 
@@ -200,6 +202,11 @@ describe("--json 출력 계약", () => {
     mockPull.mockResolvedValueOnce(pullResult);
     await run(pullCommand, "pull", "--json");
     expect(stdoutJson(write)).toMatchObject({ restoredPaths: [] });
+
+    write.mockClear();
+    mockPull.mockResolvedValueOnce({ ...pullResult, relinkedPaths: ["가.md"] });
+    await run(pullCommand, "pull", "--json");
+    expect(stdoutJson(write)).toMatchObject({ relinkedPaths: ["가.md"], relinkPending: false });
   });
 
   it("sync: Pull 이 무변경이어도 Push 변경을 churn 으로 센다", async () => {

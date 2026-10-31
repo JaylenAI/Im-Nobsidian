@@ -142,7 +142,7 @@ import {
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../src/state/sqljs-state-db.js";
 import { ConnectionEngine } from "../src/connection/connection-engine.js";
-import { FilteredVaultFS, IGNORE_FILE, ScopedVaultFS } from "@im-nobsidian/core";
+import { FilteredVaultFS, IGNORE_FILE, ScopedVaultFS, type OutsideVault } from "@im-nobsidian/core";
 import { StateDbCopyStaleError, StateDbFile } from "../src/state/state-db-file.js";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 
@@ -1084,6 +1084,10 @@ describe("ImNobsidianPlugin", () => {
       expect(rootFs!.ownsPath("Workshop/a.md")).toBe(true);
       expect(workFs!.ownsPath("회의.md")).toBe(true);
       expect(workFs!.ownsPath("../개인.md")).toBe(false);
+      // 볼트 전체를 보지 않는 연결은 나머지 노트의 링크도 고친다 — 그 연결의 폴더로 경로를 옮겨 견준다
+      const outside = orchestratorArgs.map((args) => args[5] as OutsideVault);
+      expect(outside.map((o) => o.folder)).toEqual(["", "Work"]);
+      expect(outside[1]!.fs).not.toBeInstanceOf(ScopedVaultFS);
       // 그 폴더의 상태 DB 를 잠그고 연다
       expect(existsSync(join(vaultPath, "Work", ".state", "sync.db.lock"))).toBe(true);
       expect(plugin.folderConnectionStatus("Work")).toEqual({
@@ -1149,6 +1153,8 @@ describe("ImNobsidianPlugin", () => {
       await plugin.initOrchestrator();
 
       expect(orchestratorArgs[0]![3]).not.toBeInstanceOf(FilteredVaultFS);
+      // 볼트 전체를 그대로 보면 따로 볼 노트가 없다
+      expect(orchestratorArgs[0]![5]).toBeUndefined();
     });
 
     it("한 폴더 연결이 열리지 않아도 다른 연결은 연다 — 그 연결의 까닭을 연결 이름과 함께 알린다", async () => {

@@ -18,6 +18,10 @@ import { SidecarBases, type SidecarBase } from "./sidecar-bases.js";
  *
  * 지난 기록과 속성 id 로 견준다. Notion 에서도 그 사이 속성이 바뀌었으면 어느 쪽이 맞는지 몰라 올리지 않는다. 행 노트의
  * 키는 다음 pull 이 Notion 을 따라 옮긴다(`schema-follow.ts`) — 여기서는 볼트의 행을 고치지 않는다.
+ *
+ * 선택 옵션의 이름을 바꾼 것({@link OptionRename})은 API 로 바로 바꿀 수 없다 — 옵션 id 와 새 이름을 보내도 200 인데
+ * 이름은 그대로다(2025-09-03 · 2026-03-11 실측, 색만 바뀐다). 그래서 새 이름을 더하고, 옛 값을 가진 Notion 행을 새 이름으로
+ * 옮긴 뒤 옛 옵션을 지운다 — 그냥 지우면 그 값을 가진 행이 빈 값이 된다.
  */
 
 /** 사이드카에서 설정을 고칠 수 있는 타입 — 그 밖의 설정(relation · rollup · status …)은 Notion 에서 바꾼다. */
@@ -28,6 +32,14 @@ const DEFINABLE_TYPES: ReadonlySet<string> = new Set([
   "multi_select",
 ]);
 
+/** 사이드카에서 이름을 바꾼 선택 옵션 — 같은 자리의 옵션 이름이 바뀌었다({@link renamedOptions}). */
+export interface OptionRename {
+  readonly propertyId: string;
+  readonly type: "select" | "multi_select";
+  readonly from: string;
+  readonly to: string;
+}
+
 export interface PlannedSchemaEdit {
   readonly databaseId: string;
   readonly dataSourceId: string;
@@ -37,6 +49,9 @@ export interface PlannedSchemaEdit {
   /** 고친 사이드카의 속성 — 올린 뒤 새 기록이다(더한 속성의 id 는 Notion 이 준 것으로). */
   readonly properties: readonly SidecarProperty[];
   readonly payload: Record<string, unknown>;
+  /** 옵션 이름을 바꿨으면 먼저 보낼 것 — 새 이름과 옛 이름이 함께 있다. 행을 옮긴 뒤 `payload` 로 옛 이름을 지운다. */
+  readonly staged?: Record<string, unknown>;
+  readonly optionRenames?: readonly OptionRename[];
   readonly edit: SchemaEdit;
   /** 지난 pull 이 본 스키마가 없으면 지금 것 — 다음 pull 이 이 변경을 행 노트에 옮기도록 먼저 적는다. */
   readonly seen: ReturnType<typeof seenSchemaOf>;
@@ -56,6 +71,8 @@ type Diff =
   | {
       readonly ok: true;
       readonly payload: Record<string, unknown>;
+      readonly staged?: Record<string, unknown>;
+      readonly optionRenames?: readonly OptionRename[];
       readonly edit: Omit<SchemaEdit, "path">;
     }
   | { readonly ok: false; readonly error: string };
@@ -73,6 +90,11 @@ export class SidecarSchemaEdits {
         dataSourceId: string,
         properties: Record<string, unknown>,
       ): Promise<Record<string, Record<string, unknown>>>;
+      queryAllDatabasePages(
+        databaseId: string,
+        filter?: unknown,
+      ): Promise<ReadonlyArray<{ id: string; properties: Record<string, unknown> }>>;
+      updatePageProperties(pageId: string, properties: Record<string, unknown>): Promise<unknown>;
     },
   ) {
     this.bases = new SidecarBases(stateDb);
@@ -149,6 +171,7 @@ export class SidecarSchemaEdits {
         hash,
         properties,
         payload: diff.payload,
+        ...(diff.staged ? { staged: diff.staged, optionRenames: diff.optionRenames } : {}),
         edit: { path: base.path, ...diff.edit },
         seen: this.ledger.get(databaseId) ? null : seenSchemaOf(meta),
       });
@@ -164,6 +187,12 @@ export class SidecarSchemaEdits {
       if (edit.seen) this.ledger.set(edit.databaseId, edit.seen);
       let after: Record<string, Record<string, unknown>>;
       try {
+        if (edit.staged) {
+          await this.notionClient.updateDataSourceProperties(edit.dataSourceId, edit.staged);
+          for (const rename of edit.optionRenames ?? []) {
+            await this.moveOptionValues(edit.databaseId, rename);
+          }
+        }
         after = await this.notionClient.updateDataSourceProperties(edit.dataSourceId, edit.payload);
       } catch (error) {
         failed.push({
@@ -186,6 +215,34 @@ export class SidecarSchemaEdits {
       applied.push(edit.edit);
     }
     return { applied, failed };
+  }
+
+  /**
+   * 옛 옵션 값을 가진 Notion 행을 새 이름으로 옮긴다. 중간에 멈추면 두 이름이 다 남는다 — 사이드카 기록을 고치지 않아
+   * 다음 push 가 같은 이름 바꾸기를 다시 해 남은 행을 마저 옮긴다.
+   */
+  private async moveOptionValues(databaseId: string, rename: OptionRename): Promise<void> {
+    const { propertyId, type, from, to } = rename;
+    const filter =
+      type === "select"
+        ? { property: propertyId, select: { equals: from } }
+        : { property: propertyId, multi_select: { contains: from } };
+    const rows = await this.notionClient.queryAllDatabasePages(databaseId, filter);
+    for (const row of rows) {
+      let value: unknown;
+      if (type === "select") {
+        value = { name: to };
+      } else {
+        const current = Object.values(row.properties).find(
+          (prop) => (prop as { id?: unknown } | null)?.id === propertyId,
+        ) as { multi_select?: Array<{ name?: string }> } | undefined;
+        const names = (current?.multi_select ?? []).map((option) =>
+          option.name === from ? to : (option.name ?? ""),
+        );
+        value = [...new Set(names.filter((name) => name.length > 0))].map((name) => ({ name }));
+      }
+      await this.notionClient.updatePageProperties(row.id, { [propertyId]: { [type]: value } });
+    }
   }
 }
 
@@ -250,8 +307,11 @@ export function diffSidecarProperties(
     renamed: [] as Array<readonly [string, string]>,
     retyped: [] as Array<readonly [string, string]>,
     redefined: [] as string[],
+    renamedOptions: [] as Array<readonly [string, string, string]>,
   };
   const droppedOptions: Array<readonly [string, readonly string[]]> = [];
+  const optionRenames: OptionRename[] = [];
+  const staged: Record<string, unknown> = {};
 
   const names = new Set<string>();
   const seenIds = new Set<string>();
@@ -288,10 +348,35 @@ export function diffSidecarProperties(
           `「${prop.name}」(${prop.type}) 의 설정은 사이드카에서 바꿀 수 없습니다. Notion 에서 바꾸세요`,
         );
       }
-      change[prop.type] = definitionOf(prop, old);
       edit.redefined.push(prop.name);
-      const dropped = (old.options ?? []).filter((name) => !(prop.options ?? []).includes(name));
+      const isSelect = prop.type === "select" || prop.type === "multi_select";
+      const before = isSelect ? optionNamesOf(old) : [];
+      const after = isSelect ? sentOptionNamesOf(prop, old) : [];
+      const renames = renamedOptions(before, after);
+      change[prop.type] = definitionOf(prop, old, renames);
+      const dropped = before.filter(
+        (name) => !after.includes(name) && !renames.some(([from]) => from === name),
+      );
       if (dropped.length > 0) droppedOptions.push([prop.name, dropped]);
+      if (renames.length > 0) {
+        const type = prop.type as OptionRename["type"];
+        const final = (change[type] as { options?: unknown[] } | undefined)?.options ?? [];
+        const known = (old.definition?.["options"] as Array<{ name?: string }> | undefined) ?? [];
+        staged[old.id] = {
+          ...change,
+          [type]: {
+            ...(change[type] as object),
+            options: [
+              ...final,
+              ...renames.map(([from]) => known.find((o) => o.name === from) ?? { name: from }),
+            ],
+          },
+        };
+        for (const [from, to] of renames) {
+          optionRenames.push({ propertyId: old.id, type, from, to });
+          edit.renamedOptions.push([prop.name, from, to]);
+        }
+      }
     }
     if (Object.keys(change).length > 0) payload[old.id] = change;
   }
@@ -306,15 +391,60 @@ export function diffSidecarProperties(
   if (kept >= 2 && edit.removed.length === kept && edit.added.length === 0) {
     return fail("제목 말고 모든 속성을 지우는 것은 받지 않습니다 — 정말이면 Notion 에서 지우세요");
   }
+  const { renamedOptions: renamedOptionList, ...rest } = edit;
   return {
     ok: true,
     payload,
-    edit: droppedOptions.length > 0 ? { ...edit, droppedOptions } : edit,
+    // 먼저 보낼 것 — 옵션 이름을 바꾼 속성만 새 이름 · 옛 이름을 함께, 나머지는 마지막 것과 같다.
+    ...(optionRenames.length > 0 ? { staged: { ...payload, ...staged }, optionRenames } : {}),
+    edit: {
+      ...rest,
+      ...(droppedOptions.length > 0 ? { droppedOptions } : {}),
+      ...(renamedOptionList.length > 0 ? { renamedOptions: renamedOptionList } : {}),
+    },
   };
 }
 
-/** 보낼 타입별 설정 — 옵션 이름만 고쳤으면 그 이름으로, 지난 옵션의 색은 그대로. */
-function definitionOf(prop: SidecarProperty, old: SidecarProperty | undefined): unknown {
+/** 지난 기록의 옵션 이름 — 목록(`options`)이 없으면 설정에서. */
+function optionNamesOf(prop: SidecarProperty): string[] {
+  if (prop.options) return [...prop.options];
+  const options = prop.definition?.["options"];
+  return Array.isArray(options)
+    ? options
+        .map((o) => (o as { name?: unknown }).name)
+        .filter((n): n is string => typeof n === "string")
+    : [];
+}
+
+/** 보낼 옵션 이름 — 설정을 고쳤으면 설정의 것({@link definitionOf} 가 설정을 그대로 보낸다), 아니면 목록. */
+function sentOptionNamesOf(prop: SidecarProperty, old: SidecarProperty): string[] {
+  if (sameJson(prop.definition, old.definition)) return [...(prop.options ?? [])];
+  return optionNamesOf({ ...prop, options: undefined });
+}
+
+/**
+ * 같은 자리의 옵션 이름이 바뀌었으면 이름을 바꾼 것으로 본다 — 옛 이름이 목록에서 사라지고 새 이름이 처음 보일 때만.
+ * 옵션을 지우거나 더해 자리가 밀리면 어느 자리의 이름도 이 조건을 맞추지 않는다(지운 것 · 더한 것으로 남는다).
+ */
+export function renamedOptions(
+  before: readonly string[],
+  after: readonly string[],
+): Array<readonly [string, string]> {
+  const renames: Array<readonly [string, string]> = [];
+  for (let i = 0; i < Math.min(before.length, after.length); i++) {
+    const from = before[i]!;
+    const to = after[i]!;
+    if (from !== to && !after.includes(from) && !before.includes(to)) renames.push([from, to]);
+  }
+  return renames;
+}
+
+/** 보낼 타입별 설정 — 옵션 이름만 고쳤으면 그 이름으로, 지난 옵션의 색은 그대로(이름을 바꾼 옵션은 옛 옵션의 색). */
+function definitionOf(
+  prop: SidecarProperty,
+  old: SidecarProperty | undefined,
+  renames: ReadonlyArray<readonly [string, string]> = [],
+): unknown {
   if (!DEFINABLE_TYPES.has(prop.type)) return {};
   const definition = prop.definition ?? {};
   if (
@@ -324,8 +454,15 @@ function definitionOf(prop: SidecarProperty, old: SidecarProperty | undefined): 
     !sameJson(prop.options, old.options)
   ) {
     const known = (old.definition?.["options"] as Array<{ name?: string }> | undefined) ?? [];
+    const renamedFrom = new Map(renames.map(([from, to]) => [to, from]));
     return {
-      options: (prop.options ?? []).map((name) => known.find((o) => o.name === name) ?? { name }),
+      options: (prop.options ?? []).map((name) => {
+        const from = renamedFrom.get(name);
+        if (from === undefined) return known.find((o) => o.name === name) ?? { name };
+        const color = (known.find((o) => o.name === from) as { color?: unknown } | undefined)
+          ?.color;
+        return color === undefined ? { name } : { name, color };
+      }),
     };
   }
   return definition;

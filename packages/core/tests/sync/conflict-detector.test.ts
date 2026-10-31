@@ -321,3 +321,58 @@ describe("sameNoteContent", () => {
     expect(sameNoteContent("글\n다음", "글다음")).toBe(false);
   });
 });
+
+describe("resolvePullConflict — merge 전략 (P7)", () => {
+  const BASE = "가\n나\n다\n";
+  const record = createRecord({
+    contentHash: computeHash(BASE),
+    baseSnapshot: Buffer.from(BASE, "utf-8"),
+  });
+
+  it("다른 줄을 고쳤으면 합친 글로 merge", () => {
+    const result = resolvePullConflict({
+      record,
+      localContent: "가 로컬\n나\n다\n",
+      remoteContent: "가\n나\n다 원격\n",
+      remoteChange,
+      strategy: "merge",
+    });
+    expect(result).toMatchObject({ action: "merge", merged: "가 로컬\n나\n다 원격\n" });
+    expect(result.conflict).toBeUndefined();
+  });
+
+  it("같은 줄을 다르게 고쳤으면 충돌 — 충돌 표시를 만들지 않는다", () => {
+    const result = resolvePullConflict({
+      record,
+      localContent: "가 로컬\n나\n다\n",
+      remoteContent: "가 원격\n나\n다\n",
+      remoteChange,
+      strategy: "merge",
+    });
+    expect(result.action).toBe("conflict");
+    expect(result.merged).toBeUndefined();
+    expect(result.conflict).toMatchObject({ baseContent: BASE });
+  });
+
+  it("지난 사본이 없으면 공통 조상을 몰라 충돌", () => {
+    const result = resolvePullConflict({
+      record: createRecord({ contentHash: "synced-hash", baseSnapshot: null }),
+      localContent: "가 로컬\n나\n다\n",
+      remoteContent: "가\n나\n다 원격\n",
+      remoteChange,
+      strategy: "merge",
+    });
+    expect(result.action).toBe("conflict");
+  });
+
+  it("원격이 지난 사본 그대로면 합치지 않고 skip — 로컬 편집은 push 가 올린다", () => {
+    const result = resolvePullConflict({
+      record,
+      localContent: "가 로컬\n나\n다\n",
+      remoteContent: BASE,
+      remoteChange,
+      strategy: "merge",
+    });
+    expect(result).toMatchObject({ action: "skip", remoteUnchanged: true });
+  });
+});

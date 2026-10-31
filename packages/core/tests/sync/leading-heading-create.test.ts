@@ -151,6 +151,24 @@ describe("맨 앞 `# 제목` 으로 시작하는 노트를 만든다 (N-04)", ()
     expect(incompleteOps()).toEqual([]);
   });
 
+  it("되살리지 못한 채 끊긴 뒤의 pull 은 제목 없는 본문을 받지도 충돌로 올리지도 않는다 — 다음 push 가 마저 (P7)", async () => {
+    vault.write("notes/H.md", "# Title\n\nBody\n");
+    notion.client.replacePageMarkdown
+      .mockRejectedValueOnce(new Error("Notion 503"))
+      .mockRejectedValueOnce(new Error("Notion 503"));
+    await orchestrator.push();
+    expect(pageOf("notes/H.md").body).not.toMatch(/^# Title/);
+
+    const pulled = await orchestrator.pull();
+
+    expect(pulled.conflicts).toEqual([]);
+    expect(pulled.updated).toBe(0);
+    expect(vault.read("notes/H.md")).toBe("# Title\n\nBody\n");
+    expect(await orchestrator.push()).toMatchObject({ created: 0, updated: 1, failed: [] });
+    expect(pageOf("notes/H.md").body).toMatch(/^# Title\n/);
+    expect(titled("H")).toHaveLength(1);
+  });
+
   it("자동 발견 DB 의 새 행도 맨 앞 제목을 되살린다", async () => {
     db.setMeta(
       "discovered_dbs",

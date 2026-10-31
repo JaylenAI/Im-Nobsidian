@@ -123,6 +123,19 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
       );
 
     new Setting(containerEl)
+      .setName("다른 줄을 고친 충돌은 합치기")
+      .setDesc(
+        "노트와 Notion 이 둘 다 바뀌었어도 서로 다른 줄을 고쳤으면 두 변경을 합쳐 양쪽에 씁니다. 같은 줄을 다르게 " +
+          "고쳤으면 예전처럼 충돌로 남겨 사이드바에서 고르게 합니다. 끄면 둘 다 바뀐 노트는 모두 충돌로 남습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle.setValue(settings.conflictStrategy === "merge").onChange(async (value) => {
+          settings.conflictStrategy = value ? "merge" : "manual";
+          await this.changeConnection();
+        }),
+      );
+
+    new Setting(containerEl)
       .setName("자동 동기화")
       .setDesc(
         `노트를 고치면 ${DEFAULT_WATCH_DEBOUNCE_MS / 1000}초 뒤에, 그리고 아래 간격마다 동기화합니다(동기화 방향을 따름). ` +

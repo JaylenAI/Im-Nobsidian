@@ -24,6 +24,8 @@
  */
 
 import { formatWikilink, wikilinkTitleFromPath } from "../utils/wikilink-title.js";
+import { anchorTargetOfDisplay } from "./anchor-links.js";
+import { MARKER_LABEL_CAPTURE } from "./marker-url.js";
 
 /** notion page id → 볼트 파일 경로. 미추적이면 null. */
 export type NotionIdToPath = (id: string) => string | null;
@@ -44,6 +46,41 @@ export interface NotionIdWikilinkResolution {
 const NOTION_ID_WIKILINK_RE = /\[\[notion:([a-f0-9]{32}|[a-f0-9-]{36})(?:(\\?\|)([^[\]]+))?\]\]/g;
 
 const compactId = (id: string): string => id.replace(/-/g, "");
+
+// 아직 풀지 못한 Notion 링크 자리 — 위키링크형 `[[notion:<id>|별칭]]` 과 frontmatter relation 의 원시 id.
+const PENDING_LINK_RE = new RegExp(
+  `${NOTION_ID_WIKILINK_RE.source}|\\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-f0-9]{32})\\b`,
+  "g",
+);
+
+/**
+ * 받은 글이 노트와 같은가 — 아직 풀지 못한 Notion 링크 자리는 노트의 같은 자리 링크와 같다고 본다(P7, ADR-049).
+ *
+ * 상태 DB 를 잃은 볼트를 다시 이을 때 링크 대상 페이지가 아직 이어지지 않았으면 받은 글의 링크가 `[[notion:<id>]]` ·
+ * 원시 id 로 남는다 — 링크 패스가 끝에 푼다. 그 전에 견주면 링크만 다른 노트가 모두 충돌이 됐다(실측: `[[b]]` 를 가진
+ * `a.md` · 되돌아가는 링크를 가진 `b.md`). 그 자리에는 노트의 위키링크 · 마크다운 링크만 받는다. 별칭이 있으면 노트
+ * 링크의 대상이나 별칭이 그 별칭과 같아야 한다 — 다른 글 · 다른 이름의 링크는 여전히 다르다.
+ */
+export function sameAsPendingLinks(local: string, remote: string): boolean {
+  if (!PENDING_LINK_RE.test(remote)) return false;
+  PENDING_LINK_RE.lastIndex = 0;
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let pattern = "";
+  let last = 0;
+  for (const match of remote.matchAll(PENDING_LINK_RE)) {
+    pattern += escape(remote.slice(last, match.index));
+    const alias = match[3];
+    // 원시 id(frontmatter relation)는 풀면 따옴표 친 위키링크(`"[[행]]"`)가 된다.
+    pattern += match[4]
+      ? `"?\\[\\[[^\\]\\n]+\\]\\]"?`
+      : alias
+        ? `(?:\\[\\[(?:[^\\]\\n|]*/)?${escape(alias)}(?:\\\\?\\|[^\\]\\n]*)?\\]\\]|\\[\\[[^\\]\\n|]+\\\\?\\|${escape(alias)}\\]\\]|\\[${escape(alias)}\\]\\([^)\\n]+\\))`
+        : `(?:\\[\\[[^\\]\\n]+\\]\\]|\\[[^\\]\\n]+\\]\\([^)\\n]+\\))`;
+    last = match.index + match[0].length;
+  }
+  pattern += escape(remote.slice(last).replace(/\n+$/, ""));
+  return new RegExp(`^${pattern}\\n*$`).test(local.replace(/\n+$/, ""));
+}
 
 export function resolveNotionIdWikilinks(
   markdown: string,
@@ -197,4 +234,68 @@ export function degradeUnresolvedNotionRelativePageLinks(
     },
   );
   return { markdown: out, degraded };
+}
+
+/**
+ * Notion 블록 링크 — 제목 · 블록으로 가는 위키링크를 push 가 이렇게 보낸다(anchor-links). Notion 은
+ * `https://app.notion.com/p/<페이지>#<블록>` 으로 돌려준다. 그룹 1 = 글자, 2 = 페이지, 3 = 블록.
+ */
+const NOTION_BLOCK_LINK_RE = new RegExp(
+  `\\[${MARKER_LABEL_CAPTURE}\\]\\(https?:\\/\\/(?:www\\.|app\\.)?notion\\.(?:so|com)\\/(?:p\\/)?([a-f0-9]{32})#([a-f0-9]{32}|[a-f0-9-]{36})\\)`,
+  "g",
+);
+
+/**
+ * 노트를 링크에 적을 수 있는 꼴 — 경로의 뒤쪽 조각들(`가/나/노트` · `나/노트` · `노트`), 자기 노트면 마지막에 `""`.
+ * `""` 를 먼저 보면 「노트 > 제목」 의 노트 이름을 제목으로 읽는다.
+ */
+function noteForms(path: string, self: boolean): string[] {
+  const parts = path.replace(/\.md$/i, "").split("/");
+  return [...parts.map((_, i) => parts.slice(i).join("/")), ...(self ? [""] : [])];
+}
+
+/** 볼트에서 찾은 페이지로 가는 블록 링크의 블록(줄인 id) — 그 블록을 읽어 앵커를 알아낸다. */
+export function notionBlockLinkIds(markdown: string, lookup: NotionIdToPath): string[] {
+  const ids = new Set<string>();
+  for (const m of markdown.matchAll(NOTION_BLOCK_LINK_RE)) {
+    if (lookup(m[2]!)) ids.add(compactId(m[3]!));
+  }
+  return [...ids];
+}
+
+/**
+ * 볼트에 있는 페이지로 가는 블록 링크를 `[[노트#제목]]` · `[[노트#^블록]]` 으로 되돌린다. 자기 페이지면 `[[#제목]]`.
+ * 글자가 Obsidian 이 보이는 글자(「노트 > 제목」)면 별칭을 붙이지 않고, 그 글자대로 노트를 적은 꼴(경로)과 위 제목들
+ * (`[[노트#가#나]]`)을 되살린다 — push 가 그 글자를 보낸다. 블록이 제목도 아니고 블록 id 도 없으면
+ * (`anchorOf` 가 null) Notion 링크로 둔다 — 앵커를 버리면 그 블록을 가리키지 못한다.
+ *
+ * @param anchorOf 블록(줄인 id)을 가리키는 앵커 — 미리 읽어 둔다({@link notionBlockLinkIds}).
+ * @param selfPageId 이 노트의 페이지.
+ */
+export function resolveNotionBlockLinks(
+  markdown: string,
+  lookup: NotionIdToPath,
+  anchorOf: (blockId: string) => string | null,
+  selfPageId: string | null = null,
+): NotionIdWikilinkResolution {
+  let resolved = 0;
+  const self = selfPageId === null ? null : compactId(selfPageId);
+  const out = markdown.replace(
+    NOTION_BLOCK_LINK_RE,
+    (match, label: string, pageId: string, blockId: string, offset: number) => {
+      const path = lookup(pageId);
+      const anchor = anchorOf(compactId(blockId));
+      if (!path || !anchor) return match;
+      resolved++;
+      const note = compactId(pageId) === self ? "" : wikilinkTitleFromPath(path);
+      // Notion 은 글자의 `>` · `^` 를 `\>` · `\^` 로 돌려준다(2026-10-30 실측).
+      const text = label.replace(/\\([>^])/g, "$1");
+      const written = anchorTargetOfDisplay(text, noteForms(path, note === ""), anchor);
+      const link = written ? formatWikilink(written) : formatWikilink(`${note}#${anchor}`, text);
+      // 표 칸에서는 별칭 구분자가 `\|` 다 — 노트 이름 · 제목 글자에는 `|` 가 없어 첫 `|` 가 구분자다.
+      const line = markdown.slice(markdown.lastIndexOf("\n", offset) + 1, offset);
+      return line.trimStart().startsWith("|") ? link.replace("|", "\\|") : link;
+    },
+  );
+  return { markdown: out, resolved };
 }

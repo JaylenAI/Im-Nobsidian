@@ -10,6 +10,9 @@ import {
   duration,
   readOnlySkipLines,
   restoredLines,
+  mergedLines,
+  relinkedLines,
+  plannedConflictLines,
   schemaFollowedLines,
   unsentDeletionLines,
   renamedPropertyLines,
@@ -32,12 +35,14 @@ import {
   pushDbChangeCount,
   pushJson,
 } from "../utils/json-output.js";
-import { openVaultFs } from "../utils/vault.js";
+import { openVaultFs, outsideVault } from "../utils/vault.js";
+import { askUserBaseFilterFixes } from "../utils/base-filter-prompt.js";
 
 export const syncCommand = new Command("sync")
   .description("양방향 동기화 (Pull → Push)")
   .option("--dry-run", "실제 반영 없이 변경사항만 표시")
   .option("--json", "결과를 JSON 한 줄로 출력 (자동화용 — 로그는 stderr)")
+  .option("-y, --yes", "직접 만든 .base 의 폴더 필터를 묻지 않고 고침 (비대화형/CI)")
   .action(async (options) => {
     const json = options.json === true;
     if (json) enableJsonMode();
@@ -51,7 +56,14 @@ export const syncCommand = new Command("sync")
     try {
       const client = NotionClient.fromConfig(config);
       const vaultFs = await openVaultFs(cwd, config.paths);
-      const orchestrator = new SyncOrchestrator(config, stateDb, client, vaultFs);
+      const orchestrator = new SyncOrchestrator(
+        config,
+        stateDb,
+        client,
+        vaultFs,
+        undefined,
+        await outsideVault(cwd, config.paths),
+      );
 
       log(`\n${header("  Bidirectional Sync")}`);
       log(`  ${separator()}`);
@@ -123,6 +135,12 @@ export const syncCommand = new Command("sync")
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
         console.log(`  ${line}`);
       }
+      for (const line of relinkedLines(pullResult.relinkedPaths, pullResult.relinkPending)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of mergedLines(pullResult.mergedPaths, "pushed", options.dryRun)) {
+        console.log(`  ${line}`);
+      }
       for (const line of unsentDeletionLines(pushResult.unsentDeletions, options.dryRun)) {
         console.log(`  ${line}`);
       }
@@ -160,7 +178,13 @@ export const syncCommand = new Command("sync")
         for (const line of remoteScanLines(pullResult.remoteScan)) console.log(`  ${line}`);
       }
 
-      if (result.conflicts.length > 0) {
+      if (options.dryRun) {
+        const planned = plannedConflictLines(
+          result.conflicts.map((conflict) => conflict.syncRecord.obsidianPath),
+        );
+        if (planned.length > 0) console.log("");
+        for (const line of planned) console.log(`  ${line}`);
+      } else if (result.conflicts.length > 0) {
         console.log(
           `\n  ${icons.conflict} ${chalk.magenta(`${result.conflicts.length} conflicts`)} — run ${chalk.cyan("nobsi resolve")}`,
         );
@@ -172,6 +196,7 @@ export const syncCommand = new Command("sync")
         for (const f of pushResult.failed) failedItem(f.path, f.error, "▲");
         process.exitCode = 1;
       }
+      await askUserBaseFilterFixes(orchestrator, options);
     } finally {
       stateDb.close();
     }

@@ -466,9 +466,10 @@ describe("SyncOrchestrator", () => {
     });
 
     it("앞선 요청이 적용돼 있었으면 그 페이지를 입양하고 새로 만들지 않는다", async () => {
-      // 루트의 자식에만 고아가 있다 — 고아 자신은 자식이 없는 빈 페이지다.
+      // 루트의 자식에만 고아가 있다 — 고아 자신은 자식이 없는 빈 페이지다. 고아는 앞선 생성 요청이 남긴 것이다(그 전에
+      // 루트를 읽으면 없다 — 상태 기록이 빈 볼트의 겹침 확인, ADR-049).
       mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
-        parentId === "root-page-id"
+        parentId === "root-page-id" && mockNotionClient.createPageWithMarkdown.mock.calls.length > 0
           ? [{ id: "orphan-page", type: "child_page", child_page: { title: "note" } }]
           : [],
       );
@@ -532,7 +533,11 @@ describe("SyncOrchestrator", () => {
     });
 
     it("부모 목록을 읽지 못하면 그 항목만 실패로 남긴다 — 새 페이지를 만들지 않는다", async () => {
-      mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
+      // 생성 요청을 보낸 뒤부터 읽지 못한다 — 그 전의 겹침 확인(ADR-049)은 읽는다.
+      mockNotionClient.fetchAllChildren.mockImplementation(async () => {
+        if (mockNotionClient.createPageWithMarkdown.mock.calls.length === 0) return [];
+        throw new Error("HTTP 502");
+      });
 
       const result = await orchestrator.push();
 
@@ -1260,6 +1265,47 @@ describe("SyncOrchestrator — 자식이 있는 페이지의 본문 push (S-03)"
     expect(notion.deleteBlock).not.toHaveBeenCalled();
   });
 
+  it("링크드 뷰의 .base 임베드는 그 컨테이너 블록으로 되돌린다 — 사이드카가 없고 태그 제목이 비어도 (P6)", async () => {
+    const LINKED_DB = "5f0e2a7b3c1d4e9f8a6b2c4d6e8f0a1b";
+    const LINKED_TAG = `<database url="https://app.notion.com/p/${LINKED_DB}" inline="true" data-source-url="collection://ds"></database>`;
+    const LINKED_BASE = "QA-A/QA-과제-DB/QA 과제 DB - 진행중만.base";
+    const notion = createMockNotionClient();
+    notion.replacePageMarkdown.mockRejectedValueOnce(wouldDelete());
+    notion.getPageMarkdown.mockResolvedValue({
+      markdown: `# Hub\n옛 본문.\n${LINKED_TAG}\n`,
+      truncated: false,
+      unknown_block_ids: [],
+    });
+    const stateDb = createMockStateDb();
+    stateDb.getMeta.mockImplementation((key: string) =>
+      key === "db_base_files"
+        ? JSON.stringify({
+            [LINKED_DB]: {
+              basePath: LINKED_BASE,
+              title: "QA 과제 DB - 진행중만",
+              linkedTo: CHILD_DB,
+            },
+          })
+        : null,
+    );
+    const orchestrator = new SyncOrchestrator(
+      createConfig(),
+      stateDb as any,
+      notion as any,
+      createMockVaultFs(),
+    );
+
+    await (orchestrator as unknown as { pusher: PushPage }).pusher.pushUpdatePage(
+      "hub-page",
+      "# Hub\n\n수정된 본문.\n\n" +
+        `> 📎 진행중만.base %% im-nobsidian:local-file:${encodeURIComponent(`${LINKED_BASE}|QA 과제 DB - 진행중만`)} %%\n`,
+    );
+
+    const sent = notion.replacePageMarkdown.mock.calls[1]![1] as string;
+    expect(sent).toContain(LINKED_TAG);
+    expect(sent).not.toContain("📎");
+  });
+
   it("다시 보내도 거절되면 실패로 남기고 동기화됨으로 적지 않는다", async () => {
     const path = "Hub/Hub.md";
     const before = "# Hub\n\n옛 본문.\n";
@@ -1563,6 +1609,11 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
     });
 
     const { orch, notion } = makeOrchestrator(sdb);
+    notion.getDatabaseViewsConfig.mockResolvedValue({
+      databaseId: "db-linked",
+      lastSynced: "2026-10-30T00:00:00.000Z",
+      views: [{ id: "v1", name: "진행중만", type: "table" }],
+    });
     // 컨테이너(db-linked)의 행 parent 가 원본(db-orig)을 가리킨다 — 추가 API 0회 판정 근거.
     notion.queryAllDatabasePages.mockImplementation(async (dbId: string) =>
       dbId === "db-linked"
@@ -1589,6 +1640,12 @@ describe("SyncOrchestrator — linked view 컨테이너 이중 pull 해소 (F25)
     const linkedWrite = setMetaCalls.filter(([k]) => k === "linked_dbs").pop();
     expect(linkedWrite).toBeDefined();
     expect(JSON.parse(linkedWrite![1])).toEqual({ dblinked: "dborig" });
+
+    // 링크드 뷰의 보기로 원본 폴더에 따로 `.base` 를 쓴다 — 컨테이너 폴더에는 쓰지 않는다(P6).
+    expect(notion.getDatabaseViewsConfig).toHaveBeenCalledWith("dblinked");
+    const bases = setMetaCalls.filter(([k]) => k === "db_base_files").pop();
+    expect(JSON.parse(bases![1]).dblinked).toMatchObject({ linkedTo: "dborig" });
+    expect(JSON.parse(bases![1]).dblinked.basePath).toMatch(/^루틴\/목록\/[^/]+\.base$/);
   });
 
   it("원본이 캐시/설정에 없으면 컨테이너가 행을 계속 소유(유일 통로 폴백) — 캐시·매핑 불변", async () => {
@@ -1689,6 +1746,37 @@ describe("SyncOrchestrator — 인라인 DB 임베드 재작성 마감 (F22 잔�
     expect(write).toBeDefined();
     expect(write![1]).toContain("![[para/0-인박스/0. 인박스.base|0. 인박스]]");
     expect(write![1]).not.toContain("0-인박스/0-인박스.base"); // 추측 경로 회귀 방지
+  });
+
+  it("링크드 뷰는 자기 .base 로, 그것이 없으면 원본의 .base 로 임베드한다 (P6)", async () => {
+    const { orch, sdb, vaultFs } = make();
+    orch.databaseSyncer.baseFileInfo.set(A32, { basePath: "p/목록/목록.base", title: "목록" });
+    orch.databaseSyncer.baseFileInfo.set(B32, {
+      basePath: "p/목록/목록 - 진행중만.base",
+      title: "목록 - 진행중만",
+      linkedTo: A32,
+    });
+    const present = new Set(["p/목록/목록.base", "p/목록/목록 - 진행중만.base"]);
+    (vaultFs.exists as ReturnType<typeof vi.fn>).mockImplementation((p: string) =>
+      Promise.resolve(present.has(p)),
+    );
+    (vaultFs.readFile as ReturnType<typeof vi.fn>).mockResolvedValue(
+      `**** *(Notion DB)*${marker(B32, "")}\n`,
+    );
+    (sdb.getByPath as ReturnType<typeof vi.fn>).mockReturnValue(null);
+    const rewrite = async () => {
+      (vaultFs.writeFile as ReturnType<typeof vi.fn>).mockClear();
+      await orch.rewriteDbPlaceholderEmbeds(
+        ["page.md"],
+        [{ databaseId: A32, localFolder: "p/목록" }],
+        new Map([[B32, A32]]),
+      );
+      return (vaultFs.writeFile as ReturnType<typeof vi.fn>).mock.calls[0]?.[1] as string;
+    };
+
+    expect(await rewrite()).toBe("![[p/목록/목록 - 진행중만.base|목록 - 진행중만]]\n");
+    present.delete("p/목록/목록 - 진행중만.base");
+    expect(await rewrite()).toBe("![[p/목록/목록.base|목록]]\n");
   });
 
   it(".base 가 디스크에 없으면 재작성하지 않고 placeholder 를 마커째 보존한다", async () => {

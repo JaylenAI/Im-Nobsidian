@@ -222,6 +222,8 @@ export interface DatabaseMeta {
   readonly parentPageId?: string | null;
   /** DB 의 아이콘 · 커버 · 설명 · 제목 표시 — 받은 그대로. */
   readonly appearance?: DatabaseAppearance;
+  /** 휴지통에 있다 — 링크드 뷰 블록을 지우면 컨테이너가 이렇게 남는다. 아니면 없다. */
+  readonly inTrash?: true;
 }
 
 /** DB 자체의 꾸밈 — 행이 아니라 DB 의 것이다. 값은 Notion 이 준 그대로(`icon` · `cover` 는 페이지와 같은 꼴). */
@@ -806,6 +808,8 @@ export class NotionClient {
       cover?: unknown;
       description?: unknown[];
       show_data_source_title?: boolean;
+      in_trash?: boolean;
+      archived?: boolean;
     };
 
     // 신 모델(2025-09-03): 한 database 가 2개 이상의 data source 를 가질 수 있고, 각 data
@@ -857,6 +861,7 @@ export class NotionClient {
         description: Array.isArray(db.description) ? db.description : [],
         showTitle: db.show_data_source_title !== false,
       },
+      ...(db.in_trash === true || db.archived === true ? { inTrash: true as const } : {}),
     };
     return { meta, owners };
   }
