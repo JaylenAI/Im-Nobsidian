@@ -21,6 +21,7 @@
     "@codemirror/view": "6.38.6",
     "@sveltejs/vite-plugin-svelte": "^4",
     "@types/node": "^22.0.0",
+    "buffer": "^6.0.3",
     "builtin-modules": "^5.3.0",
     "esbuild": "^0.28.1",
     "esbuild-svelte": "^0.9.5",

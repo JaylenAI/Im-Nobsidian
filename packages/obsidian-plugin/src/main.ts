@@ -1,4 +1,14 @@
-import { Plugin, Notice, MarkdownRenderChild, requireApiVersion, TFile, TFolder } from "obsidian";
+// 모바일에는 전역 Buffer 가 없다 — core 를 읽기 전에 둔다(P11)
+import "./platform/buffer-global.js";
+import {
+  Plugin,
+  Notice,
+  MarkdownRenderChild,
+  Platform,
+  requireApiVersion,
+  TFile,
+  TFolder,
+} from "obsidian";
 import {
   DEFAULT_CONFIG,
   compactNotionId,
@@ -12,6 +22,7 @@ import {
   notionIdFromInput,
   sectionLinesWithHeadingMarkers,
 } from "@im-nobsidian/core";
+import { findConnectionFoldersInVault } from "./connection/vault-connection-folders.js";
 import type {
   Config,
   Conflict,
@@ -390,6 +401,7 @@ export default class ImNobsidianPlugin extends Plugin {
     this.registerDesignRenderer();
     this.registerFolderMenu();
     this.registerVaultEvents();
+    this.registerBackgroundFlush();
   }
 
   /** 이 세션에서 끝난 동기화의 기록 — 연결마다 모아 최근 것부터. */
@@ -589,8 +601,12 @@ export default class ImNobsidianPlugin extends Plugin {
 
   /** 볼트의 연결 폴더 — 설정에 적은 폴더와 `.im-nobsidian/` 를 둔 폴더(CLI 가 만든 것)의 합. */
   private async findConnectionFolders(): Promise<string[]> {
-    const basePath = (this.app.vault.adapter as unknown as { basePath: string }).basePath;
-    const found = await findConnectionFolders(basePath);
+    // 모바일에는 Node `fs` 가 없다 — 볼트 어댑터로 같은 규칙을 걷는다(P11)
+    const found = Platform.isDesktopApp
+      ? await findConnectionFolders(
+          (this.app.vault.adapter as unknown as { basePath: string }).basePath,
+        )
+      : await findConnectionFoldersInVault(this.app.vault.adapter);
     const configured = this.folderConnections().map((c) => c.folder);
     this.connectionFolders = [...new Set(["", ...found, ...configured])];
     return this.connectionFolders;
@@ -852,6 +868,22 @@ export default class ImNobsidianPlugin extends Plugin {
         this.scheduleSidebarRefresh();
       }),
     );
+  }
+
+  /**
+   * 앱이 가려지면 상태 DB 를 바로 파일에 쓴다 — 평소에는 바뀐 뒤 5초 모아 쓴다. 모바일은 다른 앱으로 넘어가면 곧
+   * 멈추거나 닫히고 onunload 를 부르지 않는다. 그 5초 안에 만든 페이지의 기록을 잃으면 다음 push 가 같은 페이지를
+   * 또 만든다(P11).
+   */
+  private registerBackgroundFlush(): void {
+    this.registerDomEvent(document, "visibilitychange", () => {
+      if (document.visibilityState !== "hidden") return;
+      for (const engine of this.engines) {
+        engine.stateDb?.flush().catch((error: unknown) => {
+          getLogger().warn(`[Im-Nobsidian] 앱을 가리며 상태 DB 를 쓰지 못함: ${errorText(error)}`);
+        });
+      }
+    });
   }
 
   private sidebarRefreshTimer: number | null = null;
