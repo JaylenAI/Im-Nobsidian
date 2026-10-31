@@ -638,7 +638,9 @@ export class NotionClient {
     );
     if (refetched > 0) {
       const left = response.unknown_block_ids.length;
-      getLogger().info(
+      // 자리표시로 남긴 블록이 있으면 받지 못한 것이라 경고 — 다 채웠으면 정보.
+      const logger = getLogger();
+      (left > 0 ? logger.warn.bind(logger) : logger.info.bind(logger))(
         `[Im-Nobsidian] Markdown API 가 잘라 보낸 블록 ${refetched}개를 다시 받아 채움 (${pageId})` +
           (left > 0 ? ` — 권한이 없어 ${left}개는 자리표시로 남김` : ""),
       );
@@ -1983,7 +1985,13 @@ export class NotionClient {
 
   // ─── Internal ───
 
-  private lastRequestTime = 0;
+  /**
+   * 다음 요청이 나갈 수 있는 가장 이른 시각(epoch ms). 요청마다 이 자리를 «먼저 잡고» 기다린다 — 동시 칸
+   * (`concurrency`)이 여럿이어도 시작 간격이 `minRequestInterval` 아래로 내려가지 않는다. 예전에는 칸마다 마지막 요청
+   * 시각을 같이 읽고 같이 잔 뒤 한꺼번에 나가, 350ms 간격(초당 약 3회)이 실제로는 초당 8회 남짓이 되어 큰 볼트의 첫
+   * push 가 429 를 거듭 맞았다(P10 실측 — 1,000 노트에서 Retry-After 40초).
+   */
+  private nextRequestAt = 0;
 
   /**
    * 429 이후 **클라이언트 전체**가 쉬어야 하는 시각(epoch ms).
@@ -2036,7 +2044,6 @@ export class NotionClient {
       await this.sema.acquire();
       try {
         await this.waitForTurn();
-        this.lastRequestTime = Date.now();
         return await fn();
       } catch (error: unknown) {
         if (isWorkspaceBlockLimit(error)) {
@@ -2079,11 +2086,18 @@ export class NotionClient {
 
   /** 슬롯을 쥔 뒤의 발사 대기 — 전역 쿨다운(429)과 최소 요청 간격을 함께 지킨다. */
   private async waitForTurn(): Promise<void> {
-    const cooldownMs = this.cooldownUntil - Date.now();
-    if (cooldownMs > 0) await sleep(cooldownMs);
+    for (;;) {
+      const cooldownMs = this.cooldownUntil - Date.now();
+      if (cooldownMs > 0) await sleep(cooldownMs);
 
-    const elapsed = Date.now() - this.lastRequestTime;
-    if (elapsed < this.minRequestInterval) await sleep(this.minRequestInterval - elapsed);
+      // 기다리기 «전에» 자리를 잡는다 — 잠든 사이 다른 칸이 같은 자리를 잡지 못한다.
+      const now = Date.now();
+      const at = Math.max(now, this.nextRequestAt);
+      this.nextRequestAt = at + this.minRequestInterval;
+      if (at > now) await sleep(at - now);
+      // 기다리는 사이 다른 칸이 429 를 맞았으면 쿨다운 뒤로 다시 줄을 선다
+      if (this.cooldownUntil <= Date.now()) return;
+    }
   }
 }
 

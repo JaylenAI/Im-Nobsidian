@@ -3,6 +3,7 @@ import {
   IGNORE_FILE,
   inAnyPathScope,
   isMarkdownPath,
+  applicableChoices,
   isRemoteDeletion,
   notionIdsEqual,
   SyncBusyError,
@@ -10,23 +11,31 @@ import {
 import { NOTICE_PREFIX } from "../constants.js";
 import type {
   SyncOrchestrator,
+  NotionAccessCheck,
   GatedOperation,
   ProgressCallback,
+  ProgressItem,
   ChangeDiff,
   LocalChange,
   FolderMoveChange,
   RemoteChange,
   Conflict,
+  DatabaseMove,
+  FailedOperation,
   PullResult,
   PushResult,
+  RemoteScanInfo,
   RenameKind,
   ResolutionChoice,
   StatusResult,
   SyncDirection,
   SyncRecord,
+  SyncResult,
   UserBaseFilterFix,
+  VaultCompletenessReport,
 } from "@im-nobsidian/core";
 import { choiceText } from "../conflict-choices.js";
+import type { SyncPreview } from "../preview-modal.js";
 import { directionBlocks, type DirectionBlocks } from "./direction.js";
 
 /** 동기화 표시 상태 (상태바·사이드바 공용 단일 진실원). */
@@ -58,6 +67,41 @@ export interface SyncDashboardState {
 }
 
 export type SyncStatePatch = Partial<SyncDashboardState>;
+
+/**
+ * 동기화 한 번의 기록 — 알림은 몇 초 뒤 사라지지만 기록은 남는다(P8). 예전에는 실패 사유 · 경고를 다시 볼 곳이 없었고, 자동
+ * 동기화의 결과는 통째로 버렸다.
+ */
+export interface SyncLogEntry {
+  /** 끝난 때(ISO). */
+  readonly at: string;
+  /** 「Push」 · 「Pull(전체 확인)」 · 「자동 동기화」 … */
+  readonly label: string;
+  readonly summary: string;
+  /** 알린 경고와 알림에 넣지 않은 사정(받지 않은 페이지 · 미룬 삭제 …). */
+  readonly details: readonly string[];
+  /** 처리하지 못한 것과 그 까닭 — 줄이지 않는다. */
+  readonly failed: readonly FailedOperation[];
+}
+
+/** 동기화 기록을 이만큼만 둔다 — 오래된 것부터 버린다. */
+const SYNC_LOG_LIMIT = 50;
+
+/** 오래된 것이 앞인 기록을 최근 것부터. */
+export function newestFirst<T>(log: readonly T[]): T[] {
+  return [...log].reverse();
+}
+
+/** 끝난 작업을 화면에 어떻게 알릴지. */
+interface OperationReport {
+  readonly summary: string;
+  readonly phase: SyncPhase;
+  /** 오래 남는 알림으로 띄울 것. */
+  readonly warning?: string | null;
+  /** 알림에는 넣지 않고 기록에만 남길 것. */
+  readonly details?: readonly (string | null)[];
+  readonly failed?: readonly FailedOperation[];
+}
 
 /** 아무것도 모를 때의 패널 — 처음 열 때와 연결을 바꿀 때 이것에서 시작한다. */
 export const EMPTY_DASHBOARD_STATE: SyncDashboardState = {
@@ -119,10 +163,21 @@ interface ActiveTask {
 }
 
 /** 충돌 하나를 무엇으로 풀지 묻는다. 고르지 않으면 null. 신호가 취소되면 묻기를 닫는다. */
+/** 고른 것과, 남은 충돌에도 같은 것을 쓸지. */
+export interface ConflictAnswer {
+  readonly choice: ResolutionChoice;
+  /** 남은 충돌 가운데 그 선택이 가능한 것은 묻지 않고 같은 것으로 푼다 — 가능하지 않은 것(Notion 에서 지운 노트의 병합)은 묻는다. */
+  readonly forRest: boolean;
+}
+
+/**
+ * 충돌 하나를 무엇으로 풀지 묻는다 — 고르지 않으면 null. `remaining` 은 이 뒤에 물을 충돌 수(「남은 것도 같은 것으로」 를 보일지).
+ */
 export type ConflictChooser = (
   conflict: Conflict,
   signal: AbortSignal,
-) => Promise<ResolutionChoice | null>;
+  remaining: number,
+) => Promise<ResolutionChoice | ConflictAnswer | null>;
 
 export class SyncController {
   /**
@@ -149,13 +204,42 @@ export class SyncController {
 
   /** 동기화 방향이 막는 동작 — 목록을 보낼 때 함께 싣는다(새로 연 패널도 받는다). */
   private readonly blocked: DirectionBlocks;
+  /**
+   * 마지막으로 끝난 작업이 처리하지 못한 것의 까닭 — 다음 작업이 시작할 때까지 패널 · 상태바를 오류로 둔다. 목록 새로고침이
+   * 「준비됨」 으로 덮지 않게 한다.
+   */
+  private failure: string | null = null;
 
+  /**
+   * @param log 끝난 작업의 기록을 이어 적을 자리(오래된 것이 앞) — 플러그인이 연결마다 가진다. 설정을 바꿔 다시 연결하면
+   *   컨트롤러는 새로 만들어지지만 기록은 이어진다.
+   */
   constructor(
     private readonly orchestrator: SyncOrchestrator,
     private readonly hooks: SyncControllerHooks = {},
     direction: SyncDirection = "both",
+    private readonly log: SyncLogEntry[] = [],
   ) {
     this.blocked = directionBlocks(direction);
+  }
+
+  /** 이 세션의 동기화 기록 — 최근 것이 앞이다. */
+  syncLog(): readonly SyncLogEntry[] {
+    return newestFirst(this.log);
+  }
+
+  /** 끝난 작업을 기록에 남긴다. */
+  private record(label: string, report: OperationReport): void {
+    this.log.push({
+      at: new Date().toISOString(),
+      label,
+      summary: report.summary,
+      details: [report.warning ?? null, ...(report.details ?? [])]
+        .filter((line): line is string => line !== null && line !== "")
+        .flatMap((line) => line.split("\n")),
+      failed: [...(report.failed ?? [])],
+    });
+    if (this.log.length > SYNC_LOG_LIMIT) this.log.splice(0, this.log.length - SYNC_LOG_LIMIT);
   }
 
   /** 작업이 도는 중인지 — 취소한 작업도 실제로 멈출 때까지 돈다. */
@@ -216,6 +300,7 @@ export class SyncController {
 
   /** 실행 직전 공통 상태 진입(시작 표시). */
   private begin(operation: SyncOperation, label: string): void {
+    this.failure = null;
     this.hooks.onStatusBar?.("syncing");
     this.emitState({
       syncState: "syncing",
@@ -261,7 +346,7 @@ export class SyncController {
     operation: SyncOperation,
     label: string,
     call: (options: { onProgress: ProgressCallback; signal: AbortSignal }) => Promise<R>,
-    report: (result: R) => { summary: string; phase: SyncPhase; warning?: string | null },
+    report: (result: R) => OperationReport,
     completed?: (result: R) => void,
   ): Promise<void> {
     if (!this.admit(operation)) return;
@@ -272,19 +357,24 @@ export class SyncController {
         if (signal.aborted) {
           this.cancelled();
         } else {
-          const { summary, phase, warning } = report(result);
+          const reported = report(result);
+          const { summary, phase, warning } = reported;
+          this.failure = failedText(reported.failed ?? []);
           this.hooks.onNotice?.(
             `${NOTICE_PREFIX}: ${summary} (${(result.duration / 1000).toFixed(1)}s)`,
           );
           if (warning) this.hooks.onNotice?.(`${NOTICE_PREFIX}: ${warning}`, ACTIONABLE_NOTICE_MS);
           this.hooks.onStatusBar?.(phase);
-          // 패널도 상태바와 같은 단계로 둔다 — 아래 새로고침이 실패해도 「동기화 중」 에 남지 않는다.
+          // 패널도 상태바와 같은 단계로 둔다 — 아래 새로고침이 실패해도 「동기화 중」 에 남지 않는다. 실패한 것이 있으면 그
+          // 까닭을 패널에 남긴다 — 알림은 사라진다.
           this.emitState({
             completionSummary: summary,
             syncState: phase,
             operationType: null,
             progress: null,
+            errorMessage: this.failure,
           });
+          this.record(label, reported);
           completed?.(result);
         }
         await this.refreshLocal(true);
@@ -328,16 +418,20 @@ export class SyncController {
       "Push",
       (options) => this.orchestrator.push(paths ? { ...options, paths } : options),
       (result) => ({
-        summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
-        phase: "ready",
+        summary: `Push 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${result.moved > 0 ? ` / 이동 ${result.moved}` : ""}${createdDatabasesText(result)}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        phase: result.failed.length > 0 ? "error" : "ready",
         warning: warnings(
+          failedText(result.failed),
           renamedPropertyText(result),
           schemaEditText(result),
           viewEditText(result),
           placementChangeText(result),
+          databaseMoveText(result.databaseMoves),
           readOnlyText(result),
           unsentDeletionText(result),
         ),
+        details: databaseMoveDetails(result.databaseMoves),
+        failed: result.failed,
       }),
     );
   }
@@ -365,15 +459,19 @@ export class SyncController {
         }),
       (result) => ({
         summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
-        phase: result.conflicts.length > 0 ? "conflict" : "ready",
+        phase: phaseOf(result.failed.length, result.conflicts.length),
         warning: warnings(
+          failedText(result.failed),
           schemaFollowedText(result),
           heldSidecarText(result.heldSidecars ?? []),
           heldBaseText(result.heldBases ?? []),
+          moveSkippedText(result),
           restoredText(result),
           relinkedText(result),
           mergedText(result, "pull"),
         ),
+        details: pullDetails(result),
+        failed: result.failed,
       }),
       (result) => this.dropPulled(result, paths),
     );
@@ -384,34 +482,58 @@ export class SyncController {
       "sync",
       "Sync",
       (options) => this.orchestrator.sync(options),
-      (result) => ({
-        summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}`,
-        phase: result.conflicts.length > 0 ? "conflict" : "ready",
-        warning: warnings(
-          schemaFollowedText(result.pull),
-          restoredText(result.pull),
-          relinkedText(result.pull),
-          mergedText(result.pull, "sync"),
-          renamedPropertyText(result.push),
-          schemaEditText(result.push),
-          viewEditText(result.push),
-          placementChangeText(result.push),
-          heldSidecarText(
-            (result.pull.heldSidecars ?? []).filter(
-              (path) => !(result.push.schemaEdits ?? []).some((edit) => edit.path === path),
-            ),
-          ),
-          heldBaseText(
-            (result.pull.heldBases ?? []).filter(
-              (path) => !(result.push.viewEdits ?? []).some((edit) => edit.path === path),
-            ),
-          ),
-          readOnlyText(result.push),
-          unsentDeletionText(result.push),
-        ),
-      }),
+      syncReport,
       (result) => this.dropPulled(result.pull),
     );
+  }
+
+  /**
+   * 반영하지 않고 Sync 가 무엇을 할지 본다(dry-run) — 받을 것 · 올릴 것 · 충돌 · 처리하지 못할 것. 볼트 · Notion · 상태 기록을
+   * 바꾸지 않으므로 기록에 남기지 않는다. 결과는 `show` 가 보인다.
+   */
+  async preview(show: (preview: SyncPreview) => void): Promise<void> {
+    if (!this.admit("sync")) return;
+    await this.exclusive("sync", async (signal) => {
+      this.hooks.onNotice?.(`${NOTICE_PREFIX}: Sync 미리 보기...`);
+      const items: ProgressItem[] = [];
+      try {
+        const result = await this.orchestrator.sync({
+          dryRun: true,
+          signal,
+          onProgress: (_current, _total, item) => items.push(item),
+        });
+        if (!signal.aborted) show({ result, items });
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: 미리 보지 못함 — ${errorMessage(error)}`,
+          ACTIONABLE_NOTICE_MS,
+        );
+      }
+    });
+  }
+
+  /** 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 — 아무것도 쓰지 않아 도는 동기화를 기다리지 않는다. */
+  checkNotionAccess(): Promise<NotionAccessCheck> {
+    return this.orchestrator.checkNotionAccess();
+  }
+
+  /**
+   * 빠짐없이 받았는지 — Notion 의 DB 행 · 페이지를 상태 기록과 견준다(CLI `verify`). 결과는 `show` 가 보인다.
+   */
+  async verify(show: (report: VaultCompletenessReport) => void): Promise<void> {
+    if (!this.admit("verify")) return;
+    await this.exclusive("verify", async (signal) => {
+      this.hooks.onNotice?.(`${NOTICE_PREFIX}: 빠짐없이 받았는지 확인하는 중...`);
+      try {
+        const report = await this.orchestrator.verifyCompleteness();
+        if (!signal.aborted) show(report);
+      } catch (error) {
+        this.hooks.onNotice?.(
+          `${NOTICE_PREFIX}: 확인하지 못함 — ${errorMessage(error)}`,
+          ACTIONABLE_NOTICE_MS,
+        );
+      }
+    });
   }
 
   /**
@@ -506,8 +628,8 @@ export class SyncController {
   }
 
   /**
-   * Vault 이벤트 기반 자동 동기화. UI 트리거(push/pull/sync)와 달리 알림 · 진행 표시 없이 상태바만
-   * 「동기화 중」 으로 둔다. 끝나면 패널의 목록을 새로고친다 — 예전에는 새로고치지 않아, 올린 노트가
+   * Vault 이벤트 기반 자동 동기화. UI 트리거(push/pull/sync)와 달리 진행 표시 · 요약 알림 없이 상태바만
+   * 「동기화 중」 으로 둔다. 사용자가 할 일이 있는 경고만 알린다. 끝나면 패널의 목록을 새로고친다 — 예전에는 새로고치지 않아, 올린 노트가
    * 다음 새로고침까지 변경으로 남았다. 도는 작업이 있으면 끝난 뒤 한 번 돈다 — 그 사이의 편집을
    * 버리지 않는다. 충돌을 푸는 동안 병합 결과를 쓴 파일이 부른 것도 푼 뒤에 돈다.
    */
@@ -521,8 +643,20 @@ export class SyncController {
       this.hooks.onStatusBar?.("syncing");
       try {
         const result = await this.orchestrator.sync({ signal });
-        this.hooks.onStatusBar?.(result.conflicts.length > 0 ? "conflict" : "ready");
+        const report = syncReport(result);
+        this.hooks.onStatusBar?.(report.phase);
         if (!signal.aborted) {
+          this.record("자동 동기화", report);
+          // 요약은 알리지 않는다(자동이다). 사용자가 할 일이 있는 경고는 알린다 — 예전에는 결과를 통째로 버려, 처리하지
+          // 못한 노트 · 되살린 노트 · 합친 노트를 알 길이 없었다. 실패의 까닭은 패널에도 남긴다.
+          if (report.warning) {
+            this.hooks.onNotice?.(
+              `${NOTICE_PREFIX}: 자동 동기화 — ${report.warning}`,
+              ACTIONABLE_NOTICE_MS,
+            );
+          }
+          const failed = failedText(report.failed ?? []);
+          this.failure = failed ? `자동 동기화: ${failed}` : null;
           this.dropPulled(result.pull);
           await this.refreshLocal(true);
         }
@@ -616,9 +750,16 @@ export class SyncController {
     this.emitState({ ...listsOf(status), blocked: this.blocked, ...this.shown });
   }
 
-  /** 끝났다 — 충돌이 남았으면 충돌, 아니면 준비됨. 패널과 상태바가 같은 단계를 보인다. */
+  /**
+   * 끝났다 — 마지막 작업이 처리하지 못한 것이 있으면 오류, 충돌이 남았으면 충돌, 아니면 준비됨. 패널과 상태바가 같은 단계를
+   * 보인다.
+   */
   private settle(status: StatusResult, patch: SyncStatePatch = {}): void {
-    const phase: SyncPhase = status.conflictRecords.length > 0 ? "conflict" : "ready";
+    const phase: SyncPhase = this.failure
+      ? "error"
+      : status.conflictRecords.length > 0
+        ? "conflict"
+        : "ready";
     this.hooks.onStatusBar?.(phase);
     this.emitState({
       ...listsOf(status),
@@ -627,7 +768,7 @@ export class SyncController {
       syncState: phase,
       operationType: null,
       progress: null,
-      errorMessage: null,
+      errorMessage: this.failure,
     });
   }
 
@@ -762,13 +903,23 @@ export class SyncController {
     }
 
     const cleared = new Set(this.orchestrator.clearStaleConflicts(conflicts));
+    const pending = conflicts.filter((conflict) => !cleared.has(conflict.syncRecord.obsidianPath));
     let resolved = 0;
     let remaining = 0;
     let failed = 0;
-    for (const conflict of conflicts) {
+    let forRest: ResolutionChoice | null = null;
+    for (const [index, conflict] of pending.entries()) {
       const path = conflict.syncRecord.obsidianPath;
-      if (cleared.has(path)) continue;
-      const choice = signal.aborted ? null : await choose(conflict, signal);
+      let choice: ResolutionChoice | null = null;
+      if (signal.aborted) {
+        // 플러그인을 내렸다 — 「남은 것도 같은 것으로」 도 더 풀지 않는다.
+      } else if (forRest && applicableChoices(conflict).includes(forRest)) {
+        choice = forRest;
+      } else {
+        const answer = await choose(conflict, signal, pending.length - index - 1);
+        choice = typeof answer === "object" && answer ? answer.choice : answer;
+        if (typeof answer === "object" && answer?.forRest) forRest = answer.choice;
+      }
       if (!choice) {
         remaining++;
         continue;
@@ -995,6 +1146,116 @@ function schemaFollowedText(result: PullResult): string | null {
       ? `\n지운 속성에 올리지 않은 값이 있어 남겼습니다(Notion 에는 그 열이 없습니다): ${listedPaths(kept)}`
       : "")
   );
+}
+
+/** Sync 의 알림 — 사용자가 부른 Sync 와 자동 동기화가 함께 쓴다. */
+function syncReport(result: SyncResult): OperationReport {
+  const failed = [...result.pull.failed, ...result.push.failed];
+  return {
+    summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${createdDatabasesText(result.push)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${failed.length > 0 ? ` / 실패 ${failed.length}` : ""}`,
+    phase: phaseOf(failed.length, result.conflicts.length),
+    warning: warnings(
+      failedText(failed),
+      schemaFollowedText(result.pull),
+      restoredText(result.pull),
+      relinkedText(result.pull),
+      mergedText(result.pull, "sync"),
+      moveSkippedText(result.pull),
+      renamedPropertyText(result.push),
+      schemaEditText(result.push),
+      viewEditText(result.push),
+      placementChangeText(result.push),
+      databaseMoveText(result.push.databaseMoves),
+      heldSidecarText(
+        (result.pull.heldSidecars ?? []).filter(
+          (path) => !(result.push.schemaEdits ?? []).some((edit) => edit.path === path),
+        ),
+      ),
+      heldBaseText(
+        (result.pull.heldBases ?? []).filter(
+          (path) => !(result.push.viewEdits ?? []).some((edit) => edit.path === path),
+        ),
+      ),
+      readOnlyText(result.push),
+      unsentDeletionText(result.push),
+    ),
+    details: [...pullDetails(result.pull), ...databaseMoveDetails(result.push.databaseMoves)],
+    failed,
+  };
+}
+
+/** 끝난 작업의 단계 — 처리하지 못한 것이 있으면 오류, 충돌이 남았으면 충돌. */
+function phaseOf(failed: number, conflicts: number): SyncPhase {
+  return failed > 0 ? "error" : conflicts > 0 ? "conflict" : "ready";
+}
+
+/**
+ * 처리하지 못한 노트와 그 까닭(P8) — 예전에는 수만 알려 무엇을 고칠지 몰랐다. 셋까지 보이고 나머지는 동기화 기록에 모두 남는다.
+ * 없으면 null.
+ */
+function failedText(failed: readonly FailedOperation[]): string | null {
+  if (failed.length === 0) return null;
+  const shown = failed.slice(0, 3).map((failure) => `${failure.path}: ${failure.error}`);
+  return (
+    `${failed.length}개를 처리하지 못했습니다 — ${shown.join(" · ")}` +
+    (failed.length > 3 ? ` 외 ${failed.length - 3}개(명령 「동기화 기록」 에 모두)` : "")
+  );
+}
+
+/** 사이드카로 만든 Notion DB 수 — 요약 끝에 붙인다(ADR-036). */
+function createdDatabasesText(result: PushResult): string {
+  const count = result.createdDatabases ?? 0;
+  return count > 0 ? ` / DB 생성 ${count}` : "";
+}
+
+/**
+ * 옮긴 DB 폴더 가운데 Notion 의 DB 는 그대로인 것(ADR-047) — 볼트가 받지 않는 곳에 있어 볼트 쪽 자리만 바뀌었다. 없으면 null.
+ */
+function databaseMoveText(moves: readonly DatabaseMove[] | undefined): string | null {
+  const stayed = (moves ?? []).filter((move) => move.inNotion === false);
+  if (stayed.length === 0) return null;
+  return (
+    `DB 폴더를 옮겼지만 Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로입니다: ` +
+    listedPaths(stayed.map((move) => `${move.from} → ${move.to}`))
+  );
+}
+
+/** Notion 의 DB 도 함께 옮긴 DB 폴더 — 기록에만 남긴다. */
+function databaseMoveDetails(moves: readonly DatabaseMove[] | undefined): string[] {
+  return (moves ?? [])
+    .filter((move) => move.inNotion !== false)
+    .map((move) => `Notion 의 DB 도 옮겼습니다 — ${move.from} → ${move.to}`);
+}
+
+/** Notion 에서 옮겼지만 볼트에서 옮기지 않은 노트와 그 까닭(ADR-039) — 볼트에서 직접 옮기면 다음 Push 가 Notion 을 맞춘다. */
+function moveSkippedText(result: PullResult): string | null {
+  const skips = result.moveSkipped ?? [];
+  if (skips.length === 0) return null;
+  return (
+    `Notion 에서 옮긴 노트 ${skips.length}개는 볼트에서 옮기지 않았습니다 — 볼트에서 직접 옮기면 다음 Push 가 Notion 을 맞춥니다: ` +
+    listedPaths(skips.map((skip) => `${skip.path}(${skip.reason})`))
+  );
+}
+
+/** 알림에는 넣지 않는 받기의 사정 — 범위 밖이라 받지 않은 페이지 · 미룬 원격 삭제. */
+function pullDetails(result: PullResult): string[] {
+  return [
+    ...(result.excluded ?? []).map(
+      (path) => `동기화 범위(경로 패턴 · ${IGNORE_FILE}) 밖이라 받지 않음 — ${path}`,
+    ),
+    ...(result.remoteScan ? [remoteScanText(result.remoteScan)] : []),
+  ].filter((line): line is string => line !== null);
+}
+
+/**
+ * 바뀐 것만 훑은 받기가 아직 반영하지 않았을 수 있는 Notion 의 삭제(ADR-027) — 언제 반영되나. 미룬 것이 없으면 null.
+ */
+function remoteScanText(scan: RemoteScanInfo): string | null {
+  if (scan.kind !== "incremental" || !scan.deletionsDeferred) return null;
+  const when = scan.nextFullAt
+    ? `다음 전체 확인(${new Date(scan.nextFullAt).toLocaleString()})`
+    : "다음 Pull(전체 확인 때가 됨)";
+  return `Notion 에서 지운 노트는 ${when}에 볼트에 반영됩니다 — 바로 하려면 명령 「Pull (전체 확인)」`;
 }
 
 /** 알림에 늘어놓는 경로 — 셋까지, 나머지는 수로. */

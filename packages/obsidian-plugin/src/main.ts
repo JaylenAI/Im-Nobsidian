@@ -1,10 +1,12 @@
 import { Plugin, Notice, MarkdownRenderChild, requireApiVersion, TFile, TFolder } from "obsidian";
 import {
   DEFAULT_CONFIG,
+  compactNotionId,
   configDirFrom,
   connectionFolderOf,
   findConnectionFolders,
   getLogger,
+  setLogger,
   isMarkdownPath,
   normalizeVaultPath,
   notionIdFromInput,
@@ -13,9 +15,10 @@ import {
 import type {
   Config,
   Conflict,
+  Logger,
   LocalChange,
+  NotionAccessCheck,
   RemoteChange,
-  ResolutionChoice,
 } from "@im-nobsidian/core";
 import { DEFAULT_WATCH_DEBOUNCE_MS, StateDbUnavailableError } from "@im-nobsidian/core";
 import { NOTICE_PREFIX, TOKEN_SECRET_ID, withoutNoticePrefix } from "./constants.js";
@@ -28,17 +31,29 @@ import { ConflictModal } from "./conflict-modal.js";
 import { ChangeDiffModal } from "./change-diff-modal.js";
 import { BaseFilterFixModal } from "./base-filter-modal.js";
 import { DiscardConfirmModal } from "./discard-confirm-modal.js";
+import { SyncLogModal } from "./sync-log-modal.js";
+import { PreviewModal, type ConnectionPreview } from "./preview-modal.js";
+import { VerifyModal, type ConnectionVerify } from "./verify-modal.js";
 import { localDiffSource, remoteDiffSource } from "./change-diff-text.js";
 import { DatabaseItemView, DATABASE_VIEW_TYPE } from "./views/database-view.js";
 import { SyncSidebarView, SYNC_SIDEBAR_TYPE } from "./views/sync-sidebar-view.js";
-import { EMPTY_DASHBOARD_STATE } from "./sync/sync-controller.js";
+import { EMPTY_DASHBOARD_STATE, newestFirst } from "./sync/sync-controller.js";
+import { collectingLogger, type WarningLogEntry } from "./sync/warning-log.js";
 import { directionBlock } from "./sync/direction.js";
-import type { SyncPhase, SyncStatePatch } from "./sync/sync-controller.js";
+import type {
+  ConflictAnswer,
+  SyncLogEntry,
+  SyncPhase,
+  SyncStatePatch,
+} from "./sync/sync-controller.js";
 import type { SidebarPatch } from "./views/sync-sidebar-view.js";
 import { ConnectionEngine, type EngineHost } from "./connection/connection-engine.js";
 
-interface DatabaseConfig {
+/** 루트 페이지 밖에서 더 받는 Notion DB 하나(`notion.databases`) — 볼트 연결에만. */
+export interface DatabaseConfig {
+  /** Notion DB ID — 주소를 붙여 넣으면 그 안의 ID 로 적는다. */
   databaseId: string;
+  /** 행 노트를 둘 볼트 폴더. */
   localFolder: string;
 }
 
@@ -54,8 +69,26 @@ export interface ImNobsidianSettings {
   syncDirection: Config["sync"]["direction"];
   autoSync: boolean;
   autoSyncInterval: number;
-  /** 설정 화면은 manual(충돌은 사이드바에서 하나씩 푼다)과 merge(다른 줄을 고친 충돌은 합침)만 고른다. */
   conflictStrategy: Config["sync"]["conflictStrategy"];
+  /**
+   * 지운 것을 반대쪽에서도 지운다(`sync.deleteSync`). 없으면 켠다 — 예전 플러그인은 늘 켰다(CLI 기본값은 끔). 끄면 볼트에서 지운
+   * 노트는 다음 Pull 이 Notion 에서 되살리고, Notion 에서 지운 페이지의 노트는 볼트에 남는다.
+   */
+  deleteSync?: boolean;
+  /** 원격 전체 확인 주기(초, `sync.fullReconcileInterval`) — 그 사이의 Pull 은 바뀐 것만 본다. 0 이면 Pull 마다. 없으면 기본값. */
+  fullReconcileInterval?: number;
+  /** Notion 에 올린 그림을 받아 볼트에 둔다(`conversion.imageDownload`) — 파일은 늘 받는다. 없으면 받는다. */
+  downloadMedia?: boolean;
+  /** 본문을 Notion Markdown API 로 주고받는다(`conversion.preferMarkdownApi`) — 끄면 블록 API. 없으면 쓴다. */
+  preferMarkdownApi?: boolean;
+  /** 볼트의 첨부 파일을 폴더의 Notion 페이지에 올린다(`sync.syncFiles`). 없으면 올린다. */
+  syncFiles?: boolean;
+  /** DB 정의 파일(사이드카)이 있는 새 폴더를 Notion DB 로 만든다(`sync.createDatabases`, ADR-036). 없으면 만든다. */
+  createDatabases?: boolean;
+  /** 동기화가 쓴 페이지가 사람에게 알림을 보내나(`sync.notifications`). 없으면 보내지 않는다(silent). */
+  notifications?: Config["sync"]["notifications"];
+  /** DB 모드 — 볼트의 노트를 이 Notion DB 의 행으로 둔다(`notion.parentMode: database`). 비면 페이지 모드. 볼트 연결에만. */
+  databaseId?: string;
   attachments: string;
   /** 날짜시각 속성을 적고 보낼 시간대(IANA 이름). 빈 값이면 이 컴퓨터의 시간대(`conversion.timeZone`). */
   timeZone: string;
@@ -65,6 +98,11 @@ export interface ImNobsidianSettings {
    */
   includePaths?: string[];
   excludePaths?: string[];
+  /**
+   * Canvas · Excalidraw · 템플릿 폴더(Obsidian 의 템플릿 · Templater 설정)를 동기화하지 않는다(`paths.excludeObsidianOnly`).
+   * 없으면 뺀다. 모든 연결에 같다.
+   */
+  excludeObsidianOnly?: boolean;
   /** Notion 에서 바꾼 제목으로 노트 이름을 바꾸고 링크를 고친다(`sync.renameOnTitleChange`). 없으면 끈다. */
   renameOnTitleChange?: boolean;
   databases?: DatabaseConfig[];
@@ -112,6 +150,12 @@ export default class ImNobsidianPlugin extends Plugin {
   private activeFolder = "";
   /** 연결마다 패널에 보낸 상태 — 패널에서 연결을 바꾸면 그 연결의 것을 다시 보인다. */
   private readonly panelStates = new Map<ConnectionEngine, SyncStatePatch>();
+  /** 이 세션에 엔진이 낸 경고 · 오류 로그 — 「동기화 기록」 이 보인다(CLI 는 터미널에 보인다). */
+  private readonly warnings: WarningLogEntry[] = [];
+  /** 불러오기 전의 로거 — 내릴 때 되돌린다. */
+  private baseLogger: Logger | null = null;
+  /** 연결 폴더마다 이 세션의 동기화 기록 — 설정을 바꿔 다시 연결해도 이어진다. */
+  private readonly syncLogs = new Map<string, SyncLogEntry[]>();
   /** 연결마다 상태바 단계 — 상태바는 하나라 모아서 보인다. */
   private readonly phases = new Map<ConnectionEngine, SyncPhase>();
   private statusBarEl: HTMLElement | null = null;
@@ -182,6 +226,11 @@ export default class ImNobsidianPlugin extends Plugin {
           new Promise((resolve) => new BaseFilterFixModal(this.app, fixes, resolve).open()),
       }),
       reopen: () => void this.initOrchestrator(),
+      syncLog: (folder) => {
+        let log = this.syncLogs.get(folder);
+        if (!log) this.syncLogs.set(folder, (log = []));
+        return log;
+      },
     };
   }
 
@@ -211,6 +260,8 @@ export default class ImNobsidianPlugin extends Plugin {
   }
 
   async onload(): Promise<void> {
+    this.baseLogger = getLogger();
+    setLogger(collectingLogger(this.baseLogger, this.warnings));
     await this.loadSettings();
     this.addSettingTab(new ImNobsidianSettingTab(this.app, this));
 
@@ -256,6 +307,26 @@ export default class ImNobsidianPlugin extends Plugin {
       id: "im-nobsidian-resolve",
       name: "충돌 해결",
       callback: () => this.resolveConflicts(),
+    });
+
+    // 알림은 사라지고 자동 동기화는 알리지 않는다 — 처리하지 못한 노트의 까닭 · 받지 않은 페이지를 다시 본다(P8).
+    // 반영하지 않고 무엇을 할지 · 빠짐없이 받았는지 — CLI 의 `sync --dry-run` · `verify`(P8).
+    this.addCommand({
+      id: "im-nobsidian-preview",
+      name: "Sync 미리 보기 (반영하지 않음)",
+      callback: () => this.previewSync(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-verify",
+      name: "빠짐없이 받았는지 확인",
+      callback: () => this.verifyCompleteness(),
+    });
+
+    this.addCommand({
+      id: "im-nobsidian-sync-log",
+      name: "동기화 기록",
+      callback: () => this.showSyncLog(),
     });
 
     this.addCommand({
@@ -321,7 +392,18 @@ export default class ImNobsidianPlugin extends Plugin {
     this.registerVaultEvents();
   }
 
+  /** 이 세션에서 끝난 동기화의 기록 — 연결마다 모아 최근 것부터. */
+  private showSyncLog(): void {
+    const logs = this.engines.map((engine) => ({
+      label: engine.label,
+      // 연결이 열리지 않았어도 그 전의 기록은 보인다 — 「없습니다」 로 바꾸지 않는다
+      entries: newestFirst(this.syncLogs.get(engine.folder) ?? []),
+    }));
+    new SyncLogModal(this.app, logs, newestFirst(this.warnings)).open();
+  }
+
   onunload(): void {
+    if (this.baseLogger) setLogger(this.baseLogger);
     this.stopAutoSync();
     this.clearVaultDebounce();
     // 도는 초기화가 있으면 그것이 연 DB 까지 닫는다. 다시 불러온 플러그인은 이 닫기가 끝난 뒤에 DB 를 연다.
@@ -446,6 +528,26 @@ export default class ImNobsidianPlugin extends Plugin {
     return { ready: false, message: withoutNoticePrefix(this.notReadyReason()) };
   }
 
+  /**
+   * Notion 에 물어 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 — 설정 화면의 「Notion 확인」. 열지 못한 연결은
+   * 묻지 않고 열지 못한 까닭을 준다. `folder` 가 없으면 볼트 전체 연결.
+   */
+  async checkNotionAccess(folder?: string): Promise<NotionAccessCheck> {
+    const engine =
+      folder === undefined ? this.primary : this.extras.find((e) => e.folder === folder);
+    if (!engine?.controller) {
+      const { message } =
+        folder === undefined ? this.connectionStatus() : this.folderConnectionStatus(folder);
+      return { ok: false, lines: [message] };
+    }
+    try {
+      return await engine.controller.checkNotionAccess();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ok: false, lines: [`확인하지 못했습니다 — ${reason}`] };
+    }
+  }
+
   /** 폴더 연결 하나의 상태 — 설정 화면이 연결마다 보인다. */
   folderConnectionStatus(folder: string): { readonly ready: boolean; readonly message: string } {
     const engine = this.extras.find((e) => e.folder === folder);
@@ -520,6 +622,9 @@ export default class ImNobsidianPlugin extends Plugin {
         rootPageId: this.settings.rootPageId,
         settings: this.settings,
         paths: { include: this.settings.includePaths, exclude: this.settings.excludePaths },
+        // 폴더 연결은 자기 루트 페이지만 — 더 받는 DB 와 DB 모드는 볼트 연결의 설정이다.
+        databases: this.settings.databases ?? [],
+        ...(this.settings.databaseId ? { databaseId: this.settings.databaseId } : {}),
         connections: await connections(),
       });
       this.onEnginePhase(this.primary, "ready");
@@ -895,6 +1000,51 @@ export default class ImNobsidianPlugin extends Plugin {
     await this.eachEngine(engines, (controller) => controller.sync());
   }
 
+  /** 반영하지 않고 Sync 가 무엇을 할지 — 연결마다 본 것을 창 하나에 모은다. */
+  private async previewSync(): Promise<void> {
+    const engines = this.commandEngines();
+    if (engines.every((engine) => !engine.controller)) {
+      new Notice(this.notReadyReason(engines[0]));
+      return;
+    }
+    const previews: ConnectionPreview[] = [];
+    for (const engine of engines) {
+      if (!engine.controller) {
+        new Notice(this.notReadyReason(engine));
+        continue;
+      }
+      await engine.controller.preview((preview) => previews.push({ label: engine.label, preview }));
+    }
+    if (previews.length > 0) new PreviewModal(this.app, previews).open();
+  }
+
+  /** Notion 의 DB 행 · 페이지를 빠짐없이 받았는지 — 연결마다 견준 것을 창 하나에 모은다. */
+  private async verifyCompleteness(): Promise<void> {
+    const engines = this.commandEngines();
+    if (engines.every((engine) => !engine.controller)) {
+      new Notice(this.notReadyReason(engines[0]));
+      return;
+    }
+    const results: ConnectionVerify[] = [];
+    for (const engine of engines) {
+      if (!engine.controller) {
+        new Notice(this.notReadyReason(engine));
+        continue;
+      }
+      await engine.controller.verify((report) =>
+        results.push({
+          label: engine.label,
+          report,
+          pathOf: (notionId) => {
+            const path = engine.stateDb?.getByNotionId(notionId)?.obsidianPath;
+            return path ? engine.toVault(path) : null;
+          },
+        }),
+      );
+    }
+    if (results.length > 0) new VerifyModal(this.app, results).open();
+  }
+
   private async showStatus(): Promise<void> {
     const engines = this.commandEngines();
     if (engines.every((engine) => !engine.controller)) {
@@ -1015,7 +1165,9 @@ export default class ImNobsidianPlugin extends Plugin {
       return;
     }
     await this.eachEngine(engines, (controller) =>
-      controller.resolveConflicts((conflict, signal) => this.askConflictChoice(conflict, signal)),
+      controller.resolveConflicts((conflict, signal, remaining) =>
+        this.askConflictChoice(conflict, signal, remaining),
+      ),
     );
   }
 
@@ -1026,13 +1178,15 @@ export default class ImNobsidianPlugin extends Plugin {
   private askConflictChoice(
     conflict: Conflict,
     signal: AbortSignal,
-  ): Promise<ResolutionChoice | null> {
+    remaining: number,
+  ): Promise<ConflictAnswer | null> {
     return new Promise((resolve) => {
-      const modal = new ConflictModal(
+      const modal: ConflictModal = new ConflictModal(
         this.app,
         conflict,
-        resolve,
+        (choice) => resolve(choice && { choice, forRest: modal.forRest }),
         this.settings.syncDirection !== "pull",
+        remaining,
       );
       signal.addEventListener("abort", () => modal.close(), { once: true });
       modal.open();
@@ -1084,7 +1238,10 @@ export default class ImNobsidianPlugin extends Plugin {
     const databaseId = found.databaseIds[0]!;
     const dbConfig =
       engine === this.primary
-        ? this.settings.databases?.find((d) => d.databaseId === databaseId)
+        ? // 설정은 대시가 든 ID 를, 보기 설정은 받은 그대로의 ID 를 적는다 — 모양을 맞춰 견준다
+          this.settings.databases?.find(
+            (d) => compactNotionId(d.databaseId) === compactNotionId(databaseId),
+          )
         : undefined;
     const folderPath = dbConfig?.localFolder ?? "";
 

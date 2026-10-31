@@ -12,6 +12,7 @@ import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
 import { StateDB } from "../../src/state/state-db.js";
 import { parseFrontmatter } from "../../src/utils/frontmatter.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
+import type { ProgressItem } from "../../src/types/sync.js";
 import { getLogger, setLogger, type Logger } from "../../src/utils/logger.js";
 import { createConfig } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
@@ -24,7 +25,8 @@ describe("읽기 전용 속성 편집 경고", () => {
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
   let previous: Logger;
-  const warn = vi.fn();
+  /** 읽기 전용 속성 로그 — 결과(`readOnlySkipped`)가 화면에 알리므로 정보 로그다(경고로 내면 CLI 가 두 번 말했다). */
+  const logged = vi.fn();
 
   const build = (): SyncOrchestrator =>
     new SyncOrchestrator(
@@ -52,8 +54,8 @@ describe("읽기 전용 속성 편집 경고", () => {
       Score: { id: "score", type: "formula" },
     });
     previous = getLogger();
-    warn.mockClear();
-    setLogger({ ...previous, warn, info: () => {} });
+    logged.mockClear();
+    setLogger({ ...previous, warn: () => {}, info: logged });
   });
 
   afterEach(async () => {
@@ -82,11 +84,13 @@ describe("읽기 전용 속성 편집 경고", () => {
       vault.read(path)!.replace("Score: 1", "Score: 99").replace("Status: 할 일", "Status: 끝"),
     );
 
-    const result = await orchestrator.push();
+    const items: ProgressItem[] = [];
+    const result = await orchestrator.push({ onProgress: (_c, _t, item) => items.push(item) });
 
     expect(result).toMatchObject({ updated: 1, failed: [] });
+    expect(items).toEqual([{ path, operation: "update" }]);
     expect(result.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
-    expect(warn).toHaveBeenCalledWith(
+    expect(logged).toHaveBeenCalledWith(
       expect.stringContaining("다음 pull 이 Notion 값으로 되돌린다"),
     );
     const sent = notion.pages.get(db.getByPath(path)!.notionPageId!)!;
@@ -117,8 +121,25 @@ describe("읽기 전용 속성 편집 경고", () => {
     );
     vault.write(path, vault.read(path)!.replace("Score: 1", "Score: 99"));
 
-    const result = await orchestrator.push();
+    // 보낼 것이 없다 — 고침으로 세지 않는다(예전에는 「수정 1」 이라 보내지 않은 것을 보냈다고 했다). dry-run 도 같다.
+    // 진행에도 바뀌지 않은 것으로 — 예전에는 요약이 수정 0 인데 진행 줄은 「updated」 였다(0.16 릴리스 회귀).
+    const plannedItems: ProgressItem[] = [];
+    const planned = await orchestrator.push({
+      dryRun: true,
+      onProgress: (_c, _t, item) => plannedItems.push(item),
+    });
+    expect(planned).toMatchObject({ updated: 0, failed: [] });
+    expect(planned.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+    expect(plannedItems).toEqual([{ path, operation: "update", unchanged: true }]);
+    const updates = notion.client.updatePageProperties.mock.calls.length;
+    const pushedItems: ProgressItem[] = [];
+    const result = await orchestrator.push({
+      onProgress: (_c, _t, item) => pushedItems.push(item),
+    });
+    expect(result).toMatchObject({ updated: 0, failed: [] });
     expect(result.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+    expect(pushedItems).toEqual([{ path, operation: "update", unchanged: true }]);
+    expect(notion.client.updatePageProperties.mock.calls.length).toBe(updates);
 
     // 보낸 것이 없어 Notion 의 행도 DB 도 그대로다. 예전에는 바뀐 것만 찾는 pull 이 그 DB 를 «그대로» 로 건너뛰어,
     // 알림과 달리 볼트에 고친 값이 남았다(실측 2026-10-28) — 강제 전체 대조만 되돌렸다.
@@ -133,11 +154,13 @@ describe("읽기 전용 속성 편집 경고", () => {
     const path = await pulledRow(orchestrator);
     vault.write(path, vault.read(path)!.replace("Status: 할 일", "Status: 끝"));
 
-    const result = await orchestrator.push();
+    const items: ProgressItem[] = [];
+    const result = await orchestrator.push({ onProgress: (_c, _t, item) => items.push(item) });
 
     expect(result).toMatchObject({ updated: 1, failed: [] });
+    expect(items).toEqual([{ path, operation: "update" }]);
     expect(result.readOnlySkipped).toEqual([]);
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("읽기 전용"));
+    expect(logged).not.toHaveBeenCalledWith(expect.stringContaining("읽기 전용"));
   });
 
   it("dry-run 도 올리지 않을 읽기 전용 속성을 미리 알린다 — 보내지는 않는다", async () => {

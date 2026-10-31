@@ -29,6 +29,36 @@ describe("openVaultFs · obsidianConfigDir", () => {
     await rm(vault, { recursive: true, force: true });
   });
 
+  it("Canvas · Excalidraw · 템플릿 폴더는 설정이 켜면 뺀다 — 템플릿 폴더는 Obsidian 설정에서 · 연결 폴더 기준 (D10)", async () => {
+    await mkdir(join(vault, ".obsidian/plugins/templater-obsidian"), { recursive: true });
+    await writeFile(join(vault, ".obsidian/templates.json"), '{"folder":"Notes/틀"}');
+    await writeFile(
+      join(vault, ".obsidian/plugins/templater-obsidian/data.json"),
+      '{"templates_folder":"Work/tp"}',
+    );
+    await mkdir(join(vault, "Notes/틀"), { recursive: true });
+    await mkdir(join(vault, "Work/tp"), { recursive: true });
+    await writeFile(join(vault, "Notes/틀/일지.md"), "{{date}}");
+    await writeFile(join(vault, "Work/tp/회의.md"), "<% tp.date.now() %>");
+    await writeFile(join(vault, "Notes/그림.excalidraw.md"), "{}");
+    await writeFile(join(vault, "Notes/판.canvas"), "{}");
+    await writeFile(join(vault, "Work/판.canvas"), "{}");
+    const listed = async (cwd: string, on: boolean) => {
+      const fs = await openVaultFs(cwd, { excludeObsidianOnly: on });
+      return [
+        ...(await fs.listMarkdownFiles()).map((f) => f.path),
+        ...((await fs.listNonMarkdownFiles?.()) ?? []).map((f) => f.path),
+      ].sort();
+    };
+
+    expect(await listed(vault, true)).toEqual(["Notes/n.md"]);
+    expect(await listed(join(vault, "Work"), true)).toEqual(["w.md"]);
+    expect(await listed(vault, false)).toEqual(
+      ["Notes/n.md", "Notes/그림.excalidraw.md", "Notes/틀/일지.md", "Notes/판.canvas"].sort(),
+    );
+    expect(await listed(join(vault, "Work"), false)).toEqual(["tp/회의.md", "w.md", "판.canvas"]);
+  });
+
   it("맨 위에서 열면 안쪽 연결 폴더의 노트를 보지도 쓰지도 않는다", async () => {
     expect(await nestedConnections(vault)).toEqual(["Work"]);
     const fs = await openVaultFs(vault, {});

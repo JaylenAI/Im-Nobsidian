@@ -10,7 +10,7 @@
  *   다시 올려도 링크가 끊기지 않는다.
  * - 페이지의 맨 위 블록만 본다 — 콜아웃 · 토글 · 목록 자식 속 제목 · 블록 id 는 찾지 않는다(링크를 글자로 남긴다).
  */
-import { compactNotionId } from "../utils/id.js";
+import { compactNotionId, notionPageUrl } from "../utils/id.js";
 
 /** 링크 대상을 노트와 앵커로 가른다 — `#` 가 없으면 null. 노트 이름에는 `#` 를 쓸 수 없다(Obsidian). */
 export function splitAnchor(target: string): { note: string; anchor: string } | null {
@@ -129,7 +129,7 @@ export function anchoredWikilinkTargets(markdown: string): string[] {
 
 /** push 가 보내는 블록 링크. */
 export function notionBlockUrl(pageId: string, blockId: string): string {
-  return `https://www.notion.so/${compactNotionId(pageId)}#${compactNotionId(blockId)}`;
+  return `${notionPageUrl(pageId)}#${compactNotionId(blockId)}`;
 }
 
 /** push 가 앵커 링크를 풀 때 쓰는 것 — 쓰기 전에 대상 페이지의 블록을 읽어 둔다(변환은 기다리지 않는다). */

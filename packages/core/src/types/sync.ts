@@ -113,6 +113,7 @@ export interface ProgressItem {
    * 받아 봤지만 볼트에 쓰지 않았다(pull) — 바뀐 것이 없거나 로컬을 지켰다. 진행 수에는 들지만 화면이 바뀐
    * 노트로 적지 않는다. 다시 그리기(B14)는
    * 받아 둔 노트를 모두 받아 보므로, 적으면 바뀌지 않은 노트마다 「updated」 줄이 찍혔다.
+   * push 는 보낼 것이 없던 고침 — 읽기 전용 속성만 고친 행.
    */
   readonly unchanged?: boolean;
 }

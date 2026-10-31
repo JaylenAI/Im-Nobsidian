@@ -4,6 +4,7 @@ import { setLogger } from "../../src/utils/logger.js";
 import { getBlockType, getMimeType, isNotionUploadable } from "../../src/utils/mime.js";
 import type { NotionClient } from "../../src/notion/client.js";
 import type { IStateDB } from "../../src/state/state-db-interface.js";
+import type { FailedOperation } from "../../src/types/sync.js";
 import {
   createMockVaultFs,
   createMockStateDb,
@@ -133,12 +134,13 @@ describe("FileHandler", () => {
   });
 
   describe("Notion 이 받지 않는 형식의 첨부 (S-14)", () => {
-    function captureInfo(): string[] {
+    // 올리지 못한 것이라 경고로 낸다 — CLI 는 정보 로그를 기본으로 숨긴다.
+    function captureWarnings(): string[] {
       const messages: string[] = [];
       setLogger({
-        warn: () => {},
+        warn: (msg) => messages.push(msg),
         error: () => {},
-        info: (msg) => messages.push(msg),
+        info: () => {},
         debug: () => {},
       });
       return messages;
@@ -149,7 +151,7 @@ describe("FileHandler", () => {
     });
 
     it("pushAllFiles: 올리지 않고 push 마다 한 줄로만 알린다", async () => {
-      const info = captureInfo();
+      const info = captureWarnings();
       const vaultFs = createMockVaultFs();
       (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
         { path: "para/사진.png", size: 10, mtime: "2026-09-28T00:00:00.000Z" },
@@ -175,7 +177,7 @@ describe("FileHandler", () => {
     });
 
     it("많으면 다섯 개만 적고 나머지는 개수로 말한다", async () => {
-      const info = captureInfo();
+      const info = captureWarnings();
       const vaultFs = createMockVaultFs();
       (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue(
         Array.from({ length: 7 }, (_, i) => ({
@@ -304,6 +306,45 @@ describe("FileHandler", () => {
       // 어느 첨부에서 멎었는지가 로그에 남아야 한다 — 조용히 사라지면 안 된다.
       expect(warnings.join("\n")).toContain("para/멈춘 첨부.png");
       expect(warnings.join("\n")).toContain("시간 상한 초과");
+    });
+
+    it("pushAllFiles: 결과를 받을 곳을 넘기면 올리지 못한 첨부를 실패로 담는다 — push 가 「실패 0」 으로 끝나지 않는다", async () => {
+      const warnings = captureWarnings();
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "para/거절.png", size: 10, mtime: "2026-07-27T00:00:00.000Z" },
+        { path: "para/정상.png", size: 11, mtime: "2026-07-27T00:00:00.000Z" },
+      ]);
+      const stateDb = createMockStateDb();
+      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      const notion = createMockNotionClient();
+      (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
+        (_buffer: Buffer, filename: string) =>
+          filename.includes("거절")
+            ? Promise.reject(new Error("Notion 400 — file too large"))
+            : Promise.resolve("upload-id"),
+      );
+
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+        2,
+        { itemTimeoutMs: ITEM_TIMEOUT_MS },
+      );
+      const failed: FailedOperation[] = [];
+      const results = await handler.pushAllFiles(failed);
+
+      expect(results.map((r) => r.localPath)).toEqual(["para/정상.png"]);
+      expect(failed).toEqual([
+        {
+          path: "para/거절.png",
+          operation: "create",
+          error: "첨부 업로드 실패 — Notion 400 — file too large",
+        },
+      ]);
+      // 결과로 알리니 경고 로그는 내지 않는다 — 둘 다 내면 같은 말이 두 번 나온다.
+      expect(warnings.join("\n")).not.toContain("para/거절.png");
     });
 
     it("pushFilesForFolder 에도 같은 상한이 걸린다 (경로 비대칭 금지)", async () => {

@@ -38,6 +38,7 @@ function createMockVaultFs(): VaultFS {
 function createMockStateDb() {
   return {
     getByPath: vi.fn().mockReturnValue(null),
+    getByPathKey: vi.fn().mockReturnValue([]),
     getByNotionId: vi.fn().mockReturnValue(null),
     getAll: vi.fn().mockReturnValue([]),
     getByStatus: vi.fn().mockReturnValue([]),

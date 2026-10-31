@@ -21,6 +21,7 @@ import type {
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
+import { checkNotionAccess, type NotionAccessCheck } from "../notion/access-check.js";
 import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { ImageHandler } from "./image-handler.js";
@@ -103,6 +104,8 @@ import {
   type UserBaseFilterFix,
 } from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
+import { upgradeNfcPaths } from "./nfc-paths.js";
+import { NoteRelocator } from "./note-relocation.js";
 import {
   forgetRenameHint,
   isEmptyRenameHints,
@@ -393,6 +396,36 @@ export class SyncOrchestrator {
   }
 
   /**
+   * 예전 CLI 가 적은 NFD 경로를 NFC 로 옮겨 적는다 — 한 번만(`upgradeNfcPaths`). dry-run · status 도 먼저 한다: 상태 기록의
+   * 표기만 고치고 볼트 · Notion 은 그대로다. 안 고치면 그 노트를 지울 것 · 새로 만들 것으로 보인다.
+   */
+  private alignStatePaths(): void {
+    const moved = upgradeNfcPaths(
+      this.stateDb,
+      new NoteRelocator(this.stateDb, this.vaultFs, this.config.notion.databases ?? []),
+    );
+    if (moved > 0) {
+      getLogger().info(`[Im-Nobsidian] 상태 기록의 경로 ${moved}개를 NFC 표기로 옮겨 적음`);
+    }
+  }
+
+  /**
+   * 볼트의 첨부(노트가 아닌 파일)를 폴더 페이지에 올린다(`sync.syncFiles`). 올리지 못한 첨부는 `failed` 에 담는다. 올릴 노트가
+   * 있든 없든 push 마다 부른다 — 바뀌지 않은 첨부는 파일 기록이 건너뛴다.
+   */
+  private async pushVaultFiles(failed: FailedOperation[]): Promise<void> {
+    if (this.config.sync.syncFiles === false) return;
+    try {
+      const fileResults = await this.fileHandler.pushAllFiles(failed);
+      if (fileResults.length > 0) {
+        getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
+      }
+    } catch (error) {
+      getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
+    }
+  }
+
+  /**
    * @param mergedByPull sync dry-run 만 — 앞선 pull dry-run 이 합칠 노트. 실제 sync 는 합친 뒤 원격을 본 것으로
    *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
    */
@@ -407,6 +440,7 @@ export class SyncOrchestrator {
   ): Promise<PushResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
+    this.alignStatePaths();
 
     if (this.config.sync.direction === "pull") {
       return {
@@ -516,18 +550,21 @@ export class SyncOrchestrator {
       const viewed = options?.dryRun
         ? { applied: plannedViews, failed: [] }
         : await this.viewEdits.apply(viewPlan.planned);
+      const failed: FailedOperation[] = [
+        ...unverifiedFailures,
+        ...sidecarPlan.refused,
+        ...edited.failed,
+        ...viewPlan.refused,
+        ...viewed.failed,
+      ];
+      // 노트는 그대로여도 새로 넣은 첨부는 올린다 — 예전엔 여기서 돌아가 노트를 하나 고칠 때까지 첨부가 올라가지 않았다.
+      if (!options?.dryRun && !options?.signal?.aborted) await this.pushVaultFiles(failed);
       return {
         created: 0,
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [
-          ...unverifiedFailures,
-          ...sidecarPlan.refused,
-          ...edited.failed,
-          ...viewPlan.refused,
-          ...viewed.failed,
-        ],
+        failed,
         duration: Date.now() - startTime,
         ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
         ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
@@ -577,9 +614,17 @@ export class SyncOrchestrator {
       const planned = (
         this.config.sync.deleteSync ? applicable : applicable.filter((c) => c.type !== "deleted")
       ).filter((change) => !remoteRefused.has(change.path));
+      const { skips: readOnlySkipped, nothingSent } =
+        await this.pusher.previewReadOnlySkips(applicable);
+      // 읽기 전용 속성만 고친 행은 보낼 것이 없다 — 실제 push 처럼 진행에 바뀌지 않은 것으로 알린다.
+      const unsent = new Set(nothingSent);
       const items: ProgressItem[] = [
         ...movableFolders.map(({ to }) => ({ path: to, operation: "move" as const })),
-        ...planned.map((change) => ({ path: change.path, operation: pushOperationOf(change) })),
+        ...planned.map((change) => ({
+          path: change.path,
+          operation: pushOperationOf(change),
+          ...(unsent.has(change.path) ? { unchanged: true } : {}),
+        })),
       ];
       items.forEach((item, index) => options?.onProgress?.(index + 1, items.length, item));
       const count = (operation: ProgressItem["operation"]): number =>
@@ -592,7 +637,6 @@ export class SyncOrchestrator {
       const unsentDeletions = applicable
         .filter((change) => this.unsentDeletion(change))
         .map((change) => change.path);
-      const readOnlySkipped = await this.pusher.previewReadOnlySkips(applicable);
       // 실제 push 처럼 — 옮김 · 지움이 걸린 노트는 다음 push 에, 고친 노트는 옮기며 함께 보낸다(고침이 아니라 옮김으로 센다).
       const preparedConversions = this.pusher.previewPreparedConversions(
         newDatabases,
@@ -608,7 +652,7 @@ export class SyncOrchestrator {
       return {
         createdDatabases: newDatabases.size,
         created: count("create"),
-        updated: count("update") - convertedUpdates,
+        updated: count("update") - convertedUpdates - nothingSent.length,
         deleted: count("delete"),
         moved: count("move") + preparedConversions.length + movableDatabases.length,
         failed: [
@@ -667,18 +711,21 @@ export class SyncOrchestrator {
     // 이번 push 가 본문을 보낸 노트 — 링크 패스가 이 노트의 실패를 실패로 알린다.
     const pushedBodies = new Set<string>();
     // 단건 변경을 적용하고 카운트를 올린다. 실패는 throw 로 호출자에 위임.
-    const applyPushChange = async (change: LocalChange): Promise<void> => {
+    // 보낸 것이 없으면 false — 읽기 전용 속성만 고친 행.
+    const applyPushChange = async (change: LocalChange): Promise<boolean> => {
       switch (change.type) {
         case "created":
           await this.pusher.pushCreate(change.path);
           counts.created++;
           pushedBodies.add(change.path);
           break;
-        case "modified":
-          await this.pusher.pushUpdate(change.path);
-          counts.updated++;
+        case "modified": {
+          // 읽기 전용 속성만 고친 행은 보낸 것이 없다 — 고침으로 세지 않고 `readOnlySkipped` 로만 알린다.
+          const sent = await this.pusher.pushUpdate(change.path);
+          if (sent) counts.updated++;
           pushedBodies.add(change.path);
-          break;
+          return sent;
+        }
         case "moved":
           await this.pusher.pushMove(change);
           counts.moved++;
@@ -690,23 +737,28 @@ export class SyncOrchestrator {
           break;
         }
       }
+      return true;
     };
 
     // 1차 처리 — 고정 크기 워커 풀(백프레셔). 실패분은 변경 객체째 재시도 큐로.
     const retryQueue: LocalChange[] = [];
     const firstAttempt = async (change: LocalChange): Promise<void> => {
       if (options?.signal?.aborted) return;
-      options?.onProgress?.(++completed, total, {
-        path: change.path,
-        operation: pushOperationOf(change),
-      });
+      const item = { path: change.path, operation: pushOperationOf(change) };
+      // 고침은 보낸 뒤에 알린다 — 읽기 전용 속성만 고친 행은 보낸 것이 없어 「updated」 로 찍으면 요약(수정 0)과 어긋났다.
+      const reportAfter = change.type === "modified";
+      if (!reportAfter) options?.onProgress?.(++completed, total, item);
       try {
-        await withDeadline(
+        const sent = await withDeadline(
           () => applyPushChange(change),
           this.config.advanced.itemTimeoutMs,
           `push ${change.path}`,
         );
+        if (reportAfter) {
+          options?.onProgress?.(++completed, total, sent ? item : { ...item, unchanged: true });
+        }
       } catch {
+        if (reportAfter) options?.onProgress?.(++completed, total, item);
         retryQueue.push(change);
       }
     };
@@ -850,16 +902,7 @@ export class SyncOrchestrator {
       });
     }
 
-    if (this.config.sync.syncFiles !== false) {
-      try {
-        const fileResults = await this.fileHandler.pushAllFiles();
-        if (fileResults.length > 0) {
-          getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
-        }
-      } catch (error) {
-        getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
-      }
-    }
+    await this.pushVaultFiles(failed);
 
     this.stateDb.setMeta("last_push_at", new Date().toISOString());
     this.stateDb.setMeta(LAST_SYNC_META_KEY, new Date().toISOString());
@@ -986,6 +1029,7 @@ export class SyncOrchestrator {
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
+    this.alignStatePaths();
     this.puller.beginPull();
     this.databaseSyncer.beginPull(this.puller.unlinkedVaultAtStart);
     this.rowSchemas.clear();
@@ -1551,6 +1595,7 @@ export class SyncOrchestrator {
   private async executeStatus(signal?: AbortLike): Promise<StatusResult> {
     throwIfAborted(signal);
     this.assertConnectionScope();
+    this.alignStatePaths();
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
@@ -1640,6 +1685,7 @@ export class SyncOrchestrator {
    */
   async statusLocal(): Promise<StatusResult> {
     this.assertConnectionScope();
+    this.alignStatePaths();
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);
@@ -1674,6 +1720,17 @@ export class SyncOrchestrator {
   }
 
   /**
+   * 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 Notion 에 묻는다 — 아무것도 쓰지 않아 동기화와 겹쳐도 된다.
+   */
+  checkNotionAccess(): Promise<NotionAccessCheck> {
+    const { rootPageId, parentMode, databaseId } = this.config.notion;
+    return checkNotionAccess(this.notionClient, {
+      rootPageId,
+      ...(parentMode === "database" && databaseId ? { databaseId } : {}),
+    });
+  }
+
+  /**
    * 볼트 완결성 검증 — 원격에 있는 것이 볼트에 빠짐없이 있는지 대조한다(R11-B · R12-C).
    *
    * 기존 게이트(해시 일치·repull 바이트 동일·churn 0)는 전부 **멱등성**을 본다. 매번
@@ -1689,6 +1746,11 @@ export class SyncOrchestrator {
    * 열거와 맞대 봐야 의미가 있다.
    */
   async verifyCompleteness(): Promise<VaultCompletenessReport> {
+    // 도는 pull 이 상태 기록을 쓰는 중에 견주면 받는 중인 페이지를 빠진 것으로 본다.
+    return this.gate.run("verify", () => this.executeVerifyCompleteness());
+  }
+
+  private async executeVerifyCompleteness(): Promise<VaultCompletenessReport> {
     const ids: string[] = [];
     if (isDatabaseMode(this.config)) ids.push(this.config.notion.databaseId!);
     for (const db of this.config.notion.databases ?? []) ids.push(db.databaseId);

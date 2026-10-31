@@ -10,6 +10,7 @@ import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
   DEFAULT_CONFIG,
+  DEFAULT_TITLE_PROPERTY,
   EntryEditor,
   FilteredVaultFS,
   IGNORE_FILE,
@@ -21,16 +22,24 @@ import {
   ViewDataProvider,
   getLogger,
   notionIdFromInput,
+  obsidianOnlyExcludes,
   parseIgnorePatterns,
+  TEMPLATE_FOLDER_SETTINGS,
+  templateFolders,
   type Config,
+  type DatabaseSyncConfig,
   type VaultFS,
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../state/sqljs-state-db.js";
 import { previousStateDbClosed } from "../state/state-db-handoff.js";
 import { StateDbCopyStaleError, StateDbFile } from "../state/state-db-file.js";
 import { ObsidianVaultAdapter } from "../vault-adapter.js";
-import { SyncController, type SyncControllerHooks } from "../sync/sync-controller.js";
-import type { ImNobsidianSettings } from "../main.js";
+import {
+  SyncController,
+  type SyncControllerHooks,
+  type SyncLogEntry,
+} from "../sync/sync-controller.js";
+import type { DatabaseConfig, ImNobsidianSettings } from "../main.js";
 
 /** 엔진이 플러그인에게 받는 것 — 앱 · 알림 · 다시 연결. */
 export interface EngineHost {
@@ -40,6 +49,8 @@ export interface EngineHost {
   hooks(engine: ConnectionEngine): SyncControllerHooks;
   /** 쓸 수 없게 된 사본을 버리고 다시 연다 — 플러그인의 초기화 줄에 선다. */
   reopen(): void;
+  /** 이 연결 폴더의 동기화 기록 — 다시 연결하면 엔진 · 컨트롤러가 새로 만들어지므로 플러그인이 가진다. */
+  syncLog(folder: string): SyncLogEntry[];
 }
 
 /** 연결 하나를 여는 데 드는 것. */
@@ -51,6 +62,21 @@ export interface EngineOptions {
   readonly paths?: { readonly include?: readonly string[]; readonly exclude?: readonly string[] };
   /** 볼트의 연결 폴더 전부 — 이 연결은 안쪽 것을 비켜 간다. */
   readonly connections: readonly string[];
+  /** 루트 페이지 밖에서 더 받는 Notion DB(`notion.databases`) — ID 와 폴더를 다 채운 것만 쓴다. */
+  readonly databases?: readonly DatabaseConfig[];
+  /** DB 모드의 Notion DB — 있으면 노트를 그 DB 의 행으로 둔다(`notion.parentMode: database`). */
+  readonly databaseId?: string;
+}
+
+/** 설정의 더 받는 DB → 엔진 설정. 덜 채운 줄은 뺀다 — 설정 화면에서 적는 중일 수 있다. */
+export function databaseSyncConfigs(databases: readonly DatabaseConfig[]): DatabaseSyncConfig[] {
+  return databases.flatMap((database) => {
+    const databaseId = notionIdFromInput(database.databaseId.trim());
+    const localFolder = database.localFolder.trim().replace(/^\/+|\/+$/g, "");
+    return databaseId && localFolder
+      ? [{ databaseId, localFolder, titleProperty: DEFAULT_TITLE_PROPERTY }]
+      : [];
+  });
 }
 
 export class ConnectionEngine {
@@ -108,26 +134,40 @@ export class ConnectionEngine {
         token: options.token,
         // 예전 버전은 붙여 넣은 주소를 그대로 적었다 — 연결할 때 ID 로 읽는다(부른 쪽이 읽을 수 있는지 봤다).
         rootPageId: notionIdFromInput(options.rootPageId)!,
-        parentMode: "page" as const,
-        databases: [],
+        ...(options.databaseId && notionIdFromInput(options.databaseId)
+          ? { parentMode: "database" as const, databaseId: notionIdFromInput(options.databaseId)! }
+          : { parentMode: "page" as const }),
+        databases: databaseSyncConfigs(options.databases ?? []),
       },
       sync: {
         ...DEFAULT_CONFIG.sync,
         direction: settings.syncDirection,
         conflictStrategy: settings.conflictStrategy,
-        // 플러그인은 늘 삭제를 맞춘다(README 의 deleteSync 설명) — CLI 기본값(false)과 다르다.
-        deleteSync: true,
+        // 플러그인은 따로 정하지 않으면 삭제를 맞춘다(예전엔 늘 그랬다) — CLI 기본값(false)과 다르다.
+        deleteSync: settings.deleteSync ?? true,
+        fullReconcileInterval:
+          settings.fullReconcileInterval ?? DEFAULT_CONFIG.sync.fullReconcileInterval,
         renameOnTitleChange:
           settings.renameOnTitleChange ?? DEFAULT_CONFIG.sync.renameOnTitleChange,
+        syncFiles: settings.syncFiles ?? DEFAULT_CONFIG.sync.syncFiles,
+        createDatabases: settings.createDatabases ?? DEFAULT_CONFIG.sync.createDatabases,
+        notifications: settings.notifications ?? DEFAULT_CONFIG.sync.notifications,
       },
       paths: {
         ...DEFAULT_CONFIG.paths,
         include: [...(options.paths?.include ?? DEFAULT_CONFIG.paths.include)],
         exclude: [...(options.paths?.exclude ?? DEFAULT_CONFIG.paths.exclude)],
+        excludeObsidianOnly:
+          settings.excludeObsidianOnly ?? DEFAULT_CONFIG.paths.excludeObsidianOnly,
         attachments: settings.attachments,
       },
       conversion: {
         ...DEFAULT_CONFIG.conversion,
+        preferMarkdownApi:
+          settings.preferMarkdownApi ?? DEFAULT_CONFIG.conversion.preferMarkdownApi,
+        // 받지 않으면 노트에 Notion 의 임시 주소가 남는다 — 그 주소는 한 시간 뒤 열리지 않는다.
+        imageDownload:
+          settings.downloadMedia === false ? "skip" : DEFAULT_CONFIG.conversion.imageDownload,
         ...(settings.timeZone ? { timeZone: settings.timeZone } : {}),
       },
     };
@@ -136,7 +176,10 @@ export class ConnectionEngine {
     const syncFs = await this.filtered(
       this.scoped(vaultAdapter, options.connections),
       config.paths.include,
-      config.paths.exclude,
+      [
+        ...config.paths.exclude,
+        ...(config.paths.excludeObsidianOnly ? await this.obsidianOnlyPatterns() : []),
+      ],
     );
     // 이 연결이 볼트 전체를 보지 않으면 나머지 노트의 링크도 고친다. 쓰기의 볼트 이벤트를 가리지 않는 어댑터라 그 노트를
     // 맡은 연결이 바뀐 노트로 받는다.
@@ -157,6 +200,7 @@ export class ConnectionEngine {
       orchestrator,
       this.host.hooks(this),
       settings.syncDirection,
+      this.host.syncLog(this.folder),
     );
     const viewVault = this.scoped(
       new ObsidianVaultAdapter(this.host.app.vault),
@@ -182,6 +226,27 @@ export class ConnectionEngine {
       : [];
     const filter = new PathFilter(include, [...exclude, ...ignored]);
     return filter.isEmpty() ? fs : new FilteredVaultFS(fs, filter);
+  }
+
+  /**
+   * Obsidian 에서만 쓰는 것의 제외 패턴(`paths.excludeObsidianOnly`, D10) — 템플릿 폴더는 이 볼트의 설정 폴더
+   * (`vault.configDir` — 사용자가 바꿀 수 있다)에서 읽는다. CLI 와 같은 규칙(core `obsidianOnlyExcludes`).
+   */
+  private async obsidianOnlyPatterns(): Promise<string[]> {
+    const vault = this.host.app.vault;
+    const contents = new Map<string, string>();
+    for (const { file } of TEMPLATE_FOLDER_SETTINGS) {
+      const path = `${vault.configDir}/${file}`;
+      try {
+        if (await vault.adapter.exists(path)) contents.set(file, await vault.adapter.read(path));
+      } catch {
+        // 읽지 못한 설정은 없는 것으로 — 템플릿 폴더를 빼지 못할 뿐이다.
+      }
+    }
+    return obsidianOnlyExcludes(
+      templateFolders((file) => contents.get(file) ?? null),
+      this.folder,
+    );
   }
 
   /** 이 연결 폴더만 보는 볼트 — 볼트 맨 위이고 안쪽 연결이 없으면 어댑터 그대로(예전과 같다). */
@@ -307,8 +372,31 @@ export class ConnectionEngine {
   }
 }
 
+/**
+ * requestUrl 이 받는 본문으로 — 글과 ArrayBuffer 는 그대로, 그 밖(첨부를 올리는 `FormData` · Blob · 바이트 배열)은 브라우저가
+ * 만드는 바이트로 바꾼다. `FormData` 는 경계(boundary)가 든 content-type 도 함께 정해야 Notion 이 파일을 찾는다.
+ *
+ * 예전엔 무엇이든 ArrayBuffer 로 여겨 넘겨, requestUrl 이 `FormData` 를 빈 본문으로 보냈다 — 플러그인의 첨부 · 그림 업로드가
+ * 모두 「body.file should be defined」 로 거절됐다.
+ */
+async function requestBody(
+  url: string,
+  method: string,
+  body: BodyInit,
+): Promise<{ body: string | ArrayBuffer; contentType?: string }> {
+  if (typeof body === "string" || body instanceof ArrayBuffer) return { body };
+  const request = new Request(url, { method, body });
+  return {
+    body: await request.arrayBuffer(),
+    contentType: request.headers.get("content-type") ?? undefined,
+  };
+}
+
 /** Notion SDK 의 fetch 를 Obsidian 의 requestUrl 로 — 앱의 CORS 제한을 비켜 간다. */
-export function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function obsidianFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
   const url =
     typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = init?.method ?? "GET";
@@ -327,7 +415,14 @@ export function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Pro
 
   let body: string | ArrayBuffer | undefined;
   if (init?.body) {
-    body = typeof init.body === "string" ? init.body : (init.body as ArrayBuffer);
+    const prepared = await requestBody(url, method, init.body);
+    body = prepared.body;
+    if (prepared.contentType) {
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === "content-type") delete headers[key];
+      }
+      headers["content-type"] = prepared.contentType;
+    }
   }
 
   return requestUrl({ url, method, headers, body, throw: false }).then((resp) => {

@@ -50,6 +50,7 @@ import type { RemoteDriftChecker } from "./remote-drift.js";
 import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RunObservation } from "./run-observation.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
+import { foldedOwnerOf, pathKey } from "../utils/path-key.js";
 
 /**
  * 원격 페이지를 볼트에 받는다(pull) — Notion 에서 새로 생긴 페이지는 노트로 쓰고, 바뀐 페이지는
@@ -96,7 +97,8 @@ export class PagePuller {
   // 이번 pull 실행에서 이미 배정된 파일 경로. 워커 풀이 동시에 도는 동안 동명 페이지가
   // 같은 경로를 골라 서로를 덮어쓰는 것을 막는다({@link resolveUniqueFilePath}).
   // 실행마다 비운다 — 지난 실행에서 삭제된 경로를 영구히 막지 않기 위해.
-  private readonly claimedPaths = new Set<string>();
+  // 열쇠는 `pathKey` — 대소문자만 다른 두 이름은 macOS · Windows 에서 한 파일이다. 값은 고른 그대로의 경로.
+  private readonly claimedPaths = new Map<string, string>();
 
   // 제목이 같은 새 페이지끼리 경로를 고르는 차례({@link orderCreates}) — 페이지 → 앞 차례가 경로를 고르면
   // 풀리는 약속과 내 차례를 끝내는 함수.
@@ -341,7 +343,7 @@ export class PagePuller {
           : this.relinkExistingNote(filePath, claim.existing, local, rendered, note);
       if (relinked) return relinked;
       // 자연 이름에 있던 다른 노트다 — 예전처럼 id 를 붙인 새 이름으로 받는다.
-      this.claimedPaths.delete(filePath);
+      this.claimedPaths.delete(pathKey(filePath));
       filePath = (await this.resolveUniqueFilePath(noteDir, safeName, pageId)).path;
       rendered = await render(filePath);
     } else {
@@ -1122,11 +1124,13 @@ export class PagePuller {
       [natural!, "name"],
     ];
     for (const [candidate, existing] of order) {
-      if (this.claimedPaths.has(candidate) || this.stateDb.getByPath(candidate)) continue;
+      const key = pathKey(candidate);
+      if (this.claimedPaths.has(key) || this.stateDb.getByPath(candidate)) continue;
+      if (this.foldedOwner(candidate, pageId)) continue;
       if (!(await this.vaultFs.exists(candidate))) continue;
       // ── 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
-      if (this.claimedPaths.has(candidate)) continue;
-      this.claimedPaths.add(candidate);
+      if (this.claimedPaths.has(key)) continue;
+      this.claimedPaths.set(key, candidate);
       return { path: candidate, existing };
     }
     return null;
@@ -1136,31 +1140,43 @@ export class PagePuller {
     const candidates = pagePathCandidates(dir, safeName, pageId);
 
     for (const candidate of candidates) {
-      if (this.claimedPaths.has(candidate)) continue;
+      const key = pathKey(candidate);
+      const claimed = this.claimedPaths.get(key);
+      if (claimed === candidate) continue;
 
       const owner = this.stateDb.getByPath(candidate);
       if (owner) {
-        // 자기 소유면 재사용해야 멱등하다(레코드가 남은 채 파일만 지워진 복원 시나리오).
+        // 자기 소유면 재사용해야 멱등하다(레코드가 남은 채 파일만 지워진 복원 시나리오). 대소문자만 다른 이름을 다른
+        // 페이지가 골랐어도 — 이미 따로 있는 두 노트(Linux)다.
         if (owner.notionPageId != null && notionIdsEqual(owner.notionPageId, pageId)) {
-          this.claimedPaths.add(candidate);
+          this.claimedPaths.set(key, candidate);
           return candidate;
         }
         continue;
       }
+      if (claimed !== undefined || this.foldedOwner(candidate, pageId)) continue;
 
       if (await this.vaultFs.exists(candidate)) continue;
 
       // ── 여기부터 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
-      if (this.claimedPaths.has(candidate)) continue;
-      this.claimedPaths.add(candidate);
+      if (this.claimedPaths.has(key)) continue;
+      this.claimedPaths.set(key, candidate);
       return candidate;
     }
 
     // 전체 ID(32 글자) 후보는 전역 유일하므로 위 루프에서 반드시 반환된다.
     // 도달 불가 경로이나 방어적으로 가장 유일한 후보를 돌려준다.
     const fallback = candidates[candidates.length - 1]!;
-    this.claimedPaths.add(fallback);
+    this.claimedPaths.set(pathKey(fallback), fallback);
     return fallback;
+  }
+
+  /**
+   * 대소문자 · NFC 만 다른 이름을 다른 페이지가 기록에 갖고 있나 — macOS · Windows 에서 그 파일을 덮는다. 같은 페이지의
+   * 옛 이름(제목의 대소문자만 바꾼 것)은 막지 않는다 — 그 자리로 옮겨 간다.
+   */
+  private foldedOwner(candidate: string, pageId: string): boolean {
+    return foldedOwnerOf(this.stateDb, candidate, pageId);
   }
 
   // pull 시 url 기반 page mention 은 `[[notion:<id>]]` 로 1차 변환된다(notionEnhancedToObsidian).

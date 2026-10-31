@@ -19,6 +19,11 @@ export interface IStateDB {
 
   // sync_state
   getByPath(path: string): SyncRecord | null;
+  /**
+   * 대소문자를 가리지 않고 같은 경로의 기록들 — 받을 이름이 macOS · Windows 에서 다른 노트의 파일과 겹치는지(P9).
+   * SQLite 의 `NOCASE` 라 ASCII 만 접는다. 경로는 NFC 로 적혀 있다(`upgradeNfcPaths`).
+   */
+  getByPathKey(path: string): SyncRecord[];
   getByNotionId(pageId: string): SyncRecord | null;
   getByStatus(status: SyncStatus): SyncRecord[];
   getAll(): SyncRecord[];

@@ -4,6 +4,7 @@ import { StateDB } from "../../src/state/state-db.js";
 import { INITIAL_MIGRATION } from "../../src/state/migrations/001-initial.js";
 import { FILE_REGISTRY_MIGRATION } from "../../src/state/migrations/002-file-registry.js";
 import { STAT_CACHE_MIGRATION } from "../../src/state/migrations/003-stat-cache.js";
+import { STATE_DB_MIGRATIONS } from "../../src/state/migrations/index.js";
 import { join } from "node:path";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -259,7 +260,10 @@ describe("StateDB", () => {
         expect(seenAt).toBeGreaterThanOrEqual(before - 1);
         expect(seenAt).toBeLessThanOrEqual(Date.now() + 1);
         expect(upgraded.getByPath("local-only.md")!.notionSeenAt).toBeNull();
-        expect(upgraded.getMeta("schema_version")).toBe("4");
+        // 뒤의 스키마도 이어서 돈다 — 마지막 버전까지.
+        expect(upgraded.getMeta("schema_version")).toBe(
+          String(STATE_DB_MIGRATIONS.at(-1)!.version),
+        );
       } finally {
         upgraded.close();
       }
@@ -282,6 +286,36 @@ describe("StateDB", () => {
   });
 
   describe("wikilink_map", () => {
+    it("NFD 로 적은 링크 글자도 NFC 제목 · 경로 · 별칭으로 찾는다 (P9)", () => {
+      db.upsertWikilink({
+        obsidianPath: "회의/주간.md",
+        notionPageId: "page-w",
+        title: "주간 회의",
+        aliases: ["주간"],
+      });
+      for (const text of ["주간 회의", "주간", "회의/주간"]) {
+        expect(db.resolveWikilink(text.normalize("NFD"))?.notionPageId).toBe("page-w");
+      }
+    });
+
+    it("대소문자가 다른 링크는 맞는 것이 없을 때만 대소문자를 가리지 않고 찾는다 — Obsidian 처럼", () => {
+      db.upsertWikilink({
+        obsidianPath: "Note.md",
+        notionPageId: "page-upper",
+        title: "Note",
+        aliases: [],
+      });
+      expect(db.resolveWikilink("note")?.notionPageId).toBe("page-upper");
+      db.upsertWikilink({
+        obsidianPath: "note.md",
+        notionPageId: "page-lower",
+        title: "note",
+        aliases: [],
+      });
+      expect(db.resolveWikilink("note")?.notionPageId).toBe("page-lower");
+      expect(db.resolveWikilink("Note")?.notionPageId).toBe("page-upper");
+    });
+
     it("upsertWikilink + resolveWikilink (title)", () => {
       db.upsertWikilink({
         obsidianPath: "notes/project.md",

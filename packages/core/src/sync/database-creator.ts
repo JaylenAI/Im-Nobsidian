@@ -12,7 +12,7 @@ import { SIDECAR_SUFFIX } from "../constants/paths.js";
 import type { Config } from "../types/config.js";
 import type { LocalChange } from "../types/sync.js";
 import type { ViewRequest } from "../types/view.js";
-import { compactNotionId } from "../utils/id.js";
+import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import {
   NOTION_STATUS_GROUPS,
@@ -82,6 +82,14 @@ export function loadCreatedDatabases(stateDb: IStateDB): Map<string, CreatedData
   } catch {
     return new Map();
   }
+}
+
+/** push 가 이 DB 를 만들 때 붙인 제목 — 이 볼트가 만든 DB 가 아니면 undefined. */
+export function createdDatabaseTitle(stateDb: IStateDB, databaseId: string): string | undefined {
+  for (const created of loadCreatedDatabases(stateDb).values()) {
+    if (created.databaseId && notionIdsEqual(created.databaseId, databaseId)) return created.title;
+  }
+  return undefined;
 }
 
 function saveCreatedDatabases(

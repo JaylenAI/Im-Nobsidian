@@ -13,7 +13,8 @@ import { watchCommand } from "./commands/watch.js";
 import { verifyCommand } from "./commands/verify.js";
 import { prepareDbCommand } from "./commands/prepare-db.js";
 import { scheduleForcedExit } from "./utils/exit.js";
-import { reportStateDbFailure } from "./utils/state-db-failure.js";
+import { reportUserFailure } from "./utils/state-db-failure.js";
+import { applyLogLevel, logLevelOf } from "./utils/log-level.js";
 
 const requireJson = createRequire(import.meta.url);
 const { version } = requireJson("../package.json") as { version: string };
@@ -24,8 +25,9 @@ program
   .name("im-nobsidian")
   .description("Im-Nobsidian: Obsidian ↔ Notion 양방향 동기화 CLI")
   .version(version)
-  .option("--verbose", "상세 로그 출력")
-  .option("--quiet", "최소 출력");
+  .option("--verbose", "엔진의 정보 · 디버그 로그도 출력")
+  .option("--quiet", "경고 로그를 숨기고 오류 로그만 출력")
+  .hook("preAction", () => applyLogLevel(logLevelOf(program.opts())));
 
 program.addCommand(initCommand);
 program.addCommand(pushCommand);
@@ -47,7 +49,7 @@ program.parseAsync().then(
     scheduleForcedExit(process);
   },
   (error: unknown) => {
-    reportStateDbFailure(error, process);
+    reportUserFailure(error, process);
     scheduleForcedExit(process);
   },
 );

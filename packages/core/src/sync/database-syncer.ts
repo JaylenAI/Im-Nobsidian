@@ -29,10 +29,12 @@ import {
 } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
 import { extractAliases, noteTitle, retitledInNotion } from "./note-title.js";
+import { createdDatabaseTitle } from "./database-creator.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import {
   inClaimOrder,
+  withoutPageIdSuffix,
   pagePathCandidates,
   resolveDbRowPath,
   type PathOwner,
@@ -85,6 +87,7 @@ import { rekeyTrackedRows } from "./schema-follow.js";
 import { NoteRelocator, baseName, joinPath, within } from "./note-relocation.js";
 import type { DatabasePullLedger } from "./remote-scan.js";
 import type { AbortLike } from "../utils/pool.js";
+import { foldedOwnerOf, pathKey } from "../utils/path-key.js";
 import { INTERNAL_DIR, DB_VIEWS_PATH, BASE_SUFFIX, SIDECAR_SUFFIX } from "../constants/paths.js";
 import { notionBodyToObsidian } from "./page-body.js";
 import { isCompactExport } from "../converter/post-processors/block-spacer.js";
@@ -697,10 +700,10 @@ export class DatabaseSyncer {
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
         const ownerOf = await this.rowPathOwners(dbConfig.localFolder, name, page.id);
         const path = resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) => {
-          const owner = claimed.get(p);
+          const owner = claimed.get(pathKey(p));
           return owner !== undefined ? { notionPageId: owner } : ownerOf(p);
         });
-        claimed.set(path, page.id);
+        claimed.set(pathKey(path), page.id);
         planned.push({ pageId: page.id, path, operation: "create" });
       } else if (wasPage(record) || arrivesFromOtherDatabase(record, dbConfig)) {
         // 볼트에서 옮긴 것을 아직 올리지 않았으면 받지 않는다(pullDatabasePage).
@@ -1775,8 +1778,12 @@ export class DatabaseSyncer {
         untracked.add(candidate);
       }
     }
+    // 대소문자만 다른 다른 노트의 이름도 피한다 — macOS · Windows 에서 그 파일을 덮는다(`pathKey`).
     return (path) =>
-      this.stateDb.getByPath(path) ?? (untracked.has(path) ? { notionPageId: null } : null);
+      this.stateDb.getByPath(path) ??
+      (untracked.has(path) || foldedOwnerOf(this.stateDb, path, pageId)
+        ? { notionPageId: null }
+        : null);
   }
 
   /** 되살린 행의 경로를 가져가고 비운다. */
@@ -1814,9 +1821,11 @@ export class DatabaseSyncer {
       [natural!, "name"],
     ];
     for (const [candidate, existing] of order) {
-      if (this.relinkClaims.has(candidate) || this.stateDb.getByPath(candidate)) continue;
+      const key = pathKey(candidate);
+      if (this.relinkClaims.has(key) || this.stateDb.getByPath(candidate)) continue;
+      if (foldedOwnerOf(this.stateDb, candidate, pageId)) continue;
       if (!(await this.vaultFs.exists(candidate))) continue;
-      this.relinkClaims.add(candidate);
+      this.relinkClaims.add(key);
       return { path: candidate, existing };
     }
     return null;
@@ -2013,9 +2022,12 @@ export class DatabaseSyncer {
    */
   private retitledFolderName(folder: string, databaseId: string, title: string): string | null {
     if (!this.config.sync.renameOnTitleChange || !title) return null;
-    const previous = this.baseFileInfo.get(databaseId)?.title;
+    // push 가 만든 DB 는 처음 받기 전에 `.base` 기록이 없다 — 만들 때의 제목과 견준다. 예전에는 견줄 것이 없어 폴더를
+    // 두고 안의 `.base` · 사이드카만 새 이름을 따랐다(2026-10-31 실측).
+    const previous =
+      this.baseFileInfo.get(databaseId)?.title ?? createdDatabaseTitle(this.stateDb, databaseId);
     if (!previous || previous === title) return null;
-    const name = baseName(folder).replace(/ \([0-9a-f]{8,32}\)$/, "");
+    const name = withoutPageIdSuffix(baseName(folder));
     for (const style of [databaseFolderName, sanitizeFileName]) {
       if (style(previous) !== name) continue;
       const next = style(title);
@@ -2030,7 +2042,12 @@ export class DatabaseSyncer {
       ...(this.config.notion.databases ?? []),
       ...parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY)),
     ];
-    return all.find((db) => db.localFolder === folder)?.databaseId ?? null;
+    // 대소문자만 다른 폴더도 그 DB 의 것 — macOS · Windows 에서 한 폴더다(`pathKey`).
+    return (
+      all.find((db) => db.localFolder === folder)?.databaseId ??
+      all.find((db) => pathKey(db.localFolder) === pathKey(folder))?.databaseId ??
+      null
+    );
   }
 
   /** 이름을 바꾼 행을 가져가고 비운다. */

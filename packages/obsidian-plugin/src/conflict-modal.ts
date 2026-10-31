@@ -8,6 +8,8 @@ import DiffLines from "./views/DiffLines.svelte";
 
 export class ConflictModal extends Modal {
   private answered = false;
+  /** 남은 충돌에도 같은 것을 쓴다 — 「남은 충돌도 같은 것으로」 를 켰다. */
+  forRest = false;
   private diffView: ReturnType<typeof mount> | null = null;
 
   /**
@@ -15,11 +17,13 @@ export class ConflictModal extends Modal {
    *   아무것도 알리지 않아, 기다리던 해결 흐름이 멈추고 남은 충돌을 묻지 않았다(N-06).
    */
   /** @param uploads 해소 결과를 Notion 에 올리는 설정인가 — Pull만 하는 설정이면 false. */
+  /** @param remaining 이 뒤에 물을 충돌 수 — 있으면 「남은 충돌도 같은 것으로」 를 보인다. */
   constructor(
     app: App,
     private readonly conflict: Conflict,
     private readonly onResolve: (choice: ResolutionChoice | null) => void,
     private readonly uploads = true,
+    private readonly remaining = 0,
   ) {
     super(app);
   }
@@ -55,6 +59,19 @@ export class ConflictModal extends Modal {
     }
 
     const buttonContainer = contentEl.createDiv({ cls: "im-nobsidian-conflict-buttons" });
+
+    if (this.remaining > 0) {
+      new Setting(buttonContainer)
+        .setName(`남은 충돌 ${this.remaining}개도 같은 것으로`)
+        .setDesc(
+          "켜고 고르면 남은 충돌을 묻지 않고 같은 것으로 풉니다. 그 선택을 쓸 수 없는 충돌(Notion 에서 지운 노트의 병합 등)은 따로 묻습니다.",
+        )
+        .addToggle((toggle) =>
+          toggle.setValue(this.forRest).onChange((value) => {
+            this.forRest = value;
+          }),
+        );
+    }
 
     for (const choice of applicableChoices(this.conflict)) {
       const { label, description } = choiceText(this.conflict, choice, this.uploads);

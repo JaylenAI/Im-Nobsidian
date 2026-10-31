@@ -1,5 +1,5 @@
 import { isRemoteDeletion } from "@im-nobsidian/core";
-import type { Conflict, ResolutionChoice } from "@im-nobsidian/core";
+import type { Conflict, ConflictStrategy, ResolutionChoice } from "@im-nobsidian/core";
 
 type ChoiceText = { readonly label: string; readonly description: string };
 
@@ -19,6 +19,36 @@ export const RESOLUTION_CHOICES: Readonly<Record<ResolutionChoice, ChoiceText>> 
     label: "복제",
     description:
       "Obsidian 파일을 Notion 에 올리고, Notion 버전은 .conflict 파일로 남깁니다 — 이 파일은 올리지 않습니다",
+  },
+};
+
+/**
+ * 둘 다 바뀐 노트를 동기화가 어떻게 하나(`sync.conflictStrategy`) — 설정 화면의 고르개가 이 순서로 놓는다. 키가 엔진의 전략
+ * 목록이라 전략이 늘면 여기서 타입 오류가 난다.
+ */
+export const CONFLICT_STRATEGY_TEXT: Readonly<Record<ConflictStrategy, ChoiceText>> = {
+  manual: {
+    label: "충돌로 남기기 (기본)",
+    description: "둘 다 바뀐 노트는 충돌로 남겨 사이드바에서 하나씩 고릅니다.",
+  },
+  merge: {
+    label: "다른 줄이면 합치기",
+    description:
+      "서로 다른 줄을 고쳤으면 두 변경을 합쳐 양쪽에 씁니다. 같은 줄을 다르게 고쳤으면 충돌로 남깁니다.",
+  },
+  "local-first": {
+    label: "Obsidian 쪽 따르기",
+    description:
+      "Notion 의 변경은 받지 않고 노트를 Notion 에 올립니다 — Notion 쪽 변경은 사라집니다.",
+  },
+  "remote-first": {
+    label: "Notion 쪽 따르기",
+    description: "Notion 버전으로 노트를 덮어씁니다 — 노트에서 고친 것은 사라집니다.",
+  },
+  duplicate: {
+    label: "둘 다 남기기",
+    description:
+      "노트를 Notion 에 올리고 Notion 버전은 옆에 .conflict 파일로 남깁니다 — 그 파일은 올리지 않습니다.",
   },
 };
 

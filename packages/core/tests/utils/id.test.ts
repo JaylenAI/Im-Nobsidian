@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  notionPageUrl,
   generateId,
   isNotionId,
   normalizeNotionId,
@@ -109,5 +110,13 @@ describe("shortNotionId", () => {
   it("대시 · 대문자와 상관없이 앞 8자", () => {
     expect(shortNotionId("ABCDEF12-3456-7890-abcd-ef1234567890")).toBe("abcdef12");
     expect(shortNotionId("abcdef1234567890abcdef1234567890")).toBe("abcdef12");
+  });
+});
+
+describe("notionPageUrl", () => {
+  it("하이픈을 뗀 소문자 id 로 여는 주소를 만든다", () => {
+    expect(notionPageUrl("ABCDEF12-3456-7890-abcd-ef1234567890")).toBe(
+      "https://www.notion.so/abcdef1234567890abcdef1234567890",
+    );
   });
 });

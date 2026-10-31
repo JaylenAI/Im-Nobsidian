@@ -109,8 +109,14 @@ export type {
 } from "./state/index.js";
 
 // Notion
-export { NotionClient, NotionBlockBuilder, PropertyMapper } from "./notion/index.js";
+export {
+  NotionClient,
+  NotionBlockBuilder,
+  PropertyMapper,
+  checkNotionAccess,
+} from "./notion/index.js";
 export type {
+  NotionAccessCheck,
   NotionClientOptions,
   NotionBlock,
   NotionRichText,
@@ -285,6 +291,7 @@ export {
   normalizeNotionId,
   notionIdsEqual,
   compactNotionId,
+  notionPageUrl,
   shortNotionId,
   notionIdFromInput,
 } from "./utils/id.js";
@@ -293,6 +300,12 @@ export { isMarkdownPath, noteNameFromPath, stripMarkdownExtension } from "./util
 export { systemTimeZone } from "./utils/zoned-time.js";
 export { matchesPathScope, inAnyPathScope } from "./utils/path-scope.js";
 export { PathFilter, parseIgnorePatterns, toVaultPath } from "./utils/path-filter.js";
+export {
+  OBSIDIAN_ONLY_PATTERNS,
+  TEMPLATE_FOLDER_SETTINGS,
+  obsidianOnlyExcludes,
+  templateFolders,
+} from "./utils/obsidian-only.js";
 export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
 export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
@@ -323,6 +336,7 @@ export {
   STATE_DB_FILE,
   DB_VIEWS_FILE,
   IGNORE_FILE,
+  SIDECAR_SUFFIX,
   GITIGNORE_ENTRY,
   DB_VIEWS_PATH,
   STATE_DB_PATH,

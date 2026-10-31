@@ -142,6 +142,7 @@ describe("DatabaseSyncer — files 속성 pull 로컬라이즈", () => {
     };
     const stateDb = {
       getByPath: vi.fn().mockReturnValue(null),
+      getByPathKey: vi.fn().mockReturnValue([]),
       getByNotionId: vi.fn().mockReturnValue(null),
       getAll: vi.fn().mockReturnValue([]),
       getByStatus: vi.fn().mockReturnValue([]),

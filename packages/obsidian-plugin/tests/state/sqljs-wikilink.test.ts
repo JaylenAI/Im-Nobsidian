@@ -18,6 +18,41 @@ describe("SqlJsStateDB — 위키링크 조회", () => {
     await db.close();
   });
 
+  it("NFD 로 친 링크 · 대소문자가 다른 링크도 찾는다 (P9 — CLI StateDB 와 같은 사례)", () => {
+    db.upsertWikilink({
+      obsidianPath: "회의/주간.md",
+      notionPageId: "page-w",
+      title: "주간 회의",
+      aliases: [],
+    });
+    db.upsertWikilink({
+      obsidianPath: "Note.md",
+      notionPageId: "page-n",
+      title: "Note",
+      aliases: [],
+    });
+
+    expect(db.resolveWikilink("주간 회의".normalize("NFD"))?.notionPageId).toBe("page-w");
+    expect(db.resolveWikilink("note")?.notionPageId).toBe("page-n");
+  });
+
+  it("대소문자를 가리지 않고 같은 경로의 기록들 — getByPathKey", () => {
+    for (const obsidianPath of ["Note.md", "a/Note.md"]) {
+      db.upsert({
+        obsidianPath,
+        notionPageId: `page-${obsidianPath}`,
+        notionParentId: null,
+        contentHash: "h",
+        localLastModified: "2026-10-31T00:00:00Z",
+        syncDirection: "both",
+        fileType: "file",
+        status: "synced",
+      });
+    }
+    expect(db.getByPathKey("NOTE.md").map((r) => r.obsidianPath)).toEqual(["Note.md"]);
+    expect(db.getByPathKey("b/note.md")).toEqual([]);
+  });
+
   it("폴더 안 노트를 파일 이름으로 찾는다", () => {
     db.upsertWikilink({
       obsidianPath: "notes/meeting.md",

@@ -266,6 +266,13 @@ export class SqlJsStateDB implements IStateDB {
     return row ? this.mapRow(row) : null;
   }
 
+  getByPathKey(path: string): SyncRecord[] {
+    return this.queryAll<RawSyncRow>(
+      "SELECT * FROM sync_state WHERE obsidian_path = ? COLLATE NOCASE",
+      [path],
+    ).map((r) => this.mapRow(r));
+  }
+
   getByNotionId(pageId: string): SyncRecord | null {
     const row = this.queryOne<RawSyncRow>("SELECT * FROM sync_state WHERE notion_page_id = ?", [
       pageId,
