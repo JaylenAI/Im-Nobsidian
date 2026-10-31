@@ -431,3 +431,30 @@ td.im-nobsidian-table-header-column {
   font-size: var(--font-ui-smaller);
   line-height: var(--line-height-tight);
 }
+
+/* 동기화 기록(P8) — 처리하지 못한 것이 있는 기록은 왼쪽 선을 오류색으로 둔다. */
+.im-nobsidian-sync-log-entry {
+  border-left: 3px solid var(--background-modifier-border);
+  padding-left: var(--size-4-3);
+  margin-bottom: var(--size-4-4);
+}
+
+.im-nobsidian-sync-log-entry.mod-failed {
+  border-left-color: var(--text-error);
+}
+
+.im-nobsidian-sync-log-entry h4 {
+  margin: 0 0 var(--size-4-1);
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.im-nobsidian-sync-log-entry p {
+  margin: 0;
+}
+
+.im-nobsidian-sync-log-entry ul {
+  margin: var(--size-4-1) 0 0;
+  font-size: var(--font-ui-small);
+  user-select: text;
+}
