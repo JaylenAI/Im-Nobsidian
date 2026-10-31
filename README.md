@@ -280,6 +280,14 @@ If a CLI run was killed before it finished, run any CLI command in the vault onc
 
 Update the CLI and the plugin together — older versions don't take the lock.
 
+### If the Sync-State Database Is Lost
+
+If `.im-nobsidian/sync.db` was deleted or only the vault was moved to another machine, **pull (or sync) before you push**.
+Pull relinks each note that sits where its Notion page belongs instead of downloading a second copy. Notes whose text
+differs become conflicts — pick a side with `nobsi resolve`. A push in that state stops when Notion already has a page
+with the same name and asks you to pull first, so Notion never gets duplicates. Notes you renamed in the meantime
+cannot be matched and are downloaded again (ADR-049).
+
 ## Supported Conversions
 
 | Feature                                                       |        Push         |     Pull      |
