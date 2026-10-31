@@ -6,7 +6,7 @@
  * 보므로 디스크 이름을 따라가지 않으면 NFD 파일 옆에 NFC 파일이 새로 생긴다 — macOS 보다 엄한 시험이다.
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { join } from "node:path";
+import { join, sep } from "node:path";
 import { mkdtemp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { SyncOrchestrator } from "../../src/sync/orchestrator.js";
@@ -57,7 +57,10 @@ describe("NFD 이름 (P9)", () => {
     );
   const pages = () => [...notion.pages.values()].filter((page) => !page.archived);
   const diskNames = async () =>
-    (await readdir(vaultDir, { recursive: true })).map((name) => String(name)).sort();
+    // Windows 의 readdir 은 하위 경로를 `\` 로 잇는다 — 볼트 경로처럼 `/` 로 맞춰 견준다
+    (await readdir(vaultDir, { recursive: true }))
+      .map((name) => String(name).split(sep).join("/"))
+      .sort();
 
   it("NFC 경로로 보이고 제목 · 링크도 NFC — 디스크 이름은 그대로", async () => {
     const vault = new NodeVaultFS(vaultDir);
