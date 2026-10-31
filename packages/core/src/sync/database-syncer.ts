@@ -489,8 +489,12 @@ export class DatabaseSyncer {
         opts?.progress?.done({
           path: outcome.path ?? record?.obsidianPath ?? `${dbConfig.localFolder}/${page.id}`,
           operation: record ? "update" : "create",
-          // 다시 이은 행은 쓴 것이 없으면 만든 것이 아니다(P7).
-          ...(!record && outcome.relinked && outcome.action !== "written"
+          // 받아 보니 그대로 · local-first 가 지킨 행은 받은 것이 아니다 — 페이지와 같다. 같은 분 봇 쓰기 뒤에는 행을
+          // 다시 읽어 견주므로(ADR-017 보강) 바뀌지 않은 행이 «updated» 로 찍혔다(0.15 회귀). 다시 이은 행은 쓴 것이
+          // 없으면 만든 것이 아니다(P7).
+          ...(outcome.action === "unchanged" ||
+          outcome.action === "skipped" ||
+          (!record && outcome.relinked && outcome.action !== "written")
             ? { unchanged: true }
             : {}),
         });
