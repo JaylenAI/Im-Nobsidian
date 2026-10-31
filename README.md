@@ -418,6 +418,9 @@ everything in it has gone up, then rewrites it.
   multi-select, date, and the relative dates Notion has — `today()` ± `"1d"` · `"7d"` · `"1M"`, past / next week, month or
   year — empty / not empty, and / or / not up to two levels). Otherwise the
   filter is left as it is in Notion and push tells you why.
+- Notion decides "today" in UTC through the API, and compares date-times by their UTC day; Bases uses your computer's
+  time zone. Where the two days differ (00:00–09:00 in Korea) a relative-date view can show a day more or less in one of
+  them (measured 2026-10-31).
 - A view also changed in Notion since the last pull isn't overwritten. Sorting by created / edited time isn't sent —
   change that in Notion.
 - Views added in the vault (table, cards, list) are created in Notion, and views removed are deleted there. A view
