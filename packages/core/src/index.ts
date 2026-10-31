@@ -309,6 +309,8 @@ export {
 export { lineDiff, formatUnifiedDiff, DIFF_SIGN } from "./utils/line-diff.js";
 export type { DiffLine, DiffHunk, LineDiffOptions } from "./utils/line-diff.js";
 export { setLogger, getLogger } from "./utils/logger.js";
+export { LookbehindRegExp, charBefore, notAfter } from "./utils/lookbehind.js";
+export type { Lookbehind } from "./utils/lookbehind.js";
 export type { Logger } from "./utils/logger.js";
 
 // 볼트 하나에 연결 여럿(ADR-038)
