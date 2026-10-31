@@ -1,9 +1,10 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtemp, rm, readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ConfigManager } from "../../src/config/manager.js";
 import { DEFAULT_CONFIG } from "../../src/types/config.js";
+import { getLogger, setLogger } from "../../src/utils/logger.js";
 
 describe("ConfigManager", () => {
   let tempDir: string;
@@ -81,6 +82,38 @@ describe("ConfigManager", () => {
 
       expect(config.notion.token).toBe("ntn_test_load");
       expect(config.notion.rootPageId).toBe("page-id");
+    });
+
+    it("아무것도 바꾸지 않던 옛 설정은 버리고, 바꾸려고 적은 것만 알린다", async () => {
+      const previous = getLogger();
+      const warn = vi.fn();
+      setLogger({ ...previous, warn });
+      try {
+        // 예전 init 이 적던 기본값 그대로 — 알리지 않는다
+        await manager.init({ token: "ntn_test_retired", rootPageId: "page-id" });
+        const written = JSON.parse(await readFile(manager.configPath, "utf-8"));
+        written.conversion = {
+          ...written.conversion,
+          preserveMarkers: true,
+          frontmatterMapping: true,
+        };
+        await writeFile(manager.configPath, JSON.stringify(written), "utf-8");
+        const config = await new ConfigManager(tempDir).load();
+        expect(config.conversion).not.toHaveProperty("preserveMarkers");
+        expect(warn).not.toHaveBeenCalled();
+
+        written.notion.workspaceId = "ws";
+        written.conversion.frontmatterMapping = false;
+        await writeFile(manager.configPath, JSON.stringify(written), "utf-8");
+        const loaded = await new ConfigManager(tempDir).load();
+        expect(loaded.notion).not.toHaveProperty("workspaceId");
+        expect(warn.mock.calls.map(([line]) => line)).toEqual([
+          expect.stringContaining("notion.workspaceId"),
+          expect.stringContaining("conversion.frontmatterMapping"),
+        ]);
+      } finally {
+        setLogger(previous);
+      }
     });
 
     it("설정 파일 없으면 에러", async () => {

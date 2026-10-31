@@ -1,8 +1,9 @@
 import { readFile, writeFile, mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { ConfigSchema, DEFAULT_CONFIG } from "../types/config.js";
+import { ConfigSchema, DEFAULT_CONFIG, retiredSettings } from "../types/config.js";
 import type { Config } from "../types/config.js";
 import { INTERNAL_DIR, CONFIG_FILE, STATE_DB_FILE, GITIGNORE_ENTRY } from "../constants/paths.js";
+import { getLogger } from "../utils/logger.js";
 
 export class ConfigManager {
   private config: Config | null = null;
@@ -26,6 +27,9 @@ export class ConfigManager {
       const raw = await readFile(this.configPath, "utf-8");
       const parsed = JSON.parse(raw);
       this.config = ConfigSchema.parse(parsed);
+      for (const line of retiredSettings(parsed)) {
+        getLogger().warn(`[Im-Nobsidian] 없앤 설정이라 무시함 — ${line}`);
+      }
       return this.config;
     } catch (error) {
       if (error instanceof SyntaxError) {
