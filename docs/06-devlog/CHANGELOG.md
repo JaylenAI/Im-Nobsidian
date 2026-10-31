@@ -19,7 +19,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **플러그인 「동기화 기록」 명령** — 이 세션의 동기화마다 요약 · 사정 · 처리하지 못한 노트와 까닭을 모아 본다. 알림은 몇 초 뒤
   사라지고 자동 동기화는 알리지 않아 다시 볼 곳이 없었다.
 
-- **Canvas · Excalidraw · 템플릿 폴더는 기본으로 동기화하지 않는다**(D10 · `paths.excludeObsidianOnly`, 플러그인 「Obsidian 에서만
+- **Canvas · Excalidraw · 템플릿 폴더는 기본으로 동기화하지 않는다**(D10 · ADR-051 · `paths.excludeObsidianOnly`, 플러그인 「Obsidian 에서만
   쓰는 것은 빼기」) — 안이 JSON 인 그림은 Notion 에 수천 줄의 글이나 열 수 없는 파일 블록이 되었고, 템플릿 폴더의 틀(`{{date}}` ·
   Templater)은 Notion 의 페이지 목록만 어지럽혔다. 템플릿 폴더는 Obsidian 의 「템플릿」 · Templater 설정에서 읽는다(플러그인은
   `vault.configDir`). 이미 올린 것은 Notion 페이지를 지우지 않는다(deleteSync 를 켜도 — 실측).
@@ -32,7 +32,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **macOS 의 NFD 한글 이름**(P9 · CLI) — Finder 가 만든 이름은 디스크에 NFD 로 남는다. CLI 는 그 이름을 그대로 써서
+- **macOS 의 NFD 한글 이름**(P9 · CLI · ADR-050) — Finder 가 만든 이름은 디스크에 NFD 로 남는다. CLI 는 그 이름을 그대로 써서
   `[[회의록]]` 이 그 노트를 찾지 못하고(글로 남음) Notion 제목도 NFD 로 올렸다. Linux 에서는 그 폴더에 받는 새 노트가 NFC 이름의
   새 폴더에 따로 생겼다. 이제 볼트 경로 · 제목 · 링크는 NFC(Obsidian 과 같다 — 1.12.4 실측), 읽고 쓰기는 디스크의 이름으로 한다.
   예전 CLI 가 NFD 로 적은 상태 기록은 처음 실행 때 한 번 NFC 로 옮겨 적는다 — 지우거나 새로 만들지 않는다(0.15.0 이 적은 볼트로
