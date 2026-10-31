@@ -102,6 +102,44 @@ describe("SyncOrchestrator", () => {
       expect(result.duration).toBeGreaterThanOrEqual(0);
     });
 
+    it("고친 노트가 없어도 새 첨부는 올리고, 올리지 못한 첨부는 실패로 알린다", async () => {
+      (mockVaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "자료/표.pdf", size: 10, mtime: "2026-10-31T00:00:00.000Z" },
+        { path: "자료/큰.mp4", size: 20, mtime: "2026-10-31T00:00:00.000Z" },
+      ]);
+      mockStateDb.getByPath.mockImplementation((path: string) =>
+        path === "자료" ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page" } : null,
+      );
+      mockNotionClient.uploadFile.mockImplementation((_buffer: Buffer, filename: string) =>
+        filename.endsWith(".mp4")
+          ? Promise.reject(new Error("Notion 400"))
+          : Promise.resolve("file-upload-id"),
+      );
+
+      const result = await orchestrator.push();
+
+      expect(mockNotionClient.uploadFile.mock.calls.map(([, filename]) => filename).sort()).toEqual(
+        ["큰.mp4", "표.pdf"],
+      );
+      expect(result.created + result.updated).toBe(0);
+      expect(result.failed).toEqual([
+        { path: "자료/큰.mp4", operation: "create", error: "첨부 업로드 실패 — Notion 400" },
+      ]);
+    });
+
+    it("dry-run 은 고친 노트가 없어도 첨부를 올리지 않는다", async () => {
+      (mockVaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([
+        { path: "자료/표.pdf", size: 10, mtime: "2026-10-31T00:00:00.000Z" },
+      ]);
+      mockStateDb.getByPath.mockImplementation((path: string) =>
+        path === "자료" ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page" } : null,
+      );
+
+      await orchestrator.push({ dryRun: true });
+
+      expect(mockNotionClient.uploadFile).not.toHaveBeenCalled();
+    });
+
     it("새 파일 생성 시 Notion에 페이지 생성", async () => {
       const now = new Date().toISOString();
       (mockVaultFs.listMarkdownFileStats as ReturnType<typeof vi.fn>).mockResolvedValue([
