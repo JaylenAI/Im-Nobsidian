@@ -6,5 +6,5 @@
   "description": "Sync notes, databases, and attachments between your vault and Notion in both directions.",
   "author": "hanseungheon",
   "authorUrl": "https://github.com/JaylenAI",
-  "isDesktopOnly": true
+  "isDesktopOnly": false
 }

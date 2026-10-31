@@ -52,7 +52,16 @@ export class StateDbCopyStaleError extends Error {
   }
 }
 
-export class StateDbFile {
+/**
+ * 쥔 상태 DB 파일 — 사본을 쓰고, 다 쓰면 놓는다. 데스크톱은 {@link StateDbFile}(Node `fs` · 잠금), 모바일은
+ * `AdapterStateDbFile`(볼트 어댑터).
+ */
+export interface HeldStateDbFile {
+  write(data: Uint8Array): Promise<void>;
+  release(): void;
+}
+
+export class StateDbFile implements HeldStateDbFile {
   private constructor(
     private readonly path: string,
     private readonly lock: StateLock,

@@ -8,6 +8,39 @@ const prod = process.argv[2] === "production";
 
 const nodeBuiltinsWithPrefix = builtins.map((m) => `node:${m}`);
 
+// 모바일 앱에는 Node 가 없다(P11, ADR-053) — core · 의존성이 부르는 Node 모듈을 shim 으로 잇는다. shim 은 데스크톱이면
+// 진짜 모듈을 넘긴다. 여기에 없는 Node 모듈을 새로 부르면 main.js 가 그대로 `require` 해 모바일에서 뜨지 않는다 —
+// `tests/platform/no-node-load.test.ts` 가 잡는다.
+const NODE_SHIMS = {
+  fs: "./src/platform/shims/fs.ts",
+  "fs/promises": "./src/platform/shims/fs-promises.ts",
+  path: "./src/platform/shims/path.ts",
+  crypto: "./src/platform/shims/crypto.ts",
+  os: "./src/platform/shims/os.ts",
+  url: "./src/platform/shims/url.ts",
+  events: "./src/platform/shims/events.ts",
+};
+const shimAliases = Object.fromEntries(
+  Object.entries(NODE_SHIMS).flatMap(([name, shim]) => [
+    [name, shim],
+    [`node:${name}`, shim],
+  ]),
+);
+// npm `buffer`(모바일의 전역 Buffer, `src/platform/buffer-global.ts`)는 싣는다 — Node 의 `buffer` 와 이름이 같다
+const shimmed = new Set([...Object.keys(shimAliases), "buffer", "node:buffer"]);
+
+/** vfile 의 `minproc`(`module.exports = process`) — 모바일에는 전역 `process` 가 없다. */
+const vfileProcShim = {
+  name: "vfile-proc-shim",
+  setup(build) {
+    build.onResolve({ filter: /^\.\/minproc(\.js)?$/ }, (args) =>
+      /[\\/]vfile[\\/]/.test(args.importer)
+        ? { path: new URL("./src/platform/shims/vfile-proc.ts", import.meta.url).pathname }
+        : undefined,
+    );
+  },
+};
+
 esbuild
   .build({
     entryPoints: ["src/main.ts"],
@@ -26,16 +59,17 @@ esbuild
       "@lezer/common",
       "@lezer/highlight",
       "@lezer/lr",
-      ...builtins,
-      ...nodeBuiltinsWithPrefix,
+      ...[...builtins, ...nodeBuiltinsWithPrefix].filter((name) => !shimmed.has(name)),
     ],
     plugins: [
       sveltePlugin({
         compilerOptions: svelteCompilerOptions,
       }),
+      vfileProcShim,
     ],
     alias: {
       "better-sqlite3": "./src/stubs/better-sqlite3.ts",
+      ...shimAliases,
     },
     // sql.js 의 SQLite 엔진(wasm)을 main.js 안에 싣는다 — 디렉터리는 main.js · manifest.json · styles.css 만
     // 내려받는다(ADR-031).

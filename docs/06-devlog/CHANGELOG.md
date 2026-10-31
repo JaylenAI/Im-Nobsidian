@@ -5,6 +5,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **플러그인이 모바일(iOS · Android)에서 돈다**(P11 · ADR-053, `isDesktopOnly: false`) — 예전 main.js 는 처음에 Node 모듈(`fs` 등)을
+  불러 모바일에서 아예 뜨지 않았다. 빌드가 Node 모듈을 갈음하는 shim 으로 잇고(데스크톱은 진짜 모듈 그대로), 모바일의 상태 DB 는
+  Obsidian 의 볼트 API 로 한 번에 갈아 끼운다. 앱이 가려지면 상태 DB 를 바로 쓴다 — 모바일은 다른 앱으로 넘어가면 플러그인을
+  내리지 않고 멈춘다.
+
+### Changed
+
+- **정규식 lookbehind 를 모두 없앴다**(P11) — iOS 16.4 앞의 JavaScript 는 lookbehind 가 든 스크립트를 읽지 못한다. 바꾼 정규식이
+  예전과 같은 결과를 내는지 무작위 글로 견준다.
+
+### Fixed
+
+- **첨부 받기의 시간 상한이 `AbortSignal.timeout` 이 없는 곳에서도 걸린다** — iOS 16 앞의 WebView 에는 없다. 없으면 타이머로 같은
+  `TimeoutError` 를 낸다.
+
 ## [0.16.0] - 2026-10-31
 
 > 플러그인이 CLI 와 같은 설정 · 명령을 갖고(P8), macOS 의 NFD 한글 이름과 대소문자만 다른 이름을 바르게 다루며(ADR-050), Canvas ·

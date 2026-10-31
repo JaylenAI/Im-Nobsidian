@@ -283,6 +283,21 @@ If a CLI run was killed before it finished, run any CLI command in the vault onc
 
 Update the CLI and the plugin together — older versions don't take the lock.
 
+### Obsidian Mobile (iOS, Android)
+
+Since v0.17.0 the plugin also runs in Obsidian Mobile. Mobile has no Node.js, so there the plugin writes
+`.im-nobsidian/sync.db` through Obsidian's own vault API and takes no lock — the CLI does not run on a phone. It
+writes the database as soon as Obsidian goes to the background, because the system may suspend the app without
+unloading the plugin (ADR-053).
+
+- Enter the token once on each device — Obsidian's keychain is per device.
+- A first sync of a large vault takes a while (see _Rate limit_ under Known Limitations). Keep Obsidian in the
+  foreground until it finishes; if the system suspends it, run sync again.
+- If you also sync this vault between devices (Obsidian Sync, iCloud, …), sync with Notion from one device at a
+  time. Every device uses the same integration token, so one device's Notion writes look like the other's own
+  (_Edits from the same token elsewhere_). When another device's copy of `sync.db` replaces the file under the
+  plugin, the plugin does not overwrite it — it reopens and reads the newer one.
+
 ### If the Sync-State Database Is Lost
 
 If `.im-nobsidian/sync.db` was deleted or only the vault was moved to another machine, **pull (or sync) before you push**.
@@ -648,7 +663,8 @@ pnpm install && pnpm build && pnpm test
   you ask for them (sync, status, refreshing the changes panel) or on the auto-sync
   interval you turn on.
 - **Files:** the plugin reads and writes inside your vault only. It writes the sync state to
-  `.im-nobsidian/` in the vault with Node's file system API, so it is desktop-only.
+  `.im-nobsidian/` in the vault — with Node's file system API on desktop, and with Obsidian's vault
+  API on mobile.
 - **No telemetry, no ads, no payments.** The plugin is free and fully open source
   ([MIT](LICENSE)).
 

@@ -27,5 +27,19 @@ export function fetchForDownload(
   timeoutMs: number = DEFAULT_DOWNLOAD_TIMEOUT_MS,
 ): ReturnType<typeof globalThis.fetch> {
   if (timeoutMs <= 0) return fetchFn(url);
-  return fetchFn(url, { signal: AbortSignal.timeout(timeoutMs) });
+  return fetchFn(url, { signal: timeoutSignal(timeoutMs) });
+}
+
+/**
+ * `AbortSignal.timeout` — iOS 16 앞의 WebView 에는 없다(플러그인 모바일, P11). 없으면 같은 일을 타이머로 한다 — 끊는
+ * 이유도 같은 `TimeoutError`.
+ */
+function timeoutSignal(timeoutMs: number): AbortSignal {
+  if (typeof AbortSignal.timeout === "function") return AbortSignal.timeout(timeoutMs);
+  const controller = new AbortController();
+  setTimeout(
+    () => controller.abort(new DOMException("The operation timed out.", "TimeoutError")),
+    timeoutMs,
+  );
+  return controller.signal;
 }

@@ -17,16 +17,16 @@
 
 ## 준비 상태
 
-| 요건                                                                | 상태   | 근거                                                                                        |
-| ------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------- |
-| 루트 `README.md` (영어) · `LICENSE` · `manifest.json`               | ✅     | 루트에 셋 다 있다(ADR-032). LICENSE 는 MIT                                                  |
-| `id` 에 `obsidian` 이 없고 겹치지 않음                              | ✅     | `im-notion-sync`                                                                            |
-| 설명에 브랜드 이름 없음 · 마침표로 끝남                             | ✅     | 디렉터리 검사(`obsidian-review.yml`)가 push 마다 본다                                       |
-| 릴리스 태그 == manifest 버전(`v` 없이) · 자산 `main.js` 등 셋       | ✅     | GitHub 릴리스 `0.9.0` — `main.js` · `manifest.json` · `styles.css`                          |
-| `versions.json` 에 이 버전의 `minAppVersion`                        | ✅     | `0.9.0` → `1.12.4`                                                                          |
-| README 공개 항목(계정 · 네트워크 · 파일 · 텔레메트리 · 광고 · 결제) | ✅ dev | README 「Privacy and Network Use」. 🔴 디렉터리는 기본 브랜치(main) README 를 읽는다 — 아래 |
-| 결제 분류                                                           | —      | 포털에서 **Free** 로 고른다                                                                 |
-| `isDesktopOnly: true`                                               | ✅     | Node 파일 API 로 상태 DB 를 쓴다. lookbehind 정규식 규칙도 이 값으로 건너뛴다               |
+| 요건                                                                | 상태   | 근거                                                                                             |
+| ------------------------------------------------------------------- | ------ | ------------------------------------------------------------------------------------------------ |
+| 루트 `README.md` (영어) · `LICENSE` · `manifest.json`               | ✅     | 루트에 셋 다 있다(ADR-032). LICENSE 는 MIT                                                       |
+| `id` 에 `obsidian` 이 없고 겹치지 않음                              | ✅     | `im-notion-sync`                                                                                 |
+| 설명에 브랜드 이름 없음 · 마침표로 끝남                             | ✅     | 디렉터리 검사(`obsidian-review.yml`)가 push 마다 본다                                            |
+| 릴리스 태그 == manifest 버전(`v` 없이) · 자산 `main.js` 등 셋       | ✅     | GitHub 릴리스 `0.9.0` — `main.js` · `manifest.json` · `styles.css`                               |
+| `versions.json` 에 이 버전의 `minAppVersion`                        | ✅     | `0.9.0` → `1.12.4`                                                                               |
+| README 공개 항목(계정 · 네트워크 · 파일 · 텔레메트리 · 광고 · 결제) | ✅ dev | README 「Privacy and Network Use」. 🔴 디렉터리는 기본 브랜치(main) README 를 읽는다 — 아래      |
+| 결제 분류                                                           | —      | 포털에서 **Free** 로 고른다                                                                      |
+| `isDesktopOnly: false` (v0.17 부터)                                 | ✅     | 모바일은 볼트 어댑터로 상태 DB 를 쓴다(ADR-053). 그래서 lookbehind 정규식 규칙을 받는다 — 없앴다 |
 
 ### 🔴 README 를 main 에 올려야 한다
 

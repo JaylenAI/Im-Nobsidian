@@ -5,7 +5,7 @@
  * 볼트처럼 본다 — 경로는 그 폴더 기준이고, 안쪽의 다른 연결 폴더는 올리지도 덮어쓰지도 않는다.
  */
 import { NOTICE_PREFIX } from "../constants.js";
-import { Notice, requestUrl, type App } from "obsidian";
+import { Notice, Platform, requestUrl, type App } from "obsidian";
 import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
@@ -32,7 +32,12 @@ import {
 } from "@im-nobsidian/core";
 import { SqlJsStateDB } from "../state/sqljs-state-db.js";
 import { previousStateDbClosed } from "../state/state-db-handoff.js";
-import { StateDbCopyStaleError, StateDbFile } from "../state/state-db-file.js";
+import {
+  StateDbCopyStaleError,
+  StateDbFile,
+  type HeldStateDbFile,
+} from "../state/state-db-file.js";
+import { AdapterStateDbFile } from "../state/adapter-state-db-file.js";
 import { ObsidianVaultAdapter } from "../vault-adapter.js";
 import {
   SyncController,
@@ -83,7 +88,7 @@ export class ConnectionEngine {
   controller: SyncController | null = null;
   stateDb: SqlJsStateDB | null = null;
   /** 상태 DB 파일과 그 잠금 — 닫으면서 푼다({@link close}). */
-  stateDbFile: StateDbFile | null = null;
+  stateDbFile: HeldStateDbFile | null = null;
   /** 동기화 엔진이 쓰는 볼트 어댑터 — 그 쓰기의 볼트 이벤트를 가린다. 경로는 볼트 기준이다. */
   syncVault: ObsidianVaultAdapter | null = null;
   viewProvider: ViewDataProvider | null = null;
@@ -121,8 +126,7 @@ export class ConnectionEngine {
   /** 상태 DB 를 열고 오케스트레이터 · 컨트롤러를 만든다. 실패하면 던진다 — 연 DB 는 쥔 채로 둔다(닫기는 {@link close}). */
   async open(options: EngineOptions): Promise<void> {
     const { settings } = options;
-    const basePath = (this.host.app.vault.adapter as unknown as { basePath: string }).basePath;
-    const stateDb = await this.openStateDb(join(basePath, this.stateDbPath));
+    const stateDb = await this.openStateDb();
 
     // 동기화가 쓰는 어댑터는 따로 둔다 — 그 쓰기의 볼트 이벤트만 가린다. 보기 편집(EntryEditor)은 사용자의 편집이다.
     const vaultAdapter = new ObsidianVaultAdapter(this.host.app.vault);
@@ -316,9 +320,9 @@ export class ConnectionEngine {
    * 플러그인을 다시 불러왔으면 옛 인스턴스가 DB 를 다 닫고 잠금을 푼 뒤에 잡는다 — 먼저 잡으면 그 잠금에 막히고,
    * 먼저 읽으면 옛 인스턴스의 마지막 기록이 빠진 DB 를 연다.
    */
-  private async openStateDb(path: string): Promise<SqlJsStateDB> {
+  private async openStateDb(): Promise<SqlJsStateDB> {
     await previousStateDbClosed();
-    const stateDbFile = StateDbFile.acquire(path, this.host.manifestName);
+    const stateDbFile = await this.acquireStateDbFile();
     let stateDb: SqlJsStateDB;
     try {
       stateDb = await SqlJsStateDB.open(
@@ -339,10 +343,21 @@ export class ConnectionEngine {
   }
 
   /**
+   * 상태 DB 파일을 쥔다 — 데스크톱은 Node `fs` 로 잠그고 쓴다(CLI 와 같은 파일을 나눈다, ADR-026). 모바일에는 Node 가
+   * 없고 CLI 도 없다 — 볼트 어댑터로 쓴다(P11, ADR-053).
+   */
+  private async acquireStateDbFile(): Promise<HeldStateDbFile> {
+    const adapter = this.host.app.vault.adapter;
+    if (!Platform.isDesktopApp) return AdapterStateDbFile.acquire(adapter, this.stateDbPath);
+    const basePath = (adapter as unknown as { basePath: string }).basePath;
+    return StateDbFile.acquire(join(basePath, this.stateDbPath), this.host.manifestName);
+  }
+
+  /**
    * 사본을 파일에 쓴다. 다른 곳이 파일을 바꿔 쓰지 않았으면 초기화를 다시 한다 — 닫으면서 사본을 버리고 파일에서
    * 다시 연다({@link close}). 낡은 사본으로 이어 가면 다른 곳이 받아 온 노트를 새 노트로 보고 또 올린다.
    */
-  private async writeStateDb(stateDbFile: StateDbFile, data: Uint8Array): Promise<void> {
+  private async writeStateDb(stateDbFile: HeldStateDbFile, data: Uint8Array): Promise<void> {
     try {
       await stateDbFile.write(data);
     } catch (error) {
