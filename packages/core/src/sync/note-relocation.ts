@@ -88,6 +88,17 @@ export class NoteRelocator {
     await retargetBaseFiles(this.vaultFs, moves, this.stateDb);
   }
 
+  /**
+   * 파일은 두고 상태 DB 의 경로만 옮겨 적는다 — 볼트의 파일 이름은 그대로인데 기록의 표기가 달랐을 때(NFD → NFC).
+   * `.base` 파일 안의 폴더 필터는 고치지 않는다 — Obsidian 이 NFD · NFC 를 같은 폴더로 본다.
+   */
+  rewriteRecorded(moves: readonly RemoteMove[]): void {
+    this.stateDb.transaction(() => {
+      for (const move of moves) this.rewritePaths(move);
+      rewriteDatabaseFolders(this.stateDb, moves);
+    });
+  }
+
   private holdsConfiguredDatabase(folder: string): boolean {
     return this.configuredDatabases.some((db) =>
       within(db.localFolder.replace(/\/+$/, ""), folder),

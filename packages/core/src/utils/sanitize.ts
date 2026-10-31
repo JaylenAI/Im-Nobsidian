@@ -80,9 +80,13 @@ function guarded(name: string): string {
   return safe.length === 0 ? "_untitled" : safe;
 }
 
-/** Notion 제목 → 볼트 파일 이름(확장자 없이). */
+/**
+ * Notion 제목 → 볼트 파일 이름(확장자 없이). NFC 로 — 볼트 경로는 NFC 다(`NodeVaultFS`). macOS 에서 NFD 이름으로 올린
+ * 제목도 같은 파일 이름이 된다.
+ */
 export function sanitizeFileName(name: string): string {
   const cleaned = name
+    .normalize("NFC")
     .replace(INVALID_CHARS, "_")
     .replace(WIKILINK_UNSAFE_CHARS, "_")
     .replace(LINK_SUBPATH_CHARS, "_")
