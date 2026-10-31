@@ -7,7 +7,7 @@ import {
   WatchSyncService,
   DEFAULT_WATCH_DEBOUNCE_MS,
 } from "@im-nobsidian/core";
-import type { SyncResult, WatchSyncScope } from "@im-nobsidian/core";
+import type { Config, SyncResult, WatchSyncScope } from "@im-nobsidian/core";
 import { openVaultFs, outsideVault } from "../utils/vault.js";
 
 function formatResult(result: SyncResult): string {
@@ -27,6 +27,15 @@ function timestamp(): string {
   return new Date().toLocaleTimeString("ko-KR", { hour12: false });
 }
 
+/**
+ * 주기 sync 의 간격(초) — `--interval` 을 주면 그것, 아니면 설정의 `sync.autoSync` · `sync.autoSyncInterval`.
+ * 예전에는 설정의 두 값을 아무도 읽지 않아 적어도 주기 sync 가 돌지 않았다(플러그인은 제 설정을 쓴다). 0 은 끔.
+ */
+export function periodicSyncSeconds(flag: number | undefined, sync: Config["sync"]): number {
+  if (flag !== undefined) return flag;
+  return sync.autoSync ? sync.autoSyncInterval : 0;
+}
+
 /** 로그의 sync 이름 — 주기 sync 는 볼트 전체를 본다. */
 function syncLabel(scope: WatchSyncScope): string {
   return scope === "full" ? "주기적 동기화" : "동기화";
@@ -35,18 +44,21 @@ function syncLabel(scope: WatchSyncScope): string {
 export const watchCommand = new Command("watch")
   .description("파일 변경 감지 + 자동 동기화")
   .option("-d, --debounce <ms>", "디바운스 대기 시간(ms)", String(DEFAULT_WATCH_DEBOUNCE_MS))
-  .option("-i, --interval <seconds>", "풀 동기화 주기(초, 0이면 비활성)", "0")
-  .action(async (options: { debounce: string; interval: string }) => {
+  .option(
+    "-i, --interval <seconds>",
+    "풀 동기화 주기(초, 0이면 비활성) — 없으면 설정의 sync.autoSync · sync.autoSyncInterval",
+  )
+  .action(async (options: { debounce: string; interval?: string }) => {
     // 숫자가 아니면 디바운스가 0 이 되거나 주기 동기화가 말없이 꺼진다 — 시작하기 전에 거절한다.
     const debounceMs = Number(options.debounce);
-    const intervalSec = Number(options.interval);
+    const intervalFlag = options.interval === undefined ? undefined : Number(options.interval);
     if (!Number.isInteger(debounceMs) || debounceMs < 0) {
       console.error(`--debounce 는 0 이상의 정수(ms)여야 합니다: ${options.debounce}`);
       process.exitCode = 1;
       return;
     }
-    if (!Number.isInteger(intervalSec) || intervalSec < 0) {
-      console.error(`--interval 은 0 이상의 정수(초)여야 합니다: ${options.interval}`);
+    if (intervalFlag !== undefined && (!Number.isInteger(intervalFlag) || intervalFlag < 0)) {
+      console.error(`--interval 은 0 이상의 정수(초)여야 합니다: ${String(options.interval)}`);
       process.exitCode = 1;
       return;
     }
@@ -54,6 +66,7 @@ export const watchCommand = new Command("watch")
     const cwd = process.cwd();
     const configManager = new ConfigManager(cwd);
     const config = await configManager.load();
+    const intervalSec = periodicSyncSeconds(intervalFlag, config.sync);
     const stateDb = StateDB.open(configManager.dbPath);
 
     const client = NotionClient.fromConfig(config);
