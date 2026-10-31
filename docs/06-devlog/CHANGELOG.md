@@ -16,6 +16,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **플러그인이 그림 · 첨부를 올린다** — 플러그인의 HTTP 어댑터가 파일 업로드의 multipart 본문을 빈 본문으로 보내, Notion 이
+  「body.file should be defined」 로 모두 거절했다. 노트에 넣은 그림 · 폴더의 첨부가 플러그인에서는 한 번도 올라가지 않았다(CLI 는
+  영향 없음).
 - **고친 노트가 없어도 새 첨부를 올린다** — push 가 올릴 노트가 없으면 첨부를 올리기 전에 끝나, 볼트에 파일만 넣었을 때는 노트를
   하나 고칠 때까지 올라가지 않았다.
 - **동기화하지 못한 첨부 · DB 를 다시 알린다** — Notion 이 받지 않는 형식이라 올리지 않은 첨부 · 크기 상한을 넘어 받지 않은

@@ -343,8 +343,31 @@ export class ConnectionEngine {
   }
 }
 
+/**
+ * requestUrl 이 받는 본문으로 — 글과 ArrayBuffer 는 그대로, 그 밖(첨부를 올리는 `FormData` · Blob · 바이트 배열)은 브라우저가
+ * 만드는 바이트로 바꾼다. `FormData` 는 경계(boundary)가 든 content-type 도 함께 정해야 Notion 이 파일을 찾는다.
+ *
+ * 예전엔 무엇이든 ArrayBuffer 로 여겨 넘겨, requestUrl 이 `FormData` 를 빈 본문으로 보냈다 — 플러그인의 첨부 · 그림 업로드가
+ * 모두 「body.file should be defined」 로 거절됐다.
+ */
+async function requestBody(
+  url: string,
+  method: string,
+  body: BodyInit,
+): Promise<{ body: string | ArrayBuffer; contentType?: string }> {
+  if (typeof body === "string" || body instanceof ArrayBuffer) return { body };
+  const request = new Request(url, { method, body });
+  return {
+    body: await request.arrayBuffer(),
+    contentType: request.headers.get("content-type") ?? undefined,
+  };
+}
+
 /** Notion SDK 의 fetch 를 Obsidian 의 requestUrl 로 — 앱의 CORS 제한을 비켜 간다. */
-export function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export async function obsidianFetch(
+  input: RequestInfo | URL,
+  init?: RequestInit,
+): Promise<Response> {
   const url =
     typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
   const method = init?.method ?? "GET";
@@ -363,7 +386,14 @@ export function obsidianFetch(input: RequestInfo | URL, init?: RequestInit): Pro
 
   let body: string | ArrayBuffer | undefined;
   if (init?.body) {
-    body = typeof init.body === "string" ? init.body : (init.body as ArrayBuffer);
+    const prepared = await requestBody(url, method, init.body);
+    body = prepared.body;
+    if (prepared.contentType) {
+      for (const key of Object.keys(headers)) {
+        if (key.toLowerCase() === "content-type") delete headers[key];
+      }
+      headers["content-type"] = prepared.contentType;
+    }
   }
 
   return requestUrl({ url, method, headers, body, throw: false }).then((resp) => {
