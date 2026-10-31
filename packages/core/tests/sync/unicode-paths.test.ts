@@ -102,7 +102,7 @@ describe("NFD 이름 (P9)", () => {
     );
     const names = await diskNames();
     expect(names).not.toContain("회의");
-    expect(names).toContain(join(nfd("회의"), "새 노트.md"));
+    expect(names).toContain(`${nfd("회의")}/새 노트.md`);
   });
 
   it("예전 CLI 가 적은 NFD 경로 기록을 NFC 로 옮겨 적는다 — 지우거나 새로 만들지 않는다", async () => {
