@@ -85,3 +85,27 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  # P9 — macOS 의 파일 시스템(APFS 기본)은 대소문자 · NFC/NFD 를 가리지 않는다. Linux · Windows 에서 드러나지 않는다.
+  macos:
+    name: macOS
+    runs-on: macos-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: "pnpm"
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test
+        run: pnpm test

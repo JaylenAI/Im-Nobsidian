@@ -320,15 +320,19 @@ describe("NodeVaultFS", () => {
       expect(await onDisk()).toEqual([]);
     });
 
-    it("NFC · NFD 두 이름이 따로 있으면(Linux) 둘 다 보인다 — 하나로 접지 않는다", async () => {
-      await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽").catch(async () => {
-        await mkdir(join(tempDir, "회의"));
-        await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽");
-      });
-      const files = await vaultFs.listMarkdownFiles();
-      expect(files).toHaveLength(2);
-      const contents = await Promise.all(files.map((file) => vaultFs.readFile(file.path)));
-      expect(contents.sort()).toEqual(["NFC 쪽", "본문"].sort());
-    });
+    // macOS(APFS) 는 NFC · NFD 를 같은 이름으로 보아 둘을 따로 만들 수 없다.
+    it.skipIf(process.platform === "darwin")(
+      "NFC · NFD 두 이름이 따로 있으면(Linux) 둘 다 보인다 — 하나로 접지 않는다",
+      async () => {
+        await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽").catch(async () => {
+          await mkdir(join(tempDir, "회의"));
+          await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽");
+        });
+        const files = await vaultFs.listMarkdownFiles();
+        expect(files).toHaveLength(2);
+        const contents = await Promise.all(files.map((file) => vaultFs.readFile(file.path)));
+        expect(contents.sort()).toEqual(["NFC 쪽", "본문"].sort());
+      },
+    );
   });
 });
