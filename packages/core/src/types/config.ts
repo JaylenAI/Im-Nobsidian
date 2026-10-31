@@ -49,6 +49,7 @@ const DEFAULTS = {
   paths: {
     include: ["**/*"],
     exclude: [] as string[],
+    excludeObsidianOnly: true,
     attachments: "attachments",
   },
   conversion: {
@@ -149,6 +150,8 @@ export const ConfigSchema = z.object({
   paths: z.object({
     include: z.array(z.string()).default(() => [...D.paths.include]),
     exclude: z.array(z.string()).default(() => [...D.paths.exclude]),
+    // Canvas · Excalidraw · 템플릿 폴더를 동기화하지 않는다(`OBSIDIAN_ONLY_PATTERNS`, D10). 끄면 다른 파일처럼 올린다.
+    excludeObsidianOnly: z.boolean().default(D.paths.excludeObsidianOnly),
     attachments: z.string().default(D.paths.attachments),
   }),
   conversion: z.object({
