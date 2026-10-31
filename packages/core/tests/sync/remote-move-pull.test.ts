@@ -694,6 +694,35 @@ describe("Notion 에서 옮긴 페이지를 볼트에서 옮긴다 (ADR-039)", (
           expect(await sync.pull()).toMatchObject({ moved: [], failed: [] });
         });
 
+        it("push 가 만든 DB 는 받은 적이 없어도 만들 때의 제목과 견준다 — 폴더도 새 이름을 따른다", async () => {
+          await shelf();
+          // push 가 만든 직후처럼 — `.base` 도 지난번에 받은 제목 기록도 없고, 만든 기록만 있다
+          vault.files.delete("A/Tasks/Tasks.base");
+          db.setMeta("db_base_files", "");
+          db.setMeta(
+            "created_dbs",
+            JSON.stringify({
+              aaaaaaaa000000000000000000000009: {
+                databaseId: DB_ID,
+                dataSourceId: null,
+                folder: "A/Tasks",
+                parentPageId: idOf("A"),
+                title: "Tasks",
+                schemaDone: true,
+                viewsDone: true,
+              },
+            }),
+          );
+          titleInNotion("할 일 목록");
+
+          const result = await retitled(true).pull();
+          expect(result).toMatchObject({ failed: [] });
+          expect(result.moved).toEqual([{ from: "A/Tasks", to: "A/할-일-목록", renamed: true }]);
+          expect(notes()).toContain("A/할-일-목록/행.md");
+          expect(bases()).toEqual(["A/할-일-목록/할 일 목록.base"]);
+          expect(await retitled(true).pull()).toMatchObject({ moved: [], failed: [] });
+        });
+
         it("끄면 · 볼트에서 따로 정한 폴더 이름이면 폴더를 두고 .base 이름만 따른다", async () => {
           await shelf();
           titleInNotion("할 일 목록");

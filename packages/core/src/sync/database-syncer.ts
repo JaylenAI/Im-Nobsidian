@@ -29,6 +29,7 @@ import {
 } from "./remote-deletion.js";
 import { diffRowProperties } from "./row-properties.js";
 import { extractAliases, noteTitle, retitledInNotion } from "./note-title.js";
+import { createdDatabaseTitle } from "./database-creator.js";
 import { computeHash } from "../utils/hash.js";
 import { sanitizeFileName } from "../utils/sanitize.js";
 import {
@@ -2014,7 +2015,10 @@ export class DatabaseSyncer {
    */
   private retitledFolderName(folder: string, databaseId: string, title: string): string | null {
     if (!this.config.sync.renameOnTitleChange || !title) return null;
-    const previous = this.baseFileInfo.get(databaseId)?.title;
+    // push 가 만든 DB 는 처음 받기 전에 `.base` 기록이 없다 — 만들 때의 제목과 견준다. 예전에는 견줄 것이 없어 폴더를
+    // 두고 안의 `.base` · 사이드카만 새 이름을 따랐다(2026-10-31 실측).
+    const previous =
+      this.baseFileInfo.get(databaseId)?.title ?? createdDatabaseTitle(this.stateDb, databaseId);
     if (!previous || previous === title) return null;
     const name = withoutPageIdSuffix(baseName(folder));
     for (const style of [databaseFolderName, sanitizeFileName]) {
