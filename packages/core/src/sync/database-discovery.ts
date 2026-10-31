@@ -30,6 +30,7 @@ import {
 } from "./discovered-databases.js";
 import { within } from "./note-relocation.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
+import { pathKey } from "../utils/path-key.js";
 
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
@@ -173,13 +174,17 @@ export class DatabaseDiscovery {
         changed = true;
         getLogger().info(`[Im-Nobsidian] 동명 DB 폴더 충돌 ${repairedCount}건 분리(F24)`);
       }
+      // 새로 등록하는 DB 는 대소문자만 다른 폴더도 피한다 — macOS · Windows 에서 한 폴더다(`pathKey`). 이미 적힌
+      // 폴더는 위에서 그대로 둔다 — Linux 에서 따로 있던 두 폴더를 옮기지 않는다.
+      const folderKeys = new Map([...folderOwner].map(([folder, id]) => [pathKey(folder), id]));
       const claimFolder = (config: { databaseId: string; localFolder: string }): void => {
         config.localFolder = resolveDbFolderPath(
           config.localFolder,
           config.databaseId,
-          (f) => folderOwner.get(f) ?? null,
+          (f) => folderOwner.get(f) ?? folderKeys.get(pathKey(f)) ?? null,
         );
         folderOwner.set(config.localFolder, config.databaseId);
+        folderKeys.set(pathKey(config.localFolder), config.databaseId);
       };
 
       // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
