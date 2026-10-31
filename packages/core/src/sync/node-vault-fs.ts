@@ -10,6 +10,11 @@ import { PathFilter, parseIgnorePatterns, toVaultPath } from "../utils/path-filt
 export interface PathFilterConfig {
   readonly include?: string[];
   readonly exclude?: string[];
+  /**
+   * Obsidian 에서만 쓰는 것(Canvas · Excalidraw · 템플릿 폴더)도 뺀다 — `true` 일 때만. 볼트를 여는 쪽(CLI · 플러그인)이
+   * `obsidianOnlyExcludes` 로 패턴을 더한다.
+   */
+  readonly excludeObsidianOnly?: boolean;
 }
 
 /**

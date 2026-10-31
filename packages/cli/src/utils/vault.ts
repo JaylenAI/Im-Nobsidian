@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import {
   ConfigManager,
@@ -9,6 +9,8 @@ import {
   findConnectionFolders,
   OBSIDIAN_CONFIG_DIR,
   IGNORE_FILE,
+  obsidianOnlyExcludes,
+  templateFolders,
   type OutsideVault,
   type PathFilterConfig,
   type VaultFS,
@@ -24,7 +26,10 @@ export async function nestedConnections(cwd: string): Promise<string[]> {
  * 그 폴더는 자기 설정 · Notion 으로 따로 동기화한다(`cd <폴더> && nobsi sync`).
  */
 export async function openVaultFs(cwd: string, paths: PathFilterConfig): Promise<VaultFS> {
-  const base = new NodeVaultFS(cwd, paths);
+  const base = new NodeVaultFS(cwd, {
+    ...paths,
+    exclude: [...(paths.exclude ?? []), ...obsidianOnlyPatterns(cwd, paths)],
+  });
   const nested = await nestedConnections(cwd);
   return nested.length === 0 ? base : new ScopedVaultFS(base, "", ["", ...nested]);
 }
@@ -44,9 +49,32 @@ export async function outsideVault(
     folder === "" &&
     (paths.include ?? []).length === 0 &&
     (paths.exclude ?? []).length === 0 &&
+    paths.excludeObsidianOnly !== true &&
     !existsSync(join(cwd, IGNORE_FILE)) &&
     (await nestedConnections(cwd)).length === 0;
   return whole ? undefined : { fs: new NodeVaultFS(root, {}, false), folder };
+}
+
+/**
+ * Obsidian 에서만 쓰는 것의 제외 패턴(`paths.excludeObsidianOnly`, D10) — 템플릿 폴더는 볼트의 Obsidian 설정에서 읽는다.
+ * 볼트(`.obsidian`)를 못 찾으면 Canvas · Excalidraw 만.
+ */
+function obsidianOnlyPatterns(cwd: string, paths: PathFilterConfig): string[] {
+  // 설정 파일을 읽으면 스키마가 기본값(켬)을 채운다 — 값이 없는 것은 그 밖에서 만든 경로 설정(볼트 전체 보기 등)이다.
+  if (paths.excludeObsidianOnly !== true) return [];
+  const root = vaultRoot(cwd);
+  if (root === null) return obsidianOnlyExcludes([], "");
+  const read = (file: string): string | null => {
+    try {
+      return readFileSync(join(root, OBSIDIAN_CONFIG_DIR, file), "utf-8");
+    } catch {
+      return null;
+    }
+  };
+  return obsidianOnlyExcludes(
+    templateFolders(read),
+    relative(root, cwd).split("\\").join("/").normalize("NFC"),
+  );
 }
 
 /** `.obsidian` 을 둔 볼트 맨 위 — 위로 올라가 찾는다. 없으면 null. */

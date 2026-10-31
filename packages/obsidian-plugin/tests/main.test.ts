@@ -81,6 +81,9 @@ vi.mock("@im-nobsidian/core", async () => ({
       PathFilter: core.PathFilter,
       IGNORE_FILE: core.IGNORE_FILE,
       parseIgnorePatterns: core.parseIgnorePatterns,
+      obsidianOnlyExcludes: core.obsidianOnlyExcludes,
+      TEMPLATE_FOLDER_SETTINGS: core.TEMPLATE_FOLDER_SETTINGS,
+      templateFolders: core.templateFolders,
       // 플러그인 기본 설정은 core 의 기본값을 읽는다 — 손으로 적은 사본이면 둘이 갈라져도 모른다
       DEFAULT_CONFIG: core.DEFAULT_CONFIG,
       DEFAULT_WATCH_DEBOUNCE_MS: core.DEFAULT_WATCH_DEBOUNCE_MS,
@@ -196,11 +199,13 @@ function pluginWithStateFile(readBinary: () => Promise<ArrayBuffer>) {
   internals.app = {
     secretStorage: keychain({ notion: "ntn_test" }),
     vault: {
+      configDir: ".obsidian",
       adapter: {
         basePath: vaultPath,
-        // 상태 DB 는 `readBinary` 가 준다 — 제외 파일(.im-nobsidian-ignore)만 볼트 폴더에서 찾는다.
+        // 상태 DB 는 `readBinary` 가 준다 — 제외 파일(.im-nobsidian-ignore) · Obsidian 설정만 볼트 폴더에서 찾는다.
         exists: async (path: string) =>
-          !path.endsWith(IGNORE_FILE) || existsSync(join(vaultPath, path)),
+          !(path.endsWith(IGNORE_FILE) || path.startsWith(".obsidian/")) ||
+          existsSync(join(vaultPath, path)),
         read: async (path: string) => readFileSync(join(vaultPath, path), "utf-8"),
         readBinary: () => {
           reads++;
@@ -1122,6 +1127,8 @@ describe("ImNobsidianPlugin", () => {
         { databaseId: "1fa13b18d38280cf9057e37e6e473e41", localFolder: "Tasks" },
       ];
       plugin.settings.databaseId = "35a13b18d38280cf9057e37e6e473e41";
+      // 연결 범위만 본다 — 기본 제외(Canvas · 템플릿)를 켜면 거르개가 한 겹 더 감싼다
+      plugin.settings.excludeObsidianOnly = false;
       onTestFinished(() => own.closeExtras());
       orchestratorArgs.splice(0);
 
@@ -1297,8 +1304,54 @@ describe("ImNobsidianPlugin", () => {
       expect(notion.databaseId).toBeUndefined();
     });
 
-    it("패턴도 제외 파일도 없으면 감싸지 않는다", async () => {
+    it("Canvas · Excalidraw · 템플릿 폴더는 기본으로 뺀다 — 템플릿 폴더는 Obsidian 설정에서 읽는다 (D10)", async () => {
+      const { plugin, internals, vaultPath } = pluginWithStateFile(() =>
+        Promise.resolve(new ArrayBuffer(0)),
+      );
+      const own = internals as unknown as Internals;
+      own.app.secretStorage = keychain({ notion: "ntn_test", work: "ntn_work" });
+      plugin.settings.connections = [
+        { folder: "Work", tokenSecret: "work", rootPageId: WORK_ROOT },
+      ];
+      mkdirSync(join(vaultPath, ".obsidian", "plugins", "templater-obsidian"), { recursive: true });
+      writeFileSync(join(vaultPath, ".obsidian", "templates.json"), '{"folder":"Templates"}');
+      writeFileSync(
+        join(vaultPath, ".obsidian", "plugins", "templater-obsidian", "data.json"),
+        '{"templates_folder":"Work/틀"}',
+      );
+      onTestFinished(() => own.closeExtras());
+      orchestratorArgs.splice(0);
+
+      await plugin.initOrchestrator();
+
+      const [rootFs, workFs] = orchestratorArgs.map((args) => args[3] as FilteredVaultFS);
+      for (const path of [
+        "a.canvas",
+        "x/그림.excalidraw.md",
+        "x/b.excalidraw",
+        "Templates/일지.md",
+      ]) {
+        expect(rootFs!.excludesPath(path)).toBe(true);
+      }
+      expect(rootFs!.excludesPath("Templates", "folder")).toBe(true);
+      expect(rootFs!.excludesPath("x/노트.md")).toBe(false);
+      // 폴더 연결은 그 폴더 기준 — 볼트 맨 위의 템플릿 폴더는 그 밖이다
+      expect(workFs!.excludesPath("틀/회의.md")).toBe(true);
+      expect(workFs!.excludesPath("Templates/일지.md")).toBe(false);
+      expect(workFs!.excludesPath("a.canvas")).toBe(true);
+
+      plugin.settings.excludeObsidianOnly = false;
+      orchestratorArgs.splice(0);
+      await plugin.initOrchestrator();
+      expect(orchestratorArgs[0]![0]).toMatchObject({ paths: { excludeObsidianOnly: false } });
+      expect((orchestratorArgs[1]![3] as FilteredVaultFS).excludesPath?.("a.canvas") ?? false).toBe(
+        false,
+      );
+    });
+
+    it("패턴도 제외 파일도 없고 기본 제외를 끄면 감싸지 않는다", async () => {
       const { plugin } = pluginWithStateFile(() => Promise.resolve(new ArrayBuffer(0)));
+      plugin.settings.excludeObsidianOnly = false;
       orchestratorArgs.splice(0);
 
       await plugin.initOrchestrator();

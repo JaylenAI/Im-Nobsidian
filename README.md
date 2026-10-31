@@ -344,6 +344,7 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
   "paths": {
     "include": ["**/*"], // glob patterns to include
     "exclude": [], // glob patterns to exclude
+    "excludeObsidianOnly": true, // skip Canvas, Excalidraw and the template folder (Templates / Templater setting)
     "attachments": "attachments", // image download folder
   },
 }
@@ -362,6 +363,9 @@ The plugin's settings tab has the same options as this file: **둘 다 바뀐 �
 
 The CLI also reads `.im-nobsidian-ignore` (one exclude pattern per line, `#` for comments) at the vault root. The Obsidian plugin applies the same patterns from **Settings → 동기화 범위** (sync scope, one pattern per line) and reads the ignore file in each connection folder. See [Configuration](docs/05-guides/CONFIGURATION.md#include--exclude) for the pattern rules.
 New Notion pages that would land in an excluded place aren't pulled — `pull` and `status --full` list them.
+Canvas (`.canvas`), Excalidraw (`.excalidraw.md`, `.excalidraw`) and the template folder set in Obsidian's Templates or
+Templater settings are skipped by default (`paths.excludeObsidianOnly`, plugin: **Obsidian 에서만 쓰는 것은 빼기**) — Notion
+can't draw or use them. Turning it on for an already-synced vault doesn't delete their Notion pages.
 
 ## Database Mode
 

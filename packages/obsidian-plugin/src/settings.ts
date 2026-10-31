@@ -273,6 +273,20 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
 
     new Setting(containerEl).setName("동기화 범위").setHeading();
     this.pathPatterns(containerEl, "", settings);
+    new Setting(containerEl)
+      .setName("Obsidian 에서만 쓰는 것은 빼기")
+      .setDesc(
+        "Canvas · Excalidraw 그림과 템플릿 폴더(템플릿 · Templater 설정의 폴더)를 동기화하지 않습니다 — Notion 에서 그릴 수도 " +
+          "쓸 수도 없습니다. 모든 연결에 같습니다. 이미 동기화한 것을 빼도 Notion 페이지는 지우지 않습니다.",
+      )
+      .addToggle((toggle) =>
+        toggle
+          .setValue(settings.excludeObsidianOnly ?? DEFAULT_CONFIG.paths.excludeObsidianOnly)
+          .onChange(async (value) => {
+            settings.excludeObsidianOnly = value;
+            await this.changeConnection();
+          }),
+      );
 
     this.databaseSettings(containerEl);
 

@@ -132,9 +132,21 @@ glob 패턴으로 동기화 범위를 제한합니다. 플러그인은 설정의
 - 포함 패턴은 파일에 댑니다 — 폴더를 걸러 내지 않습니다. 제외가 포함보다 이깁니다
 - 동기화하던 노트를 나중에 빼면 그 노트는 그대로 둡니다 — Notion 페이지를 지우지 않고, 「삭제됨」 으로 보이지 않으며,
   pull 이 받거나 되살리지 않습니다. 이미 받은 DB 의 폴더를 빼면 그 DB 를 받지 않습니다
-- Notion 에 새로 생긴 페이지는 빼도 받습니다 — 받기 전에는 볼트의 어느 자리에 놓일지 모릅니다
+- Notion 에 새로 생긴 페이지가 뺀 자리(폴더 · 이름)에 놓일 것이면 받지 않습니다 — `pull` · `status --full` 이 그 자리를
+  알립니다
 - 경로는 연결 폴더 기준입니다. 볼트 안 폴더 연결(ADR-038)은 그 폴더 기준으로 따로 적고, 볼트 연결의 패턴은 폴더
   연결에 대지 않습니다
+
+### excludeObsidianOnly
+
+- `true` (기본값) — Obsidian 에서만 쓰는 것을 동기화하지 않습니다. Notion 에서 그릴 수도 쓸 수도 없습니다
+  - Canvas(`*.canvas`) · Excalidraw(`*.excalidraw.md` · `*.excalidraw`) — 안은 JSON 입니다
+  - 템플릿 폴더 — Obsidian 의 「템플릿」(`.obsidian/templates.json` 의 `folder`) · Templater(`templates_folder`) 설정에서
+    읽습니다. 폴더 연결이 템플릿 폴더 자신이거나 그 안이면 빼지 않습니다
+- `false` — 다른 파일처럼 올립니다
+
+이미 동기화한 것을 빼도 위의 제외 패턴처럼 Notion 페이지는 지우지 않습니다. 플러그인은 설정의 「Obsidian 에서만 쓰는 것은
+빼기」 다(모든 연결에 같다).
 
 ### .im-nobsidian-ignore
 
