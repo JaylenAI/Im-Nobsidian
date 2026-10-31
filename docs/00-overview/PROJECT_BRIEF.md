@@ -83,7 +83,7 @@ Obsidian과 Notion을 동시에 사용하는 사람들은 두 도구 사이에�
 
 ### Won't Have (v1에서 제외)
 
-- 모바일 앱
+- 따로 만든 모바일 앱 — Obsidian 모바일의 플러그인은 v0.17.0 부터 돈다([ADR-053](../02-architecture/adr/053-mobile.md))
 - Dataview 쿼리 동기화
 - Notion 댓글 동기화
 - 실시간 협업 편집
