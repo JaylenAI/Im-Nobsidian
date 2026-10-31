@@ -15,9 +15,7 @@ export const DEFAULT_TITLE_PROPERTY = "Name";
 const DatabaseSyncSchema = z.object({
   databaseId: z.string(),
   localFolder: z.string(),
-  propertyMapping: z.record(z.string()).optional(),
   pullFilter: z.unknown().optional(),
-  titleProperty: z.string().default(DEFAULT_TITLE_PROPERTY),
 });
 
 export type DatabaseSyncConfig = z.infer<typeof DatabaseSyncSchema>;
@@ -105,14 +103,44 @@ const RETIRED_SETTINGS: readonly {
   },
 ];
 
+/** `notion.databases` 의 줄마다 있던, 아무것도 바꾸지 않던 설정 — 줄은 엔진이 제 손으로 읽지 않았다. */
+const RETIRED_DATABASE_SETTINGS: readonly {
+  readonly key: string;
+  readonly meant: (value: unknown) => boolean;
+  readonly note: string;
+}[] = [
+  {
+    key: "propertyMapping",
+    meant: (value) => value !== undefined,
+    note: "어디에도 쓰이지 않았습니다 — 속성은 frontmatter 의 이름 그대로 Notion 속성과 짝짓습니다",
+  },
+  {
+    key: "titleProperty",
+    meant: (value) => value !== undefined && value !== DEFAULT_TITLE_PROPERTY,
+    note: "어디에도 쓰이지 않았습니다 — 제목 속성은 Notion DB 의 title 속성을 읽어 찾습니다",
+  },
+];
+
 /** 설정 파일에 적힌, 이제 없는 설정 가운데 무엇을 바꾸려고 적은 것 — 「키: 까닭」. */
 export function retiredSettings(raw: unknown): string[] {
-  return RETIRED_SETTINGS.flatMap(({ path: [section, key], meant, note }) => {
-    const group = (raw as Record<string, unknown> | null)?.[section];
+  const root = raw as Record<string, unknown> | null;
+  const lines = RETIRED_SETTINGS.flatMap(({ path: [section, key], meant, note }) => {
+    const group = root?.[section];
     const value =
       group && typeof group === "object" ? (group as Record<string, unknown>)[key] : undefined;
     return meant(value) ? [`${section}.${key}: ${note}`] : [];
   });
+  const notion = root?.notion as Record<string, unknown> | undefined;
+  const databases = Array.isArray(notion?.databases) ? (notion.databases as unknown[]) : [];
+  databases.forEach((database, index) => {
+    if (!database || typeof database !== "object") return;
+    for (const { key, meant, note } of RETIRED_DATABASE_SETTINGS) {
+      if (meant((database as Record<string, unknown>)[key])) {
+        lines.push(`notion.databases[${index}].${key}: ${note}`);
+      }
+    }
+  });
+  return lines;
 }
 
 export const ConfigSchema = z.object({

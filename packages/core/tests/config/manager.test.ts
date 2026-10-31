@@ -104,12 +104,25 @@ describe("ConfigManager", () => {
 
         written.notion.workspaceId = "ws";
         written.conversion.frontmatterMapping = false;
+        // DB 줄의 제목 속성 기본값은 알리지 않고, 바꾼 것 · 속성 짝짓기는 알린다
+        written.notion.databases = [
+          { databaseId: "db-a", localFolder: "A", titleProperty: "Name" },
+          {
+            databaseId: "db-b",
+            localFolder: "B",
+            titleProperty: "이름",
+            propertyMapping: { a: "b" },
+          },
+        ];
         await writeFile(manager.configPath, JSON.stringify(written), "utf-8");
         const loaded = await new ConfigManager(tempDir).load();
         expect(loaded.notion).not.toHaveProperty("workspaceId");
+        expect(loaded.notion.databases[1]).toEqual({ databaseId: "db-b", localFolder: "B" });
         expect(warn.mock.calls.map(([line]) => line)).toEqual([
           expect.stringContaining("notion.workspaceId"),
           expect.stringContaining("conversion.frontmatterMapping"),
+          expect.stringContaining("notion.databases[1].propertyMapping"),
+          expect.stringContaining("notion.databases[1].titleProperty"),
         ]);
       } finally {
         setLogger(previous);
