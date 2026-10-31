@@ -21,6 +21,7 @@ import type {
 import type { Config } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
+import { checkNotionAccess, type NotionAccessCheck } from "../notion/access-check.js";
 import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { ImageHandler } from "./image-handler.js";
@@ -1682,6 +1683,17 @@ export class SyncOrchestrator {
     const hints = this.planner.renameHints();
     if (isEmptyRenameHints(hints)) return;
     this.planner.writeRenameHints(forgetRenameHint(hints, path));
+  }
+
+  /**
+   * 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 Notion 에 묻는다 — 아무것도 쓰지 않아 동기화와 겹쳐도 된다.
+   */
+  checkNotionAccess(): Promise<NotionAccessCheck> {
+    const { rootPageId, parentMode, databaseId } = this.config.notion;
+    return checkNotionAccess(this.notionClient, {
+      rootPageId,
+      ...(parentMode === "database" && databaseId ? { databaseId } : {}),
+    });
   }
 
   /**
