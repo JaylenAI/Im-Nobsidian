@@ -24,7 +24,8 @@ describe("읽기 전용 속성 편집 경고", () => {
   let vault: MemoryVault;
   let notion: ReturnType<typeof memoryNotion>;
   let previous: Logger;
-  const warn = vi.fn();
+  /** 읽기 전용 속성 로그 — 결과(`readOnlySkipped`)가 화면에 알리므로 정보 로그다(경고로 내면 CLI 가 두 번 말했다). */
+  const logged = vi.fn();
 
   const build = (): SyncOrchestrator =>
     new SyncOrchestrator(
@@ -52,8 +53,8 @@ describe("읽기 전용 속성 편집 경고", () => {
       Score: { id: "score", type: "formula" },
     });
     previous = getLogger();
-    warn.mockClear();
-    setLogger({ ...previous, warn, info: () => {} });
+    logged.mockClear();
+    setLogger({ ...previous, warn: () => {}, info: logged });
   });
 
   afterEach(async () => {
@@ -86,7 +87,7 @@ describe("읽기 전용 속성 편집 경고", () => {
 
     expect(result).toMatchObject({ updated: 1, failed: [] });
     expect(result.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
-    expect(warn).toHaveBeenCalledWith(
+    expect(logged).toHaveBeenCalledWith(
       expect.stringContaining("다음 pull 이 Notion 값으로 되돌린다"),
     );
     const sent = notion.pages.get(db.getByPath(path)!.notionPageId!)!;
@@ -137,7 +138,7 @@ describe("읽기 전용 속성 편집 경고", () => {
 
     expect(result).toMatchObject({ updated: 1, failed: [] });
     expect(result.readOnlySkipped).toEqual([]);
-    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("읽기 전용"));
+    expect(logged).not.toHaveBeenCalledWith(expect.stringContaining("읽기 전용"));
   });
 
   it("dry-run 도 올리지 않을 읽기 전용 속성을 미리 알린다 — 보내지는 않는다", async () => {

@@ -1,4 +1,4 @@
-import { setLogger } from "@im-nobsidian/core";
+import { applyLogLevel, currentLogLevel } from "./log-level.js";
 import type {
   DatabaseMove,
   FailedOperation,
@@ -22,8 +22,7 @@ import type {
  * 계약: stdout 에는 JSON 한 줄만 쓴다. 코어 로그는 전부 stderr 로 돌린다.
  */
 export function enableJsonMode(): void {
-  const toStderr = (message: string, ...args: unknown[]): void => console.error(message, ...args);
-  setLogger({ warn: toStderr, error: toStderr, info: toStderr, debug: () => {} });
+  applyLogLevel(currentLogLevel(), (message, ...args) => console.error(message, ...args));
 }
 
 export interface PushJson {

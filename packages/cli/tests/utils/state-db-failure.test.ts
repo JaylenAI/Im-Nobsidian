@@ -5,8 +5,13 @@
  * 어디에도 없었다. 플러그인이 같은 볼트를 쓰는 중(`StateDbLockedError`)도 같다. 사용자가 보는 문구를 그대로 본다.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
-import { SavedStateDbError, StateDbLockedError } from "@im-nobsidian/core";
-import { describeFailure, reportStateDbFailure } from "../../src/utils/state-db-failure.js";
+import {
+  SavedStateDbError,
+  StateDbLockedError,
+  SyncBusyError,
+  UnlinkedVaultError,
+} from "@im-nobsidian/core";
+import { describeFailure, reportUserFailure } from "../../src/utils/state-db-failure.js";
 
 const GUIDED =
   "저장된 상태 DB 파일에 동기화 기록이 없음 (0바이트) — 볼트 폴더의 .im-nobsidian/sync.db 를 사본으로 바꾸거나 " +
@@ -52,12 +57,12 @@ describe("describeFailure", () => {
   });
 });
 
-describe("reportStateDbFailure", () => {
+describe("reportUserFailure", () => {
   it("저장된 상태 DB 파일 탓이면 이유와 치우는 법만 보이고 1 로 끝낸다", () => {
     const print = vi.spyOn(console, "error").mockImplementation(() => {});
     const proc = { exitCode: undefined as number | undefined, exit: vi.fn() };
 
-    reportStateDbFailure(SavedStateDbError.noTables(0), proc);
+    reportUserFailure(SavedStateDbError.noTables(0), proc);
 
     expect(print.mock.calls).toEqual([[`오류: ${GUIDED}`]]);
     expect(proc.exitCode).toBe(1);
@@ -67,10 +72,20 @@ describe("reportStateDbFailure", () => {
     const print = vi.spyOn(console, "error").mockImplementation(() => {});
     const proc = { exitCode: undefined as number | undefined, exit: vi.fn() };
 
-    reportStateDbFailure(pluginHolds(), proc);
+    reportUserFailure(pluginHolds(), proc);
 
     expect(print.mock.calls).toEqual([[`오류: ${PLUGIN_HOLDS}`]]);
     expect(proc.exitCode).toBe(1);
+  });
+
+  it("상태 기록을 잃은 볼트의 push 거절 · 도는 작업도 말만 보인다 — 「먼저 pull 하세요」 가 스택에 묻히지 않는다", () => {
+    const print = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const failure of [new UnlinkedVaultError(["a.md"]), new SyncBusyError("pull", "push")]) {
+      const proc = { exitCode: undefined as number | undefined, exit: vi.fn() };
+      reportUserFailure(failure, proc);
+      expect(proc.exitCode).toBe(1);
+      expect(print).toHaveBeenLastCalledWith(`오류: ${failure.message}`);
+    }
   });
 
   it("다른 실패는 그대로 다시 던진다 — 지금까지처럼 Node 가 보이고 1 로 끝난다", () => {
@@ -80,7 +95,7 @@ describe("reportStateDbFailure", () => {
 
     const thrown = (() => {
       try {
-        reportStateDbFailure(failure, proc);
+        reportUserFailure(failure, proc);
       } catch (error) {
         return error;
       }
