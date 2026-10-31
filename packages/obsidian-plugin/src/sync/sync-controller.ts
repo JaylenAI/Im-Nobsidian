@@ -11,6 +11,7 @@ import {
 import { NOTICE_PREFIX } from "../constants.js";
 import type {
   SyncOrchestrator,
+  NotionAccessCheck,
   GatedOperation,
   ProgressCallback,
   ProgressItem,
@@ -509,6 +510,11 @@ export class SyncController {
         );
       }
     });
+  }
+
+  /** 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 — 아무것도 쓰지 않아 도는 동기화를 기다리지 않는다. */
+  checkNotionAccess(): Promise<NotionAccessCheck> {
+    return this.orchestrator.checkNotionAccess();
   }
 
   /**

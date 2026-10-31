@@ -12,7 +12,14 @@ import {
   notionIdFromInput,
   sectionLinesWithHeadingMarkers,
 } from "@im-nobsidian/core";
-import type { Config, Conflict, Logger, LocalChange, RemoteChange } from "@im-nobsidian/core";
+import type {
+  Config,
+  Conflict,
+  Logger,
+  LocalChange,
+  NotionAccessCheck,
+  RemoteChange,
+} from "@im-nobsidian/core";
 import { DEFAULT_WATCH_DEBOUNCE_MS, StateDbUnavailableError } from "@im-nobsidian/core";
 import { NOTICE_PREFIX, TOKEN_SECRET_ID, withoutNoticePrefix } from "./constants.js";
 import { decorateRendered } from "./design/render-dom.js";
@@ -514,6 +521,26 @@ export default class ImNobsidianPlugin extends Plugin {
   connectionStatus(): { readonly ready: boolean; readonly message: string } {
     if (this.syncController) return { ready: true, message: "준비됨 — 동기화할 수 있습니다." };
     return { ready: false, message: withoutNoticePrefix(this.notReadyReason()) };
+  }
+
+  /**
+   * Notion 에 물어 토큰 · 루트 페이지(DB 모드면 DB)를 읽을 수 있는지 — 설정 화면의 「Notion 확인」. 열지 못한 연결은
+   * 묻지 않고 열지 못한 까닭을 준다. `folder` 가 없으면 볼트 전체 연결.
+   */
+  async checkNotionAccess(folder?: string): Promise<NotionAccessCheck> {
+    const engine =
+      folder === undefined ? this.primary : this.extras.find((e) => e.folder === folder);
+    if (!engine?.controller) {
+      const { message } =
+        folder === undefined ? this.connectionStatus() : this.folderConnectionStatus(folder);
+      return { ok: false, lines: [message] };
+    }
+    try {
+      return await engine.controller.checkNotionAccess();
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      return { ok: false, lines: [`확인하지 못했습니다 — ${reason}`] };
+    }
   }
 
   /** 폴더 연결 하나의 상태 — 설정 화면이 연결마다 보인다. */

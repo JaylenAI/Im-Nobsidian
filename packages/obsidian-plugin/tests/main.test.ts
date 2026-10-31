@@ -111,6 +111,7 @@ vi.mock("@im-nobsidian/core", async () => ({
       linkCount: 0,
     });
     sync = vi.fn().mockResolvedValue({ push: {}, pull: {}, conflicts: [], duration: 0 });
+    checkNotionAccess = vi.fn().mockResolvedValue({ ok: true, lines: ["토큰이 맞습니다."] });
     status = vi.fn().mockResolvedValue({
       localChanges: [],
       remoteChanges: [],
@@ -996,6 +997,11 @@ describe("ImNobsidianPlugin", () => {
         ready: false,
         message: internals.initFailure,
       });
+      // 열지 못한 연결은 Notion 에 묻지 않고 열지 못한 까닭을 준다
+      expect(await plugin.checkNotionAccess()).toEqual({
+        ok: false,
+        lines: [internals.initFailure],
+      });
     });
   });
 
@@ -1015,6 +1021,8 @@ describe("ImNobsidianPlugin", () => {
       ready: true,
       message: "준비됨 — 동기화할 수 있습니다.",
     });
+    // 연 연결은 그 엔진으로 Notion 에 묻는다
+    expect(await plugin.checkNotionAccess()).toEqual({ ok: true, lines: ["토큰이 맞습니다."] });
   });
 
   it("초기화가 되면 자동 동기화 주기를 걸고, 연결 설정을 비우면 옛 연결을 닫고 주기를 푼다", async () => {

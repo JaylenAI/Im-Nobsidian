@@ -351,7 +351,8 @@ After `nobsi init`, config lives in `.im-nobsidian/config.json`:
 
 The plugin also has **Sync 미리 보기 (반영하지 않음)** (like `nobsi sync --dry-run`: what would be pulled, pushed, left as a
 conflict or refused) and **빠짐없이 받았는지 확인** (like `nobsi verify`) in the command palette, and **동기화 기록** for this session's
-results and engine warnings.
+results and engine warnings. **Settings → 연결 상태 → Notion 확인** asks Notion whether the token is valid and the root page
+(or the DB in DB mode) is shared with the integration, and says what to fix — before the first sync finds out.
 
 The plugin's settings tab has the same options as this file: **둘 다 바뀐 노트** (`conflictStrategy`), **지운 것을 반대쪽에서도
 지우기** (`deleteSync`, on by default in the plugin), **첨부 파일 올리기** (`syncFiles`), **DB 정의가 있는 폴더를 Notion DB 로

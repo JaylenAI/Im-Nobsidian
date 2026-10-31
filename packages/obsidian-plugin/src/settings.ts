@@ -10,6 +10,7 @@ import {
   parseIgnorePatterns,
   systemTimeZone,
 } from "@im-nobsidian/core";
+import type { NotionAccessCheck } from "@im-nobsidian/core";
 import { AUTO_SYNC_INTERVAL_MINUTES, FULL_RECONCILE_INTERVAL_MINUTES } from "./constants.js";
 import { CONFLICT_STRATEGY_TEXT } from "./conflict-choices.js";
 import type ImNobsidianPlugin from "./main.js";
@@ -377,7 +378,29 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
         show();
       }),
     );
+    this.accessButton(row, () => this.plugin.checkNotionAccess());
     this.refreshConnection = show;
+  }
+
+  /**
+   * 「Notion 확인」 — 토큰 · 루트 페이지를 Notion 에 물어 그 줄의 설명에 적는다. 바꾼 연결 설정이 있으면 먼저 건다 —
+   * 옛 설정을 확인하면 고친 것이 맞는지 알 수 없다.
+   */
+  private accessButton(row: Setting, check: () => Promise<NotionAccessCheck>): void {
+    row.addButton((button) =>
+      button.setButtonText("Notion 확인").onClick(async () => {
+        button.setDisabled(true);
+        if (this.connectionChanged) {
+          this.connectionChanged = false;
+          await this.plugin.initOrchestrator();
+        }
+        row.setDesc("Notion 에 묻는 중...");
+        const { ok, lines } = await check();
+        button.setDisabled(false);
+        row.setDesc(lines.join(" "));
+        row.descEl.toggleClass("mod-warning", !ok);
+      }),
+    );
   }
 
   /** 연결 상태 줄을 다시 그린다 — 연결 설정을 바꾸면 「닫으면 걸립니다」 로 바뀐다. */
@@ -468,6 +491,7 @@ export class ImNobsidianSettingTab extends PluginSettingTab {
         this.display();
       });
     });
+    this.accessButton(folderRow, () => this.plugin.checkNotionAccess(connection.folder));
     folderRow.addButton((button) =>
       button
         .setButtonText("지우기")

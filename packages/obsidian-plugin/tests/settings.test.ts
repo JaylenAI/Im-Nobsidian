@@ -43,6 +43,7 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     startAutoSync: ReturnType<typeof vi.fn>;
     stopAutoSync: ReturnType<typeof vi.fn>;
     connectionStatus: ReturnType<typeof vi.fn>;
+    checkNotionAccess: ReturnType<typeof vi.fn>;
   };
 
   beforeEach(() => {
@@ -62,6 +63,10 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       startAutoSync: vi.fn(),
       stopAutoSync: vi.fn(),
       connectionStatus: vi.fn(() => ({ ready: true, message: "준비됨 — 동기화할 수 있습니다." })),
+      checkNotionAccess: vi.fn(async () => ({
+        ok: true,
+        lines: ["토큰이 맞습니다.", "루트 페이지 「홈」 — 읽을 수 있습니다."],
+      })),
       knownConnectionFolders: [""],
       // 볼트 연결이 「개인」 폴더의 노트 3개를 동기화하고 있다
       trackedNotesUnder: vi.fn((folder: string) => (folder === "개인" ? 3 : 0)),
@@ -85,6 +90,13 @@ describe("ImNobsidianSettingTab (U-03)", () => {
       return found;
     };
     return { row, control: (name) => row(name).controls[0]! };
+  }
+
+  /** 줄의 단추를 글자로 찾는다. */
+  function button(row: Rows[number], text: string): StubControl {
+    const found = row.controls.find((c) => c.buttonText === text);
+    if (!found) throw new Error(`단추 없음: ${text}`);
+    return found;
   }
 
   it("토큰은 키체인 고르개다 — 글자 칸에 토큰을 두지 않는다", () => {
@@ -218,6 +230,29 @@ describe("ImNobsidianSettingTab (U-03)", () => {
     // 다시 연결로 이미 걸었으니 닫을 때 또 연결하지 않는다
     settingTab.hide();
     expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+  });
+
+  it("Notion 확인은 바꾼 연결 설정을 먼저 걸고 Notion 에 물은 것을 그 줄에 적는다", async () => {
+    const { row, control } = display();
+    await control("Notion 토큰").change("new-token");
+    await button(row("연결 상태"), "Notion 확인").click();
+    expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+    expect(plugin.checkNotionAccess).toHaveBeenCalledWith();
+    expect(row("연결 상태").desc).toBe("토큰이 맞습니다. 루트 페이지 「홈」 — 읽을 수 있습니다.");
+    expect(row("연결 상태").descEl.classes.has("mod-warning")).toBe(false);
+    expect(button(row("연결 상태"), "Notion 확인").disabled).toBe(false);
+
+    // 바꾼 것이 없으면 다시 걸지 않고 묻기만 한다
+    plugin.checkNotionAccess.mockResolvedValueOnce({
+      ok: false,
+      lines: [
+        "토큰이 맞습니다.",
+        "루트 페이지를 읽지 못했습니다 — 없거나 이 통합에 공유하지 않았습니다.",
+      ],
+    });
+    await button(row("연결 상태"), "Notion 확인").click();
+    expect(plugin.initOrchestrator).toHaveBeenCalledTimes(1);
+    expect(row("연결 상태").descEl.classes.has("mod-warning")).toBe(true);
   });
 
   it("동기화 범위 — 포함 · 제외 패턴은 한 줄에 하나, 빈 줄 · 주석은 빼고 창을 닫을 때 다시 연결한다", async () => {
@@ -444,8 +479,21 @@ describe("ImNobsidianSettingTab (U-03)", () => {
         { folder: "Work/Team", tokenSecret: "b", rootPageId: "" },
       ];
       const { row } = display();
-      await row("폴더 연결 1").controls[1]!.click();
+      await button(row("폴더 연결 1"), "지우기").click();
       expect(plugin.settings.connections.map((c) => c.folder)).toEqual(["Work/Team"]);
+    });
+
+    it("폴더 연결마다 Notion 확인 — 그 연결의 토큰 · 루트 페이지를 묻는다", async () => {
+      plugin.settings.connections = [{ folder: "Work", tokenSecret: "a", rootPageId: "r" }];
+      plugin.checkNotionAccess.mockResolvedValue({
+        ok: false,
+        lines: ["토큰이 맞지 않습니다 — 다시 복사해 넣으세요."],
+      });
+      const { row } = display();
+      await button(row("폴더 연결 1"), "Notion 확인").click();
+      expect(plugin.checkNotionAccess).toHaveBeenCalledWith("Work");
+      expect(row("폴더 연결 1").desc).toBe("토큰이 맞지 않습니다 — 다시 복사해 넣으세요.");
+      expect(row("폴더 연결 1").descEl.classes.has("mod-warning")).toBe(true);
     });
 
     it("CLI 로 만든 연결 폴더는 플러그인이 비켜 간다고 알린다", () => {

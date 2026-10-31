@@ -109,8 +109,14 @@ export type {
 } from "./state/index.js";
 
 // Notion
-export { NotionClient, NotionBlockBuilder, PropertyMapper } from "./notion/index.js";
+export {
+  NotionClient,
+  NotionBlockBuilder,
+  PropertyMapper,
+  checkNotionAccess,
+} from "./notion/index.js";
 export type {
+  NotionAccessCheck,
   NotionClientOptions,
   NotionBlock,
   NotionRichText,
