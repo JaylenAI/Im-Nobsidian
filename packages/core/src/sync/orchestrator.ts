@@ -66,6 +66,7 @@ import {
   PULL_IN_PROGRESS_META_KEY,
   PUSH_IN_PROGRESS_META_KEY,
 } from "./interrupted-sync.js";
+import { assertVaultLinked } from "./lost-state-guard.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { DatabaseDiscovery } from "./database-discovery.js";
 import { FolderPlacement } from "./folder-placement.js";
@@ -395,9 +396,14 @@ export class SyncOrchestrator {
    * @param mergedByPull sync dry-run 만 — 앞선 pull dry-run 이 합칠 노트. 실제 sync 는 합친 뒤 원격을 본 것으로
    *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
    */
+  /**
+   * @param relinkedByPull 같은 sync 의 dry-run pull 이 다시 이을 것이라고 미리 봤다 — 실제 sync 는 받으며 먼저 잇고 올리므로
+   *   상태 기록이 비었어도 막지 않는다({@link assertVaultLinked}).
+   */
   private async executePush(
     options?: PushOptions,
     mergedByPull: ReadonlySet<string> = new Set(),
+    relinkedByPull = false,
   ): Promise<PushResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
@@ -438,9 +444,25 @@ export class SyncOrchestrator {
     const eligible = options?.force ? changes : changes.filter((c) => !conflictPaths.has(c.path));
 
     const excludeSet = options?.excludePaths ? new Set(options.excludePaths) : null;
-    const filtered = (
+    const scoped = (
       options?.paths ? eligible.filter((c) => inAnyPathScope(c.path, options.paths)) : eligible
     ).filter((c) => !excludeSet || !excludeSet.has(c.path));
+    // 상태 DB 를 잃었으면 올리기 전에 받아 다시 잇게 한다 — 그대로 올리면 모든 노트 · DB 를 또 만든다(P7). 확인하지 못한
+    // 노트는 그것만 실패로 남긴다.
+    const unverified = relinkedByPull
+      ? new Map<string, string>()
+      : await assertVaultLinked(
+          this.config,
+          this.stateDb,
+          this.notionClient,
+          scoped.filter((c) => c.type === "created").map((c) => c.path),
+        );
+    const filtered = scoped.filter((c) => !unverified.has(c.path));
+    const unverifiedFailures: FailedOperation[] = [...unverified].map(([path, error]) => ({
+      path,
+      operation: "create",
+      error,
+    }));
     // 범위를 좁힌 push 는 그 범위 안의 폴더만 옮긴다. 노트의 부모는 폴더 레코드의 페이지라, 폴더
     // 페이지를 옮기기 전에도 노트는 맞는 자리로 간다.
     const folderMoves = this.planner
@@ -499,7 +521,13 @@ export class SyncOrchestrator {
         updated: 0,
         deleted: 0,
         moved: 0,
-        failed: [...sidecarPlan.refused, ...edited.failed, ...viewPlan.refused, ...viewed.failed],
+        failed: [
+          ...unverifiedFailures,
+          ...sidecarPlan.refused,
+          ...edited.failed,
+          ...viewPlan.refused,
+          ...viewed.failed,
+        ],
         duration: Date.now() - startTime,
         ...(edited.applied.length > 0 ? { schemaEdits: edited.applied } : {}),
         ...(viewed.applied.length > 0 ? { viewEdits: viewed.applied } : {}),
@@ -583,7 +611,12 @@ export class SyncOrchestrator {
         updated: count("update") - convertedUpdates,
         deleted: count("delete"),
         moved: count("move") + preparedConversions.length + movableDatabases.length,
-        failed: [...refusedFailures, ...refusedDatabaseMoves, ...remoteRefusals],
+        failed: [
+          ...unverifiedFailures,
+          ...refusedFailures,
+          ...refusedDatabaseMoves,
+          ...remoteRefusals,
+        ],
         duration: Date.now() - startTime,
         ...(unsentDeletions.length > 0 ? { unsentDeletions } : {}),
         ...(readOnlySkipped.length > 0 ? { readOnlySkipped } : {}),
@@ -601,7 +634,7 @@ export class SyncOrchestrator {
     await this.observation.resolveBotUserId();
 
     const counts = { created: 0, updated: 0, deleted: 0, moved: 0 };
-    const failed: FailedOperation[] = [...refusedFailures];
+    const failed: FailedOperation[] = [...unverifiedFailures, ...refusedFailures];
     const edited = await this.sidecarEdits.apply(sidecarPlan.planned);
     failed.push(...edited.failed);
     const viewed = await this.viewEdits.apply(viewPlan.planned);
@@ -954,6 +987,7 @@ export class SyncOrchestrator {
     const startTime = Date.now();
     this.assertConnectionScope();
     this.puller.beginPull();
+    this.databaseSyncer.beginPull(this.puller.unlinkedVaultAtStart);
     this.rowSchemas.clear();
     this.databaseSyncer.takeRestoredRows(); // 지난 실행이 중간에 끝나 남긴 것은 버린다
     this.databaseSyncer.takeMergedRows();
@@ -1010,6 +1044,8 @@ export class SyncOrchestrator {
     const restoredPaths: string[] = [];
     // merge 전략이 받은 원격에 로컬 편집을 합친 노트 — 행은 마감에서 DB 동기화가 모은 것을 더한다.
     const mergedPaths: string[] = [];
+    // 상태 기록에 없던 같은 자리의 노트를 다시 이은 것(P7) — 행은 마감에서 DB 동기화가 모은 것을 더한다.
+    const relinkedPaths: string[] = [];
     // 동기화에서 뺀 자리에 놓일 새 원격 페이지 — 받지 않고 알린다.
     const excluded: string[] = [];
     const failed: FailedOperation[] = [];
@@ -1075,6 +1111,7 @@ export class SyncOrchestrator {
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());
       mergedPaths.push(...this.databaseSyncer.takeMergedRows());
+      relinkedPaths.push(...this.databaseSyncer.takeRelinkedRows());
       const schemaFollowed = this.databaseSyncer.takeSchemaFollowed();
       const heldSidecars = this.databaseSyncer.takeHeldSidecars();
       const heldBases = this.databaseSyncer.takeHeldBases();
@@ -1112,6 +1149,7 @@ export class SyncOrchestrator {
         restored,
         ...(restoredPaths.length > 0 ? { restoredPaths } : {}),
         ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
+        ...(relinkedPaths.length > 0 ? { relinkedPaths } : {}),
         ...(schemaFollowed.length > 0 ? { schemaFollowed } : {}),
         ...(heldSidecars.length > 0 ? { heldSidecars } : {}),
         ...(heldBases.length > 0 ? { heldBases } : {}),
@@ -1208,6 +1246,9 @@ export class SyncOrchestrator {
         moved: [...relocated.moved, ...(plan.moved ?? [])],
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
+        ...(this.puller.unlinkedVaultAtStart && plan.created > 0
+          ? { relinkPending: true as const }
+          : {}),
       };
     }
 
@@ -1317,6 +1358,15 @@ export class SyncOrchestrator {
           if (created.excluded) {
             excluded.push(created.path);
             return { path: created.path, unchanged: true };
+          }
+          if (created.folderExisted) return { path: created.path, unchanged: true };
+          if (created.relinked) {
+            // 새로 받은 것이 아니다 — 이미 있던 노트를 이었다. 충돌이면 노트는 그대로다.
+            relinkedPaths.push(created.path);
+            if (created.conflict) conflicts.push(created.conflict);
+            if (!created.written) return { path: created.path, unchanged: true };
+            writtenPaths.push(created.path);
+            return { path: created.path, unchanged: false };
           }
           writtenPaths.push(created.path);
           counts.created++;
@@ -1479,6 +1529,7 @@ export class SyncOrchestrator {
         excludePaths: [...pullResult.writtenPaths, ...conflicted],
       },
       new Set(options?.dryRun ? (pullResult.mergedPaths ?? []) : []),
+      pullResult.relinkPending === true,
     );
 
     return {

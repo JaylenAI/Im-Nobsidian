@@ -22,6 +22,7 @@ import {
   remoteScanLines,
   restoredLines,
   mergedLines,
+  relinkedLines,
   plannedConflictLines,
   schemaFollowedLines,
   heldSidecarLines,
@@ -125,6 +126,9 @@ export const pullCommand = new Command("pull")
       for (const line of heldSidecarLines(result.heldSidecars)) console.log(`  ${line}`);
       for (const line of heldBaseLines(result.heldBases)) console.log(`  ${line}`);
       for (const line of restoredLines(result.restoredPaths, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of relinkedLines(result.relinkedPaths, result.relinkPending)) {
         console.log(`  ${line}`);
       }
       for (const line of mergedLines(result.mergedPaths, "push", options.dryRun)) {

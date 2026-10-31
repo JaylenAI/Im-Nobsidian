@@ -11,6 +11,7 @@ import {
   readOnlySkipLines,
   restoredLines,
   mergedLines,
+  relinkedLines,
   plannedConflictLines,
   schemaFollowedLines,
   unsentDeletionLines,
@@ -132,6 +133,9 @@ export const syncCommand = new Command("sync")
         console.log(`  ${line}`);
       for (const line of schemaFollowedLines(pullResult.schemaFollowed)) console.log(`  ${line}`);
       for (const line of restoredLines(pullResult.restoredPaths, options.dryRun)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of relinkedLines(pullResult.relinkedPaths, pullResult.relinkPending)) {
         console.log(`  ${line}`);
       }
       for (const line of mergedLines(pullResult.mergedPaths, "pushed", options.dryRun)) {

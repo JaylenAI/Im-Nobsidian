@@ -62,6 +62,10 @@ export interface PullJson {
   readonly restoredPaths: readonly string[];
   /** 받은 원격에 로컬 편집을 합친 노트 · 행(merge 전략) — `updated` 에도 센다. */
   readonly mergedPaths: readonly string[];
+  /** 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — `created` 에 세지 않는다. */
+  readonly relinkedPaths: readonly string[];
+  /** dry-run 만 — 받으면 같은 자리의 노트를 다시 잇는다. 미리 보기는 그 노트들도 `created` 로 센다. */
+  readonly relinkPending: boolean;
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). */
   readonly schemaFollowed: readonly SchemaFollowed[];
   /** 볼트에서 고쳐 덮어쓰지 않은 사이드카(ADR-045). */
@@ -131,6 +135,8 @@ export function pullJson(result: PullResult): PullJson {
     restored: result.restored,
     restoredPaths: result.restoredPaths ?? [],
     mergedPaths: result.mergedPaths ?? [],
+    relinkedPaths: result.relinkedPaths ?? [],
+    relinkPending: result.relinkPending ?? false,
     schemaFollowed: result.schemaFollowed ?? [],
     heldSidecars: result.heldSidecars ?? [],
     heldBases: result.heldBases ?? [],

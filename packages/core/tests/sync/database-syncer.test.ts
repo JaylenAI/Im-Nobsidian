@@ -510,6 +510,7 @@ describe("DatabaseSyncer", () => {
         expect.stringContaining("prod-files-secure"),
         "page-1",
         mdCall[0],
+        undefined, // 다시 잇는 행이 아니다 — 노트 글로 미디어를 되찾지 않는다(P7)
       );
       expect(mockImageHandler.downloadAllImages).toHaveBeenCalledWith(
         "![[assets/a.png|300]]",

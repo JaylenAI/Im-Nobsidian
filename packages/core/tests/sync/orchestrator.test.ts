@@ -466,9 +466,10 @@ describe("SyncOrchestrator", () => {
     });
 
     it("앞선 요청이 적용돼 있었으면 그 페이지를 입양하고 새로 만들지 않는다", async () => {
-      // 루트의 자식에만 고아가 있다 — 고아 자신은 자식이 없는 빈 페이지다.
+      // 루트의 자식에만 고아가 있다 — 고아 자신은 자식이 없는 빈 페이지다. 고아는 앞선 생성 요청이 남긴 것이다(그 전에
+      // 루트를 읽으면 없다 — 상태 기록이 빈 볼트의 겹침 확인, ADR-049).
       mockNotionClient.fetchAllChildren.mockImplementation(async (parentId: string) =>
-        parentId === "root-page-id"
+        parentId === "root-page-id" && mockNotionClient.createPageWithMarkdown.mock.calls.length > 0
           ? [{ id: "orphan-page", type: "child_page", child_page: { title: "note" } }]
           : [],
       );
@@ -532,7 +533,11 @@ describe("SyncOrchestrator", () => {
     });
 
     it("부모 목록을 읽지 못하면 그 항목만 실패로 남긴다 — 새 페이지를 만들지 않는다", async () => {
-      mockNotionClient.fetchAllChildren.mockRejectedValue(new Error("HTTP 502"));
+      // 생성 요청을 보낸 뒤부터 읽지 못한다 — 그 전의 겹침 확인(ADR-049)은 읽는다.
+      mockNotionClient.fetchAllChildren.mockImplementation(async () => {
+        if (mockNotionClient.createPageWithMarkdown.mock.calls.length === 0) return [];
+        throw new Error("HTTP 502");
+      });
 
       const result = await orchestrator.push();
 

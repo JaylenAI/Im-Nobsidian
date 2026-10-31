@@ -47,6 +47,41 @@ const NOTION_ID_WIKILINK_RE = /\[\[notion:([a-f0-9]{32}|[a-f0-9-]{36})(?:(\\?\|)
 
 const compactId = (id: string): string => id.replace(/-/g, "");
 
+// 아직 풀지 못한 Notion 링크 자리 — 위키링크형 `[[notion:<id>|별칭]]` 과 frontmatter relation 의 원시 id.
+const PENDING_LINK_RE = new RegExp(
+  `${NOTION_ID_WIKILINK_RE.source}|\\b([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}|[a-f0-9]{32})\\b`,
+  "g",
+);
+
+/**
+ * 받은 글이 노트와 같은가 — 아직 풀지 못한 Notion 링크 자리는 노트의 같은 자리 링크와 같다고 본다(P7, ADR-049).
+ *
+ * 상태 DB 를 잃은 볼트를 다시 이을 때 링크 대상 페이지가 아직 이어지지 않았으면 받은 글의 링크가 `[[notion:<id>]]` ·
+ * 원시 id 로 남는다 — 링크 패스가 끝에 푼다. 그 전에 견주면 링크만 다른 노트가 모두 충돌이 됐다(실측: `[[b]]` 를 가진
+ * `a.md` · 되돌아가는 링크를 가진 `b.md`). 그 자리에는 노트의 위키링크 · 마크다운 링크만 받는다. 별칭이 있으면 노트
+ * 링크의 대상이나 별칭이 그 별칭과 같아야 한다 — 다른 글 · 다른 이름의 링크는 여전히 다르다.
+ */
+export function sameAsPendingLinks(local: string, remote: string): boolean {
+  if (!PENDING_LINK_RE.test(remote)) return false;
+  PENDING_LINK_RE.lastIndex = 0;
+  const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  let pattern = "";
+  let last = 0;
+  for (const match of remote.matchAll(PENDING_LINK_RE)) {
+    pattern += escape(remote.slice(last, match.index));
+    const alias = match[3];
+    // 원시 id(frontmatter relation)는 풀면 따옴표 친 위키링크(`"[[행]]"`)가 된다.
+    pattern += match[4]
+      ? `"?\\[\\[[^\\]\\n]+\\]\\]"?`
+      : alias
+        ? `(?:\\[\\[(?:[^\\]\\n|]*/)?${escape(alias)}(?:\\\\?\\|[^\\]\\n]*)?\\]\\]|\\[\\[[^\\]\\n|]+\\\\?\\|${escape(alias)}\\]\\]|\\[${escape(alias)}\\]\\([^)\\n]+\\))`
+        : `(?:\\[\\[[^\\]\\n]+\\]\\]|\\[[^\\]\\n]+\\]\\([^)\\n]+\\))`;
+    last = match.index + match[0].length;
+  }
+  pattern += escape(remote.slice(last).replace(/\n+$/, ""));
+  return new RegExp(`^${pattern}\\n*$`).test(local.replace(/\n+$/, ""));
+}
+
 export function resolveNotionIdWikilinks(
   markdown: string,
   lookup: NotionIdToPath,

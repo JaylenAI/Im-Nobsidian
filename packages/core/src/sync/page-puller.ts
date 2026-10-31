@@ -10,6 +10,7 @@ import {
   notionBlockLinkIds,
   resolveNotionBlockLinks,
   resolveNotionIdWikilinks,
+  sameAsPendingLinks,
 } from "../converter/notion-id-links.js";
 import { readBlockAnchors } from "./block-anchors.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
@@ -24,7 +25,7 @@ import type { PropertyMapper } from "../notion/property-mapper.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { Config } from "../types/config.js";
 import type { PreserveMarker } from "../types/convert.js";
-import type { RemoteChange, SyncRecord } from "../types/sync.js";
+import type { Conflict, RemoteChange, SyncRecord } from "../types/sync.js";
 import { inClaimOrder, pagePathCandidates } from "../utils/db-row-path.js";
 import { computeHash } from "../utils/hash.js";
 import { normalizeNotionId, notionIdsEqual } from "../utils/id.js";
@@ -57,6 +58,36 @@ import { readLocalNote, type VaultFS } from "./vault-fs.js";
  * 원격 페이지를 볼트에 쓸 본문으로 렌더하는 일({@link renderRemotePage})은 충돌 해소도 같이 쓴다 —
  * 받을 때와 «원격 유지» 로 해소할 때 같은 노트가 써져야 한다.
  */
+/** 새로 받은 페이지의 노트 기록에 드는 것 — {@link PagePuller.recordPulledNote}. */
+interface PulledNote {
+  readonly pageId: string;
+  readonly page: PageObjectResponse;
+  readonly fingerprint: string | null;
+  readonly parentId: string | null;
+  readonly fileType: "file" | "folder-note";
+  readonly title: string;
+}
+
+/**
+ * 새 페이지를 받은 결과 — 쓴 노트(폴더) 경로. `excluded` 는 동기화에서 뺀 자리라 받지 않았다. `relinked` 는 상태 기록에 없던
+ * 같은 자리의 노트를 이 페이지와 다시 이었다(P7) — 그때 `written` 은 원격으로 덮었고 `conflict` 는 충돌로 남겼다.
+ */
+export interface PulledCreate {
+  readonly path: string;
+  readonly excluded?: true;
+  readonly relinked?: true;
+  readonly written?: true;
+  readonly conflict?: Conflict;
+  /** 폴더로만 받는 페이지의 폴더가 이미 있었다 — 그 폴더를 이었다. 만든 것으로 세지 않는다. */
+  readonly folderExisted?: true;
+}
+
+/** 경로 고르기 결과 — `existing` 은 상태 기록에 없는 노트가 이미 있는 자리다(이 페이지 id 를 단 이름 · 자연 이름). */
+interface ClaimedPath {
+  readonly path: string;
+  readonly existing?: "own" | "name";
+}
+
 export class PagePuller {
   private dbSchemaLoaded = false;
   private _pullImageCount = 0;
@@ -76,6 +107,17 @@ export class PagePuller {
 
   // Notion 에서 사라져 볼트에서 지운 페이지의 하위 폴더 — pull 이 마칠 때 비었으면 지운다({@link removeVacatedFolders}).
   private readonly vacatedFolders = new Set<string>();
+
+  /**
+   * 이번 pull 을 시작할 때 Notion 과 이은 노트가 하나도 없었다 — 상태 DB 를 잃었거나 처음 잇는 볼트다. 그때는 자연 이름에
+   * 있는 노트의 글이 달라도 다시 잇는다({@link relinkExistingNote}). 시작할 때 정한다 — 받는 동안 기록이 생긴다.
+   */
+  private unlinkedVault = false;
+
+  /** 이번 pull 을 시작할 때 Notion 과 이은 노트가 하나도 없었나 — DB 행 받기도 같은 판정을 쓴다. */
+  get unlinkedVaultAtStart(): boolean {
+    return this.unlinkedVault;
+  }
 
   private decorationsCache?: PageDecorations;
   private get decorations(): PageDecorations {
@@ -109,6 +151,7 @@ export class PagePuller {
     this._pullImageCount = 0;
     this._pullFileCount = 0;
     this.vacatedFolders.clear();
+    this.unlinkedVault = !this.stateDb.getAll().some((record) => record.notionPageId !== null);
   }
 
   /**
@@ -196,7 +239,7 @@ export class PagePuller {
   /**
    * @returns 쓴 노트(폴더) 경로. 동기화에서 뺀 자리에 놓일 페이지면 `excluded` — 받지 않았다.
    */
-  async pullCreate(pageId: string): Promise<{ readonly path: string; readonly excluded?: true }> {
+  async pullCreate(pageId: string): Promise<PulledCreate> {
     try {
       return await this.createPulledPage(pageId);
     } finally {
@@ -235,9 +278,7 @@ export class PagePuller {
     return blocked ? note : null;
   }
 
-  private async createPulledPage(
-    pageId: string,
-  ): Promise<{ readonly path: string; readonly excluded?: true }> {
+  private async createPulledPage(pageId: string): Promise<PulledCreate> {
     const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
     const title = this.notionClient.extractTitle(page);
     const safeName = sanitizeFileName(title);
@@ -250,70 +291,187 @@ export class PagePuller {
     const fetched = await this.fetchPageMarkdown(pageId);
     const hasChildPages = this.hasChildContainers(pageId, fetched.children);
     if (hasChildPages && !fetched.hasBody) {
-      return {
-        path: await this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName),
-      };
+      return this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName);
     }
 
-    let filePath: string;
-    let fileType: "file" | "folder-note";
-
-    if (hasChildPages) {
-      const folderPath = parentPath ? `${parentPath}/${safeName}` : safeName;
-      filePath = await this.resolveUniqueFilePath(folderPath, safeName, pageId);
-      fileType = "folder-note";
-      await this.vaultFs.ensureFolder(folderPath);
-    } else {
-      filePath = await this.resolveUniqueFilePath(parentPath, safeName, pageId);
-      fileType = "file";
-    }
-
-    const { content: finalContent, properties } = await this.renderPageNote({
-      pageId,
-      page,
-      fetched,
-      filePath,
-      title,
-      titleFollowsName: extractTitle(filePath) === title,
-      downloadMedia: true,
-    });
+    const fileType: "file" | "folder-note" = hasChildPages ? "folder-note" : "file";
+    const noteDir = hasChildPages
+      ? parentPath
+        ? `${parentPath}/${safeName}`
+        : safeName
+      : parentPath;
+    if (hasChildPages) await this.vaultFs.ensureFolder(noteDir);
+    const claim = await this.resolveUniqueFilePath(noteDir, safeName, pageId, { adopt: true });
+    let filePath = claim.path;
+    const render = async (path: string, local?: string) =>
+      await this.renderPageNote({
+        pageId,
+        page,
+        fetched,
+        filePath: path,
+        title,
+        titleFollowsName: extractTitle(path) === title,
+        downloadMedia: true,
+        ...(local !== undefined
+          ? { local: { content: local, markers: [] }, adoptLocalMedia: true }
+          : {}),
+      });
 
     // 부모 해소는 파일 기록 전에 끝낸다. parent 가 block 일 때 resolveBlockToPageId 가
     // API 를 호출(429 가능)하는데, 이를 writeFile 뒤에 두면 기록만 되고 sync_state 등록 전에
     // throw → 재시도 시 같은 페이지가 `(1)` 로 재생성되며 첫 파일이 고아가 된다. 기록↔등록
     // 사이에는 throw 가능한 원격 호출을 두지 않는다(원자적 등록 보장).
     const resolvedParentId = await extractParentId(this.notionClient, page);
+    const note = {
+      pageId,
+      page,
+      fingerprint: fetched.fingerprint,
+      parentId: resolvedParentId,
+      fileType,
+      title,
+    };
 
-    await this.vaultFs.writeFile(filePath, finalContent);
+    let rendered: { content: string; properties: Record<string, unknown> };
+    if (claim.existing) {
+      const local = await readLocalNote(this.vaultFs, filePath);
+      rendered = await render(filePath, local);
+      const relinked =
+        local === undefined
+          ? null
+          : this.relinkExistingNote(filePath, claim.existing, local, rendered, note);
+      if (relinked) return relinked;
+      // 자연 이름에 있던 다른 노트다 — 예전처럼 id 를 붙인 새 이름으로 받는다.
+      this.claimedPaths.delete(filePath);
+      filePath = (await this.resolveUniqueFilePath(noteDir, safeName, pageId)).path;
+      rendered = await render(filePath);
+    } else {
+      rendered = await render(filePath);
+    }
 
-    const hash = computeHash(finalContent);
-    const pullStat = await this.vaultFs.getFileStat(filePath);
+    await this.vaultFs.writeFile(filePath, rendered.content);
+    await this.recordPulledNote(filePath, note, {
+      content: rendered.content,
+      properties: rendered.properties,
+      status: "synced",
+    });
+    return { path: filePath };
+  }
+
+  /**
+   * 상태 기록에 없는 노트가 이 페이지가 놓일 자리에 이미 있다 — 상태 DB 를 잃었거나 처음 잇는 볼트다(P7).
+   * 예전에는 남의 노트로 보고 id 를 붙인 이름으로 또 받아 모든 노트가 두 벌이 됐다(push 는 모든 페이지를 또 만들었다).
+   *
+   * - 글이 같으면(끝 개행만 달라도) 그 노트를 이 페이지와 다시 잇는다 — 쓰지 않는다.
+   * - 다르면 이 페이지 id 를 단 이름(지난번 이 페이지를 받은 이름)이면 충돌 전략을 따른다: remote-first 는 원격으로 덮고 ·
+   *   local-first 는 로컬을 두어 다음 push 가 올리고 · 그 밖은 충돌로 남긴다(지난 사본이 없어 merge 도 합칠 수 없다).
+   * - 자연 이름에 있는 다른 글은 이은 노트가 하나도 없는 볼트에서만 잇고 전략과 상관없이 충돌로 남긴다 — 다른 노트일 수 있어
+   *   덮거나 올리면 잃는다. 이은 노트가 있는 볼트에서는 잇지 않는다(null) — 그 볼트의 새 노트일 수 있다.
+   */
+  private relinkExistingNote(
+    filePath: string,
+    existing: "own" | "name",
+    local: string,
+    rendered: { content: string; properties: Record<string, unknown> },
+    note: PulledNote,
+  ): Promise<PulledCreate> | null {
+    const same =
+      sameNoteContent(local, rendered.content) || sameAsPendingLinks(local, rendered.content);
+    if (!same && existing === "name" && !this.unlinkedVault) return null;
+    return (async () => {
+      // 자연 이름에 있던 다른 글은 정말 이 페이지의 노트인지 모른다 — 전략대로 덮거나 올리면 다른 노트를 잃는다. 고르게 한다.
+      const strategy = existing === "own" ? this.config.sync.conflictStrategy : "manual";
+      if (same || strategy === "local-first") {
+        await this.recordPulledNote(filePath, note, {
+          content: rendered.content,
+          properties: rendered.properties,
+          status: "synced",
+          // 같으면 로컬 글로 적어 바뀐 것이 없게 · local-first 는 받은 글로 적어 다음 push 가 로컬을 올리게.
+          hashOf: same ? local : rendered.content,
+          ...(same ? {} : { differsOnDisk: true as const }),
+        });
+        return { path: filePath, relinked: true };
+      }
+      if (strategy === "remote-first") {
+        await this.vaultFs.writeFile(filePath, rendered.content);
+        await this.recordPulledNote(filePath, note, {
+          content: rendered.content,
+          properties: rendered.properties,
+          status: "synced",
+        });
+        return { path: filePath, relinked: true, written: true };
+      }
+      await this.recordPulledNote(filePath, note, {
+        content: rendered.content,
+        properties: rendered.properties,
+        status: "conflict",
+        snapshot: null,
+        differsOnDisk: true,
+      });
+      const record = this.stateDb.getByPath(filePath)!;
+      const conflict: Conflict = {
+        syncRecord: record,
+        localChange: {
+          path: filePath,
+          type: "modified",
+          currentHash: computeHash(local),
+          previousHash: record.contentHash,
+        },
+        remoteChange: {
+          pageId: note.pageId,
+          type: "modified",
+          lastEdited: note.page.last_edited_time,
+          previousEdited: null,
+          path: filePath,
+          title: note.title,
+        },
+        baseContent: null,
+        localContent: local,
+        remoteContent: rendered.content,
+      };
+      return { path: filePath, relinked: true, conflict };
+    })();
+  }
+
+  /**
+   * 받은 노트를 상태 기록 · 위키링크 표에 적는다. 해시는 `hashOf`(기본은 받은 글), 지난 사본은 `snapshot`(기본은 받은 글 —
+   * 충돌로 이은 노트는 공통 조상을 모르므로 null). `differsOnDisk` 는 노트가 적는 해시와 다르다는 뜻이다 — stat 을 적지 않아
+   * 변경 확인이 내용을 읽게 한다. 적으면 stat 이 맞아 바뀐 노트를 읽지 않고 지나쳤다(B5).
+   */
+  private async recordPulledNote(
+    filePath: string,
+    note: PulledNote,
+    input: {
+      readonly content: string;
+      readonly properties: Record<string, unknown>;
+      readonly status: "synced" | "conflict";
+      readonly hashOf?: string;
+      readonly snapshot?: null;
+      readonly differsOnDisk?: true;
+    },
+  ): Promise<void> {
+    const pullStat = input.differsOnDisk ? null : await this.vaultFs.getFileStat(filePath);
     this.stateDb.transaction(() => {
       this.stateDb.upsert({
         obsidianPath: filePath,
-        notionPageId: pageId,
-        notionParentId: resolvedParentId,
-        contentHash: hash,
-        ...this.observation.fieldsOf(page, fetched.fingerprint),
+        notionPageId: note.pageId,
+        notionParentId: note.parentId,
+        contentHash: computeHash(input.hashOf ?? input.content),
+        ...this.observation.fieldsOf(note.page, note.fingerprint),
         localLastModified: new Date().toISOString(),
         syncDirection: "both",
-        fileType,
-        status: "synced",
-        baseSnapshot: Buffer.from(finalContent, "utf-8"),
+        fileType: note.fileType,
+        status: input.status,
+        baseSnapshot: input.snapshot === null ? null : Buffer.from(input.content, "utf-8"),
         localMtime: pullStat?.mtime ?? null,
         localFileSize: pullStat?.size ?? null,
       });
-
-      const aliases = extractAliases(properties);
       this.stateDb.upsertWikilink({
         obsidianPath: filePath,
-        notionPageId: pageId,
-        title,
-        aliases,
+        notionPageId: note.pageId,
+        title: note.title,
+        aliases: extractAliases(input.properties),
       });
     });
-
-    return { path: filePath };
   }
 
   /**
@@ -329,11 +487,13 @@ export class PagePuller {
     fingerprint: string | null,
     parentPath: string,
     safeName: string,
-  ): Promise<string> {
+  ): Promise<PulledCreate> {
     const folderPath = stripMarkdownExtension(
-      await this.resolveUniqueFilePath(parentPath, safeName, pageId),
+      (await this.resolveUniqueFilePath(parentPath, safeName, pageId)).path,
     );
     const resolvedParentId = await extractParentId(this.notionClient, page);
+    // 상태 DB 를 잃은 볼트에서는 그 폴더가 이미 있다 — 만든 것이 아니라 이은 것이다(P7, ADR-049).
+    const existed = await this.vaultFs.exists(folderPath);
     await this.vaultFs.ensureFolder(folderPath);
     this.stateDb.upsert({
       obsidianPath: folderPath,
@@ -346,7 +506,7 @@ export class PagePuller {
       fileType: "folder-only",
       status: "synced",
     });
-    return folderPath;
+    return existed ? { path: folderPath, folderExisted: true } : { path: folderPath };
   }
 
   /**
@@ -650,6 +810,8 @@ export class PagePuller {
       readonly content: string | undefined;
       readonly markers: PreserveMarker[];
     };
+    /** 다시 잇는 노트(P7) — 받은 미디어가 노트가 가리키는 볼트 파일과 같으면 사본을 받지 않고 그 임베드로 되살린다. */
+    readonly adoptLocalMedia?: true;
   }): Promise<{ content: string; properties: Record<string, unknown> }> {
     const { pageId, page, filePath, title } = input;
     let properties: Record<string, unknown>;
@@ -661,7 +823,8 @@ export class PagePuller {
       properties = this.propertyMapper.fromNotionProperties(raw);
       notionKeys = [...this.propertyMapper.ownedKeys(raw), "title", ...DECORATION_KEYS];
     } else {
-      properties = this.notionClient.extractProperties(page);
+      // 아래에서 제목 · 꾸밈을 더한다 — 받은 객체를 고치지 않게 복사한다.
+      properties = { ...this.notionClient.extractProperties(page) };
     }
     // D2(page 모드): 파일명 stem 으로 복원 가능한 제목은 프론트매터에 주입하지 않는다 — 원본에 없던 `title:`
     // 키가 pull 마다 생기는 가짜 diff 의 원인. sanitize · `(1)` 접미사로 파일명이 제목과 달라진 경우만
@@ -679,6 +842,7 @@ export class PagePuller {
       input.fetched.content,
       pageId,
       filePath,
+      input.adoptLocalMedia ? input.local?.content : undefined,
     );
     if (input.downloadMedia && this.config.conversion.imageDownload === "immediate") {
       const imageResult = await this.imageHandler.downloadAllImages(markdown, title, pageId);
@@ -928,14 +1092,44 @@ export class PagePuller {
     dir: string,
     safeName: string,
     pageId: string,
-  ): Promise<string> {
+    options?: { readonly adopt?: boolean },
+  ): Promise<ClaimedPath> {
     const turn = this.claimTurns.get(normalizeNotionId(pageId));
     await turn?.previous;
     try {
-      return await this.claimFilePath(dir, safeName, pageId);
+      if (options?.adopt) {
+        const existing = await this.claimExistingNote(dir, safeName, pageId);
+        if (existing) return existing;
+      }
+      return { path: await this.claimFilePath(dir, safeName, pageId) };
     } finally {
       turn?.release();
     }
+  }
+
+  /**
+   * 상태 기록에 없는 노트가 이미 있는 자리를 고른다 — 이 페이지 id 를 단 이름(지난번 이 페이지를 받은 이름)이 먼저, 그 다음 자연
+   * 이름. 다시 이을지는 받은 글과 견줘 호출측이 정한다({@link relinkExistingNote}) — 잇지 않으면 장부에서 지운다.
+   */
+  private async claimExistingNote(
+    dir: string,
+    safeName: string,
+    pageId: string,
+  ): Promise<ClaimedPath | null> {
+    const [natural, ...suffixed] = pagePathCandidates(dir, safeName, pageId);
+    const order: Array<[string, "own" | "name"]> = [
+      ...suffixed.map((path): [string, "own"] => [path, "own"]),
+      [natural!, "name"],
+    ];
+    for (const [candidate, existing] of order) {
+      if (this.claimedPaths.has(candidate) || this.stateDb.getByPath(candidate)) continue;
+      if (!(await this.vaultFs.exists(candidate))) continue;
+      // ── 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
+      if (this.claimedPaths.has(candidate)) continue;
+      this.claimedPaths.add(candidate);
+      return { path: candidate, existing };
+    }
+    return null;
   }
 
   private async claimFilePath(dir: string, safeName: string, pageId: string): Promise<string> {

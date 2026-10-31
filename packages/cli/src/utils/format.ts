@@ -205,6 +205,31 @@ export function restoredLines(paths: readonly string[] | undefined, dryRun = fal
 }
 
 /**
+ * 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — 상태 DB 를 잃었거나 처음 잇는 볼트. 새로 받은 것으로
+ * 세지 않는다. dry-run 은 노트 글을 받아 견주지 않아 목록 없이 다시 이을 것이라고만 알린다(`relinkPending`).
+ */
+export function relinkedLines(
+  paths: readonly string[] | undefined,
+  pending: boolean | undefined,
+): string[] {
+  if (pending) {
+    return [
+      chalk.cyan(
+        "↻ 상태 기록에 Notion 과 이은 노트가 없습니다 — 받으면 같은 자리에 있는 노트는 새로 만들지 않고 그 페이지와 다시 " +
+          "잇습니다(글이 다르면 충돌). 미리 보기는 그 노트들도 생성으로 셉니다",
+      ),
+    ];
+  }
+  if (!paths || paths.length === 0) return [];
+  return [
+    chalk.cyan(
+      `↻ 상태 기록에 없던 노트 ${paths.length}개를 같은 자리의 Notion 페이지와 다시 이었습니다 — 새로 받지 않았습니다:`,
+    ),
+    ...pathLines(paths),
+  ];
+}
+
+/**
  * merge 전략이 받은 원격에 로컬 편집을 합친 노트 · 행. pull 만 했으면 합친 글은 아직 볼트에만 있다 — push 가 올린다.
  * sync 는 같은 실행의 push 가 올린다.
  */
