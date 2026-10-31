@@ -10,7 +10,6 @@ import { join } from "node:path";
 import sqlJsWasm from "sql.js/dist/sql-wasm-browser.wasm";
 import {
   DEFAULT_CONFIG,
-  DEFAULT_TITLE_PROPERTY,
   EntryEditor,
   FilteredVaultFS,
   IGNORE_FILE,
@@ -78,9 +77,7 @@ export function databaseSyncConfigs(databases: readonly DatabaseConfig[]): Datab
   return databases.flatMap((database) => {
     const databaseId = notionIdFromInput(database.databaseId.trim());
     const localFolder = database.localFolder.trim().replace(/^\/+|\/+$/g, "");
-    return databaseId && localFolder
-      ? [{ databaseId, localFolder, titleProperty: DEFAULT_TITLE_PROPERTY }]
-      : [];
+    return databaseId && localFolder ? [{ databaseId, localFolder }] : [];
   });
 }
 

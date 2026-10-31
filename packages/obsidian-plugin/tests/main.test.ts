@@ -1273,7 +1273,6 @@ describe("ImNobsidianPlugin", () => {
           {
             databaseId: "1fa13b18-d382-80cf-9057-e37e6e473e41",
             localFolder: "Projects/Tasks",
-            titleProperty: "Name",
           },
         ],
       });

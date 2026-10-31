@@ -6,6 +6,8 @@ const mockIsSyncing = vi.fn().mockReturnValue(false);
 const mockRequestFullSync = vi.fn();
 const mockOrchestratorSync = vi.fn();
 const mockDbClose = vi.fn();
+/** 설정 파일의 `sync` — 시험마다 바꾼다. */
+const mockSync = { autoSync: false, autoSyncInterval: 300 };
 
 vi.mock("@im-nobsidian/core", async () => ({
   // 기본값은 진짜를 쓴다 — 옵션 기본값이 core 의 값을 읽는지가 시험 대상이다
@@ -14,11 +16,12 @@ vi.mock("@im-nobsidian/core", async () => ({
   ).DEFAULT_WATCH_DEBOUNCE_MS,
   ConfigManager: vi.fn().mockImplementation(() => ({
     dbPath: "/mock/sync.db",
-    load: vi.fn().mockResolvedValue({
+    load: vi.fn().mockImplementation(async () => ({
       notion: { token: "ntn_test" },
+      sync: { ...mockSync },
       paths: {},
       advanced: { concurrency: 3, timeoutMs: 30000 },
-    }),
+    })),
   })),
   StateDB: { open: vi.fn().mockImplementation(() => ({ close: mockDbClose })) },
   NotionClient: Object.assign(
@@ -40,7 +43,7 @@ vi.mock("@im-nobsidian/core", async () => ({
 }));
 
 import { DEFAULT_WATCH_DEBOUNCE_MS } from "@im-nobsidian/core";
-import { watchCommand } from "../../src/commands/watch.js";
+import { periodicSyncSeconds, watchCommand } from "../../src/commands/watch.js";
 
 describe("watch command", () => {
   it("watchCommand 정의 확인", () => {
@@ -79,10 +82,19 @@ describe("watch command", () => {
     },
   );
 
-  it("interval 옵션 기본값", () => {
+  it("interval 옵션은 기본값이 없다 — 주지 않으면 설정을 따른다", () => {
     const intervalOpt = watchCommand.options.find((o) => o.long === "--interval");
     expect(intervalOpt).toBeDefined();
-    expect(intervalOpt!.defaultValue).toBe("0");
+    expect(intervalOpt!.defaultValue).toBeUndefined();
+  });
+
+  it.each([
+    [undefined, { autoSync: false, autoSyncInterval: 300 }, 0],
+    [undefined, { autoSync: true, autoSyncInterval: 120 }, 120],
+    [0, { autoSync: true, autoSyncInterval: 120 }, 0],
+    [45, { autoSync: false, autoSyncInterval: 300 }, 45],
+  ])("주기 sync 간격 — --interval %s · 설정 %o → %d초", (flag, sync, expected) => {
+    expect(periodicSyncSeconds(flag, sync as never)).toBe(expected);
   });
 
   it("formatResult 유틸리티 동작 확인", async () => {
@@ -126,6 +138,28 @@ describe("watch command", () => {
 
       expect(mockRequestFullSync).toHaveBeenCalledTimes(2);
       expect(mockOrchestratorSync).not.toHaveBeenCalled();
+    });
+
+    it("--interval 이 없으면 설정의 autoSync · autoSyncInterval 로 주기 sync 를 돈다", async () => {
+      vi.useFakeTimers();
+      Object.assign(mockSync, { autoSync: true, autoSyncInterval: 60 });
+      startWatch([]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(130_000);
+
+      expect(mockRequestFullSync).toHaveBeenCalledTimes(2);
+      Object.assign(mockSync, { autoSync: false, autoSyncInterval: 300 });
+    });
+
+    it("설정이 꺼져 있고 --interval 이 없으면 주기 sync 를 돌지 않는다", async () => {
+      vi.useFakeTimers();
+      startWatch([]);
+      await vi.advanceTimersByTimeAsync(0);
+
+      await vi.advanceTimersByTimeAsync(3_600_000);
+
+      expect(mockRequestFullSync).not.toHaveBeenCalled();
     });
 
     it("종료는 도는 sync 가 끝난 뒤에 DB 를 닫고, 기다리는 중 한 번 더 누르면 바로 끝낸다", async () => {

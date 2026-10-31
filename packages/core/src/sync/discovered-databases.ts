@@ -16,7 +16,8 @@ export const ROOT_DATABASES_FOLDER = "databases";
 export interface DiscoveredDbConfig {
   databaseId: string;
   localFolder: string;
-  titleProperty: string;
+  /** push 가 만든 DB 의 제목 속성 — 적어 두기만 하고 읽는 곳은 없다. 발견한 DB · 설정의 DB 에는 없다. */
+  titleProperty?: string;
 }
 
 /** 자동 발견 DB 목록을 보존하는 상태 메타 키. */

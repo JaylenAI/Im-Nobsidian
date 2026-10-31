@@ -1,5 +1,5 @@
 import type { Conflict, FailedOperation } from "../types/sync.js";
-import { DEFAULT_TITLE_PROPERTY, type Config, type DatabaseSyncConfig } from "../types/config.js";
+import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import type { NotionClient } from "../notion/client.js";
 import { isNotionAccessDenied, isNotionObjectNotFound } from "../notion/client.js";
@@ -645,7 +645,6 @@ export class DatabaseDiscovery {
       config: {
         databaseId: dbId,
         localFolder: `${parentFolder}/${safeName}`,
-        titleProperty: DEFAULT_TITLE_PROPERTY,
       },
     };
   }
