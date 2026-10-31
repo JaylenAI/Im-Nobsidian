@@ -45,8 +45,8 @@ function createMockOrchestrator(): MockOrchestrator {
       duration: 0,
     }),
     sync: vi.fn().mockResolvedValue({
-      pull: { created: 0, updated: 0, deleted: 0 },
-      push: { created: 0, updated: 0, deleted: 0, moved: 0 },
+      pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+      push: { created: 0, updated: 0, deleted: 0, moved: 0, failed: [] },
       conflicts: [],
       duration: 0,
     }),
@@ -381,8 +381,8 @@ describe("SyncController", () => {
         duration: 0,
       });
       mock.sync.mockResolvedValue({
-        pull: { created: 0, updated: 0, deleted: 0 },
-        push: { created: 0, updated: 0, deleted: 0, moved: 2 },
+        pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+        push: { created: 0, updated: 0, deleted: 0, moved: 2, failed: [] },
         conflicts: [],
         duration: 0,
       });
@@ -509,8 +509,8 @@ describe("SyncController", () => {
   describe("sync", () => {
     it("Pull/Push 양방향 요약을 방출한다", async () => {
       mock.sync.mockResolvedValue({
-        pull: { created: 2, updated: 1, deleted: 0 },
-        push: { created: 3, updated: 0, deleted: 1 },
+        pull: { created: 2, updated: 1, deleted: 0, failed: [] },
+        push: { created: 3, updated: 0, deleted: 1, failed: [] },
         conflicts: [],
         duration: 3000,
       });
@@ -723,14 +723,197 @@ describe("SyncController", () => {
     });
   });
 
+  describe("처리하지 못한 것 · 알림 밖의 결과를 남긴다 (P8)", () => {
+    const failure = (path: string, error: string) => ({ path, operation: "update", error });
+
+    it("실패한 노트의 까닭을 알리고 패널에 남긴다 — 예전엔 수만 알렸다", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 1,
+        deleted: 0,
+        moved: 0,
+        failed: [failure("a.md", "Notion 400: body too long"), failure("b.md", "429")],
+        duration: 0,
+      });
+      const { hooks, onNotice, onState, onStatusBar } = createHooks();
+      await makeController(mock, hooks).push();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: 2개를 처리하지 못했습니다 — a.md: Notion 400: body too long · b.md: 429",
+        8000,
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+      expect(onState).toHaveBeenCalledWith(
+        expect.objectContaining({
+          syncState: "error",
+          errorMessage: expect.stringContaining("a.md: Notion 400: body too long"),
+        }),
+      );
+    });
+
+    it("넷 이상이면 셋만 보이고 동기화 기록에 모두 남긴다", async () => {
+      const failed = ["a", "b", "c", "d", "e"].map((name) => failure(`${name}.md`, "500"));
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed,
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        expect.stringContaining("c.md: 500 외 2개(명령 「동기화 기록」 에 모두)"),
+        8000,
+      );
+      const [entry] = controller.syncLog();
+      expect(entry).toMatchObject({ label: "Pull", failed });
+      expect(entry!.summary).toContain("실패 5");
+    });
+
+    it("Sync 요약에 Pull · Push 의 실패를 함께 센다", async () => {
+      mock.sync.mockResolvedValue({
+        pull: { created: 0, updated: 0, deleted: 0, failed: [failure("a.md", "x")] },
+        push: { created: 0, updated: 0, deleted: 0, moved: 0, failed: [failure("b.md", "y")] },
+        conflicts: [conflictAt("c.md")],
+        duration: 0,
+      });
+      const { hooks, onNotice, onStatusBar } = createHooks();
+      await makeController(mock, hooks).sync();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Sync 완료 — Pull(+0 ~0 -0) Push(+0 ~0 -0) / 충돌 1 / 실패 2 (0.0s)",
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+    });
+
+    it("자동 동기화도 실패 · 경고를 버리지 않는다 — 요약은 알리지 않는다", async () => {
+      mock.sync.mockResolvedValue({
+        pull: {
+          created: 0,
+          updated: 0,
+          deleted: 0,
+          failed: [],
+          mergedPaths: ["m.md"],
+        },
+        push: { created: 0, updated: 0, deleted: 0, moved: 0, failed: [failure("a.md", "409")] },
+        conflicts: [],
+        duration: 0,
+      });
+      const { hooks, onNotice, onState, onStatusBar } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.vaultSync();
+
+      expect(onNotice).toHaveBeenCalledTimes(1);
+      expect(onNotice).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /^Im-Nobsidian: 자동 동기화 — 1개를 처리하지 못했습니다 — a\.md: 409\n.*m\.md/s,
+        ),
+        8000,
+      );
+      expect(onStatusBar).toHaveBeenLastCalledWith("error");
+      expect(onState).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          syncState: "error",
+          errorMessage: expect.stringContaining("a.md: 409"),
+        }),
+      );
+      expect(controller.syncLog()[0]).toMatchObject({ label: "자동 동기화" });
+    });
+
+    it("범위 밖이라 받지 않은 페이지 · 미룬 원격 삭제는 알리지 않고 기록에 남긴다", async () => {
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        excluded: ["drafts/x.md"],
+        remoteScan: {
+          kind: "incremental",
+          lastFullAt: null,
+          nextFullAt: "2026-10-31T12:00:00Z",
+          deletionsDeferred: true,
+        },
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.pull();
+
+      expect(onNotice).not.toHaveBeenCalledWith(expect.anything(), 8000);
+      const details = controller.syncLog()[0]!.details;
+      expect(details).toEqual([
+        expect.stringContaining("밖이라 받지 않음 — drafts/x.md"),
+        expect.stringMatching(/^Notion 에서 지운 노트는 다음 전체 확인\(.+\)에 볼트에 반영됩니다/),
+      ]);
+    });
+
+    it("옮기지 않은 Notion 이동 · Notion 에 그대로인 DB · 만든 DB 를 알린다", async () => {
+      mock.push.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        moved: 2,
+        createdDatabases: 1,
+        databaseMoves: [
+          { from: "A", to: "B", inNotion: false },
+          { from: "C", to: "D", inNotion: true },
+        ],
+        failed: [],
+        duration: 0,
+      });
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        moveSkipped: [{ path: "x.md", reason: "그 자리에 다른 노트" }],
+        duration: 0,
+      });
+      const { hooks, onNotice } = createHooks();
+      const controller = makeController(mock, hooks);
+      await controller.push();
+      await controller.pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Push 완료 — 생성 0 / 수정 0 / 삭제 0 / 이동 2 / DB 생성 1 (0.0s)",
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        expect.stringContaining("Notion 의 DB 는 볼트가 받지 않는 곳에 있어 그대로입니다: A → B"),
+        8000,
+      );
+      expect(onNotice).toHaveBeenCalledWith(
+        expect.stringContaining("x.md(그 자리에 다른 노트)"),
+        8000,
+      );
+      const [pullEntry, pushEntry] = controller.syncLog();
+      expect(pullEntry!.label).toBe("Pull");
+      expect(pushEntry!.details).toContain("Notion 의 DB 도 옮겼습니다 — C → D");
+    });
+
+    it("기록은 최근 것이 앞이고 50개까지만 둔다", async () => {
+      const controller = makeController(mock, createHooks().hooks);
+      for (let index = 0; index < 52; index++) await controller.push();
+      expect(controller.syncLog()).toHaveLength(50);
+    });
+  });
+
   describe("vaultSync", () => {
     it("알림 · 진행 표시 없이 돌고, 끝나면 패널의 목록을 새로고친다 — 올린 노트가 변경으로 남지 않는다", async () => {
       let pushed = false;
       mock.sync.mockImplementation(async () => {
         pushed = true;
         return {
-          pull: { created: 0, updated: 0, deleted: 0 },
-          push: { created: 0, updated: 1, deleted: 0 },
+          pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+          push: { created: 0, updated: 1, deleted: 0, failed: [] },
           conflicts: [],
           duration: 0,
         };
@@ -761,8 +944,8 @@ describe("SyncController", () => {
 
     it("자동 동기화가 만든 충돌도 패널에 보인다", async () => {
       mock.sync.mockResolvedValue({
-        pull: { created: 0, updated: 0, deleted: 0 },
-        push: { created: 0, updated: 0, deleted: 0 },
+        pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+        push: { created: 0, updated: 0, deleted: 0, failed: [] },
         conflicts: [conflictAt("a.md")],
         duration: 0,
       });
@@ -801,8 +984,8 @@ describe("SyncController", () => {
           new Promise((resolve) => {
             resolveSync = () =>
               resolve({
-                pull: { created: 0, updated: 0, deleted: 0 },
-                push: { created: 0, updated: 0, deleted: 0 },
+                pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+                push: { created: 0, updated: 0, deleted: 0, failed: [] },
                 conflicts: [],
                 duration: 0,
               });
@@ -1448,8 +1631,8 @@ describe("SyncController", () => {
           new Promise((resolve) => {
             finish = () =>
               resolve({
-                pull: { created: 0, updated: 0, deleted: 0 },
-                push: { created: 0, updated: 0, deleted: 0 },
+                pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+                push: { created: 0, updated: 0, deleted: 0, failed: [] },
                 conflicts: [],
                 duration: 0,
               });
@@ -1506,8 +1689,8 @@ describe("SyncController", () => {
       duration: 0,
     };
     const SYNC_RESULT = {
-      pull: { created: 0, updated: 0, deleted: 0 },
-      push: { created: 0, updated: 0, deleted: 0 },
+      pull: { created: 0, updated: 0, deleted: 0, failed: [] },
+      push: { created: 0, updated: 0, deleted: 0, failed: [] },
       conflicts: [],
       duration: 0,
     };
