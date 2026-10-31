@@ -117,6 +117,23 @@ describe("실제 pull 이 DB 행도 진행 항목으로 알린다", () => {
     expectSteady(real.counts);
   });
 
+  it("다시 읽어 보니 그대로인 행은 받은 것으로 알리지 않는다 — 같은 분 봇 쓰기 뒤의 내용 확인(0.15 회귀)", async () => {
+    notion.add(ROW_DB_ID, "R1", "본문", {});
+    at("10:00:20");
+    const orchestrator = build();
+    await orchestrator.pull();
+    at("10:01:05");
+    vault.write("Tasks/R1.md", vault.read("Tasks/R1.md")!.replace("본문", "고친 본문"));
+    await orchestrator.push();
+    at("10:01:30");
+
+    const real = collect();
+    const result = await orchestrator.pull({ onProgress: real.onProgress });
+
+    expect(result).toMatchObject({ created: 0, updated: 0, failed: [] });
+    expect(real.items.filter((item) => !item.unchanged)).toEqual([]);
+  });
+
   it("페이지 변경이 없어도 받은 행 · 지운 행을 알린다", async () => {
     const orchestrator = build();
     const r1 = notion.add(ROW_DB_ID, "R1", "", {});
