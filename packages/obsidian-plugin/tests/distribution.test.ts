@@ -24,4 +24,14 @@ describe("배포 파일", () => {
       [],
     );
   });
+
+  // P11 — iOS 16.4 앞의 JavaScript 는 lookbehind 를 읽지 못해 main.js 전체가 뜨지 않는다. 디렉터리 검사도 데스크톱
+  // 전용이 아닌 플러그인의 lookbehind 를 거절한다. 빌드한 main.js(주석이 없다)를 본다 — 의존성에서 들어와도 잡는다.
+  it("main.js 에 정규식 lookbehind 가 없다", () => {
+    const bundle = read("../main.js");
+    const found = [...bundle.matchAll(/\(\?<[=!]/g)].map((m) =>
+      bundle.slice(Math.max(0, m.index - 40), m.index + 40),
+    );
+    expect(found).toEqual([]);
+  });
 });

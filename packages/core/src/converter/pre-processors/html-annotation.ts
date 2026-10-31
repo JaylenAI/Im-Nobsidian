@@ -1,12 +1,13 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { MARKER_BRAND_RE, compactMarker } from "../../constants/markers.js";
 import { replaceOutsideCode } from "../container-indent.js";
+import { LookbehindRegExp, notAfter } from "../../utils/lookbehind.js";
 
 /** `<u>밑줄</u>` (Obsidian·HTML 관용) — push 시 underline 마커로 승격. */
 const UNDERLINE_REGEX = /<u>([\s\S]*?)<\/u>/g;
 
 /** `==하이라이트==` — 같은 줄 내, `===`(3연속)와 구분. */
-const HIGHLIGHT_REGEX = /(?<!=)==([^=\n]+?)==(?!=)/g;
+const HIGHLIGHT_REGEX = new LookbehindRegExp(/==([^=\n]+?)==(?!=)/g, undefined, notAfter(/=/));
 
 /**
  * `<mark>형광</mark>` — HTML 의 형광이다. Highlightr 플러그인은 `<mark style="…">` 로 적는다. `==` 와 같이

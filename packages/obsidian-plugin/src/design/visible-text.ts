@@ -5,6 +5,17 @@
  * 원문 조각을 보이는 글로 바꿔 그려진 글에서 차례대로 찾는다(`render-dom.ts`). 여기가 틀리면 그
  * 조각을 못 찾고 건너뛸 뿐 다른 글을 칠하지 않는다 — 찾는 자리가 차례로만 앞으로 가기 때문이다.
  */
+import { LookbehindRegExp, charBefore } from "@im-nobsidian/core";
+
+/**
+ * 기울임 구분자 `_` — 앞이 줄머리 · 공백 · 문장 부호이고 뒤가 글자이거나, 앞이 글자이고 뒤가 공백 · 문장 부호 · 끝.
+ * 두 번째 갈래의 «앞이 글자» 는 lookbehind 대신 앞 글자로 본다(P11 — 옛 iOS 는 lookbehind 를 읽지 못한다).
+ */
+const UNDERSCORE_DELIMITER_RE = new LookbehindRegExp(
+  /(^|[\s\p{P}])_+(?=\S)|_+(?=[\s\p{P}]|$)/gu,
+  undefined,
+  (text, index, match) => match[1] !== undefined || /\S/u.test(charBefore(text, index)),
+);
 
 /** 줄 머리의 블록 문법 — 인용 · 콜아웃 머리 · 제목 · 목록 · 할 일. */
 const BLOCK_PREFIX_RE =
@@ -56,7 +67,7 @@ export function toVisibleText(source: string): string {
       // 강조 구분자
       .replace(/\*\*|~~|==/g, "")
       .replace(/(^|[^\\])\*/g, "$1")
-      .replace(/(^|[\s\p{P}])_+(?=\S)|(?<=\S)_+(?=[\s\p{P}]|$)/gu, "$1")
+      .replace(UNDERSCORE_DELIMITER_RE, "$1")
       // 이스케이프 · 문자 참조
       .replace(/\\([!-/:-@[-`{-~])/g, "$1")
       .replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (e) => ENTITIES[e]!)

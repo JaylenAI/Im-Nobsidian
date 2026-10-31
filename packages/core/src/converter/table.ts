@@ -36,6 +36,7 @@ import {
   splitContainerPrefix,
 } from "./container-indent.js";
 import { nfmAttrString, parseNfmAttrs, type NfmAttrs } from "./nfm-attrs.js";
+import { LookbehindRegExp, evenBackslashesBefore } from "../utils/lookbehind.js";
 
 /**
  * 파이프 표를 받은 Notion 이 만드는 표 속성 — 새 파이프 표를 push 하면 `<table header-row="true">`
@@ -51,10 +52,9 @@ const ESCAPED_PIPE = "\\|";
  * 칸 경계 파이프 — 앞의 백슬래시가 짝수 개(0 포함)다. 백슬래시는 다음 글자 하나를 이스케이프해
  * `\|` 는 칸 안 파이프지만 `\\|` 의 파이프는 경계다(Obsidian 1.12.4 읽기 보기 실측).
  */
-const CELL_PIPE_SOURCE = String.raw`(?<=(?:^|[^\\])(?:\\\\)*)\|`;
-const CELL_PIPE_RE = new RegExp(CELL_PIPE_SOURCE);
-const CELL_PIPES_RE = new RegExp(CELL_PIPE_SOURCE, "g");
-const TRAILING_CELL_PIPE_RE = new RegExp(`${CELL_PIPE_SOURCE}$`);
+const CELL_PIPE_RE = new LookbehindRegExp(/\|/, undefined, evenBackslashesBefore);
+const CELL_PIPES_RE = new LookbehindRegExp(/\|/g, undefined, evenBackslashesBefore);
+const TRAILING_CELL_PIPE_RE = new LookbehindRegExp(/\|$/, undefined, evenBackslashesBefore);
 
 /** 코드 속 파이프와 그 앞 백슬래시 묶음(그룹 1). */
 const CODE_PIPE_RE = /(\\*)\|/g;
@@ -276,7 +276,7 @@ function isPipeRow(body: string): boolean {
   return body.trim() !== "" && CELL_PIPE_RE.test(body);
 }
 
-/** 파이프 표 한 행을 칸으로 — 앞뒤 파이프를 떼고, 경계 파이프({@link CELL_PIPE_SOURCE})에서 자른다. */
+/** 파이프 표 한 행을 칸으로 — 앞뒤 파이프를 떼고, 경계 파이프({@link CELL_PIPE_RE})에서 자른다. */
 function splitPipeRow(body: string): string[] {
   let row = body.trim();
   if (row.startsWith("|")) row = row.slice(1);

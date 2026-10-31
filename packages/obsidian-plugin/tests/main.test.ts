@@ -58,6 +58,9 @@ vi.mock("@im-nobsidian/core", async () => ({
     .then((core) => ({
       getLogger: core.getLogger,
       setLogger: core.setLogger,
+      // 모듈을 읽을 때 정규식을 만든다(design/visible-text)
+      LookbehindRegExp: core.LookbehindRegExp,
+      charBefore: core.charBefore,
       StateDbUnavailableError: core.StateDbUnavailableError,
       SavedStateDbError: core.SavedStateDbError,
       StateDbLockedError: core.StateDbLockedError,
