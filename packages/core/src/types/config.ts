@@ -53,8 +53,6 @@ const DEFAULTS = {
   },
   conversion: {
     preferMarkdownApi: true,
-    preserveMarkers: true,
-    frontmatterMapping: true,
     imageDownload: "immediate" as const,
   },
   advanced: {
@@ -79,12 +77,48 @@ const DEFAULTS = {
 };
 const D = DEFAULTS;
 
+/**
+ * 예전 스키마에 있었지만 아무것도 바꾸지 않던 설정 — 이제 스키마에 없어 읽을 때 버린다(`init` 이 기본값을 적어 둔 파일이
+ * 많아 그대로 읽힌다). 무엇을 바꾸려고 적은 값이면 바뀐 적이 없다는 것을 알린다.
+ */
+const RETIRED_SETTINGS: readonly {
+  readonly path: readonly [string, string];
+  /** 바꾸려고 적은 값인가 — 기본값을 그대로 적은 것은 알리지 않는다. */
+  readonly meant: (value: unknown) => boolean;
+  readonly note: string;
+}[] = [
+  {
+    path: ["notion", "workspaceId"],
+    meant: (value) => value !== undefined,
+    note: "어디에도 쓰이지 않았습니다 — 워크스페이스는 토큰이 정합니다",
+  },
+  {
+    path: ["conversion", "preserveMarkers"],
+    meant: (value) => value === false,
+    note: "꺼도 바뀐 것이 없었습니다 — Notion 이 받지 못하는 기능은 늘 보존 마커로 남깁니다",
+  },
+  {
+    path: ["conversion", "frontmatterMapping"],
+    meant: (value) => value === false,
+    note: "꺼도 바뀐 것이 없었습니다 — frontmatter 는 늘 Notion 속성으로 주고받습니다",
+  },
+];
+
+/** 설정 파일에 적힌, 이제 없는 설정 가운데 무엇을 바꾸려고 적은 것 — 「키: 까닭」. */
+export function retiredSettings(raw: unknown): string[] {
+  return RETIRED_SETTINGS.flatMap(({ path: [section, key], meant, note }) => {
+    const group = (raw as Record<string, unknown> | null)?.[section];
+    const value =
+      group && typeof group === "object" ? (group as Record<string, unknown>)[key] : undefined;
+    return meant(value) ? [`${section}.${key}: ${note}`] : [];
+  });
+}
+
 export const ConfigSchema = z.object({
   version: z.literal(1),
   notion: z.object({
     token: z.string().startsWith(NOTION_TOKEN_PREFIX),
     rootPageId: z.string(),
-    workspaceId: z.string().optional(),
     parentMode: z.enum(["page", "database"]).default(D.notion.parentMode),
     databaseId: z.string().optional(),
     databases: z.array(DatabaseSyncSchema).default(() => []),
@@ -119,8 +153,6 @@ export const ConfigSchema = z.object({
   }),
   conversion: z.object({
     preferMarkdownApi: z.boolean().default(D.conversion.preferMarkdownApi),
-    preserveMarkers: z.boolean().default(D.conversion.preserveMarkers),
-    frontmatterMapping: z.boolean().default(D.conversion.frontmatterMapping),
     imageDownload: z.enum(["immediate", "lazy", "skip"]).default(D.conversion.imageDownload),
     // 행 속성의 날짜시각을 적고 보낼 시간대(IANA 이름, 예: "Asia/Seoul"). 없으면 이 컴퓨터의 시간대.
     // Obsidian 날짜시각 속성에는 시간대가 없다 — pull 은 이 시간대의 시각으로 적고 push 는 이 시간대의

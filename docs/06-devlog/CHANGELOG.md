@@ -17,6 +17,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **플러그인 「동기화 기록」 명령** — 이 세션의 동기화마다 요약 · 사정 · 처리하지 못한 노트와 까닭을 모아 본다. 알림은 몇 초 뒤
   사라지고 자동 동기화는 알리지 않아 다시 볼 곳이 없었다.
 
+### Removed
+
+- **아무것도 바꾸지 않던 설정 세 개** — `notion.workspaceId` · `conversion.preserveMarkers` · `conversion.frontmatterMapping` 은
+  스키마에만 있고 어디서도 읽지 않았다(끄려고 `false` 로 적어도 그대로였다). 이제 읽을 때 버리고, 바꾸려고 적은 값이면 경고로
+  알린다. 기본값을 적어 둔 예전 설정 파일은 그대로 읽힌다.
+
 ### Fixed
 
 - **사람이 붙인 「(16진 글자)」 이름을 pull 이 붙인 이름으로 보지 않는다** — 동명을 가르는 id 조각은 8 · 16 · 32 자뿐인데 8~32 자를
