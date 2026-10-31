@@ -46,7 +46,7 @@ delete that file from the plugin folder after updating.
 - **Date-time time zone.** Date-time properties are written and sent in this computer's time zone unless you
   pick one under _Date-time time zone_. Changing it does not rewrite times already in your notes.
 
-Requires Obsidian v1.12.4+. Desktop only.
+Requires Obsidian v1.12.4+. Runs on desktop and on mobile (iOS, Android) since v0.17.0.
 
 ## Documentation
 
