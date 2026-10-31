@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.17.0] - 2026-11-01
+
+> 플러그인이 모바일(iOS · Android)의 Obsidian 에서 뜨고 동기화한다(P11 · ADR-053). 예전에는 데스크톱 전용이었다 — 켤 수 있는
+> 곳이 바뀌는 동작 변경이라 마이너를 올린다.
+
 ### Added
 
 - **플러그인이 모바일(iOS · Android)에서 돈다**(P11 · ADR-053, `isDesktopOnly: false`) — 예전 main.js 는 처음에 Node 모듈(`fs` 등)을
