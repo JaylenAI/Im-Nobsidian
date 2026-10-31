@@ -118,8 +118,15 @@ describe("읽기 전용 속성 편집 경고", () => {
     );
     vault.write(path, vault.read(path)!.replace("Score: 1", "Score: 99"));
 
+    // 보낼 것이 없다 — 고침으로 세지 않는다(예전에는 「수정 1」 이라 보내지 않은 것을 보냈다고 했다). dry-run 도 같다.
+    const planned = await orchestrator.push({ dryRun: true });
+    expect(planned).toMatchObject({ updated: 0, failed: [] });
+    expect(planned.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+    const updates = notion.client.updatePageProperties.mock.calls.length;
     const result = await orchestrator.push();
+    expect(result).toMatchObject({ updated: 0, failed: [] });
     expect(result.readOnlySkipped).toEqual([{ path, properties: ["Score"] }]);
+    expect(notion.client.updatePageProperties.mock.calls.length).toBe(updates);
 
     // 보낸 것이 없어 Notion 의 행도 DB 도 그대로다. 예전에는 바뀐 것만 찾는 pull 이 그 DB 를 «그대로» 로 건너뛰어,
     // 알림과 달리 볼트에 고친 값이 남았다(실측 2026-10-28) — 강제 전체 대조만 되돌렸다.

@@ -19,6 +19,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **읽기 전용 속성만 고친 행을 「수정」 으로 세지 않는다** — 수식 · 롤업만 고친 행은 Notion 에 보낸 것이 없는데 push · dry-run 이
+  「수정 1」 이라 했다. 이제 수정 0 이고 「읽기 전용 속성 N개는 올리지 않았습니다」 로만 알린다.
 - **플러그인이 그림 · 첨부를 올린다** — 플러그인의 HTTP 어댑터가 파일 업로드의 multipart 본문을 빈 본문으로 보내, Notion 이
   「body.file should be defined」 로 모두 거절했다. 노트에 넣은 그림 · 폴더의 첨부가 플러그인에서는 한 번도 올라가지 않았다(CLI 는
   영향 없음).
