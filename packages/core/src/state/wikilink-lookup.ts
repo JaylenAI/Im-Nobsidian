@@ -11,6 +11,8 @@
  * - 링크 글자는 NFC 로 견준다 — 볼트 경로 · 제목이 NFC 다. macOS 에서 붙여 넣은 NFD 글자도 같은 노트로 간다.
  * - 끝으로 대소문자를 가리지 않고 한 번 더 — Obsidian 은 `[[note]]` 를 `Note.md` 로 잇는다. SQLite 의 `NOCASE` 는
  *   ASCII 만 접는다.
+ * - 별칭과 경로 꼬리(`%/노트.md`)는 무늬가 `%` 로 시작해 색인을 못 쓴다 — 어디에도 없는 링크(아직 올리지 않은 노트로 가는
+ *   링크)는 그 둘에서 표를 훑는다. 5,000 노트 첫 push 에서 1초 남짓이다(P10 실측) — Notion 요청 시간에 견주면 작다.
  */
 export interface WikilinkLookup {
   readonly sql: string;
@@ -34,9 +36,14 @@ export const WIKILINK_LOOKUPS: readonly WikilinkLookup[] = [
     sql: `SELECT * FROM wikilink_map WHERE obsidian_path = ? OR obsidian_path LIKE ? ESCAPE '${LIKE_ESCAPE}'`,
     params: (text) => [`${nfc(text)}.md`, `%/${escapeLike(nfc(text))}.md`],
   },
+  // 둘을 OR 로 묶으면 SQLite 가 색인을 못 쓰고 표를 다 훑는다(P10) — 따로 묻는다(색인: 마이그레이션 006)
   {
-    sql: "SELECT * FROM wikilink_map WHERE title = ? COLLATE NOCASE OR obsidian_path = ? COLLATE NOCASE",
-    params: (text) => [nfc(text), `${nfc(text)}.md`],
+    sql: "SELECT * FROM wikilink_map WHERE title = ? COLLATE NOCASE",
+    params: (text) => [nfc(text)],
+  },
+  {
+    sql: "SELECT * FROM wikilink_map WHERE obsidian_path = ? COLLATE NOCASE",
+    params: (text) => [`${nfc(text)}.md`],
   },
 ];
 

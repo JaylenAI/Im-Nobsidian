@@ -17,6 +17,11 @@ import { StateLock, stateDbLockPath } from "./state-lock.js";
 
 export class StateDB implements IStateDB {
   private readonly db: Database.Database;
+  /**
+   * 준비한 문장 — SQL 글자마다 한 번만 준비한다. 노트마다 여러 번 부르는 조회(`getByPath` 등)가 부를 때마다 다시
+   * 준비하면 5,000 노트 첫 push 에서 준비만 3초였다(P10 실측). 스키마가 바뀌면 SQLite 가 다시 준비한다.
+   */
+  private readonly statements = new Map<string, Database.Statement>();
 
   private constructor(
     db: Database.Database,
@@ -25,6 +30,15 @@ export class StateDB implements IStateDB {
     this.db = db;
     this.db.pragma("journal_mode = WAL");
     this.db.pragma("foreign_keys = ON");
+  }
+
+  private sql(text: string): Database.Statement {
+    let statement = this.statements.get(text);
+    if (!statement) {
+      statement = this.db.prepare(text);
+      this.statements.set(text, statement);
+    }
+    return statement;
   }
 
   /**
@@ -90,22 +104,16 @@ export class StateDB implements IStateDB {
     const fix = (path: string) => path.replace(/\\/g, "/");
     this.db.transaction(() => {
       const unique = (table: string, column: string, key: string) => {
-        const rows = this.db
-          .prepare(
-            `SELECT ${key} AS k, ${column} AS p FROM ${table} WHERE instr(${column}, '\\') > 0`,
-          )
-          .all() as Array<{ k: string; p: string }>;
+        const rows = this.sql(
+          `SELECT ${key} AS k, ${column} AS p FROM ${table} WHERE instr(${column}, '\\') > 0`,
+        ).all() as Array<{ k: string; p: string }>;
         for (const row of rows) {
-          const taken = this.db
-            .prepare(`SELECT 1 FROM ${table} WHERE ${column} = ?`)
-            .get(fix(row.p));
+          const taken = this.sql(`SELECT 1 FROM ${table} WHERE ${column} = ?`).get(fix(row.p));
           if (taken) {
-            this.db.prepare(`DELETE FROM ${table} WHERE ${key} = ?`).run(row.k);
+            this.sql(`DELETE FROM ${table} WHERE ${key} = ?`).run(row.k);
             if (table === "sync_state") dropped++;
           } else {
-            this.db
-              .prepare(`UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`)
-              .run(fix(row.p), row.k);
+            this.sql(`UPDATE ${table} SET ${column} = ? WHERE ${key} = ?`).run(fix(row.p), row.k);
             if (table === "sync_state") renamed++;
           }
         }
@@ -113,18 +121,14 @@ export class StateDB implements IStateDB {
       unique("sync_state", "obsidian_path", "id");
       unique("wikilink_map", "obsidian_path", "obsidian_path");
       unique("file_registry", "local_path", "id");
-      this.db
-        .prepare("UPDATE image_registry SET local_path = replace(local_path, '\\', '/')")
-        .run();
-      const markers = this.db
-        .prepare(
-          "SELECT key FROM sync_metadata WHERE key LIKE 'preserve_markers:%' AND instr(key, '\\') > 0",
-        )
-        .all() as Array<{ key: string }>;
+      this.sql("UPDATE image_registry SET local_path = replace(local_path, '\\', '/')").run();
+      const markers = this.sql(
+        "SELECT key FROM sync_metadata WHERE key LIKE 'preserve_markers:%' AND instr(key, '\\') > 0",
+      ).all() as Array<{ key: string }>;
       for (const { key } of markers) {
-        const taken = this.db.prepare("SELECT 1 FROM sync_metadata WHERE key = ?").get(fix(key));
-        if (taken) this.db.prepare("DELETE FROM sync_metadata WHERE key = ?").run(key);
-        else this.db.prepare("UPDATE sync_metadata SET key = ? WHERE key = ?").run(fix(key), key);
+        const taken = this.sql("SELECT 1 FROM sync_metadata WHERE key = ?").get(fix(key));
+        if (taken) this.sql("DELETE FROM sync_metadata WHERE key = ?").run(key);
+        else this.sql("UPDATE sync_metadata SET key = ? WHERE key = ?").run(fix(key), key);
       }
     })();
     if (renamed + dropped > 0) {
@@ -140,9 +144,8 @@ export class StateDB implements IStateDB {
 
   private getSchemaVersion(): number {
     try {
-      const row = this.db
-        .prepare("SELECT value FROM sync_metadata WHERE key = 'schema_version'")
-        .get() as { value: string } | undefined;
+      const row = this.sql("SELECT value FROM sync_metadata WHERE key = 'schema_version'").get() as
+        { value: string } | undefined;
       return row ? Number(row.value) : 0;
     } catch {
       return 0;
@@ -161,33 +164,31 @@ export class StateDB implements IStateDB {
   // --- sync_state ---
 
   getByPath(path: string): SyncRecord | null {
-    const row = this.db.prepare("SELECT * FROM sync_state WHERE obsidian_path = ?").get(path) as
+    const row = this.sql("SELECT * FROM sync_state WHERE obsidian_path = ?").get(path) as
       RawSyncRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
   getByPathKey(path: string): SyncRecord[] {
-    const rows = this.db
-      .prepare("SELECT * FROM sync_state WHERE obsidian_path = ? COLLATE NOCASE")
-      .all(path) as RawSyncRow[];
+    const rows = this.sql("SELECT * FROM sync_state WHERE obsidian_path = ? COLLATE NOCASE").all(
+      path,
+    ) as RawSyncRow[];
     return rows.map((r) => this.mapRow(r));
   }
 
   getByNotionId(pageId: string): SyncRecord | null {
-    const row = this.db.prepare("SELECT * FROM sync_state WHERE notion_page_id = ?").get(pageId) as
+    const row = this.sql("SELECT * FROM sync_state WHERE notion_page_id = ?").get(pageId) as
       RawSyncRow | undefined;
     return row ? this.mapRow(row) : null;
   }
 
   getByStatus(status: SyncStatus): SyncRecord[] {
-    const rows = this.db
-      .prepare("SELECT * FROM sync_state WHERE status = ?")
-      .all(status) as RawSyncRow[];
+    const rows = this.sql("SELECT * FROM sync_state WHERE status = ?").all(status) as RawSyncRow[];
     return rows.map((r) => this.mapRow(r));
   }
 
   getAll(): SyncRecord[] {
-    const rows = this.db.prepare("SELECT * FROM sync_state").all() as RawSyncRow[];
+    const rows = this.sql("SELECT * FROM sync_state").all() as RawSyncRow[];
     return rows.map((r) => this.mapRow(r));
   }
 
@@ -195,9 +196,8 @@ export class StateDB implements IStateDB {
     const existing = this.getByPath(record.obsidianPath);
 
     if (existing) {
-      this.db
-        .prepare(
-          `UPDATE sync_state SET
+      this.sql(
+        `UPDATE sync_state SET
             notion_page_id = ?, notion_parent_id = ?, content_hash = ?,
             notion_last_edited = ?, notion_last_edited_by = ?, notion_seen_at = ?,
             notion_body_fingerprint = ?, local_last_modified = ?,
@@ -205,40 +205,7 @@ export class StateDB implements IStateDB {
             base_snapshot = ?, local_mtime = ?, local_file_size = ?,
             version = version + 1, updated_at = datetime('now')
           WHERE id = ?`,
-        )
-        .run(
-          record.notionPageId ?? null,
-          record.notionParentId ?? null,
-          record.contentHash,
-          record.notionLastEdited ?? null,
-          record.notionLastEditedBy ?? null,
-          record.notionSeenAt ?? null,
-          record.notionBodyFingerprint ?? null,
-          record.localLastModified,
-          record.syncDirection,
-          record.fileType,
-          record.status,
-          record.baseSnapshot ?? null,
-          record.localMtime ?? null,
-          record.localFileSize ?? null,
-          existing.id,
-        );
-      return this.getByPath(record.obsidianPath)!;
-    }
-
-    const id = generateId();
-    this.db
-      .prepare(
-        `INSERT INTO sync_state
-          (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
-           notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
-           local_last_modified, sync_direction, file_type,
-           status, base_snapshot, local_mtime, local_file_size, version)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
-      )
-      .run(
-        id,
-        record.obsidianPath,
+      ).run(
         record.notionPageId ?? null,
         record.notionParentId ?? null,
         record.contentHash,
@@ -253,92 +220,108 @@ export class StateDB implements IStateDB {
         record.baseSnapshot ?? null,
         record.localMtime ?? null,
         record.localFileSize ?? null,
+        existing.id,
       );
+      return this.getByPath(record.obsidianPath)!;
+    }
+
+    const id = generateId();
+    this.sql(
+      `INSERT INTO sync_state
+          (id, obsidian_path, notion_page_id, notion_parent_id, content_hash,
+           notion_last_edited, notion_last_edited_by, notion_seen_at, notion_body_fingerprint,
+           local_last_modified, sync_direction, file_type,
+           status, base_snapshot, local_mtime, local_file_size, version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+    ).run(
+      id,
+      record.obsidianPath,
+      record.notionPageId ?? null,
+      record.notionParentId ?? null,
+      record.contentHash,
+      record.notionLastEdited ?? null,
+      record.notionLastEditedBy ?? null,
+      record.notionSeenAt ?? null,
+      record.notionBodyFingerprint ?? null,
+      record.localLastModified,
+      record.syncDirection,
+      record.fileType,
+      record.status,
+      record.baseSnapshot ?? null,
+      record.localMtime ?? null,
+      record.localFileSize ?? null,
+    );
     return this.getByPath(record.obsidianPath)!;
   }
 
   updateStatus(id: string, status: SyncStatus): void {
-    this.db
-      .prepare("UPDATE sync_state SET status = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(status, id);
+    this.sql("UPDATE sync_state SET status = ?, updated_at = datetime('now') WHERE id = ?").run(
+      status,
+      id,
+    );
   }
 
   updateHash(id: string, hash: string, snapshot?: Buffer | null): void {
     if (snapshot !== undefined) {
-      this.db
-        .prepare(
-          "UPDATE sync_state SET content_hash = ?, base_snapshot = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(hash, snapshot, id);
+      this.sql(
+        "UPDATE sync_state SET content_hash = ?, base_snapshot = ?, updated_at = datetime('now') WHERE id = ?",
+      ).run(hash, snapshot, id);
     } else {
-      this.db
-        .prepare(
-          "UPDATE sync_state SET content_hash = ?, updated_at = datetime('now') WHERE id = ?",
-        )
-        .run(hash, id);
+      this.sql(
+        "UPDATE sync_state SET content_hash = ?, updated_at = datetime('now') WHERE id = ?",
+      ).run(hash, id);
     }
   }
 
   setRemoteObservation(id: string, observation: RemoteObservation): void {
     const { lastEdited, lastEditedBy, seenAt, bodyFingerprint } = observation;
     if (bodyFingerprint === undefined) {
-      this.db
-        .prepare(
-          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+      this.sql(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
             notion_seen_at = ?, updated_at = datetime('now') WHERE id = ?`,
-        )
-        .run(lastEdited, lastEditedBy, seenAt, id);
+      ).run(lastEdited, lastEditedBy, seenAt, id);
     } else {
-      this.db
-        .prepare(
-          `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
+      this.sql(
+        `UPDATE sync_state SET notion_last_edited = ?, notion_last_edited_by = ?,
             notion_seen_at = ?, notion_body_fingerprint = ?, updated_at = datetime('now')
           WHERE id = ?`,
-        )
-        .run(lastEdited, lastEditedBy, seenAt, bodyFingerprint, id);
+      ).run(lastEdited, lastEditedBy, seenAt, bodyFingerprint, id);
     }
   }
 
   setNotionBodyFingerprint(id: string, fingerprint: string | null): void {
-    this.db
-      .prepare(
-        "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(fingerprint, id);
+    this.sql(
+      "UPDATE sync_state SET notion_body_fingerprint = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(fingerprint, id);
   }
 
   updateStatCache(id: string, mtime: string, fileSize: number): void {
-    this.db
-      .prepare(
-        "UPDATE sync_state SET local_mtime = ?, local_file_size = ?, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(mtime, fileSize, id);
+    this.sql(
+      "UPDATE sync_state SET local_mtime = ?, local_file_size = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(mtime, fileSize, id);
   }
 
   setNotionParentId(id: string, parentId: string): void {
-    this.db
-      .prepare(
-        "UPDATE sync_state SET notion_parent_id = ?, updated_at = datetime('now') WHERE id = ?",
-      )
-      .run(parentId, id);
+    this.sql(
+      "UPDATE sync_state SET notion_parent_id = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(parentId, id);
   }
 
   updatePath(id: string, newPath: string): void {
-    this.db
-      .prepare("UPDATE sync_state SET obsidian_path = ?, updated_at = datetime('now') WHERE id = ?")
-      .run(newPath, id);
+    this.sql(
+      "UPDATE sync_state SET obsidian_path = ?, updated_at = datetime('now') WHERE id = ?",
+    ).run(newPath, id);
   }
 
   delete(id: string): void {
-    this.db.prepare("DELETE FROM sync_state WHERE id = ?").run(id);
+    this.sql("DELETE FROM sync_state WHERE id = ?").run(id);
   }
 
   // --- wikilink_map ---
 
   resolveWikilink(text: string): WikilinkEntry | null {
     for (const lookup of WIKILINK_LOOKUPS) {
-      const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
-        RawWikilinkRow | undefined;
+      const row = this.sql(lookup.sql).get(...lookup.params(text)) as RawWikilinkRow | undefined;
       if (row) return this.mapWikilinkRow(row);
     }
     return null;
@@ -347,89 +330,80 @@ export class StateDB implements IStateDB {
   resolveWikilinkIn(text: string, parentIds: readonly string[]): WikilinkEntry | null {
     if (parentIds.length === 0) return null;
     for (const lookup of wikilinkLookupsIn(parentIds)) {
-      const row = this.db.prepare(lookup.sql).get(...lookup.params(text)) as
-        RawWikilinkRow | undefined;
+      const row = this.sql(lookup.sql).get(...lookup.params(text)) as RawWikilinkRow | undefined;
       if (row) return this.mapWikilinkRow(row);
     }
     return null;
   }
 
   resolvePageId(pageId: string): WikilinkEntry | null {
-    const row = this.db
-      .prepare("SELECT * FROM wikilink_map WHERE notion_page_id = ?")
-      .get(pageId) as RawWikilinkRow | undefined;
+    const row = this.sql("SELECT * FROM wikilink_map WHERE notion_page_id = ?").get(pageId) as
+      RawWikilinkRow | undefined;
     return row ? this.mapWikilinkRow(row) : null;
   }
 
   upsertWikilink(entry: WikilinkEntry): void {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO wikilink_map (obsidian_path, notion_page_id, title, aliases, updated_at)
+    this.sql(
+      `INSERT OR REPLACE INTO wikilink_map (obsidian_path, notion_page_id, title, aliases, updated_at)
         VALUES (?, ?, ?, ?, datetime('now'))`,
-      )
-      .run(entry.obsidianPath, entry.notionPageId, entry.title, JSON.stringify(entry.aliases));
+    ).run(entry.obsidianPath, entry.notionPageId, entry.title, JSON.stringify(entry.aliases));
   }
 
   deleteWikilink(obsidianPath: string): void {
-    this.db.prepare("DELETE FROM wikilink_map WHERE obsidian_path = ?").run(obsidianPath);
+    this.sql("DELETE FROM wikilink_map WHERE obsidian_path = ?").run(obsidianPath);
   }
 
   // --- sync_metadata ---
 
   getMeta(key: string): string | null {
-    const row = this.db.prepare("SELECT value FROM sync_metadata WHERE key = ?").get(key) as
+    const row = this.sql("SELECT value FROM sync_metadata WHERE key = ?").get(key) as
       { value: string } | undefined;
     return row?.value ?? null;
   }
 
   setMeta(key: string, value: string): void {
-    this.db
-      .prepare("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)")
-      .run(key, value);
+    this.sql("INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)").run(key, value);
   }
 
   // --- file_registry ---
 
   isFileRegistered(localPath: string): boolean {
-    const row = this.db.prepare("SELECT 1 FROM file_registry WHERE local_path = ?").get(localPath);
+    const row = this.sql("SELECT 1 FROM file_registry WHERE local_path = ?").get(localPath);
     return !!row;
   }
 
   getFileRegistry(localPath: string): FileRegistryEntry | null {
-    const row = this.db
-      .prepare("SELECT * FROM file_registry WHERE local_path = ?")
-      .get(localPath) as RawFileRegistryRow | undefined;
+    const row = this.sql("SELECT * FROM file_registry WHERE local_path = ?").get(localPath) as
+      RawFileRegistryRow | undefined;
     return row ? this.mapFileRegistryRow(row) : null;
   }
 
   getFilesByPageId(notionPageId: string): FileRegistryEntry[] {
-    const rows = this.db
-      .prepare("SELECT * FROM file_registry WHERE notion_page_id = ?")
-      .all(notionPageId) as RawFileRegistryRow[];
+    const rows = this.sql("SELECT * FROM file_registry WHERE notion_page_id = ?").all(
+      notionPageId,
+    ) as RawFileRegistryRow[];
     return rows.map((r) => this.mapFileRegistryRow(r));
   }
 
   registerFile(entry: RegisterFileInput): void {
     const id = generateId();
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO file_registry
+    this.sql(
+      `INSERT OR REPLACE INTO file_registry
           (id, local_path, notion_page_id, file_upload_id, file_type, file_hash, file_size)
         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        entry.localPath,
-        entry.notionPageId,
-        entry.fileUploadId,
-        entry.fileType,
-        entry.fileHash,
-        entry.fileSize,
-      );
+    ).run(
+      id,
+      entry.localPath,
+      entry.notionPageId,
+      entry.fileUploadId,
+      entry.fileType,
+      entry.fileHash,
+      entry.fileSize,
+    );
   }
 
   deleteFileRegistry(localPath: string): void {
-    this.db.prepare("DELETE FROM file_registry WHERE local_path = ?").run(localPath);
+    this.sql("DELETE FROM file_registry WHERE local_path = ?").run(localPath);
   }
 
   private mapFileRegistryRow(row: RawFileRegistryRow): FileRegistryEntry {
@@ -448,22 +422,18 @@ export class StateDB implements IStateDB {
 
   recordPendingOperation(input: RecordPendingInput): string {
     const id = generateId();
-    this.db
-      .prepare(
-        `INSERT INTO pending_operations
+    this.sql(
+      `INSERT INTO pending_operations
           (id, sync_state_id, operation, direction, payload, status)
         VALUES (?, ?, ?, ?, ?, 'pending')`,
-      )
-      .run(id, input.syncStateId, input.operation, input.direction, input.payload ?? null);
+    ).run(id, input.syncStateId, input.operation, input.direction, input.payload ?? null);
     return id;
   }
 
   getIncompletePendingOperations(): PendingOperation[] {
-    const rows = this.db
-      .prepare(
-        "SELECT * FROM pending_operations WHERE status IN ('pending', 'processing') ORDER BY created_at ASC",
-      )
-      .all() as RawPendingRow[];
+    const rows = this.sql(
+      "SELECT * FROM pending_operations WHERE status IN ('pending', 'processing') ORDER BY created_at ASC",
+    ).all() as RawPendingRow[];
     return rows.map((r) => this.mapPendingRow(r));
   }
 
@@ -471,34 +441,28 @@ export class StateDB implements IStateDB {
     syncStateId: string,
     operation: PendingOperation["operation"],
   ): PendingOperation | null {
-    const row = this.db
-      .prepare(
-        `SELECT * FROM pending_operations
+    const row = this.sql(
+      `SELECT * FROM pending_operations
          WHERE sync_state_id = ? AND operation = ? AND status IN ('pending', 'processing')
          ORDER BY created_at ASC LIMIT 1`,
-      )
-      .get(syncStateId, operation) as RawPendingRow | undefined;
+    ).get(syncStateId, operation) as RawPendingRow | undefined;
     return row ? this.mapPendingRow(row) : null;
   }
 
   markPendingCompleted(id: string): void {
-    this.db
-      .prepare(
-        "UPDATE pending_operations SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
-      )
-      .run(id);
+    this.sql(
+      "UPDATE pending_operations SET status = 'completed', completed_at = datetime('now') WHERE id = ?",
+    ).run(id);
   }
 
   markPendingFailed(id: string, errorMessage: string): void {
-    this.db
-      .prepare(
-        "UPDATE pending_operations SET status = 'failed', retry_count = retry_count + 1, error_message = ?, completed_at = datetime('now') WHERE id = ?",
-      )
-      .run(errorMessage, id);
+    this.sql(
+      "UPDATE pending_operations SET status = 'failed', retry_count = retry_count + 1, error_message = ?, completed_at = datetime('now') WHERE id = ?",
+    ).run(errorMessage, id);
   }
 
   clearCompletedOperations(): void {
-    this.db.prepare("DELETE FROM pending_operations WHERE status IN ('completed', 'failed')").run();
+    this.sql("DELETE FROM pending_operations WHERE status IN ('completed', 'failed')").run();
   }
 
   private mapPendingRow(row: RawPendingRow): PendingOperation {
@@ -520,7 +484,7 @@ export class StateDB implements IStateDB {
 
   storePreserveMarkers(path: string, markers: PreserveMarker[]): void {
     if (markers.length === 0) {
-      this.db.prepare("DELETE FROM sync_metadata WHERE key = ?").run(`preserve_markers:${path}`);
+      this.sql("DELETE FROM sync_metadata WHERE key = ?").run(`preserve_markers:${path}`);
       return;
     }
     this.setMeta(`preserve_markers:${path}`, JSON.stringify(markers));
