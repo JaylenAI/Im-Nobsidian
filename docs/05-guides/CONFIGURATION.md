@@ -11,35 +11,44 @@
     "token": "ntn_...", // Notion Integration Secret
     "rootPageId": "...", // 루트 페이지 또는 데이터베이스 ID
     "parentMode": "page", // "page" (페이지 트리) 또는 "database" (DB 행)
+    "databases": [], // 따로 받을 DB — [{ "databaseId": "...", "localFolder": "Tasks" }]
   },
   "sync": {
     "direction": "both", // "push" | "pull" | "both"
     "conflictStrategy": "manual", // "local-first" | "remote-first" | "manual" | "duplicate" | "merge"
-    "autoSync": false, // watch 모드 시 자동 동기화
-    "autoSyncInterval": 300, // 자동 동기화 간격 (초)
+    "autoSync": false, // nobsi watch 의 주기 동기화
+    "autoSyncInterval": 300, // 주기 동기화 간격 (초, 30–3600)
+    "fullReconcileInterval": 3600, // Notion 전체 확인 주기 (초, 0 = pull 마다)
     "deleteSync": false, // 삭제 동기화 여부
     "renameOnTitleChange": false, // Notion 에서 바꾼 제목으로 파일 이름 바꾸기
+    "syncFiles": true, // 볼트 첨부를 폴더 페이지에 올리기
+    "createDatabases": true, // DB 정의 파일이 있는 폴더를 Notion DB 로 만들기
+    "notifications": "silent", // "silent" | "default"
   },
   "paths": {
     "include": ["**/*"], // 동기화 포함 glob 패턴
     "exclude": [], // 동기화 제외 glob 패턴
-    "attachments": "attachments", // 이미지 다운로드 폴더
+    "excludeObsidianOnly": true, // Canvas · Excalidraw · 템플릿 폴더 빼기
+    "attachments": "attachments", // 받은 그림 · 파일을 두는 폴더
   },
   "conversion": {
     "preferMarkdownApi": true, // Notion Markdown API 사용 (권장)
-    "preserveMarkers": true, // 보존 마커 활성화
-    "frontmatterMapping": true, // 프론트매터 ↔ 속성 매핑
-    "imageDownload": "immediate", // "immediate" | "lazy"
+    "imageDownload": "immediate", // "immediate" | "skip" ("lazy" 는 "skip" 과 같다)
+    // "timeZone": "Asia/Seoul", // DB 날짜시각의 시간대 — 없으면 이 컴퓨터의 시간대
   },
   "advanced": {
     "concurrency": 3, // 동시에 기다리는 API 요청 수
     "rateLimitIntervalMs": 350, // 요청 사이 최소 간격 (ms)
     "maxRetries": 5, // API 재시도 횟수
     "timeoutMs": 30000, // API 타임아웃 (ms)
-    "batchSize": 100, // 배치 처리 크기
+    // 그 밖의 값은 아래 「Advanced Settings」 — 보통 바꿀 일이 없다
   },
 }
 ```
+
+설정 파일에 적지 않은 키는 기본값을 씁니다. 0.16 부터 없앤 키(`conversion.preserveMarkers` · `conversion.frontmatterMapping`
+· `notion.workspaceId` · `notion.databases[].propertyMapping` · `notion.databases[].titleProperty`)는 읽을 때 버립니다 — 어느
+것도 동작을 바꾼 적이 없었습니다. 기본값과 다른 값을 적어 두었으면 그렇다고 알립니다.
 
 ## Notion Settings / Notion 설정
 
@@ -63,6 +72,28 @@ https://www.notion.so/My-Page-abc123def456...
 - `"page"` — 마크다운 파일이 페이지 트리로 동기화됩니다 (기본값)
 - `"database"` — 마크다운 파일이 데이터베이스 행으로 동기화됩니다. `notion.databaseId` 도 적어야 합니다 — 없으면
   페이지 모드로 동작합니다. `nobsi init` 은 이 둘을 묻지 않으므로 `config.json` 에 직접 적습니다.
+
+### databases
+
+루트 아래가 아닌 곳의 DB 를 볼트의 폴더로 받습니다. 줄마다 `databaseId` · `localFolder`(볼트 루트 기준 폴더), 그리고 받을 행만
+고르는 `pullFilter`(Notion API 의 [필터 객체](https://developers.notion.com/reference/post-database-query-filter) 그대로)를 적습니다.
+
+```jsonc
+{
+  "notion": {
+    "databases": [
+      {
+        "databaseId": "1fa13b18d38280cf9057e37e6e473e41",
+        "localFolder": "Projects/Tasks",
+        "pullFilter": { "property": "Status", "status": { "does_not_equal": "Done" } },
+      },
+    ],
+  },
+}
+```
+
+`pullFilter` 가 있는 DB 는 지운 행을 반대쪽에서 지우지 않습니다 — 필터 밖으로 나간 행과 지운 행을 가를 수 없기 때문입니다.
+루트 아래의 DB 는 여기 적지 않아도 찾아서 받습니다. 플러그인은 설정의 **Notion DB** 절입니다.
 
 ## Sync Settings / 동기화 설정
 
@@ -104,6 +135,37 @@ https://www.notion.so/My-Page-abc123def456...
 이름을 바꾸지 않는 경우 — frontmatter `title:` 을 파일 이름과 따로 정해 두었거나, 그 노트의 제목을 볼트에서도 고쳤거나,
 볼트에서 옮긴 것을 아직 올리지 않았거나, 폴더 안에 DB · 다른 연결 폴더가 있으면 예전처럼 제목만 받는다(ADR-040).
 플러그인은 설정의 「Notion 에서 바꾼 제목으로 이름 바꾸기」 다.
+
+### autoSync / autoSyncInterval
+
+- `autoSync: true` — `nobsi watch` 가 파일 변경 때 말고도 `autoSyncInterval` 초마다(30–3600, 기본 300) 볼트 전체를 동기화합니다
+- `nobsi watch --interval <초>` 를 주면 그 값이 이깁니다(`0` 은 끔)
+
+0.17.1 전까지는 이 두 값을 아무도 읽지 않았습니다. 플러그인은 설정 탭의 「자동 동기화」 를 씁니다.
+
+### fullReconcileInterval
+
+Notion 전체를 훑어 확인하는 주기(초, 기본 3600, 0–604800). 그 사이의 pull 은 바뀐 페이지 · 행 · DB 만 받고, Notion 에서 지운
+페이지는 pull 마다 15개씩 돌아가며 확인합니다(ADR-027 · 044). `0` 이면 pull 마다 전체를 봅니다. `nobsi pull --force` 는 주기와
+상관없이 지금 전체를 봅니다.
+
+### syncFiles
+
+`true`(기본값) — 볼트의 첨부(노트가 아닌 파일)를 그 폴더의 Notion 페이지에 파일 블록으로 올립니다. 바뀌지 않은 파일은 다시
+올리지 않습니다. 노트에 붙인 첨부(`![[파일]]`)는 이 값과 상관없이 그 노트와 함께 올라갑니다. 노트가 하나도 없는 폴더(받은 그림을
+두는 `attachments` 같은)에는 Notion 페이지가 없어 그 안의 파일은 따로 올리지 않습니다 — 받은 것을 다시 올려 겹치지 않게 하려는
+것입니다. Notion 이 받지 않는 형식(`.ipynb` 등)은 볼트에 두고 push 때 알립니다.
+
+### createDatabases
+
+`true`(기본값) — DB 정의 파일(`<폴더>.notion.json` 사이드카)이 있는 새 폴더를 push 가 Notion DB 로 만들고 그 안의 노트를 행으로
+올립니다(ADR-036 · 037). `false` 면 그 폴더를 보통 폴더 페이지로 올립니다.
+
+### notifications
+
+- `"silent"`(기본값) — 동기화가 만들고 고친 페이지가 페이지 수정 · @멘션 · 사람 속성 알림을 보내지 않습니다. 볼트를 새
+  워크스페이스로 올릴 때 사람 속성이 있는 행마다 그 사람에게 알림이 가던 것을 막습니다
+- `"default"` — Notion 의 기본 동작대로 알립니다
 
 ## Path Settings / 경로 설정
 
@@ -193,15 +255,23 @@ Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입
 
 `true` 여도 Markdown API 로 받지 못한 페이지는 블록 API 로 받습니다.
 
-### preserveMarkers
+### imageDownload
 
-`true` (기본값): Obsidian 고유 문법 (콜아웃 타입, 토글 상태 등)을 보존 마커로 저장합니다.
-이를 통해 Push → Pull 왕복 시 원본 문법이 완벽하게 복원됩니다.
+- `"immediate"`(기본값) — pull 때 Notion 에 올린 그림을 `attachments` 폴더로 받아 노트에 `![[…]]` 로 적습니다
+- `"skip"` — 받지 않고 Notion 의 주소를 그대로 적습니다. Notion 에 올린 파일의 주소는 **약 1시간 뒤 열리지 않습니다**
+- `"lazy"` — 지금은 `"skip"` 과 같습니다(나중에 받는 동작은 없습니다)
 
-### frontmatterMapping
+파일 블록(PDF · 첨부)은 이 값과 상관없이 받습니다(`maxFileSizeBytes` 까지). 플러그인은 설정의 「Notion 의 그림 받기」 입니다.
 
-`true` (기본값): YAML 프론트매터 ↔ Notion 속성을 자동 매핑합니다.
-지원 타입: title, rich_text, number, select, multi_select, date, checkbox, url, email, phone_number, people, status, created_time, last_edited_time, formula, relation, files
+### timeZone
+
+DB 의 날짜시각 속성을 적고 보낼 시간대(IANA 이름, 예: `"Asia/Seoul"`). 없으면 이 컴퓨터의 시간대입니다. Obsidian 의 날짜시각
+속성에는 시간대가 없어서, pull 은 이 시간대의 시각으로 적고 push 는 이 시간대의 오프셋을 붙여 보냅니다.
+
+### preserveMarkers · frontmatterMapping (0.16 에 없앰)
+
+둘 다 꺼도 동작이 바뀌지 않았습니다. Notion 이 받지 못하는 기능은 늘 보존 마커로 남기고, frontmatter 는 늘 Notion 속성으로
+주고받습니다. 적어 두었으면 지워도 됩니다.
 
 ## Advanced Settings / 고급 설정
 
@@ -218,13 +288,28 @@ Pull 시 이미지가 저장될 폴더명. 볼트 루트 기준 상대 경로입
 쯤으로 낮춰 큰 볼트의 첫 동기화를 줄일 수 있습니다 — Business 워크스페이스에서는 실측하지 않았습니다. 429 가 자주 보이면 이
 값을 올리세요.
 
-### maxRetries
+### maxRetries · retryBaseDelayMs · retryBackoffFactor
 
-API 실패 시 재시도 횟수. 지수 백오프 + 랜덤 지터가 적용됩니다.
+API 실패 시 재시도 횟수(기본 5, 0–10)와 그 사이 대기. 대기는 `retryBaseDelayMs × retryBackoffFactor^시도` 에 0.5–1.0 배 지터를
+곱한 값입니다(기본 1000ms · 2). 서버가 `Retry-After` 를 주면 그 시간(1.0–1.25 배)을 기다리고, 429 는 모든 요청이 함께 멈춥니다.
 
 ### timeoutMs
 
 단일 API 요청의 타임아웃 (밀리초). 대규모 페이지의 경우 증가가 필요할 수 있습니다.
+
+### retryWaitMs
+
+한 번의 push · pull 안에서 실패한 노트를 다시 해 보기 전에 기다리는 시간(ms, 기본 2000, 0–30000). 다시 해도 실패한 노트는 결과의
+실패로 남고 다음 동기화가 다시 합니다.
+
+### pageSize · batchSize
+
+목록을 한 번에 읽는 수와 블록을 한 번에 붙이는 수(기본 100 — Notion 의 상한). 낮추면 요청 수가 늘어납니다.
+
+### mediaConcurrency · mediaMaxRetries · mediaRetryBaseMs · fileConcurrency
+
+그림 · 미디어를 동시에 받는 수(기본 3), 받기 시도 수(기본 3, 0 은 1 로 본다)와 다시 받기 전 대기(기본 1000ms × 몇 번째 재시도인지), 첨부를 동시에 올리고
+받는 수(기본 2). 모두 최대 10. 늘려도 API 요청 빠르기는 `rateLimitIntervalMs` 가 정합니다.
 
 ### maxFileSizeBytes
 
