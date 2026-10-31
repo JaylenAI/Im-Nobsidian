@@ -47,6 +47,8 @@
   no 429. Speed is set by `advanced.rateLimitIntervalMs`; Business and Enterprise workspaces can lower it.
 - **Large first pushes slowed down with the square of the vault size** — the case-insensitive link lookup had no
   index. Local work for 5,000 notes fell from 15.7 s to 9 s and now grows linearly.
+- **Rows where only read-only properties changed were listed as «updated»** in push progress while the summary said
+  no changes. They are no longer listed (also in `--dry-run`).
 - Renaming in Notion a database created by push now renames its folder too; names a person ended with «(hex)» are no
   longer mistaken for pull's id suffix; rows where only read-only properties changed are no longer counted as
   updated.
@@ -105,6 +107,9 @@
 
 - **Tests:** core 4,278 · cli 178 · plugin 481 on Linux (build, lint, format, typecheck), and CI on Linux (Node 22,
   24), macOS and Windows.
+- **Release regression:** seven scripts on the dev build against a fresh probe — two vaults pushing and pulling text,
+  attachments, databases, formulas, deletions, moves between databases and a lost state database — all ending with
+  zero changes on both sides. One defect found and fixed (the progress line above); the run was repeated with the fix.
 - **Real Notion API:** NFD vaults written by the new CLI and by 0.15.0, the Obsidian-only excludes in the CLI and in
   the plugin (isolated Obsidian), Notion's «today», and a 1,000-note vault — first push 17.9 min with no 429, peak
   138 MB, status 0.3 s, `verify` 1,020 / 1,020.
