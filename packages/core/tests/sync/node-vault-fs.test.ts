@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, writeFile, readFile, mkdir, chmod } from "node:fs/promises";
+import { mkdtemp, rm, writeFile, readFile, readdir, mkdir, chmod } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { NodeVaultFS } from "../../src/sync/node-vault-fs.js";
@@ -262,6 +262,73 @@ describe("NodeVaultFS", () => {
       // 포함 패턴은 폴더를 빼지 않는다
       expect(filtered.excludesPath("Notes", "folder")).toBe(false);
       expect(filtered.excludesPath("Notes")).toBe(true);
+    });
+  });
+
+  describe("NFD 이름 (P9)", () => {
+    const nfd = (text: string) => text.normalize("NFD");
+    const onDisk = async () =>
+      (await readdir(tempDir, { recursive: true })).map((name) => String(name)).sort();
+
+    beforeEach(async () => {
+      await mkdir(join(tempDir, nfd("회의")));
+      await writeFile(join(tempDir, nfd("회의"), nfd("주간.md")), "본문");
+      await writeFile(join(tempDir, nfd("회의"), nfd("그림.png")), "png");
+      await vaultFs.listMarkdownFiles();
+    });
+
+    it("NFC 경로로 보이고 그 경로로 읽고 · 쓰고 · 있는지 본다 — 새 이름을 만들지 않는다", async () => {
+      expect((await vaultFs.listMarkdownFiles()).map((f) => f.path)).toEqual(["회의/주간.md"]);
+      expect((await vaultFs.listNonMarkdownFiles()).map((f) => f.path)).toEqual(["회의/그림.png"]);
+      expect(await vaultFs.exists("회의/주간.md")).toBe(true);
+      await vaultFs.writeFile("회의/주간.md", "고친 본문");
+      await vaultFs.writeFile("회의/새 노트.md", "새");
+      expect(await readFile(join(tempDir, nfd("회의"), nfd("주간.md")), "utf-8")).toBe("고친 본문");
+      expect(await onDisk()).toEqual(
+        [
+          nfd("회의"),
+          join(nfd("회의"), nfd("주간.md")),
+          join(nfd("회의"), nfd("그림.png")),
+          join(nfd("회의"), "새 노트.md"),
+        ].sort(),
+      );
+    });
+
+    it("걷기 전에 연 NFC 경로도 NFD 파일 · 폴더로 간다", async () => {
+      const fresh = new NodeVaultFS(tempDir);
+      expect(await fresh.exists("회의/주간.md")).toBe(true);
+      expect(await fresh.readFile("회의/주간.md")).toBe("본문");
+      await fresh.writeFile("회의/새 노트.md", "새");
+      expect(await fresh.exists("회의/없는 노트.md")).toBe(false);
+      expect(await onDisk()).toContain(join(nfd("회의"), "새 노트.md"));
+      expect(await onDisk()).not.toContain("회의");
+    });
+
+    it("옮기면 새 이름은 NFC 로 · 옮긴 폴더 안의 NFD 이름은 새 자리에서도 찾는다", async () => {
+      await vaultFs.moveFile("회의", "모임");
+      expect(await vaultFs.readFile("모임/주간.md")).toBe("본문");
+      await vaultFs.moveFile("모임/주간.md", "모임/월간.md");
+      expect(await onDisk()).toEqual(
+        ["모임", join("모임", "월간.md"), join("모임", nfd("그림.png"))].sort(),
+      );
+    });
+
+    it("지우고 · 빈 폴더를 치운다", async () => {
+      await vaultFs.deleteFile("회의/주간.md");
+      await vaultFs.deleteFile("회의/그림.png");
+      expect(await vaultFs.removeEmptyFolder("회의")).toBe(true);
+      expect(await onDisk()).toEqual([]);
+    });
+
+    it("NFC · NFD 두 이름이 따로 있으면(Linux) 둘 다 보인다 — 하나로 접지 않는다", async () => {
+      await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽").catch(async () => {
+        await mkdir(join(tempDir, "회의"));
+        await writeFile(join(tempDir, "회의", "주간.md"), "NFC 쪽");
+      });
+      const files = await vaultFs.listMarkdownFiles();
+      expect(files).toHaveLength(2);
+      const contents = await Promise.all(files.map((file) => vaultFs.readFile(file.path)));
+      expect(contents.sort()).toEqual(["NFC 쪽", "본문"].sort());
     });
   });
 });

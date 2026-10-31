@@ -29,6 +29,7 @@ function createMockVaultFs(): VaultFS {
 function createMockStateDb() {
   return {
     getByPath: vi.fn().mockReturnValue(null),
+    getByPathKey: vi.fn().mockReturnValue([]),
     getByNotionId: vi.fn().mockReturnValue(null),
     getAll: vi.fn().mockReturnValue([]),
     getByStatus: vi.fn().mockReturnValue([]),
@@ -57,6 +58,8 @@ function createMockStateDb() {
     markPendingFailed: vi.fn(),
     clearCompletedOperations: vi.fn(),
     registerFile: vi.fn(),
+    getFilesByPageId: vi.fn().mockReturnValue([]),
+    deleteFileRegistry: vi.fn(),
     getFileRegistry: vi.fn().mockReturnValue(null),
     isFileRegistered: vi.fn().mockReturnValue(false),
     close: vi.fn(),

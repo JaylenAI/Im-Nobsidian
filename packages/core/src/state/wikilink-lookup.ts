@@ -8,6 +8,9 @@
  *   예전 조회(`LIKE '%/노트.md'`)는 슬래시가 앞에 있어야 맞아서 볼트 맨 위 노트와 경로 붙은 링크를 못 찾았다 —
  *   제목이 파일 이름과 다른 노트(파일 이름에 못 쓰는 글자를 바꾼 노트)로 가는 링크가 Notion 에서 글로 남았다.
  * - LIKE 의 `%` · `_` 는 글자로 견준다. 예전에는 `a_b` 가 `a-b.md` 에도 맞았다.
+ * - 링크 글자는 NFC 로 견준다 — 볼트 경로 · 제목이 NFC 다. macOS 에서 붙여 넣은 NFD 글자도 같은 노트로 간다.
+ * - 끝으로 대소문자를 가리지 않고 한 번 더 — Obsidian 은 `[[note]]` 를 `Note.md` 로 잇는다. SQLite 의 `NOCASE` 는
+ *   ASCII 만 접는다.
  */
 export interface WikilinkLookup {
   readonly sql: string;
@@ -22,16 +25,24 @@ function escapeLike(text: string): string {
 }
 
 export const WIKILINK_LOOKUPS: readonly WikilinkLookup[] = [
-  { sql: "SELECT * FROM wikilink_map WHERE title = ?", params: (text) => [text] },
+  { sql: "SELECT * FROM wikilink_map WHERE title = ?", params: (text) => [nfc(text)] },
   {
     sql: `SELECT * FROM wikilink_map WHERE aliases LIKE ? ESCAPE '${LIKE_ESCAPE}'`,
-    params: (text) => [`%${escapeLike(JSON.stringify(text))}%`],
+    params: (text) => [`%${escapeLike(JSON.stringify(nfc(text)))}%`],
   },
   {
     sql: `SELECT * FROM wikilink_map WHERE obsidian_path = ? OR obsidian_path LIKE ? ESCAPE '${LIKE_ESCAPE}'`,
-    params: (text) => [`${text}.md`, `%/${escapeLike(text)}.md`],
+    params: (text) => [`${nfc(text)}.md`, `%/${escapeLike(nfc(text))}.md`],
+  },
+  {
+    sql: "SELECT * FROM wikilink_map WHERE title = ? COLLATE NOCASE OR obsidian_path = ? COLLATE NOCASE",
+    params: (text) => [nfc(text), `${nfc(text)}.md`],
   },
 ];
+
+function nfc(text: string): string {
+  return text.normalize("NFC");
+}
 
 /**
  * relation 값의 위키링크 → 대상 DB(`parentIds` — DB id · data source id)의 행만 보는 조회들.
@@ -49,12 +60,12 @@ export function wikilinkLookupsIn(parentIds: readonly string[]): WikilinkLookup[
   return [
     {
       sql: scoped(`w.obsidian_path = ? OR w.obsidian_path LIKE ? ESCAPE '${LIKE_ESCAPE}'`),
-      params: (text) => [...ids, `${text}.md`, `%/${escapeLike(text)}.md`],
+      params: (text) => [...ids, `${nfc(text)}.md`, `%/${escapeLike(nfc(text))}.md`],
     },
-    { sql: scoped("w.title = ?"), params: (text) => [...ids, text] },
+    { sql: scoped("w.title = ?"), params: (text) => [...ids, nfc(text)] },
     {
       sql: scoped(`w.aliases LIKE ? ESCAPE '${LIKE_ESCAPE}'`),
-      params: (text) => [...ids, `%${escapeLike(JSON.stringify(text))}%`],
+      params: (text) => [...ids, `%${escapeLike(JSON.stringify(nfc(text)))}%`],
     },
   ];
 }

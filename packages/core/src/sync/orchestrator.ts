@@ -104,6 +104,8 @@ import {
   type UserBaseFilterFix,
 } from "./db-folder-moves.js";
 import type { GatedOperation } from "./operation-gate.js";
+import { upgradeNfcPaths } from "./nfc-paths.js";
+import { NoteRelocator } from "./note-relocation.js";
 import {
   forgetRenameHint,
   isEmptyRenameHints,
@@ -394,6 +396,20 @@ export class SyncOrchestrator {
   }
 
   /**
+   * 예전 CLI 가 적은 NFD 경로를 NFC 로 옮겨 적는다 — 한 번만(`upgradeNfcPaths`). dry-run · status 도 먼저 한다: 상태 기록의
+   * 표기만 고치고 볼트 · Notion 은 그대로다. 안 고치면 그 노트를 지울 것 · 새로 만들 것으로 보인다.
+   */
+  private alignStatePaths(): void {
+    const moved = upgradeNfcPaths(
+      this.stateDb,
+      new NoteRelocator(this.stateDb, this.vaultFs, this.config.notion.databases ?? []),
+    );
+    if (moved > 0) {
+      getLogger().info(`[Im-Nobsidian] 상태 기록의 경로 ${moved}개를 NFC 표기로 옮겨 적음`);
+    }
+  }
+
+  /**
    * 볼트의 첨부(노트가 아닌 파일)를 폴더 페이지에 올린다(`sync.syncFiles`). 올리지 못한 첨부는 `failed` 에 담는다. 올릴 노트가
    * 있든 없든 push 마다 부른다 — 바뀌지 않은 첨부는 파일 기록이 건너뛴다.
    */
@@ -424,6 +440,7 @@ export class SyncOrchestrator {
   ): Promise<PushResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
+    this.alignStatePaths();
 
     if (this.config.sync.direction === "pull") {
       return {
@@ -998,6 +1015,7 @@ export class SyncOrchestrator {
   private async executePull(options?: PullOptions): Promise<PullResult> {
     const startTime = Date.now();
     this.assertConnectionScope();
+    this.alignStatePaths();
     this.puller.beginPull();
     this.databaseSyncer.beginPull(this.puller.unlinkedVaultAtStart);
     this.rowSchemas.clear();
@@ -1563,6 +1581,7 @@ export class SyncOrchestrator {
   private async executeStatus(signal?: AbortLike): Promise<StatusResult> {
     throwIfAborted(signal);
     this.assertConnectionScope();
+    this.alignStatePaths();
     this.observation.begin(Date.now());
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const localChanges = plan.scan.changes;
@@ -1652,6 +1671,7 @@ export class SyncOrchestrator {
    */
   async statusLocal(): Promise<StatusResult> {
     this.assertConnectionScope();
+    this.alignStatePaths();
     const plan = await this.planner.planLocalChanges(await this.vaultFs.listMarkdownFileStats());
     const conflictRecords = this.stateDb.getByStatus("conflict");
     const lastSyncAt = this.stateDb.getMeta(LAST_SYNC_META_KEY);
