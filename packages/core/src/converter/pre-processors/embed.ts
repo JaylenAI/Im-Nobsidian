@@ -15,6 +15,7 @@ import {
 import { encodeMarkerTarget } from "../marker-url.js";
 import { mediaLabel } from "../media-labels.js";
 import { pushContainerKind } from "../container-head.js";
+import { LookbehindRegExp } from "../../utils/lookbehind.js";
 
 /**
  * 대상에 `[` `]` 를 허용하지 않는다 — 이유는 WikilinkResolver 쪽 주석 참조.
@@ -43,9 +44,11 @@ const VIDEO_HOSTS = ["youtube.com", "youtu.be", "vimeo.com"];
  * 노트에 홀로 남은 미디어 마커 — 같은 줄 앞에 `📎` 가 없는 것. push 가 심는 자리표시자
  * (`> 📎 이름 %% …:local-image:… %%`)와 가른다.
  */
-const STRAY_MEDIA_MARKER_RE = new RegExp(
-  `(?<!📎[^\\n]*)%%\\s*${MARKER_BRAND_RE}:local-(?:image|file):${MARKER_PAYLOAD_CHAR}+?\\s*%%`,
+const STRAY_MEDIA_MARKER_RE = new LookbehindRegExp(
+  `%%\\s*${MARKER_BRAND_RE}:local-(?:image|file):${MARKER_PAYLOAD_CHAR}+?\\s*%%`,
   "gu",
+  // 같은 줄의 앞에 📎 이 없다 — 예전 `(?<!📎[^\n]*)`
+  (text, index) => !text.slice(text.lastIndexOf("\n", index - 1) + 1, index).includes("📎"),
 );
 
 export class EmbedResolver implements Processor {

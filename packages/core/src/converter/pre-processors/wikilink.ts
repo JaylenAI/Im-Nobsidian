@@ -9,6 +9,7 @@ import { WIKILINK_PROTOCOL } from "../../constants/markers.js";
 import { computeAnchor, mapOutsideCode } from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
 import { anchorDisplay, notionBlockUrl, splitAnchor, type AnchorLookup } from "../anchor-links.js";
+import { LookbehindRegExp, notAfter } from "../../utils/lookbehind.js";
 
 /**
  * 대상·별칭 어디에도 `[` `]` 를 허용하지 않는다 — 안쪽 링크를 잡게 하기 위해서다.
@@ -17,7 +18,11 @@ import { anchorDisplay, notionBlockUrl, splitAnchor, type AnchorLookup } from ".
  * `]` 하나가 링크 밖으로 삐져나와 문법이 깨졌다. 이제 `[` + `[[happy]]` + `]` 로
  * 갈라져 사용자가 쓴 그대로 왕복한다.
  */
-const WIKILINK_REGEX = /(?<!!)\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g;
+const WIKILINK_REGEX = new LookbehindRegExp(
+  /\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g,
+  undefined,
+  notAfter(/!/),
+);
 
 /**
  * 표 칸의 위키링크 `[[대상\|별칭]]` 에서 대상 끝의 `\` 를 뗀다 — Obsidian 은 표 칸에서 별칭 구분자를 `\|` 로 적는다

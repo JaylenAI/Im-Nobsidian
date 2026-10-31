@@ -1,6 +1,7 @@
 import type { Processor, ProcessorInput, ProcessorOutput } from "../../types/convert.js";
 import { LIST_MARKER_SOURCE, mapOutsideCode } from "../../utils/md-regions.js";
 import { mathCloseAt } from "../literal-dollar.js";
+import { LookbehindRegExp, notAfter } from "../../utils/lookbehind.js";
 
 const BLOCK_MATH_REGEX = /\$\$([\s\S]+?)\$\$/g;
 /** 줄머리가 인용 표시(`>`)와 들여쓰기뿐인가 — 콜아웃 · 목록 안의 블록 수식은 줄마다 이것을 단다. */
@@ -99,7 +100,7 @@ function withoutPrefix(line: string, prefix: string): string | null {
  * 글의 `$$` — 앞이 `\` · `$` 가 아니고 뒤가 `$` 가 아니다. `$$$` 처럼 세 개 넘게 붙은 `$` 는 보지 않는다. 앞이
  * 공백(줄 머리)이 아닌 `$$` 는 인라인 수식 둘 사이(`$a$$b$`)일 수 있어 글로 바꾸지 않는다({@link settleLineDollars}).
  */
-const DOUBLE_DOLLAR_RE = /(?<![\\$])\$\$(?!\$)/g;
+const DOUBLE_DOLLAR_RE = new LookbehindRegExp(/\$\$(?!\$)/g, undefined, notAfter(/[\\$]/));
 /** 제 줄의 `$$` — 줄머리 · 목록 표지 · 콜아웃 머리(`[!note]`) 뒤에 `$$` 만 있다. 블록 수식의 경계다. */
 const OWN_LINE_DOLLARS_RE = new RegExp(
   String.raw`^(?:[ \t]*>)*[ \t]*(?:\[![^\]]*\][+-]?[ \t]*|${LIST_MARKER_SOURCE}[ \t]+)?\$\$[ \t]*$`,
