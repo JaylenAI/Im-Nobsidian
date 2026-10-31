@@ -6,9 +6,10 @@
 import { describe, it, expect } from "vitest";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const SOURCE_ROOTS = ["../../src", "../../../obsidian-plugin/src"].map(
-  (relative) => new URL(relative, import.meta.url).pathname,
+const SOURCE_ROOTS = ["../../src", "../../../obsidian-plugin/src"].map((relative) =>
+  fileURLToPath(new URL(relative, import.meta.url)),
 );
 
 function sourceFiles(dir: string): string[] {
