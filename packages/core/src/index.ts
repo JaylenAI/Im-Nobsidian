@@ -285,6 +285,7 @@ export {
   normalizeNotionId,
   notionIdsEqual,
   compactNotionId,
+  notionPageUrl,
   shortNotionId,
   notionIdFromInput,
 } from "./utils/id.js";

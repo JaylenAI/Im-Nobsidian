@@ -61,6 +61,14 @@ export function compactNotionId(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
 }
 
+/** Notion 페이지 주소의 앞 — 열면 워크스페이스 · 제목이 붙은 주소로 넘어간다. */
+const NOTION_PAGE_URL_BASE = "https://www.notion.so/";
+
+/** 페이지 · DB 를 여는 주소 — 하이픈을 뗀 id 를 붙인다. */
+export function notionPageUrl(id: string): string {
+  return `${NOTION_PAGE_URL_BASE}${compactNotionId(id)}`;
+}
+
 /** 로그 · 화면에 보일 id — 앞 8자만. 전체 id 는 페이지를 가리키므로 남기지 않는다. */
 export const SHORT_NOTION_ID_LENGTH = 8;
 

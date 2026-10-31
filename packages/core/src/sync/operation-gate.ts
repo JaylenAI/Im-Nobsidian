@@ -22,7 +22,8 @@ export type GatedOperation =
   | "resolve"
   | "discard"
   | "prepare-database"
-  | "base-filters";
+  | "base-filters"
+  | "verify";
 
 /** 사용자에게 보이는 이름 — 내부 코드값을 화면에 내보내지 않는다. */
 const OPERATION_LABELS: Readonly<Record<GatedOperation, string>> = {
@@ -35,6 +36,7 @@ const OPERATION_LABELS: Readonly<Record<GatedOperation, string>> = {
   discard: "변경 되돌리기",
   "prepare-database": "DB 로 올릴 준비",
   "base-filters": ".base 폴더 필터 고치기",
+  verify: "빠짐없이 받았는지 확인",
 };
 
 export function operationLabel(operation: GatedOperation): string {
