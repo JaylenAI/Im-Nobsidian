@@ -852,7 +852,7 @@ export class SyncOrchestrator {
 
     if (this.config.sync.syncFiles !== false) {
       try {
-        const fileResults = await this.fileHandler.pushAllFiles();
+        const fileResults = await this.fileHandler.pushAllFiles(failed);
         if (fileResults.length > 0) {
           getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
         }

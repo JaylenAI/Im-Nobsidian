@@ -192,7 +192,7 @@ export class DatabaseDiscovery {
           inaccessibleIds.add(nohyph);
           inaccessibleChanged = true;
         }
-        getLogger().info(
+        getLogger().warn(
           `[Im-Nobsidian] DB ${rawId}: 접근 가능한 data source 없음(링크드/미공유/삭제 추정) — 동기화 대상에서 제외(제목은 부모 페이지에 보존)`,
         );
       };

@@ -83,7 +83,7 @@ export interface SyncLogEntry {
 const SYNC_LOG_LIMIT = 50;
 
 /** 오래된 것이 앞인 기록을 최근 것부터. */
-export function newestFirst(log: readonly SyncLogEntry[]): SyncLogEntry[] {
+export function newestFirst<T>(log: readonly T[]): T[] {
   return [...log].reverse();
 }
 

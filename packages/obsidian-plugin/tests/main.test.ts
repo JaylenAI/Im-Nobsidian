@@ -788,6 +788,44 @@ describe("ImNobsidianPlugin", () => {
     await commands.get("im-nobsidian-pull-rerender")!();
 
     expect(executePull.mock.calls).toEqual([[{ force: true }], [], [{ rerender: true }]]);
+    plugin.onunload();
+  });
+
+  it("엔진의 경고 · 오류를 이 세션의 기록에 모으고, 내리면 원래 로거로 되돌린다", async () => {
+    const plugin = new ImNobsidianPlugin({} as never, {} as never);
+    const internals = plugin as unknown as {
+      addCommand: () => void;
+      registerDesignRenderer: () => void;
+      registerFolderMenu: () => void;
+      registerVaultEvents: () => void;
+      warnings: { level: string; message: string }[];
+    };
+    internals.addCommand = () => {};
+    internals.registerDesignRenderer = () => {};
+    internals.registerFolderMenu = () => {};
+    internals.registerVaultEvents = () => {};
+    const previous = getLogger();
+    const base = { ...previous, warn: vi.fn(), error: vi.fn(), info: vi.fn() };
+    setLogger(base);
+    try {
+      await plugin.onload();
+      getLogger().warn("[Im-Nobsidian] DB x: 접근 가능한 data source 없음");
+      getLogger().error("[DB Sync] 행을 쓰지 못함:", new Error("Notion 400"));
+      getLogger().info("[Im-Nobsidian] 3개 파일 업로드 완료");
+
+      expect(internals.warnings.map(({ level, message }) => [level, message])).toEqual([
+        ["warn", "DB x: 접근 가능한 data source 없음"],
+        ["error", "행을 쓰지 못함: Notion 400"],
+      ]);
+      // 콘솔에는 그대로 간다
+      expect(base.warn).toHaveBeenCalledWith("[Im-Nobsidian] DB x: 접근 가능한 data source 없음");
+      expect(base.info).toHaveBeenCalledTimes(1);
+
+      plugin.onunload();
+      expect(getLogger()).toBe(base);
+    } finally {
+      setLogger(previous);
+    }
   });
 
   it("상태 알림은 마지막 전체 확인을 적고, 바뀐 것만 찾았으면 원격 삭제가 언제 반영되는지 덧붙인다", async () => {

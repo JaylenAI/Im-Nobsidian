@@ -1251,7 +1251,7 @@ export class ImageHandler {
       );
     }
     if (unsupported.length > 0) {
-      getLogger().info(
+      getLogger().warn(
         `[Im-Nobsidian] Notion 이 받지 않는 형식이라 올리지 않은 임베드 (${notePath ?? pageId}): ` +
           `${unsupported.join(", ")} — Notion 에는 파일 이름 자리표시자로 남는다`,
       );
@@ -1617,10 +1617,10 @@ export class ImageHandler {
         const MAX_FILE_SIZE = this.maxFileSizeBytes;
         if (contentLength && parseInt(contentLength, 10) > MAX_FILE_SIZE) {
           const bytes = parseInt(contentLength, 10);
-          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 info 로 알린다. 그 링크는 한 시간쯤
-          // 뒤 끊기므로 호출측이 끊기지 않는 «Notion 에서 열기» 링크를 옆에 둔다(D4).
+          // 원본 링크가 노트에 남는 의도된 degrade — 사용자가 이유를 알 수 있게 경고로 알린다(CLI 는 정보 로그를
+          // 기본으로 숨긴다). 그 링크는 한 시간쯤 뒤 끊기므로 호출측이 끊기지 않는 «Notion 에서 열기» 링크를 옆에 둔다(D4).
           // push 는 restoreMediaTags 가 태그로 복원해 Notion 블록을 보존한다(실측: 동일 블록 유지).
-          getLogger().info(
+          getLogger().warn(
             `[Im-Nobsidian] 파일 다운로드 건너뜀 — 크기 상한 초과 (${fileSizeLabel(bytes)} > ${fileSizeLabel(MAX_FILE_SIZE)}), Notion 에서 열기 링크를 둠: ${caption}`,
           );
           return { originalUrl: url, localPath: "", hash: "", size: 0, skippedBytes: bytes };
