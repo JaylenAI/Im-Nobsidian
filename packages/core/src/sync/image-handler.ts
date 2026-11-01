@@ -449,7 +449,7 @@ function nameHashOf(fullHash: string): string {
 const IMAGE_STEM_MAX = 50;
 
 /**
- * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
+ * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>`)를 뗀다 — 확장자는 하나 남긴다.
  *
  * 받은 파일은 `이름-<해시>.확장자` 로 저장하고, push 는 그 파일 이름 그대로 올린다. 다른 볼트로 다시 받으면 올라간
  * 이름 뒤에 같은 해시가 또 붙어(`이름-<해시>-<해시>.png`) 받을 때마다 이름이 길어졌다(2026-10-23 전체 E2E 첨부 41개).
@@ -457,8 +457,14 @@ const IMAGE_STEM_MAX = 50;
  */
 export function withoutOwnHash(name: string, hash: string): string {
   if (hash.length !== NAME_HASH_LENGTH || !/^[0-9a-f]+$/.test(hash)) return name;
-  const stripped = name.replace(new RegExp(`-${hash}(\\.[^./]*)?$`), "");
-  return stripped === "" ? name : stripped;
+  const tail = new RegExp(`-${hash}(\\.[^./]*)?$`).exec(name);
+  const stem = tail ? name.slice(0, tail.index) : "";
+  if (stem === "") return name;
+  // 확장자는 남긴다 — 예전 이름(`표.xlsx-<해시>.xlsx`)은 앞에 이미 있고, 지금 이름(`표-<해시>.xlsx`)은 뒤에만 있다
+  const extension = tail?.[1] ?? "";
+  return extension && !stem.toLowerCase().endsWith(extension.toLowerCase())
+    ? `${stem}${extension}`
+    : stem;
 }
 
 function imageStemOf(uploadedName: string, pageTitle: string): string {
@@ -1643,16 +1649,24 @@ export class ImageHandler {
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const name = withoutOwnHash(caption, hash);
-        // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
-        const safeName = truncateBytes(
-          name
-            .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
-            .replace(/\s+/g, "-")
-            .slice(0, 80),
-          FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
-        );
-        const fileName = `${safeName}-${hash}${extension}`;
-        const localPath = `${this.attachmentFolder}/${fileName}`;
+        // 이름의 확장자는 떼고 해시 뒤에 하나만 붙인다 — 예전에는 `보고서.pdf-<해시>.pdf` 처럼 둘이었다.
+        const hasExtension =
+          extension !== "" && name.toLowerCase().endsWith(extension.toLowerCase());
+        const stem = hasExtension ? name.slice(0, -extension.length) : name;
+        const localPath = `${this.attachmentFolder}/${this.fileNameOf(stem, hash, extension)}`;
+        // 그 예전 이름으로 받아 둔 파일이 있으면 그대로 쓴다 — 이름에 내용 해시가 들어 있어 같은 내용이다. 새 이름으로 또
+        // 받으면 사본이 생기고 노트의 링크가 바뀐다.
+        const legacyPath = `${this.attachmentFolder}/${this.fileNameOf(name, hash, extension)}`;
+        if (hasExtension && (await this.vaultFs.exists(legacyPath))) {
+          return {
+            originalUrl: url,
+            localPath: legacyPath,
+            hash,
+            size: buffer.length,
+            fileHash,
+            name,
+          };
+        }
 
         await this.vaultFs.ensureFolder(this.attachmentFolder);
         await this.vaultFs.writeBinary(localPath, buffer);
@@ -1663,6 +1677,19 @@ export class ImageHandler {
       }
     }
     throw lastError!;
+  }
+
+  /** 받은 파일의 이름 — `<줄기>-<해시><확장자>`. */
+  private fileNameOf(stem: string, hash: string, extension: string): string {
+    // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
+    const safeName = truncateBytes(
+      stem
+        .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
+        .replace(/\s+/g, "-")
+        .slice(0, 80),
+      FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
+    );
+    return `${safeName}-${hash}${extension}`;
   }
 
   private isNotionImageUrl(url: string): boolean {
