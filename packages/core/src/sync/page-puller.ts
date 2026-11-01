@@ -957,29 +957,19 @@ export class PagePuller {
     };
   }
 
-  /**
-   * push 가 만든 폴더 페이지(폴더 레코드)의 원격 변경을 받는다(S-17). 폴더 레코드에는 볼트 파일이
-   * 없다 — 예전에는 폴더 경로를 파일로 읽어 «빈 로컬 파일» 과 원격 본문의 충돌로 남겼다.
-   *
-   * - 자식 말고 본문이 없으면 받을 것이 없다. 그 아래에 페이지가 생겨도 Notion 이 수정 시각을
-   *   올린다 — 시각만 맞춰 다음 pull 이 다시 읽지 않게 한다.
-   * - 본문이 생겼으면 그 페이지는 이제 폴더 노트다(ADR-012) — 레코드를 폴더 노트 경로로 옮겨 적고
-   *   돌려준다. 호출자가 보통 노트처럼 받는다: 로컬 폴더 노트가 없으면 쓰고, 올리지 않은 로컬
-   *   폴더 노트가 있으면 그 노트와의 충돌이 된다.
-   * - 폴더 노트를 둘 자리가 없으면 본문은 Notion 에만 둔다 — 시각만 맞추고 알린다. DB 모드는
-   *   노트가 행이고, v0.3 이 DB 폴더 자리에 만든 폴더 페이지는 그 폴더가 DB 라 행만 든다.
-   *
-   * @returns 폴더 노트로 옮겨 적은 레코드. 받을 것이 없으면 null.
-   * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
-   *         이 변경 앞에 묶인다).
-   */
   /** 폴더 첨부를 받아 받은 파일 수에 더한다. */
   private async receiveFolderFiles(
     folder: string,
     pageId: string,
     files: readonly FolderFileRef[],
+    complete = false,
   ): Promise<void> {
-    this._pullFileCount += await this.fileHandler.receiveFolderFiles(folder, pageId, files);
+    this._pullFileCount += await this.fileHandler.receiveFolderFiles(
+      folder,
+      pageId,
+      files,
+      complete,
+    );
   }
 
   /**
@@ -1005,6 +995,22 @@ export class PagePuller {
       : null;
   }
 
+  /**
+   * push 가 만든 폴더 페이지(폴더 레코드)의 원격 변경을 받는다(S-17). 폴더 레코드에는 볼트 파일이
+   * 없다 — 예전에는 폴더 경로를 파일로 읽어 «빈 로컬 파일» 과 원격 본문의 충돌로 남겼다.
+   *
+   * - 자식 말고 본문이 없으면 받을 것이 없다. 그 아래에 페이지가 생겨도 Notion 이 수정 시각을
+   *   올린다 — 시각만 맞춰 다음 pull 이 다시 읽지 않게 한다.
+   * - 본문이 생겼으면 그 페이지는 이제 폴더 노트다(ADR-012) — 레코드를 폴더 노트 경로로 옮겨 적고
+   *   돌려준다. 호출자가 보통 노트처럼 받는다: 로컬 폴더 노트가 없으면 쓰고, 올리지 않은 로컬
+   *   폴더 노트가 있으면 그 노트와의 충돌이 된다.
+   * - 폴더 노트를 둘 자리가 없으면 본문은 Notion 에만 둔다 — 시각만 맞추고 알린다. DB 모드는
+   *   노트가 행이고, v0.3 이 DB 폴더 자리에 만든 폴더 페이지는 그 폴더가 DB 라 행만 든다.
+   *
+   * @returns 폴더 노트로 옮겨 적은 레코드. 받을 것이 없으면 null.
+   * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
+   *         이 변경 앞에 묶인다).
+   */
   private async pullFolderRecord(
     record: SyncRecord,
     page: PageObjectResponse,
@@ -1012,15 +1018,17 @@ export class PagePuller {
     const folder = record.obsidianPath;
     if (isTrashedOrArchived(page)) return null;
 
-    const { markdown } = await this.notionClient.getPageMarkdown(page.id);
+    const { markdown, truncated } = await this.notionClient.getPageMarkdown(page.id);
     if (!hasBodyBesidesChildren(markdown)) {
+      // 남은 폴더 첨부가 없다 — Notion 에서 모두 지웠으면 볼트에서도 지운다(deleteSync)
+      await this.receiveFolderFiles(folder, page.id, [], !truncated);
       this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
     // 폴더 첨부뿐이면 폴더 그대로 — 파일만 받는다. 예전에는 폴더 노트를 새로 쓰고 올린 파일의 사본을 받았다(ADR-054).
     const files = folderFilesOf(markdown, false);
     if (files) {
-      await this.receiveFolderFiles(folder, page.id, files);
+      await this.receiveFolderFiles(folder, page.id, files, !truncated);
       this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }

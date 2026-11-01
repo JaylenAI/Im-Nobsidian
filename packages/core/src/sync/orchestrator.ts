@@ -216,6 +216,7 @@ export class SyncOrchestrator {
         downloadTimeoutMs: config.advanced.mediaDownloadTimeoutMs,
         itemTimeoutMs: config.advanced.itemTimeoutMs,
         attachmentsFolder: config.paths.attachments,
+        deleteSync: config.sync.deleteSync,
       },
     );
     const propertyMapper = PropertyMapper.fromConfig(config);
