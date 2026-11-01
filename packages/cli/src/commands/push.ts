@@ -72,7 +72,7 @@ export const pushCommand = new Command("push")
       const failedCount = result.failed.length;
       console.log(`\n  ${completionHeader("Push", failedCount)}`);
       console.log(
-        `  ${summary(result.created, result.updated, result.deleted, result.moved, pushDbChangeCount(result))}  ${failedCountText(failedCount)}`,
+        `  ${summary(result.created, result.updated, result.deleted, result.moved, pushDbChangeCount(result), result.uploadedFiles)}  ${failedCountText(failedCount)}`,
       );
       if (result.createdDatabases) {
         console.log(`  ${options.dryRun ? "만들 DB" : "만든 DB"} ${result.createdDatabases}`);

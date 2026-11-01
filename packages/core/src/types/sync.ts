@@ -160,6 +160,8 @@ export interface PushResult {
    * 겹치지 않는다. 예전에는 updated 에 섞여, 이름만 바꾼 노트도 「수정」 으로 보였다.
    */
   readonly moved: number;
+  /** 폴더 첨부로 올린 파일 수(ADR-054) — 노트 임베드는 노트와 함께 가 여기 들지 않는다. 없으면 0. */
+  readonly uploadedFiles?: number;
   readonly failed: FailedOperation[];
   readonly duration: number;
   /**

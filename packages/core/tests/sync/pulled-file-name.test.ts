@@ -77,14 +77,14 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
   it("HTML 블록(파일을 붙인 embed)은 .html 첨부로 받는다 — 서명 URL 은 한 시간 뒤 끊긴다", async () => {
     const content = await pull(`앞\n\n<embed src="${signedUrl("차트.html")}"></embed>\n\n뒤`);
 
-    expect(content).toBe(`앞\n\n![[attachments/차트.html-${SHA12}.html|차트.html]]\n\n뒤`);
-    expect(fs.writeBinary).toHaveBeenCalledWith(`attachments/차트.html-${SHA12}.html`, BYTES);
+    expect(content).toBe(`앞\n\n![[attachments/차트-${SHA12}.html|차트.html]]\n\n뒤`);
+    expect(fs.writeBinary).toHaveBeenCalledWith(`attachments/차트-${SHA12}.html`, BYTES);
   });
 
   it("변환을 거친 HTML 블록 링크(`[🌐 html](…)`)도 올라간 이름으로 받는다", async () => {
     const content = await pull(`앞\n\n[🌐 html](${signedUrl("차트.html")})\n\n뒤`);
 
-    expect(content).toBe(`앞\n\n![[attachments/차트.html-${SHA12}.html|차트.html]]\n\n뒤`);
+    expect(content).toBe(`앞\n\n![[attachments/차트-${SHA12}.html|차트.html]]\n\n뒤`);
   });
 
   it("긴 한글 이름도 파일 시스템 상한(255 바이트) 안으로 자른다 — 넘으면 받지 못했다", async () => {
@@ -108,7 +108,7 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
   it("캡션이 없으면 올라간 이름으로 저장하고 별칭에도 쓴다", async () => {
     const content = await pull(`앞\n\n[📎 file](${signedUrl("분석 노트.ipynb")})\n\n뒤`);
 
-    const saved = `attachments/분석-노트.ipynb-${SHA12}.ipynb`;
+    const saved = `attachments/분석-노트-${SHA12}.ipynb`;
     expect(content).toBe(`앞\n\n![[${saved}|분석 노트.ipynb]]\n\n뒤`);
     expect(fs.writeBinary).toHaveBeenCalledWith(saved, BYTES);
   });
@@ -120,20 +120,38 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
   ])("%s %s 자리 이름도 캡션이 없는 것이다", async (emoji, placeholder, name) => {
     const content = await pull(`[${emoji} ${placeholder}](${signedUrl(name)})`);
 
-    const ext = name.slice(name.lastIndexOf("."));
-    expect(content).toBe(`![[attachments/${name}-${SHA12}${ext}|${name}]]`);
+    const dot = name.lastIndexOf(".");
+    expect(content).toBe(
+      `![[attachments/${name.slice(0, dot)}-${SHA12}${name.slice(dot)}|${name}]]`,
+    );
   });
 
   it("받은 파일을 올린 것을 다시 받으면 같은 이름 · 별칭이다 — 해시를 또 붙이지 않는다", async () => {
     const content = await pull(`<file src="${signedUrl(`표.xlsx-${SHA12}.xlsx`)}"></file>`);
 
-    expect(content).toBe(`![[attachments/표.xlsx-${SHA12}.xlsx|표.xlsx]]`);
+    expect(content).toBe(`![[attachments/표-${SHA12}.xlsx|표.xlsx]]`);
+  });
+
+  it("새 이름(`표-<해시>.xlsx`)으로 받은 것을 올려 다시 받아도 같은 이름이다", async () => {
+    const content = await pull(`<file src="${signedUrl(`표-${SHA12}.xlsx`)}"></file>`);
+
+    expect(content).toBe(`![[attachments/표-${SHA12}.xlsx|표.xlsx]]`);
+  });
+
+  it("예전 이름(`표.xlsx-<해시>.xlsx`)으로 받아 둔 파일이 있으면 그것을 쓴다 — 사본을 받지 않는다", async () => {
+    const legacy = `attachments/표.xlsx-${SHA12}.xlsx`;
+    (fs.exists as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) => p === legacy);
+
+    const content = await pull(`<file src="${signedUrl("표.xlsx")}"></file>`);
+
+    expect(content).toBe(`![[${legacy}|표.xlsx]]`);
+    expect(fs.writeBinary).not.toHaveBeenCalled();
   });
 
   it("태그로 남은 캡션 없는 파일도 같다", async () => {
     const content = await pull(`<file src="${signedUrl("표.xlsx")}"></file>`);
 
-    expect(content).toBe(`![[attachments/표.xlsx-${SHA12}.xlsx|표.xlsx]]`);
+    expect(content).toBe(`![[attachments/표-${SHA12}.xlsx|표.xlsx]]`);
   });
 
   it("사람이 단 캡션은 예전처럼 이름 · 별칭이 된다", async () => {
@@ -161,9 +179,9 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     const internal = await pull(`[📎 file](${internalFileUrl("가격$&.pdf")})`);
     const internalTag = await pull(`<file src="${internalFileUrl("가격$&.pdf")}"></file>`);
 
-    expect(named).toBe(`![[attachments/가격.xlsx-${SHA12}.xlsx|가격$&.xlsx]]`);
+    expect(named).toBe(`![[attachments/가격-${SHA12}.xlsx|가격$&.xlsx]]`);
     expect(captioned).toBe(`![[attachments/가격-표-${SHA12}.xlsx|가격 $& 표]]`);
-    expect(internal).toBe(`![[attachments/가격.pdf-${SHA12}.pdf|가격$&.pdf]]`);
+    expect(internal).toBe(`![[attachments/가격-${SHA12}.pdf|가격$&.pdf]]`);
     expect(internalTag).toBe(internal);
   });
 
@@ -175,7 +193,7 @@ describe("ImageHandler.downloadAllFiles — 받은 파일 이름", () => {
     const internalTag = await pull(`<file src="${internalFileUrl(name)}"></file>`);
 
     // 저장 이름은 올라간 이름에서 못 쓰는 글자만 뺀 것 — 예전에 내부 참조로 받던 자리와 같다.
-    expect(signed).toBe(`![[attachments/초안최종v2.pdf-${SHA12}.pdf|초안)최종-v2.pdf]]`);
+    expect(signed).toBe(`![[attachments/초안최종v2-${SHA12}.pdf|초안)최종-v2.pdf]]`);
     expect([signedTag, internal, internalTag]).toEqual([signed, signed, signed]);
   });
 
@@ -242,7 +260,7 @@ describe("Notion 에서 올린 캡션 없는 파일 — 다시 받아도 같은 
       "보고서",
       `앞 문단\n\n<file src="${signedUrl("분석 노트.ipynb")}"></file>\n\n뒤 문단`,
     );
-    const embed = `![[attachments/분석-노트.ipynb-${SHA12}.ipynb|분석 노트.ipynb]]`;
+    const embed = `![[attachments/분석-노트-${SHA12}.ipynb|분석 노트.ipynb]]`;
 
     expect(await orchestrator.pull()).toMatchObject({ created: 1, failed: [] });
     const path = db.getByNotionId(page.id)!.obsidianPath;
@@ -255,6 +273,6 @@ describe("Notion 에서 올린 캡션 없는 파일 — 다시 받아도 같은 
 
     expect(vault.read(path)).toContain(embed);
     expect(vault.read(path)).toContain("뒤 문단 — Notion 에서 고침");
-    expect(attachments()).toEqual([`attachments/분석-노트.ipynb-${SHA12}.ipynb`]);
+    expect(attachments()).toEqual([`attachments/분석-노트-${SHA12}.ipynb`]);
   });
 });

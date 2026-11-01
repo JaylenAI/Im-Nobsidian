@@ -35,6 +35,8 @@ export interface PushJson {
   readonly churn: number;
   /** 사이드카로 만든(dry-run 은 만들) Notion DB 수 — churn 에도 든다. */
   readonly createdDatabases: number;
+  /** 폴더 첨부로 올린 파일 수(ADR-054) — churn 에도 든다. */
+  readonly files: number;
   readonly failed: readonly FailedOperation[];
   /** 볼트에서 고쳤지만 올리지 않은 읽기 전용 속성 — 다음 pull 이 Notion 값으로 되돌린다. churn 에 들지 않는다. */
   readonly readOnlySkipped: readonly ReadOnlySkip[];
@@ -112,8 +114,14 @@ export function pushJson(result: PushResult): PushJson {
     deleted: result.deleted,
     moved: result.moved,
     churn:
-      result.created + result.updated + result.deleted + result.moved + pushDbChangeCount(result),
+      result.created +
+      result.updated +
+      result.deleted +
+      result.moved +
+      pushDbChangeCount(result) +
+      (result.uploadedFiles ?? 0),
     createdDatabases: result.createdDatabases ?? 0,
+    files: result.uploadedFiles ?? 0,
     failed: result.failed,
     readOnlySkipped: result.readOnlySkipped ?? [],
     unsentDeletions: result.unsentDeletions ?? [],

@@ -11,6 +11,13 @@ import {
   createMockNotionClient,
 } from "../helpers/mock-orchestrator.js";
 
+/** push 가 만든 폴더 페이지 레코드(`para`) — 폴더 첨부는 이런 페이지에만 붙는다. */
+const FOLDER_RECORD = {
+  notionPageId: "folder-page-id",
+  obsidianPath: "para",
+  fileType: "folder-note",
+};
+
 describe("FileHandler", () => {
   describe("getBlockType", () => {
     it("이미지 확장자 → image 블록", () => {
@@ -159,7 +166,7 @@ describe("FileHandler", () => {
         { path: "para/문서.hwp", size: 30, mtime: "2026-09-28T00:00:00.000Z" },
       ]);
       const stateDb = createMockStateDb();
-      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      stateDb.getByPath.mockReturnValue(FOLDER_RECORD);
       const notion = createMockNotionClient();
 
       const handler = new FileHandler(
@@ -214,7 +221,7 @@ describe("FileHandler", () => {
         { path: "para/0. 인박스.notion.json", size: 30, mtime: "2026-01-01T00:00:00.000Z" },
       ]);
       const stateDb = createMockStateDb();
-      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      stateDb.getByPath.mockReturnValue(FOLDER_RECORD);
       const notion = createMockNotionClient();
 
       const handler = new FileHandler(
@@ -286,7 +293,7 @@ describe("FileHandler", () => {
         { path: "para/정상 첨부.png", size: 11, mtime: "2026-07-27T00:00:00.000Z" },
       ]);
       const stateDb = createMockStateDb();
-      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      stateDb.getByPath.mockReturnValue(FOLDER_RECORD);
       const notion = createMockNotionClient();
       (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
         (_buffer: Buffer, filename: string) =>
@@ -316,7 +323,7 @@ describe("FileHandler", () => {
         { path: "para/정상.png", size: 11, mtime: "2026-07-27T00:00:00.000Z" },
       ]);
       const stateDb = createMockStateDb();
-      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      stateDb.getByPath.mockReturnValue(FOLDER_RECORD);
       const notion = createMockNotionClient();
       (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
         (_buffer: Buffer, filename: string) =>
@@ -379,7 +386,7 @@ describe("FileHandler", () => {
         { path: "para/정상.png", size: 12, mtime: "2026-07-27T00:00:00.000Z" },
       ]);
       const stateDb = createMockStateDb();
-      stateDb.getByPath.mockReturnValue({ notionPageId: "folder-page-id" });
+      stateDb.getByPath.mockReturnValue(FOLDER_RECORD);
       const notion = createMockNotionClient();
       (notion.uploadFile as ReturnType<typeof vi.fn>).mockImplementation(
         (_buffer: Buffer, filename: string) =>

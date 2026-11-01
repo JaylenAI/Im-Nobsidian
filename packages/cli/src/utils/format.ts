@@ -53,7 +53,7 @@ export function operationLabel(op: ProgressItem["operation"]): string {
 
 /**
  * 결과 수 한 줄. `moved` 는 push 만 센다 — 옮긴 노트 · 폴더(본문을 함께 고친 것도). `dbChanges` 도 push 만 —
- * Notion DB 에 올린 것(`pushDbChangeCount`). 무엇인지는 아래 줄들이 하나씩 적는다.
+ * Notion DB 에 올린 것(`pushDbChangeCount`). `files` 도 push 만 — 폴더 첨부로 올린 파일(받은 파일은 pull 이 따로 적는다). 무엇인지는 아래 줄들이 하나씩 적는다.
  */
 export function summary(
   created: number,
@@ -61,6 +61,7 @@ export function summary(
   deleted: number,
   moved = 0,
   dbChanges = 0,
+  files = 0,
 ): string {
   const parts: string[] = [];
   if (created > 0) parts.push(chalk.green(`${created} created`));
@@ -68,6 +69,7 @@ export function summary(
   if (moved > 0) parts.push(chalk.cyan(`${moved} moved`));
   if (deleted > 0) parts.push(chalk.red(`${deleted} deleted`));
   if (dbChanges > 0) parts.push(chalk.yellow(`${dbChanges} DB changes`));
+  if (files > 0) parts.push(chalk.green(`${files} files`));
   if (parts.length === 0) parts.push(chalk.dim("no changes"));
   return parts.join("  ");
 }

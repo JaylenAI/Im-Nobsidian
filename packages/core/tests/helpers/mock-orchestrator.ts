@@ -153,7 +153,7 @@ export function createMockNotionClient() {
         title: { type: "title", title: [{ plain_text: "Test Page" }] },
       },
     }),
-    appendChildren: vi.fn().mockResolvedValue({}),
+    appendChildren: vi.fn().mockResolvedValue([]),
     appendChildBlocks: vi.fn().mockResolvedValue([]),
     appendBlockTree: vi.fn().mockResolvedValue(undefined),
     fetchAllChildren: vi.fn().mockResolvedValue([]),

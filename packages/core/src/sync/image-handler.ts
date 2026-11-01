@@ -1,3 +1,4 @@
+import { VaultFileIndex } from "./vault-file-index.js";
 import { createHash } from "node:crypto";
 import type { UploadedFile } from "../notion/property-mapper.js";
 import { Sema } from "async-sema";
@@ -336,7 +337,7 @@ function isNotionMediaUrl(url: string): boolean {
 }
 
 /** 받은 본문의 Notion 미디어 한 건 — 이미지 임베드 · 파일 링크 · 미디어 태그. */
-interface NotionMediaSpan {
+export interface NotionMediaSpan {
   readonly full: string;
   /** 캡션(파일 블록이면 이름일 수도 있다). 표시 이모지 · 이스케이프가 붙어 있을 수 있다. */
   readonly label: string;
@@ -347,7 +348,7 @@ interface NotionMediaSpan {
  * 받은 본문에서 Notion 이 호스팅한 미디어를 모두 찾는다 — 이미지 `![캡션](url)`, 파일
  * `[📎 캡션](url)`(pull 변환 뒤의 모양), 태그 `<file|pdf|video|audio src="url">캡션</…>`.
  */
-function notionMediaSpans(markdown: string): NotionMediaSpan[] {
+export function notionMediaSpans(markdown: string): NotionMediaSpan[] {
   const spans: NotionMediaSpan[] = [];
   for (const link of scanMarkdownLinks(markdown)) {
     if (!link.isEmbed && !MEDIA_LABEL_PREFIX_RE.test(link.label)) continue;
@@ -448,7 +449,7 @@ function nameHashOf(fullHash: string): string {
 const IMAGE_STEM_MAX = 50;
 
 /**
- * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>` 와 그 뒤 확장자)를 뗀다.
+ * 받은 이름에서 이 볼트가 붙인 꼬리표(`-<내용 해시 12자>`)를 뗀다 — 확장자는 하나 남긴다.
  *
  * 받은 파일은 `이름-<해시>.확장자` 로 저장하고, push 는 그 파일 이름 그대로 올린다. 다른 볼트로 다시 받으면 올라간
  * 이름 뒤에 같은 해시가 또 붙어(`이름-<해시>-<해시>.png`) 받을 때마다 이름이 길어졌다(2026-10-23 전체 E2E 첨부 41개).
@@ -456,8 +457,14 @@ const IMAGE_STEM_MAX = 50;
  */
 export function withoutOwnHash(name: string, hash: string): string {
   if (hash.length !== NAME_HASH_LENGTH || !/^[0-9a-f]+$/.test(hash)) return name;
-  const stripped = name.replace(new RegExp(`-${hash}(\\.[^./]*)?$`), "");
-  return stripped === "" ? name : stripped;
+  const tail = new RegExp(`-${hash}(\\.[^./]*)?$`).exec(name);
+  const stem = tail ? name.slice(0, tail.index) : "";
+  if (stem === "") return name;
+  // 확장자는 남긴다 — 예전 이름(`표.xlsx-<해시>.xlsx`)은 앞에 이미 있고, 지금 이름(`표-<해시>.xlsx`)은 뒤에만 있다
+  const extension = tail?.[1] ?? "";
+  return extension && !stem.toLowerCase().endsWith(extension.toLowerCase())
+    ? `${stem}${extension}`
+    : stem;
 }
 
 function imageStemOf(uploadedName: string, pageTitle: string): string {
@@ -472,7 +479,7 @@ function safeImageStem(name: string): string {
     .slice(0, IMAGE_STEM_MAX);
 }
 
-function uploadedFileNameFromUrl(url: string): string {
+export function uploadedFileNameFromUrl(url: string): string {
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
   } catch {
@@ -665,7 +672,7 @@ export class ImageHandler {
     if (!target || /^https?:\/\//.test(target) || target.includes("\n")) return null;
     const vaultPath = stripAlias(target);
     if (baseName(vaultPath) !== uploadedName) return null;
-    for (const candidate of this.vaultCandidates(vaultPath, noteFolder)) {
+    for await (const candidate of this.vaultCandidates(vaultPath, noteFolder)) {
       try {
         if (await this.vaultFs.exists(candidate)) return target;
       } catch {
@@ -757,7 +764,7 @@ export class ImageHandler {
       return null;
     }
     for (const target of targets) {
-      for (const candidate of this.vaultCandidates(stripAlias(target), noteFolder)) {
+      for await (const candidate of this.vaultCandidates(stripAlias(target), noteFolder)) {
         let localHash: string;
         try {
           localHash = sha256Of(await this.vaultFs.readBinary(candidate));
@@ -1370,20 +1377,32 @@ export class ImageHandler {
   /**
    * 임베드 경로가 가리킬 수 있는 볼트 실제 파일 후보를 우선순위대로 만든다(F23).
    * Obsidian 위키링크 임베드는 노트 옆 파일을 파일명만으로 참조하는 게 관례라
-   * 노트 폴더 → 볼트 루트 → attachments/ 순.
+   * 노트 폴더 → 볼트 루트 → attachments/ 순. 세 곳에 없으면 볼트 어디서든 이름으로 찾는다({@link VaultFileIndex}).
    *
    * push(업로드)와 pull(원본 복원)이 **같은 사다리**를 봐야 왕복이 닫힌다. 예전에는
    * pull 쪽이 볼트 루트만 확인해서, `__e2e_probe__/노트.md` 안의 `![[t-img.png]]` 는
    * 올라갈 때는 노트 폴더에서 잘 찾아 올리고도 내려올 때는 원본을 못 찾아 사본을
    * 새로 받았다(실측) — 왕복할 때마다 첨부가 한 벌씩 늘어난다.
    */
-  private vaultCandidates(localPath: string, noteFolder?: string): string[] {
-    const candidates: string[] = [];
+  private async *vaultCandidates(localPath: string, noteFolder?: string): AsyncGenerator<string> {
+    const ladder: string[] = [];
     if (noteFolder && !localPath.includes("/")) {
-      candidates.push(`${noteFolder}/${localPath}`);
+      ladder.push(`${noteFolder}/${localPath}`);
     }
-    candidates.push(localPath, `${this.attachmentFolder}/${localPath}`);
-    return candidates;
+    ladder.push(localPath, `${this.attachmentFolder}/${localPath}`);
+    yield* ladder;
+    // 세 곳에서 찾지 못했을 때만 — Obsidian 처럼 볼트 어디서든 이름(경로 끝)으로 찾는다
+    for (const found of await this.fileIndex.find(localPath, noteFolder)) {
+      if (!ladder.includes(found)) yield found;
+    }
+  }
+
+  private indexOfFiles: VaultFileIndex | null = null;
+
+  /** 볼트의 첨부 이름표 — 처음 쓸 때 만든다. */
+  private get fileIndex(): VaultFileIndex {
+    this.indexOfFiles ??= new VaultFileIndex(this.vaultFs);
+    return this.indexOfFiles;
   }
 
   /**
@@ -1394,10 +1413,8 @@ export class ImageHandler {
     localPath: string,
     noteFolder?: string,
   ): Promise<{ buffer: Buffer; resolvedPath: string }> {
-    const candidates = this.vaultCandidates(localPath, noteFolder);
-
     let lastError: unknown;
-    for (const candidate of candidates) {
+    for await (const candidate of this.vaultCandidates(localPath, noteFolder)) {
       try {
         return { buffer: await this.vaultFs.readBinary(candidate), resolvedPath: candidate };
       } catch (error) {
@@ -1632,16 +1649,24 @@ export class ImageHandler {
 
         const extension = this.guessFileExtension(url, response.headers.get("content-type"));
         const name = withoutOwnHash(caption, hash);
-        // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
-        const safeName = truncateBytes(
-          name
-            .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
-            .replace(/\s+/g, "-")
-            .slice(0, 80),
-          FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
-        );
-        const fileName = `${safeName}-${hash}${extension}`;
-        const localPath = `${this.attachmentFolder}/${fileName}`;
+        // 이름의 확장자는 떼고 해시 뒤에 하나만 붙인다 — 예전에는 `보고서.pdf-<해시>.pdf` 처럼 둘이었다.
+        const hasExtension =
+          extension !== "" && name.toLowerCase().endsWith(extension.toLowerCase());
+        const stem = hasExtension ? name.slice(0, -extension.length) : name;
+        const localPath = `${this.attachmentFolder}/${this.fileNameOf(stem, hash, extension)}`;
+        // 그 예전 이름으로 받아 둔 파일이 있으면 그대로 쓴다 — 이름에 내용 해시가 들어 있어 같은 내용이다. 새 이름으로 또
+        // 받으면 사본이 생기고 노트의 링크가 바뀐다.
+        const legacyPath = `${this.attachmentFolder}/${this.fileNameOf(name, hash, extension)}`;
+        if (hasExtension && (await this.vaultFs.exists(legacyPath))) {
+          return {
+            originalUrl: url,
+            localPath: legacyPath,
+            hash,
+            size: buffer.length,
+            fileHash,
+            name,
+          };
+        }
 
         await this.vaultFs.ensureFolder(this.attachmentFolder);
         await this.vaultFs.writeBinary(localPath, buffer);
@@ -1652,6 +1677,19 @@ export class ImageHandler {
       }
     }
     throw lastError!;
+  }
+
+  /** 받은 파일의 이름 — `<줄기>-<해시><확장자>`. */
+  private fileNameOf(stem: string, hash: string, extension: string): string {
+    // 한글 80자는 240 바이트라 해시 · 확장자를 붙이면 파일 시스템 상한(255 바이트)을 넘는다 — 넘을 때만 더 자른다.
+    const safeName = truncateBytes(
+      stem
+        .replace(/[^a-zA-Z0-9가-힣\s._-]/g, "")
+        .replace(/\s+/g, "-")
+        .slice(0, 80),
+      FILE_SYSTEM_NAME_MAX_BYTES - utf8Bytes(`-${hash}${extension}`),
+    );
+    return `${safeName}-${hash}${extension}`;
   }
 
   private isNotionImageUrl(url: string): boolean {
