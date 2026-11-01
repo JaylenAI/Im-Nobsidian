@@ -125,7 +125,7 @@ export const syncCommand = new Command("sync")
         console.log(`    ${icons.success} ${pullResult.linkCount} links resolved`);
       }
       console.log(
-        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved, pushDbChangeCount(pushResult))}` +
+        `  ${chalk.magenta("Push:")} ${summary(pushResult.created, pushResult.updated, pushResult.deleted, pushResult.moved, pushDbChangeCount(pushResult), pushResult.uploadedFiles)}` +
           (pushFailed > 0 ? `  ${chalk.red(`${pushFailed} failed`)}` : ""),
       );
       console.log(`  ${duration(result.duration)}`);

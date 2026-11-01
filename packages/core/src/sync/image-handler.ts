@@ -336,7 +336,7 @@ function isNotionMediaUrl(url: string): boolean {
 }
 
 /** 받은 본문의 Notion 미디어 한 건 — 이미지 임베드 · 파일 링크 · 미디어 태그. */
-interface NotionMediaSpan {
+export interface NotionMediaSpan {
   readonly full: string;
   /** 캡션(파일 블록이면 이름일 수도 있다). 표시 이모지 · 이스케이프가 붙어 있을 수 있다. */
   readonly label: string;
@@ -347,7 +347,7 @@ interface NotionMediaSpan {
  * 받은 본문에서 Notion 이 호스팅한 미디어를 모두 찾는다 — 이미지 `![캡션](url)`, 파일
  * `[📎 캡션](url)`(pull 변환 뒤의 모양), 태그 `<file|pdf|video|audio src="url">캡션</…>`.
  */
-function notionMediaSpans(markdown: string): NotionMediaSpan[] {
+export function notionMediaSpans(markdown: string): NotionMediaSpan[] {
   const spans: NotionMediaSpan[] = [];
   for (const link of scanMarkdownLinks(markdown)) {
     if (!link.isEmbed && !MEDIA_LABEL_PREFIX_RE.test(link.label)) continue;
@@ -472,7 +472,7 @@ function safeImageStem(name: string): string {
     .slice(0, IMAGE_STEM_MAX);
 }
 
-function uploadedFileNameFromUrl(url: string): string {
+export function uploadedFileNameFromUrl(url: string): string {
   try {
     return decodeURIComponent(new URL(url).pathname.split("/").pop() ?? "");
   } catch {

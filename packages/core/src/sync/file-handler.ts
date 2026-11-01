@@ -11,6 +11,16 @@ import { fetchForDownload } from "../utils/download-fetch.js";
 import { withDeadline } from "../utils/deadline.js";
 import { DEFAULT_CONFIG } from "../types/config.js";
 import type { FailedOperation } from "../types/sync.js";
+import type { FileRegistryEntry } from "../state/state-db.js";
+import { isFolderRecord } from "./folder-container.js";
+import {
+  embeddedNamesOf,
+  folderFileIdsOf,
+  rememberFolderFileId,
+  type FolderFileRef,
+} from "./folder-files.js";
+import { uploadedFileNameFromUrl } from "./image-handler.js";
+import { fileUrlOfBlock, notionFileIdOf } from "../utils/notion-file-url.js";
 
 /** 첨부 다운로드 운영 튜닝값. 미지정 시 기존 동작과 동일한 기본값 사용. */
 export interface FileHandlerOptions {
@@ -20,6 +30,28 @@ export interface FileHandlerOptions {
   readonly downloadTimeoutMs?: number;
   /** 첨부 1건 업로드 전체의 시간 상한(ms). 기본 30분. 0 이하면 상한 없음. */
   readonly itemTimeoutMs?: number;
+  /**
+   * pull 이 받은 그림 · 파일을 두는 폴더(`paths.attachments`). 그 안의 파일은 폴더 첨부로 올리지 않는다 — 받은 것을
+   * 다시 올리면 Notion 에 사본이 생긴다.
+   */
+  readonly attachmentsFolder?: string;
+}
+
+/** 노트 없는 폴더의 Notion 페이지를 마련하는 쪽 — push 의 폴더 배치(`FolderPlacement`). */
+export interface FolderPageProvider {
+  /** 폴더의 페이지를 마련한다. 이미 있으면 그대로 둔다. 마련할 수 없으면 까닭과 함께 던진다. */
+  ensureFolderPage(folder: string): Promise<void>;
+}
+
+/** 점으로 시작하는 폴더 · 파일 안인가 — Obsidian 이 보이지 않는 것(`.obsidian` · 상태 폴더)은 첨부가 아니다. */
+function isHiddenPath(path: string): boolean {
+  return path.split("/").some((part) => part.startsWith("."));
+}
+
+/** 올리지 않은 폴더 첨부 — 폴더에 Notion 자리가 없다. */
+interface StrandedFile {
+  readonly path: string;
+  readonly reason: string;
 }
 
 export interface FileUploadResult {
@@ -54,6 +86,7 @@ export class FileHandler {
   private readonly customFetch?: typeof globalThis.fetch;
   private readonly downloadTimeoutMs: number;
   private readonly itemTimeoutMs: number;
+  private readonly attachmentsFolder: string;
 
   constructor(
     private readonly vaultFs: VaultFS,
@@ -67,6 +100,9 @@ export class FileHandler {
     this.downloadTimeoutMs =
       options?.downloadTimeoutMs ?? DEFAULT_CONFIG.advanced.mediaDownloadTimeoutMs;
     this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_CONFIG.advanced.itemTimeoutMs;
+    this.attachmentsFolder = (
+      options?.attachmentsFolder ?? DEFAULT_CONFIG.paths.attachments
+    ).replace(/^\/+|\/+$/g, "");
   }
 
   private get fetchFn(): typeof globalThis.fetch {
@@ -82,7 +118,9 @@ export class FileHandler {
     const results: FileUploadResult[] = [];
 
     for (const file of folderFiles) {
-      const result = await this.pushSingleFile(file, folderPageId);
+      const existing = this.stateDb.getFileRegistry(file.path);
+      if (existing && (await this.isUnchanged(existing, file))) continue;
+      const result = await this.pushSingleFile(file, folderPageId, existing);
       if (result) results.push(result);
     }
 
@@ -108,21 +146,14 @@ export class FileHandler {
   private async pushSingleFile(
     file: NonMdFileInfo,
     folderPageId: string,
+    existing: FileRegistryEntry | null,
     failed?: FailedOperation[],
   ): Promise<FileUploadResult | null> {
-    const existing = this.stateDb.getFileRegistry(file.path);
-    if (existing) {
-      if (existing.fileSize === file.size) return null;
-      const buffer = await this.vaultFs.readBinary(file.path);
-      const currentHash = createHash("sha256").update(buffer).digest("hex");
-      if (existing.fileHash === currentHash) return null;
-    }
-
     // 슬롯 대기는 상한 밖이다 — 줄 서서 기다리는 것은 정지가 아니라 정상 동작이다.
     await this.sema.acquire();
     try {
       return await withDeadline(
-        () => this.uploadFile(file, folderPageId),
+        () => this.uploadFile(file, folderPageId, existing),
         this.itemTimeoutMs,
         `첨부 업로드 ${file.path}`,
       );
@@ -143,6 +174,25 @@ export class FileHandler {
     } finally {
       this.sema.release();
     }
+  }
+
+  /** 올린 뒤 바뀌지 않았나 — 크기가 같으면 읽지 않는다. */
+  private async isUnchanged(existing: FileRegistryEntry, file: NonMdFileInfo): Promise<boolean> {
+    if (existing.fileSize === file.size) return true;
+    const buffer = await this.vaultFs.readBinary(file.path);
+    return existing.fileHash === createHash("sha256").update(buffer).digest("hex");
+  }
+
+  /** pull 이 받은 것을 두는 폴더 안인가. */
+  private inAttachmentsFolder(path: string): boolean {
+    return this.attachmentsFolder !== "" && path.startsWith(`${this.attachmentsFolder}/`);
+  }
+
+  /** 폴더 첨부를 둘 Notion 페이지 — 폴더 노트 없는 폴더의 페이지(폴더 레코드)만. 맨 위는 루트 기록이 있을 때만. */
+  private folderPageOf(folder: string): string | null {
+    const record = this.stateDb.getByPath(folder || "__root__");
+    if (!record?.notionPageId) return null;
+    return folder === "" || isFolderRecord(record) ? record.notionPageId : null;
   }
 
   /**
@@ -172,7 +222,10 @@ export class FileHandler {
    * @param failed 올리지 못한 첨부를 담을 곳 — push 결과의 `failed` 를 넘기면 CLI · 플러그인이 처리하지 못한 것으로
    *   보인다. 예전엔 경고 로그로만 남아 push 가 「실패 0」 으로 끝났다.
    */
-  async pushAllFiles(failed?: FailedOperation[]): Promise<FileUploadResult[]> {
+  async pushAllFiles(
+    failed?: FailedOperation[],
+    folders?: FolderPageProvider,
+  ): Promise<FileUploadResult[]> {
     const { uploadable: allFiles, unsupported } = await this.listUploadableFiles();
     if (unsupported.length > 0) {
       const names = unsupported.slice(0, LOGGED_NAMES).map((f) => f.path);
@@ -183,40 +236,191 @@ export class FileHandler {
           `${names.join(", ")}${rest > 0 ? ` 외 ${rest}개` : ""}`,
       );
     }
-    if (allFiles.length === 0) return [];
 
-    const filesByFolder = new Map<string, NonMdFileInfo[]>();
+    // 올릴 것: 처음 보는 파일 · 폴더 첨부로 올린 뒤 바뀐 파일. 노트 임베드로 올라간 파일(다른 페이지의 기록)은 노트가
+    // 올린다 — 여기서 또 올리면 폴더 페이지에 사본이 생긴다.
+    const pending: Array<{ file: NonMdFileInfo; existing: FileRegistryEntry | null }> = [];
     for (const file of allFiles) {
-      const folder = getFolderPath(file.path);
-      const list = filesByFolder.get(folder) ?? [];
-      list.push(file);
-      filesByFolder.set(folder, list);
+      if (this.inAttachmentsFolder(file.path) || isHiddenPath(file.path)) continue;
+      const existing = this.stateDb.getFileRegistry(file.path);
+      if (existing) {
+        if (existing.notionPageId !== this.folderPageOf(getFolderPath(file.path))) continue;
+        if (await this.isUnchanged(existing, file)) continue;
+      }
+      pending.push({ file, existing });
+    }
+    if (pending.length === 0) return [];
+
+    // 노트에 붙인 파일은 노트와 함께 간다 — 처음 보는 것만 노트에서 찾는다.
+    const embedded = pending.some((p) => !p.existing) ? await this.embeddedNames() : new Set();
+    const byFolder = new Map<string, typeof pending>();
+    for (const item of pending) {
+      if (
+        !item.existing &&
+        embedded.has(item.file.path.slice(item.file.path.lastIndexOf("/") + 1).normalize("NFC"))
+      ) {
+        continue;
+      }
+      const folder = getFolderPath(item.file.path);
+      const list = byFolder.get(folder) ?? [];
+      list.push(item);
+      byFolder.set(folder, list);
     }
 
     const results: FileUploadResult[] = [];
-
-    for (const [folderPath, files] of filesByFolder) {
-      const folderRecord = folderPath
-        ? this.stateDb.getByPath(folderPath)
-        : this.stateDb.getByPath("__root__");
-
-      const folderPageId = folderRecord?.notionPageId;
-      if (!folderPageId) {
-        if (files.length > 0) {
-          getLogger().debug(
-            `폴더 페이지 없음, 파일 스킵: ${folderPath || "(루트)"} (${files.length}개)`,
-          );
-        }
-        continue;
-      }
-
-      for (const file of files) {
-        const result = await this.pushSingleFile(file, folderPageId, failed);
+    const stranded: StrandedFile[] = [];
+    for (const [folder, items] of byFolder) {
+      const pageId = await this.provideFolderPage(folder, folders, items, stranded);
+      if (!pageId) continue;
+      for (const { file, existing } of items) {
+        const result = await this.pushSingleFile(file, pageId, existing, failed);
         if (result) results.push(result);
       }
     }
-
+    this.reportStranded(stranded);
     return results;
+  }
+
+  /** 폴더 첨부를 둘 페이지 — 노트 없는 폴더면 마련한다. 둘 곳이 없으면 그 파일들을 `stranded` 에 담고 null. */
+  private async provideFolderPage(
+    folder: string,
+    folders: FolderPageProvider | undefined,
+    items: ReadonlyArray<{ file: NonMdFileInfo }>,
+    stranded: StrandedFile[],
+  ): Promise<string | null> {
+    let pageId = this.folderPageOf(folder);
+    let reason = folder === "" ? "볼트 맨 위" : "폴더 노트가 있는 폴더 · DB 폴더";
+    if (!pageId && folder !== "" && folders && !this.stateDb.getByPath(folder)) {
+      try {
+        await folders.ensureFolderPage(folder);
+        pageId = this.folderPageOf(folder);
+      } catch (error) {
+        reason = error instanceof Error ? error.message : String(error);
+      }
+    }
+    if (!pageId) stranded.push(...items.map(({ file }) => ({ path: file.path, reason })));
+    return pageId;
+  }
+
+  /**
+   * 둘 곳이 없어 올리지 않은 폴더 첨부 — 경고로 알린다. 예전에는 디버그 로그로만 남아 파일이 Notion 에 가지 않은 것을 알 수
+   * 없었다. 노트에 붙이면 그 노트와 함께 올라간다.
+   */
+  private reportStranded(stranded: readonly StrandedFile[]): void {
+    if (stranded.length === 0) return;
+    const names = stranded.slice(0, LOGGED_NAMES).map((f) => `${f.path}(${f.reason})`);
+    const rest = stranded.length - names.length;
+    getLogger().warn(
+      `[Im-Nobsidian] 폴더에 Notion 자리가 없어 올리지 않은 첨부 ${stranded.length}개 — 노트에 붙이면 함께 올라간다: ` +
+        `${names.join(", ")}${rest > 0 ? ` 외 ${rest}개` : ""}`,
+    );
+  }
+
+  /** 볼트의 노트가 붙인 파일 이름 — {@link embeddedNamesOf}. 읽지 못한 노트는 건너뛴다. */
+  private async embeddedNames(): Promise<Set<string>> {
+    const texts: string[] = [];
+    for (const note of await this.vaultFs.listMarkdownFiles()) {
+      try {
+        texts.push(await this.vaultFs.readFile(note.path));
+      } catch {
+        // 못 읽은 노트가 붙인 파일은 폴더 첨부로 올라갈 수 있다 — 사본일 뿐 잃는 것은 없다
+      }
+    }
+    return embeddedNamesOf(texts);
+  }
+
+  /**
+   * 폴더 페이지의 폴더 첨부를 그 폴더에 받는다 — 올린 이름 그대로. Notion 파일 id 가 적어 둔 것과 같으면(올린 볼트 · 앞서
+   * 받은 볼트) 받지 않는다. Notion 에서 바뀐 파일은 볼트 쪽이 그대로일 때만 덮는다 — 볼트에서도 고쳤으면 두고 알린다(다음
+   * push 가 볼트의 것을 올린다).
+   *
+   * @returns 새로 받거나 바꾼 파일 수
+   */
+  async receiveFolderFiles(
+    folder: string,
+    pageId: string,
+    files: readonly FolderFileRef[],
+  ): Promise<number> {
+    const known = new Map(
+      this.stateDb.getFilesByPageId(pageId).map((entry) => [entry.localPath, entry]),
+    );
+    const ids = folderFileIdsOf(this.stateDb, pageId);
+    let received = 0;
+    for (const file of files) {
+      const localPath = folder ? `${folder}/${file.name}` : file.name;
+      const fileId = notionFileIdOf(file.url);
+      const entry = known.get(localPath);
+      if (entry && fileId && ids.get(localPath) === fileId) continue;
+      if (entry && fileId && !ids.has(localPath)) {
+        // 파일 id 를 적기 전(v0.17)에 올리거나 받은 것 — 같은 파일로 보고 id 만 적는다
+        rememberFolderFileId(this.stateDb, pageId, localPath, fileId);
+        continue;
+      }
+      if (entry && !fileId) continue;
+      await this.sema.acquire();
+      try {
+        if (await this.receiveOne(localPath, folder, pageId, file, entry ?? null)) received++;
+        if (fileId) rememberFolderFileId(this.stateDb, pageId, localPath, fileId);
+      } catch (error) {
+        getLogger().warn(
+          `[Im-Nobsidian] 폴더 첨부를 받지 못함 (${localPath}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      } finally {
+        this.sema.release();
+      }
+    }
+    return received;
+  }
+
+  /**
+   * 폴더 첨부 하나를 받는다. 볼트에 같은 경로가 있으면: 같은 내용이면 적기만 하고, 지난 동기화 뒤 볼트에서 그대로인 파일은
+   * 덮고(`entry`), 그 밖(볼트에서 고친 것 · 처음 보는 다른 파일)은 두고 알린다.
+   *
+   * @returns 볼트에 썼는가
+   */
+  private async receiveOne(
+    localPath: string,
+    folder: string,
+    pageId: string,
+    file: FolderFileRef,
+    entry: FileRegistryEntry | null,
+  ): Promise<boolean> {
+    const response = await fetchForDownload(this.fetchFn, file.url, this.downloadTimeoutMs);
+    if (!response.ok) {
+      throw new Error(`파일 다운로드 실패: ${response.status} ${response.statusText}`);
+    }
+    const buffer = Buffer.from(await response.arrayBuffer());
+    const hash = createHash("sha256").update(buffer).digest("hex");
+    let wrote = false;
+    if (await this.vaultFs.exists(localPath)) {
+      const localHash = createHash("sha256")
+        .update(await this.vaultFs.readBinary(localPath))
+        .digest("hex");
+      if (localHash !== hash) {
+        if (entry?.fileHash !== localHash) {
+          getLogger().warn(
+            `[Im-Nobsidian] 폴더 첨부를 받지 않음 — 볼트의 ${localPath} 가 Notion 의 것과 다르다` +
+              `${entry ? "(양쪽에서 고침 — 다음 push 가 볼트의 것을 올린다)" : "(같은 이름의 다른 파일)"}`,
+          );
+          return false;
+        }
+        await this.vaultFs.writeBinary(localPath, buffer);
+        wrote = true;
+      }
+    } else {
+      await this.vaultFs.ensureFolder(folder || ".");
+      await this.vaultFs.writeBinary(localPath, buffer);
+      wrote = true;
+    }
+    this.stateDb.registerFile({
+      localPath,
+      notionPageId: pageId,
+      fileUploadId: "",
+      fileType: getBlockType(file.name),
+      fileHash: hash,
+      fileSize: buffer.length,
+    });
+    return wrote;
   }
 
   async downloadFileBlock(
@@ -267,6 +471,7 @@ export class FileHandler {
   private async uploadFile(
     file: NonMdFileInfo,
     parentPageId: string,
+    previous: FileRegistryEntry | null,
   ): Promise<FileUploadResult | null> {
     const buffer = await this.vaultFs.readBinary(file.path);
     const filename = file.path.split("/").pop() ?? "file";
@@ -277,8 +482,14 @@ export class FileHandler {
     const blob = new Blob([buffer], { type: contentType });
     const fileUploadId = await this.notionClient.uploadFile(blob, filename, contentType);
 
-    const block = this.createFileBlock(blockType, fileUploadId);
-    await this.notionClient.appendChildren(parentPageId, [block]);
+    const block = this.createFileBlock(blockType, fileUploadId, filename);
+    const [created] = await this.notionClient.appendChildBlocks(parentPageId, [block]);
+    // 바뀐 파일은 새 블록을 붙이고 옛 블록을 지운다 — 예전에는 고칠 때마다 블록이 하나씩 늘었다.
+    if (previous) await this.removeOlderBlocks(parentPageId, filename, created?.id);
+    // Notion 이 저장한 파일 id 를 적는다 — 다음 pull 이 제가 올린 것을 다시 받지 않는다
+    const url = created ? fileUrlOfBlock(created as { readonly type?: string }) : null;
+    const fileId = url ? notionFileIdOf(url) : null;
+    if (fileId) rememberFolderFileId(this.stateDb, parentPageId, file.path, fileId);
 
     this.stateDb.registerFile({
       localPath: file.path,
@@ -294,10 +505,31 @@ export class FileHandler {
     return { localPath: file.path, fileUploadId, blockType };
   }
 
-  private createFileBlock(blockType: NotionBlockType, fileUploadId: string): unknown {
+  /** 이 페이지에서 같은 이름의 파일 블록 중 방금 붙인 것 말고를 지운다. */
+  private async removeOlderBlocks(
+    pageId: string,
+    name: string,
+    keep: string | undefined,
+  ): Promise<void> {
+    for (const block of await this.notionClient.fetchAllChildren(pageId)) {
+      if (block.id === keep) continue;
+      const media = (block as unknown as Record<string, unknown>)[block.type] as
+        { type?: string; file?: { url?: string }; name?: string } | undefined;
+      const url = media?.type === "file" ? media.file?.url : undefined;
+      if (!url || uploadedFileNameFromUrl(url) !== name) continue;
+      await this.notionClient.deleteBlock(block.id);
+    }
+  }
+
+  /**
+   * 폴더 첨부의 파일 블록 — 캡션에 파일 이름을 적는다. 받는 쪽이 그 표시로 폴더 첨부를 알아본다({@link folderFilesOf}) —
+   * 자식 페이지가 없는 폴더 페이지는 PDF 하나만 붙인 노트와 모양이 같다.
+   */
+  private createFileBlock(blockType: NotionBlockType, fileUploadId: string, name: string): unknown {
     const fileRef = {
       type: "file_upload" as const,
       file_upload: { id: fileUploadId },
+      caption: [{ type: "text" as const, text: { content: name } }],
     };
 
     switch (blockType) {

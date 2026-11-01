@@ -1202,10 +1202,11 @@ function failedText(failed: readonly FailedOperation[]): string | null {
   );
 }
 
-/** 사이드카로 만든 Notion DB 수 — 요약 끝에 붙인다(ADR-036). */
+/** 사이드카로 만든 Notion DB 수 · 폴더 첨부로 올린 파일 수 — 요약 끝에 붙인다(ADR-036 · ADR-054). */
 function createdDatabasesText(result: PushResult): string {
   const count = result.createdDatabases ?? 0;
-  return count > 0 ? ` / DB 생성 ${count}` : "";
+  const files = result.uploadedFiles ?? 0;
+  return `${count > 0 ? ` / DB 생성 ${count}` : ""}${files > 0 ? ` / 파일 ${files}` : ""}`;
 }
 
 /**

@@ -105,9 +105,7 @@ export const pullCommand = new Command("pull")
         );
       }
       if (result.fileCount > 0) {
-        console.log(
-          `  ${icons.success} ${result.fileCount} files → ${dimText(`${config.paths.attachments}/`)}`,
-        );
+        console.log(`  ${icons.success} ${result.fileCount} files received`);
       }
       if (result.linkCount > 0) {
         console.log(`  ${icons.success} ${result.linkCount} links resolved`);

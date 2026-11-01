@@ -257,7 +257,8 @@ describe("pull command", () => {
     await runPull();
     // 첨부 폴더는 설정의 것을 보인다 — 예전에는 늘 attachments/ 라고 적었다
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("5 images → media/첨부/"));
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files → media/첨부/"));
+    // 파일은 폴더 첨부면 그 폴더에 받는다(ADR-054) — 한 폴더로 적지 않는다
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining("2 files received"));
     expect(spy).toHaveBeenCalledWith(expect.stringContaining("3 links resolved"));
     spy.mockRestore();
   });
