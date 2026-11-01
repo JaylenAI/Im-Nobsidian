@@ -101,6 +101,13 @@ export function folderFileIdsOf(stateDb: IStateDB, pageId: string): Map<string, 
   }
 }
 
+/** 폴더 첨부의 Notion 파일 id 를 지운다 — 볼트 · Notion 어느 쪽에서든 지운 파일. */
+export function forgetFolderFileId(stateDb: IStateDB, pageId: string, localPath: string): void {
+  const ids = folderFileIdsOf(stateDb, pageId);
+  if (!ids.delete(localPath)) return;
+  stateDb.setMeta(keyOf(pageId), JSON.stringify(Object.fromEntries(ids)));
+}
+
 /** 폴더 첨부의 Notion 파일 id 를 적는다 — 같은 경로는 바꾼다. */
 export function rememberFolderFileId(
   stateDb: IStateDB,

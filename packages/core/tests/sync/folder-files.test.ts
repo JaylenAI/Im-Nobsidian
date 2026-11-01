@@ -288,4 +288,113 @@ describe("FileHandler — 폴더 첨부", () => {
     expect(stateDb.registerFile).not.toHaveBeenCalled();
     expect(warnings.join("\n")).toContain("같은 이름의 다른 파일");
   });
+
+  describe("지운 폴더 첨부(deleteSync)", () => {
+    function deleting(local: Record<string, string>, deleteSync = true) {
+      setLogger({
+        warn: (m) => warnings.push(m),
+        error: () => {},
+        info: () => {},
+        debug: () => {},
+      });
+      const vaultFs = createMockVaultFs();
+      (vaultFs.listNonMarkdownFiles as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (vaultFs.exists as ReturnType<typeof vi.fn>).mockImplementation(
+        async (p: string) => p in local,
+      );
+      (vaultFs.readBinary as ReturnType<typeof vi.fn>).mockImplementation(async (p: string) =>
+        Buffer.from(local[p] ?? ""),
+      );
+      const stateDb = createMockStateDb();
+      const meta = new Map<string, string>();
+      stateDb.getMeta.mockImplementation((k: string) => meta.get(k) ?? null);
+      stateDb.setMeta.mockImplementation((k: string, v: string) => meta.set(k, v));
+      stateDb.getAll.mockReturnValue([
+        { notionPageId: "p", obsidianPath: "proj", fileType: "folder-only" },
+        { notionPageId: "n", obsidianPath: "proj/노트.md", fileType: "note" },
+      ]);
+      const notion = createMockNotionClient();
+      const handler = new FileHandler(
+        vaultFs,
+        notion as unknown as NotionClient,
+        stateDb as unknown as IStateDB,
+        2,
+        { deleteSync, fetch: vi.fn() as unknown as typeof globalThis.fetch },
+      );
+      return { vaultFs, stateDb, notion, handler, db: stateDb as unknown as IStateDB };
+    }
+    const block = (id: string, name: string) => ({
+      id,
+      type: "file",
+      file: { type: "file", file: { url: `https://file.notion.so/f/f/s/${id}/${name}?x=1` } },
+    });
+
+    it("push: 볼트에서 지운 파일의 블록 · 기록을 지운다 — 볼트에 있는 파일은 두고", async () => {
+      const { stateDb, notion, handler, db } = deleting({ "proj/남음.csv": "a" });
+      stateDb.getFilesByPageId.mockImplementation((id: string) =>
+        id === "p" ? [{ localPath: "proj/지움.csv" }, { localPath: "proj/남음.csv" }] : [],
+      );
+      rememberFolderFileId(db, "p", "proj/지움.csv", "x");
+      (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+        block("b1", "지움.csv"),
+        block("b2", "남음.csv"),
+      ]);
+
+      await handler.pushAllFiles();
+
+      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["b1"]]);
+      expect(stateDb.deleteFileRegistry.mock.calls).toEqual([["proj/지움.csv"]]);
+      expect(folderFileIdsOf(db, "p").has("proj/지움.csv")).toBe(false);
+    });
+
+    it("push: deleteSync 가 꺼져 있으면 지우지 않는다", async () => {
+      const { stateDb, notion, handler } = deleting({});
+      stateDb.getFilesByPageId.mockReturnValue([{ localPath: "proj/지움.csv" }]);
+
+      await handler.pushAllFiles();
+
+      expect(notion.deleteBlock).not.toHaveBeenCalled();
+    });
+
+    it("pull: Notion 에서 지운 파일은 볼트 쪽이 그대로면 지우고, 고쳤으면 두고 기록만 놓는다", async () => {
+      const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+      const { vaultFs, stateDb, handler, db } = deleting({
+        "proj/그대로.csv": "a",
+        "proj/고침.csv": "고친 것",
+        "proj/남음.csv": "c",
+      });
+      stateDb.getFilesByPageId.mockReturnValue([
+        { localPath: "proj/그대로.csv", fileHash: sha("a") },
+        { localPath: "proj/고침.csv", fileHash: sha("b") },
+        { localPath: "proj/남음.csv", fileHash: sha("c") },
+        { localPath: "proj/본적없음.csv", fileHash: sha("d") },
+      ]);
+      for (const name of ["그대로", "고침", "남음", "본적없음"].slice(0, 3)) {
+        rememberFolderFileId(
+          db,
+          "p",
+          `proj/${name}.csv`,
+          `0123abcd-0000-4000-8000-00000000000${name.length}`,
+        );
+      }
+      const remaining = [
+        {
+          url: "https://file.notion.so/f/f/s/0123abcd-0000-4000-8000-000000000002/남음.csv",
+          name: "남음.csv",
+        },
+      ];
+
+      await handler.receiveFolderFiles("proj", "p", remaining, false);
+      expect(vaultFs.deleteFile).not.toHaveBeenCalled();
+
+      await handler.receiveFolderFiles("proj", "p", remaining, true);
+      expect((vaultFs.deleteFile as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+        ["proj/그대로.csv"],
+      ]);
+      expect(stateDb.deleteFileRegistry.mock.calls.map(([p]) => p).sort()).toEqual(
+        ["proj/고침.csv", "proj/그대로.csv"].sort(),
+      );
+      expect(warnings.join("\n")).toContain("proj/고침.csv");
+    });
+  });
 });

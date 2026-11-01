@@ -16,6 +16,7 @@ import { isFolderRecord } from "./folder-container.js";
 import {
   embeddedNamesOf,
   folderFileIdsOf,
+  forgetFolderFileId,
   rememberFolderFileId,
   type FolderFileRef,
 } from "./folder-files.js";
@@ -35,6 +36,11 @@ export interface FileHandlerOptions {
    * 다시 올리면 Notion 에 사본이 생긴다.
    */
   readonly attachmentsFolder?: string;
+  /**
+   * 지운 폴더 첨부를 다른 쪽에서도 지우나(`sync.deleteSync`) — 볼트에서 지우면 Notion 의 블록을, Notion 에서 지우면 볼트의
+   * 파일을. 기본 false.
+   */
+  readonly deleteSync?: boolean;
 }
 
 /** 노트 없는 폴더의 Notion 페이지를 마련하는 쪽 — push 의 폴더 배치(`FolderPlacement`). */
@@ -87,6 +93,7 @@ export class FileHandler {
   private readonly downloadTimeoutMs: number;
   private readonly itemTimeoutMs: number;
   private readonly attachmentsFolder: string;
+  private readonly deleteSync: boolean;
 
   constructor(
     private readonly vaultFs: VaultFS,
@@ -100,6 +107,7 @@ export class FileHandler {
     this.downloadTimeoutMs =
       options?.downloadTimeoutMs ?? DEFAULT_CONFIG.advanced.mediaDownloadTimeoutMs;
     this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_CONFIG.advanced.itemTimeoutMs;
+    this.deleteSync = options?.deleteSync ?? false;
     this.attachmentsFolder = (
       options?.attachmentsFolder ?? DEFAULT_CONFIG.paths.attachments
     ).replace(/^\/+|\/+$/g, "");
@@ -237,6 +245,8 @@ export class FileHandler {
       );
     }
 
+    if (this.deleteSync) await this.removeDeletedFolderFiles();
+
     // 올릴 것: 처음 보는 파일 · 폴더 첨부로 올린 뒤 바뀐 파일. 노트 임베드로 올라간 파일(다른 페이지의 기록)은 노트가
     // 올린다 — 여기서 또 올리면 폴더 페이지에 사본이 생긴다.
     const pending: Array<{ file: NonMdFileInfo; existing: FileRegistryEntry | null }> = [];
@@ -279,6 +289,39 @@ export class FileHandler {
     }
     this.reportStranded(stranded);
     return results;
+  }
+
+  /**
+   * 볼트에서 지운 폴더 첨부를 Notion 에서도 지운다(deleteSync) — 폴더 페이지에 적힌 파일 가운데 볼트에 없는 것의 블록과 기록.
+   * 포함 · 제외 패턴으로 빠진 파일은 볼트에 있어 지우지 않는다.
+   */
+  private async removeDeletedFolderFiles(): Promise<void> {
+    const removed: string[] = [];
+    for (const record of this.stateDb.getAll()) {
+      if (!record.notionPageId || !isFolderRecord(record)) continue;
+      for (const entry of this.stateDb.getFilesByPageId(record.notionPageId)) {
+        if (getFolderPath(entry.localPath) !== record.obsidianPath) continue;
+        if (await this.vaultFs.exists(entry.localPath)) continue;
+        try {
+          const name = entry.localPath.slice(entry.localPath.lastIndexOf("/") + 1);
+          await this.removeOlderBlocks(record.notionPageId, name, undefined);
+          this.stateDb.deleteFileRegistry(entry.localPath);
+          forgetFolderFileId(this.stateDb, record.notionPageId, entry.localPath);
+          removed.push(entry.localPath);
+        } catch (error) {
+          getLogger().warn(
+            `[Im-Nobsidian] 볼트에서 지운 폴더 첨부를 Notion 에서 지우지 못함 (${entry.localPath}): ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+          );
+        }
+      }
+    }
+    if (removed.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 볼트에서 지운 폴더 첨부 ${removed.length}개를 Notion 에서 지움`,
+      );
+    }
   }
 
   /** 폴더 첨부를 둘 페이지 — 노트 없는 폴더면 마련한다. 둘 곳이 없으면 그 파일들을 `stranded` 에 담고 null. */
@@ -334,12 +377,15 @@ export class FileHandler {
    * 받은 볼트) 받지 않는다. Notion 에서 바뀐 파일은 볼트 쪽이 그대로일 때만 덮는다 — 볼트에서도 고쳤으면 두고 알린다(다음
    * push 가 볼트의 것을 올린다).
    *
+   * @param complete 본문을 끝까지 받았나 — 그럴 때만 Notion 에서 지운 파일을 볼트에서 지운다(deleteSync). 잘린 본문에 없는
+   *   파일은 지운 것이 아니다.
    * @returns 새로 받거나 바꾼 파일 수
    */
   async receiveFolderFiles(
     folder: string,
     pageId: string,
     files: readonly FolderFileRef[],
+    complete = false,
   ): Promise<number> {
     const known = new Map(
       this.stateDb.getFilesByPageId(pageId).map((entry) => [entry.localPath, entry]),
@@ -369,7 +415,49 @@ export class FileHandler {
         this.sema.release();
       }
     }
+    if (complete && this.deleteSync) {
+      const names = new Set(files.map((file) => file.name));
+      for (const entry of known.values()) {
+        const name = entry.localPath.slice(entry.localPath.lastIndexOf("/") + 1);
+        if (getFolderPath(entry.localPath) !== folder || names.has(name)) continue;
+        // 이 페이지에서 본 적 있는 파일만 — 본 적 없는 기록은 Notion 에서 지운 것인지 모른다
+        if (!ids.has(entry.localPath)) continue;
+        await this.removeLocalFolderFile(pageId, entry);
+      }
+    }
     return received;
+  }
+
+  /**
+   * Notion 에서 지운 폴더 첨부를 볼트에서 지운다 — 지난 동기화 그대로일 때만. 볼트에서 고쳤으면 두고 기록만 놓는다 — 다음 push
+   * 가 다시 올린다(노트의 원격 삭제와 같은 규칙).
+   */
+  private async removeLocalFolderFile(pageId: string, entry: FileRegistryEntry): Promise<void> {
+    try {
+      if (await this.vaultFs.exists(entry.localPath)) {
+        const local = createHash("sha256")
+          .update(await this.vaultFs.readBinary(entry.localPath))
+          .digest("hex");
+        if (local === entry.fileHash) {
+          await this.vaultFs.deleteFile(entry.localPath);
+          getLogger().info(
+            `[Im-Nobsidian] Notion 에서 지운 폴더 첨부를 볼트에서 지움: ${entry.localPath}`,
+          );
+        } else {
+          getLogger().warn(
+            `[Im-Nobsidian] Notion 에서 지운 폴더 첨부를 볼트에서 고쳐 두었음 — 다음 push 가 다시 올린다: ${entry.localPath}`,
+          );
+        }
+      }
+      this.stateDb.deleteFileRegistry(entry.localPath);
+      forgetFolderFileId(this.stateDb, pageId, entry.localPath);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] Notion 에서 지운 폴더 첨부를 볼트에서 지우지 못함 (${entry.localPath}): ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
   }
 
   /**
