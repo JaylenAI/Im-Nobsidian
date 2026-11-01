@@ -108,7 +108,9 @@ describe("SyncOrchestrator", () => {
         { path: "자료/큰.mp4", size: 20, mtime: "2026-10-31T00:00:00.000Z" },
       ]);
       mockStateDb.getByPath.mockImplementation((path: string) =>
-        path === "자료" ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page" } : null,
+        path === "자료"
+          ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page", fileType: "folder-note" }
+          : null,
       );
       mockNotionClient.uploadFile.mockImplementation((_buffer: Buffer, filename: string) =>
         filename.endsWith(".mp4")
@@ -132,7 +134,9 @@ describe("SyncOrchestrator", () => {
         { path: "자료/표.pdf", size: 10, mtime: "2026-10-31T00:00:00.000Z" },
       ]);
       mockStateDb.getByPath.mockImplementation((path: string) =>
-        path === "자료" ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page" } : null,
+        path === "자료"
+          ? { id: 1, obsidianPath: "자료", notionPageId: "folder-page", fileType: "folder-note" }
+          : null,
       );
 
       await orchestrator.push({ dryRun: true });

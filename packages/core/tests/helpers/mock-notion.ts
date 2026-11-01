@@ -30,7 +30,7 @@ export function createMockNotionClient() {
       nextCursor: null,
     }),
     fetchAllChildren: vi.fn().mockResolvedValue([]),
-    appendChildren: vi.fn().mockResolvedValue(undefined),
+    appendChildren: vi.fn().mockResolvedValue([]),
     deleteBlock: vi.fn().mockResolvedValue(undefined),
     search: vi.fn().mockResolvedValue({
       results: [],

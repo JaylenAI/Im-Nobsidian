@@ -1,3 +1,5 @@
+import type { FileHandler } from "./file-handler.js";
+import { folderFilesOf, type FolderFileRef } from "./folder-files.js";
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
@@ -140,6 +142,7 @@ export class PagePuller {
     private readonly placement: FolderPlacement,
     private readonly detector: RemoteDetector,
     private readonly discovery: DatabaseDiscovery,
+    private readonly fileHandler: FileHandler,
   ) {}
 
   /**
@@ -292,8 +295,21 @@ export class PagePuller {
 
     const fetched = await this.fetchPageMarkdown(pageId);
     const hasChildPages = this.hasChildContainers(pageId, fetched.children);
-    if (hasChildPages && !fetched.hasBody) {
-      return this.createFolderOnly(pageId, page, fetched.fingerprint, parentPath, safeName);
+    // 본문이 폴더 첨부뿐이면 폴더다 — 자식이 없는 페이지는 push 가 남긴 표시(캡션 = 파일 이름)가 있을 때만(ADR-054).
+    const folderFiles =
+      fetched.folderFiles && (hasChildPages || fetched.folderFiles.named)
+        ? fetched.folderFiles.files
+        : null;
+    if ((hasChildPages && !fetched.hasBody) || folderFiles) {
+      const created = await this.createFolderOnly(
+        pageId,
+        page,
+        fetched.fingerprint,
+        parentPath,
+        safeName,
+      );
+      if (folderFiles) await this.receiveFolderFiles(created.path, pageId, folderFiles);
+      return created;
     }
 
     const fileType: "file" | "folder-note" = hasChildPages ? "folder-note" : "file";
@@ -891,6 +907,8 @@ export class PagePuller {
     fingerprint: string | null;
     /** 자식 페이지 · 자식 DB 태그와 빈 블록 말고 본문이 있는가 — 받은 원문으로 본다({@link hasBodyBesidesChildren}). */
     hasBody: boolean;
+    /** 본문이 폴더 첨부뿐이면 그 파일들 — `named` 는 모두 캡션이 파일 이름인가({@link folderFilesOf}). */
+    folderFiles: { files: FolderFileRef[]; named: boolean } | null;
   }> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
@@ -910,6 +928,7 @@ export class PagePuller {
           children: extractChildTags(result.markdown),
           fingerprint: remoteBodyFingerprint(result.markdown),
           hasBody: hasBodyBesidesChildren(result.markdown),
+          folderFiles: folderFilesInBody(result.markdown),
         };
       } catch (error) {
         // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
@@ -934,6 +953,7 @@ export class PagePuller {
       children: extractChildTags(fallback.markdown),
       fingerprint: null,
       hasBody: hasBodyBesidesChildren(fallback.markdown),
+      folderFiles: folderFilesInBody(fallback.markdown),
     };
   }
 
@@ -953,6 +973,15 @@ export class PagePuller {
    * @throws 받을 자리가 없을 때 — 이유와 함께 실패로 남고, 다음 pull 이 다시 본다(기준 시각이
    *         이 변경 앞에 묶인다).
    */
+  /** 폴더 첨부를 받아 받은 파일 수에 더한다. */
+  private async receiveFolderFiles(
+    folder: string,
+    pageId: string,
+    files: readonly FolderFileRef[],
+  ): Promise<void> {
+    this._pullFileCount += await this.fileHandler.receiveFolderFiles(folder, pageId, files);
+  }
+
   /**
    * 이 폴더 레코드의 Notion 페이지에서 받을 본문이 있나 — dry-run 이 실제 pull({@link pullFolderRecord})과 같게 센다.
    * 본문이 하위 페이지뿐이면 실제 pull 은 본 것만 적고 고친 것으로 세지 않는다.
@@ -961,7 +990,11 @@ export class PagePuller {
     const page = await this.notionClient.getPage(record.notionPageId!);
     if (isTrashedOrArchived(page)) return false;
     const { markdown } = await this.notionClient.getPageMarkdown(page.id);
-    return hasBodyBesidesChildren(markdown) && this.folderNoteRefusal(record.obsidianPath) === null;
+    return (
+      hasBodyBesidesChildren(markdown) &&
+      folderFilesOf(markdown, false) === null &&
+      this.folderNoteRefusal(record.obsidianPath) === null
+    );
   }
 
   /** 이 폴더에 폴더 노트를 둘 수 없는 까닭 — 둘 수 있으면 null. */
@@ -981,6 +1014,13 @@ export class PagePuller {
 
     const { markdown } = await this.notionClient.getPageMarkdown(page.id);
     if (!hasBodyBesidesChildren(markdown)) {
+      this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
+      return null;
+    }
+    // 폴더 첨부뿐이면 폴더 그대로 — 파일만 받는다. 예전에는 폴더 노트를 새로 쓰고 올린 파일의 사본을 받았다(ADR-054).
+    const files = folderFilesOf(markdown, false);
+    if (files) {
+      await this.receiveFolderFiles(folder, page.id, files);
       this.observation.record(record.id, page, remoteBodyFingerprint(markdown));
       return null;
     }
@@ -1209,4 +1249,10 @@ export class PagePuller {
     this.propertyMapper.loadSchema(schema);
     this.dbSchemaLoaded = true;
   }
+}
+
+/** 받은 원문이 폴더 첨부뿐이면 그 파일들과 표시 여부({@link folderFilesOf}). */
+function folderFilesInBody(markdown: string): { files: FolderFileRef[]; named: boolean } | null {
+  const files = folderFilesOf(markdown, false);
+  return files ? { files, named: folderFilesOf(markdown, true) !== null } : null;
 }
