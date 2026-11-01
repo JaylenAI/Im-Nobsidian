@@ -1,3 +1,4 @@
+import { VaultFileIndex } from "./vault-file-index.js";
 import { createHash } from "node:crypto";
 import type { UploadedFile } from "../notion/property-mapper.js";
 import { Sema } from "async-sema";
@@ -665,7 +666,7 @@ export class ImageHandler {
     if (!target || /^https?:\/\//.test(target) || target.includes("\n")) return null;
     const vaultPath = stripAlias(target);
     if (baseName(vaultPath) !== uploadedName) return null;
-    for (const candidate of this.vaultCandidates(vaultPath, noteFolder)) {
+    for await (const candidate of this.vaultCandidates(vaultPath, noteFolder)) {
       try {
         if (await this.vaultFs.exists(candidate)) return target;
       } catch {
@@ -757,7 +758,7 @@ export class ImageHandler {
       return null;
     }
     for (const target of targets) {
-      for (const candidate of this.vaultCandidates(stripAlias(target), noteFolder)) {
+      for await (const candidate of this.vaultCandidates(stripAlias(target), noteFolder)) {
         let localHash: string;
         try {
           localHash = sha256Of(await this.vaultFs.readBinary(candidate));
@@ -1370,20 +1371,32 @@ export class ImageHandler {
   /**
    * 임베드 경로가 가리킬 수 있는 볼트 실제 파일 후보를 우선순위대로 만든다(F23).
    * Obsidian 위키링크 임베드는 노트 옆 파일을 파일명만으로 참조하는 게 관례라
-   * 노트 폴더 → 볼트 루트 → attachments/ 순.
+   * 노트 폴더 → 볼트 루트 → attachments/ 순. 세 곳에 없으면 볼트 어디서든 이름으로 찾는다({@link VaultFileIndex}).
    *
    * push(업로드)와 pull(원본 복원)이 **같은 사다리**를 봐야 왕복이 닫힌다. 예전에는
    * pull 쪽이 볼트 루트만 확인해서, `__e2e_probe__/노트.md` 안의 `![[t-img.png]]` 는
    * 올라갈 때는 노트 폴더에서 잘 찾아 올리고도 내려올 때는 원본을 못 찾아 사본을
    * 새로 받았다(실측) — 왕복할 때마다 첨부가 한 벌씩 늘어난다.
    */
-  private vaultCandidates(localPath: string, noteFolder?: string): string[] {
-    const candidates: string[] = [];
+  private async *vaultCandidates(localPath: string, noteFolder?: string): AsyncGenerator<string> {
+    const ladder: string[] = [];
     if (noteFolder && !localPath.includes("/")) {
-      candidates.push(`${noteFolder}/${localPath}`);
+      ladder.push(`${noteFolder}/${localPath}`);
     }
-    candidates.push(localPath, `${this.attachmentFolder}/${localPath}`);
-    return candidates;
+    ladder.push(localPath, `${this.attachmentFolder}/${localPath}`);
+    yield* ladder;
+    // 세 곳에서 찾지 못했을 때만 — Obsidian 처럼 볼트 어디서든 이름(경로 끝)으로 찾는다
+    for (const found of await this.fileIndex.find(localPath, noteFolder)) {
+      if (!ladder.includes(found)) yield found;
+    }
+  }
+
+  private indexOfFiles: VaultFileIndex | null = null;
+
+  /** 볼트의 첨부 이름표 — 처음 쓸 때 만든다. */
+  private get fileIndex(): VaultFileIndex {
+    this.indexOfFiles ??= new VaultFileIndex(this.vaultFs);
+    return this.indexOfFiles;
   }
 
   /**
@@ -1394,10 +1407,8 @@ export class ImageHandler {
     localPath: string,
     noteFolder?: string,
   ): Promise<{ buffer: Buffer; resolvedPath: string }> {
-    const candidates = this.vaultCandidates(localPath, noteFolder);
-
     let lastError: unknown;
-    for (const candidate of candidates) {
+    for await (const candidate of this.vaultCandidates(localPath, noteFolder)) {
       try {
         return { buffer: await this.vaultFs.readBinary(candidate), resolvedPath: candidate };
       } catch (error) {
