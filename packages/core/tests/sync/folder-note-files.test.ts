@@ -23,10 +23,13 @@ function at(hms: string): void {
   vi.setSystemTime(new Date(`${DAY}T${hms}.000Z`));
 }
 
-function config(deleteSync = true, renameOnTitleChange = false): Config {
+function config(deleteSync = true, renameOnTitleChange = false, blockMode = false): Config {
   return createConfig({
     notion: { token: "ntn_test_token", rootPageId: ROOT, parentMode: "page", databases: [] },
     sync: { ...DEFAULT_CONFIG.sync, deleteSync, renameOnTitleChange },
+    ...(blockMode
+      ? { conversion: { ...DEFAULT_CONFIG.conversion, preferMarkdownApi: false } }
+      : {}),
     advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0, maxRetries: 0 },
   });
 }
@@ -36,7 +39,7 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
   let notion: ReturnType<typeof memoryNotion>;
   const devices: { db: StateDB; vault: MemoryVault; sync: SyncOrchestrator }[] = [];
 
-  function device(deleteSync = true, renameOnTitleChange = false) {
+  function device(deleteSync = true, renameOnTitleChange = false, blockMode = false) {
     const db = StateDB.open(join(tempDir, `state-${devices.length}.db`));
     const vault = new MemoryVault();
     const fetchFn = vi.fn(async (url: string | URL) => {
@@ -44,7 +47,7 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
       return bytes ? new Response(bytes) : new Response("gone", { status: 404 });
     });
     const sync = new SyncOrchestrator(
-      config(deleteSync, renameOnTitleChange),
+      config(deleteSync, renameOnTitleChange, blockMode),
       db,
       notion.client as never,
       vault.fs(),
@@ -96,6 +99,29 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
     expect(pageOf("X").body).toContain("폴더 노트 글 고침");
     expect(pageOf("X").body).toContain("📁 data.csv");
     expect(uploads()).toBe(2);
+  });
+
+  it("블록 방식 push — 노트를 고쳐도 폴더 첨부 블록을 두고 새 본문을 그 앞에 넣는다(다시 올리지 않는다)", async () => {
+    const a = device(true, false, true);
+    at("10:00:05");
+    a.vault.write("L.md", "블록 노트\n");
+    a.vault.write("L/file.csv", "k,v\n");
+    expect((await a.sync.push()).failed).toEqual([]);
+    expect(uploads()).toBe(1);
+    expect(pageOf("L").body).toContain("📁 file.csv");
+
+    at("10:02:05");
+    a.vault.write("L.md", "블록 노트 고침\n");
+    expect(await a.sync.push()).toMatchObject({ updated: 1, failed: [] });
+    expect(uploads()).toBe(1);
+    expect(pageOf("L").body.match(/📁 file\.csv/g)).toHaveLength(1);
+    const lastTree = notion.client.appendBlockTree.mock.calls.at(-1)!;
+    expect(lastTree[0]).toBe(pageOf("L").id);
+    expect(lastTree[2]).toEqual({ atStart: true });
+
+    at("10:04:05");
+    expect(await a.sync.push()).toMatchObject({ created: 0, updated: 0, failed: [] });
+    expect(uploads()).toBe(1);
   });
 
   it("pull: 다른 볼트가 노트에서 떼어 같은 폴더에 같은 바이트로 받고, 다시 돌려도 바뀌는 것이 없다", async () => {

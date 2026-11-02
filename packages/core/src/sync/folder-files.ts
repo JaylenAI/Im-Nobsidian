@@ -67,6 +67,36 @@ function isMarkedCaption(label: string, name: string): boolean {
   return unescapeCaption(label) === folderFileCaption(name);
 }
 
+/** 블록 API 로 읽은 블록의 Notion 에 올린 파일 — 주소 · 캡션. 올린 파일 블록이 아니면 null. */
+export function uploadedFileOfBlock(block: {
+  readonly type: string;
+}): { readonly url: string; readonly caption: string } | null {
+  const media = (block as unknown as Record<string, unknown>)[block.type] as
+    | { type?: string; file?: { url?: string }; caption?: ReadonlyArray<{ plain_text?: string }> }
+    | undefined;
+  const url = media?.type === "file" ? media.file?.url : undefined;
+  if (!url) return null;
+  return { url, caption: (media?.caption ?? []).map((part) => part.plain_text ?? "").join("") };
+}
+
+/**
+ * 블록이 이 페이지의 폴더 첨부인가 — 적어 둔 Notion 파일 id(`knownIds`)이거나 표시를 단 캡션({@link folderFileCaption}).
+ * {@link folderFilesInNote} 의 블록 판.
+ */
+export function isFolderFileBlock(
+  block: { readonly type: string },
+  knownIds: ReadonlySet<string>,
+): boolean {
+  const file = uploadedFileOfBlock(block);
+  if (!file) return false;
+  const name = uploadedFileNameFromUrl(file.url);
+  const fileId = notionFileIdOf(file.url);
+  return (
+    (fileId !== null && knownIds.has(fileId)) ||
+    (name !== null && file.caption === folderFileCaption(name))
+  );
+}
+
 /** 노트 페이지의 폴더 첨부({@link folderFilesInNote}) — 떼어 낸 본문과 그 파일들. */
 export interface NoteFolderFiles {
   /** 폴더 첨부 줄을 뺀 본문 — 노트로 받는다. */
