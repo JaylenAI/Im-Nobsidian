@@ -4,6 +4,7 @@ import type { RemoteMove, SyncRecord } from "../types/sync.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 import { wikilinkTitleFromPath } from "../utils/wikilink-title.js";
 import { retargetBaseFiles, rewriteDatabaseFolders } from "./db-folder-moves.js";
+import { folderFileIdsOf } from "./folder-files.js";
 import { isFolderRecord, parentFolderOf } from "./folder-container.js";
 import type { VaultFS } from "./vault-fs.js";
 
@@ -34,7 +35,13 @@ export class NoteRelocator {
     // 폴더 노트(`X/X.md`)는 폴더째. 노트와 행은 파일 하나와 그 옆의 하위 페이지 폴더(`X/`).
     if (record.fileType === "folder-note") return [parentFolderOf(record.obsidianPath)];
     const children = stripMarkdownExtension(record.obsidianPath);
-    const hasChildren = this.stateDb.getAll().some((r) => within(r.obsidianPath, children));
+    // 하위 페이지가 없어도 그 노트 페이지에 올린 폴더 첨부(ADR-056)가 든 폴더는 노트의 것이다
+    const hasChildren =
+      this.stateDb.getAll().some((r) => within(r.obsidianPath, children)) ||
+      (record.notionPageId !== null &&
+        [...folderFileIdsOf(this.stateDb, record.notionPageId).keys()].some((path) =>
+          within(path, children),
+        ));
     return hasChildren ? [record.obsidianPath, children] : [record.obsidianPath];
   }
 

@@ -23,10 +23,10 @@ function at(hms: string): void {
   vi.setSystemTime(new Date(`${DAY}T${hms}.000Z`));
 }
 
-function config(): Config {
+function config(deleteSync = true, renameOnTitleChange = false): Config {
   return createConfig({
     notion: { token: "ntn_test_token", rootPageId: ROOT, parentMode: "page", databases: [] },
-    sync: { ...DEFAULT_CONFIG.sync, deleteSync: true },
+    sync: { ...DEFAULT_CONFIG.sync, deleteSync, renameOnTitleChange },
     advanced: { ...DEFAULT_CONFIG.advanced, retryWaitMs: 0, maxRetries: 0 },
   });
 }
@@ -36,7 +36,7 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
   let notion: ReturnType<typeof memoryNotion>;
   const devices: { db: StateDB; vault: MemoryVault; sync: SyncOrchestrator }[] = [];
 
-  function device() {
+  function device(deleteSync = true, renameOnTitleChange = false) {
     const db = StateDB.open(join(tempDir, `state-${devices.length}.db`));
     const vault = new MemoryVault();
     const fetchFn = vi.fn(async (url: string | URL) => {
@@ -44,7 +44,7 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
       return bytes ? new Response(bytes) : new Response("gone", { status: 404 });
     });
     const sync = new SyncOrchestrator(
-      config(),
+      config(deleteSync, renameOnTitleChange),
       db,
       notion.client as never,
       vault.fs(),
@@ -223,6 +223,85 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
     await a.sync.pull();
     expect(a.vault.read("X/data.csv")).toBe("a,b\nB,B,B,B\n");
     expect(a.vault.read("X/X.md")).not.toContain("data.csv");
+  });
+
+  for (const deleteSync of [true, false]) {
+    it(`폴더 이름을 바꿔도(deleteSync ${deleteSync}) 파일 블록은 하나씩 · 다른 볼트는 새 폴더에만 받는다`, async () => {
+      const a = device(deleteSync);
+      at("10:00:05");
+      a.vault.write("X/X.md", "폴더 노트 글\n");
+      a.vault.write("X/Y.md", "하위\n");
+      a.vault.write("X/data.csv", "a,b\n1,2\n");
+      a.vault.write("N.md", "노트 글\n");
+      a.vault.write("N/sheet.csv", "x\n");
+      a.vault.write("P/p.csv", "p\n");
+      expect((await a.sync.push()).failed).toEqual([]);
+      at("10:02:05");
+      const early = device(deleteSync);
+      await early.sync.pull();
+
+      at("10:03:05");
+      a.vault.renameFolder("X", "W");
+      a.vault.rename("W/X.md", "W/W.md");
+      a.vault.rename("N.md", "K.md");
+      a.vault.renameFolder("N", "K");
+      a.vault.renameFolder("P", "Q");
+      expect((await a.sync.push()).failed).toEqual([]);
+      const body = (title: string) => pageOf(title).body;
+      expect(body("W").match(/📁 data\.csv/g)).toHaveLength(1);
+      expect(body("K").match(/📁 sheet\.csv/g)).toHaveLength(1);
+      expect(body("Q").match(/📁 p\.csv/g)).toHaveLength(1);
+      const before = uploads();
+      expect((await a.sync.push()).failed).toEqual([]);
+      expect(uploads()).toBe(before);
+
+      at("10:05:05");
+      const b = device(deleteSync);
+      await b.sync.pull();
+      const files = [...b.vault.files.keys()].filter((path) => !path.endsWith(".md")).sort();
+      expect(files).toEqual(["K/sheet.csv", "Q/p.csv", "W/data.csv"]);
+
+      // 옮기기 전에 받은 볼트 — Notion 의 이름 바꾸기를 따르지 않는 설정이라 옛 자리에 두고, 다시 올리지도 사본을 받지도 않는다
+      await early.sync.pull();
+      const kept = [...early.vault.files.keys()].filter((path) => !path.endsWith(".md")).sort();
+      expect(kept).toEqual(["N/sheet.csv", "P/p.csv", "X/data.csv"]);
+      at("10:07:05");
+      const quiet = uploads();
+      expect(await early.sync.push()).toMatchObject({ created: 0, updated: 0, failed: [] });
+      expect(uploads()).toBe(quiet);
+      expect(body("W").match(/📁 data\.csv/g)).toHaveLength(1);
+    });
+  }
+
+  it("Notion 의 이름 바꾸기를 따르는 볼트는 폴더째 옮겨 받고, 다시 올리지 않는다", async () => {
+    const a = device();
+    at("10:00:05");
+    a.vault.write("X/X.md", "폴더 노트 글\n");
+    a.vault.write("X/Y.md", "하위\n");
+    a.vault.write("X/data.csv", "a,b\n1,2\n");
+    a.vault.write("N.md", "노트 글\n");
+    a.vault.write("N/sheet.csv", "x\n");
+    expect((await a.sync.push()).failed).toEqual([]);
+    at("10:02:05");
+    const b = device(true, true);
+    await b.sync.pull();
+
+    at("10:03:05");
+    a.vault.renameFolder("X", "W");
+    a.vault.rename("W/X.md", "W/W.md");
+    a.vault.rename("N.md", "K.md");
+    a.vault.renameFolder("N", "K");
+    expect((await a.sync.push()).failed).toEqual([]);
+
+    at("10:05:05");
+    await b.sync.pull();
+    const files = [...b.vault.files.keys()].sort();
+    expect(files.filter((path) => !path.endsWith(".md"))).toEqual(["K/sheet.csv", "W/data.csv"]);
+    at("10:07:05");
+    const quiet = uploads();
+    expect(await b.sync.push()).toMatchObject({ created: 0, updated: 0, failed: [] });
+    expect(uploads()).toBe(quiet);
+    expect(pageOf("W").body.match(/📁 data\.csv/g)).toHaveLength(1);
   });
 
   it("하위가 없는 노트 이름의 폴더 · 폴더 노트 하나뿐인 폴더도 파일을 왕복한다 — 다시 돌려도 올리거나 받는 것이 없다", async () => {
