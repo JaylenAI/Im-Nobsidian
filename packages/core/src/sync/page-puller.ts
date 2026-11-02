@@ -282,6 +282,18 @@ export class PagePuller {
   }
 
   /**
+   * dry-run — 새 페이지를 실제 pull 이 받을 자리(부모의 자리 + 제목). 그 안에서 찾은 DB 의 폴더를 실제처럼 그 옆에 둔다 — 예전에는
+   * 자리를 몰라 `databases/` 아래로 보였다. 같은 이름이 있으면 실제 pull 은 접미사를 붙이지만 여기서는 붙이지 않는다(선점하지
+   * 않는다). 볼트도 상태 DB 도 바꾸지 않는다.
+   */
+  async plannedNotePath(pageId: string): Promise<string> {
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
+    const parent = await this.resolveParentPath(page);
+    const name = `${sanitizeFileName(this.notionClient.extractTitle(page))}.md`;
+    return parent ? `${parent}/${name}` : name;
+  }
+
+  /**
    * dry-run — 실제 pull({@link createPulledPage})이 이 새 페이지를 새로 받지 않고 상태 기록에 없던 노트 · 폴더와 다시 잇는가(P7).
    * 다시 이을 노트(`note` — 충돌로 남길 것이면 `conflict`) · 이미 있는 폴더(`folder` — 폴더로만 받는 페이지), 아니면 null.
    * 그 자리에 무엇이 있을 때만 본문을 받아 실제 pull 처럼 렌더해 견준다 — 미디어는 받되 볼트에 쓰지 않는다
