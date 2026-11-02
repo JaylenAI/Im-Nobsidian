@@ -10,6 +10,7 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import { compactNotionId } from "../utils/id.js";
 import { notionFileIdOf } from "../utils/notion-file-url.js";
 import { notionMediaSpans, uploadedFileNameFromUrl } from "./image-handler.js";
+import { recallUploadedMedia } from "./uploaded-media.js";
 
 /** 폴더 페이지에 실린 폴더 첨부 하나. */
 export interface FolderFileRef {
@@ -159,6 +160,36 @@ export function folderFilesInNote(
     markdown: all.filter((_, i) => !drop.has(i)).join("\n"),
     files,
     lines,
+  };
+}
+
+/**
+ * 받은 노트 페이지(행 포함)의 폴더 첨부({@link folderFilesInNote}) — 이 페이지에 적어 둔 폴더 첨부 id 로도 찾고, 로컬 노트가
+ * 임베드한 이름 · 이 노트가 올린 미디어는 노트의 것으로 둔다. 페이지 받기와 행 받기가 같은 규칙을 읽는다.
+ *
+ * @returns `holdsAll` — 떼고 남은 본문에 적어 둔 폴더 첨부가 없나. 그럴 때만 빠진 파일을 Notion 에서 지운 것으로 본다.
+ */
+export function noteFolderFilesOfPage(
+  stateDb: IStateDB,
+  pageId: string,
+  markdown: string,
+  embedded?: ReadonlySet<string>,
+): { readonly found: NoteFolderFiles | null; readonly holdsAll: boolean } {
+  const ids = new Set(folderFileIdsOf(stateDb, pageId).values());
+  const media = recallUploadedMedia(stateDb, pageId);
+  const found = folderFilesInNote(markdown, {
+    knownIds: ids,
+    exclude: (file) => {
+      const fileId = notionFileIdOf(file.url);
+      return embedded?.has(file.name) === true || (fileId !== null && media.has(fileId));
+    },
+  });
+  const rest = found?.markdown ?? markdown;
+  return {
+    found,
+    holdsAll:
+      ids.size === 0 ||
+      !notionMediaSpans(rest).some((span) => ids.has(notionFileIdOf(span.url) ?? "")),
   };
 }
 
