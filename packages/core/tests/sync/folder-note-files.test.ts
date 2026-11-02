@@ -206,6 +206,25 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
     expect(pageOf("X").body).toMatch(/B 가 더함[\s\S]*📁 data\.csv<\/file>$/);
   });
 
+  it("두 볼트가 같은 폴더 첨부를 따로 고쳐 올려도 블록은 하나다 — 나중에 올린 것이 남고, 다른 볼트가 받는다", async () => {
+    const a = await seeded();
+    at("10:03:05");
+    const b = device();
+    await b.sync.pull();
+
+    at("10:05:05");
+    a.vault.write("X/data.csv", "a,b\nA,A,A\n");
+    expect((await a.sync.push()).failed).toEqual([]);
+    b.vault.write("X/data.csv", "a,b\nB,B,B,B\n");
+    expect((await b.sync.push()).failed).toEqual([]);
+    expect(pageOf("X").body.match(/📁 data\.csv/g)).toHaveLength(1);
+
+    at("10:07:05");
+    await a.sync.pull();
+    expect(a.vault.read("X/data.csv")).toBe("a,b\nB,B,B,B\n");
+    expect(a.vault.read("X/X.md")).not.toContain("data.csv");
+  });
+
   it("하위가 없는 노트 이름의 폴더 · 폴더 노트 하나뿐인 폴더도 파일을 왕복한다 — 다시 돌려도 올리거나 받는 것이 없다", async () => {
     const a = device();
     at("10:00:05");

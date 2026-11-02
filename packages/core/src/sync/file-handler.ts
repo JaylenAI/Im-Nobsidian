@@ -385,12 +385,7 @@ export class FileHandler {
         for (const entry of gone) {
           try {
             const name = entry.localPath.slice(entry.localPath.lastIndexOf("/") + 1);
-            await this.removeOlderBlocks(
-              pageId,
-              name,
-              undefined,
-              this.noteFileId(pageId, entry.localPath),
-            );
+            await this.removeOlderBlocks(pageId, entry.localPath, name, undefined);
             this.stateDb.deleteFileRegistry(entry.localPath);
             forgetFolderFileId(this.stateDb, pageId, entry.localPath);
             removed.push(entry.localPath);
@@ -679,12 +674,7 @@ export class FileHandler {
     const [created] = await this.notionClient.appendChildBlocks(parentPageId, [block]);
     // 바뀐 파일은 새 블록을 붙이고 옛 블록을 지운다 — 예전에는 고칠 때마다 블록이 하나씩 늘었다.
     if (previous) {
-      await this.removeOlderBlocks(
-        parentPageId,
-        filename,
-        created?.id,
-        this.noteFileId(parentPageId, file.path),
-      );
+      await this.removeOlderBlocks(parentPageId, file.path, filename, created?.id);
     }
     // Notion 이 저장한 파일 id 를 적는다 — 다음 pull 이 제가 올린 것을 다시 받지 않는다
     const url = created ? fileUrlOfBlock(created as { readonly type?: string }) : null;
@@ -707,32 +697,38 @@ export class FileHandler {
   }
 
   /**
-   * 노트의 페이지에 적어 둔 그 폴더 첨부의 Notion 파일 id — 노트 페이지에는 노트가 임베드한 같은 이름의 파일이 있을 수 있어 id
-   * 로만 지운다. 폴더 페이지는 undefined — 예전처럼 이름으로 지운다(id 를 적기 전에 올린 블록도).
-   */
-  private noteFileId(pageId: string, localPath: string): string | undefined {
-    const record = this.stateDb.getByNotionId(pageId);
-    if (!record || isFolderRecord(record)) return undefined;
-    return folderFileIdsOf(this.stateDb, pageId).get(localPath);
-  }
-
-  /**
-   * 이 페이지에서 같은 이름의 파일 블록 중 방금 붙인 것 말고를 지운다. 적어 둔 Notion 파일 id(`fileId`)가 있으면 그 파일의
-   * 블록만 — 폴더 노트의 페이지에는 노트가 임베드한 같은 이름의 파일이 있을 수 있다.
+   * 이 페이지에서 그 폴더 첨부의 블록 중 방금 붙인 것(`keep`) 말고를 지운다. 폴더 페이지는 같은 이름의 파일 블록 모두(id 를
+   * 적기 전에 올린 블록도). 노트의 페이지는 노트가 임베드한 같은 이름의 파일이 있을 수 있어, 적어 둔 Notion 파일 id 의 블록과
+   * 표시를 단 캡션({@link folderFileCaption})의 블록만 — 다른 볼트가 같은 파일을 먼저 고쳐 올린 블록은 id 를 모르지만 표시가 있다.
+   * 예전에는 id 로만 지워, 두 볼트가 따로 고쳐 올리면 블록이 둘 남았다.
    */
   private async removeOlderBlocks(
     pageId: string,
+    localPath: string,
     name: string,
     keep: string | undefined,
-    fileId?: string,
   ): Promise<void> {
+    const record = this.stateDb.getByNotionId(pageId);
+    const onNote = record !== null && !isFolderRecord(record);
+    const fileId = onNote ? folderFileIdsOf(this.stateDb, pageId).get(localPath) : undefined;
     for (const block of await this.notionClient.fetchAllChildren(pageId)) {
       if (block.id === keep) continue;
       const media = (block as unknown as Record<string, unknown>)[block.type] as
-        { type?: string; file?: { url?: string }; name?: string } | undefined;
+        | {
+            type?: string;
+            file?: { url?: string };
+            caption?: ReadonlyArray<{ plain_text?: string }>;
+          }
+        | undefined;
       const url = media?.type === "file" ? media.file?.url : undefined;
       if (!url || uploadedFileNameFromUrl(url) !== name) continue;
-      if (fileId && notionFileIdOf(url) !== fileId) continue;
+      if (onNote) {
+        const caption = (media?.caption ?? []).map((part) => part.plain_text ?? "").join("");
+        const ours =
+          (fileId !== undefined && notionFileIdOf(url) === fileId) ||
+          caption === folderFileCaption(name);
+        if (!ours) continue;
+      }
       await this.notionClient.deleteBlock(block.id);
     }
   }

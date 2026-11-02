@@ -508,7 +508,7 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
   const uploads = new Map<string, { name: string; bytes: Buffer }>();
   const fileBlocks = new Map<
     string,
-    { pageId: string; line: string; url: string; type: string; bytes: Buffer }
+    { pageId: string; line: string; url: string; type: string; caption: string; bytes: Buffer }
   >();
   client.uploadFile.mockImplementation(async (blob: Blob, name: string) => {
     const id = `upload-${uploads.size + 1}`;
@@ -534,7 +534,7 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
           type === "image" ? `![${caption}](${url})` : `<${type} src="${url}">${caption}</${type}>`;
         page.body = page.body ? `${page.body}\n${line}` : line;
         const blockId = `${pageId}#file:${fileId}`;
-        fileBlocks.set(blockId, { pageId, line, url, type, bytes: upload.bytes });
+        fileBlocks.set(blockId, { pageId, line, url, type, caption, bytes: upload.bytes });
         return { id: blockId, type, [type]: { type: "file", file: { url } } };
       });
     },
@@ -549,7 +549,11 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       .map(([id, block]) => ({
         id,
         type: block.type,
-        [block.type]: { type: "file", file: { url: block.url } },
+        [block.type]: {
+          type: "file",
+          file: { url: block.url },
+          caption: block.caption ? [{ plain_text: block.caption }] : [],
+        },
       }));
   /** 올린 파일의 바이트 — 받는 쪽 fetch 가 주소로 찾는다. */
   const downloadOf = (url: string): Buffer | undefined => {
