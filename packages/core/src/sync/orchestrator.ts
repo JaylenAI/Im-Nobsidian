@@ -26,6 +26,7 @@ import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { ImageHandler } from "./image-handler.js";
 import { FileHandler, type NotePageWrites } from "./file-handler.js";
+import { rootFilesPageOf } from "./folder-files.js";
 import { isFolderRecord } from "./folder-container.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
@@ -218,6 +219,7 @@ export class SyncOrchestrator {
         itemTimeoutMs: config.advanced.itemTimeoutMs,
         attachmentsFolder: config.paths.attachments,
         deleteSync: config.sync.deleteSync,
+        rootPageId: rootFilesPageOf(config),
       },
     );
     const propertyMapper = PropertyMapper.fromConfig(config);
@@ -1205,6 +1207,8 @@ export class SyncOrchestrator {
       deleted: number,
       restored = 0,
     ): Promise<PullResult> => {
+      // 볼트 맨 위 파일 — 루트가 바뀌었을 때만 루트 본문을 읽는다(파일을 올리거나 지우면 루트의 수정 시각이 바뀐다).
+      if (!options?.dryRun && this.detector.rootChanged()) await this.puller.receiveRootFiles();
       await this.puller.removeVacatedFolders();
       const renamedRows = this.databaseSyncer.takeRenamedRows();
       restoredPaths.push(...this.databaseSyncer.takeRestoredRows());

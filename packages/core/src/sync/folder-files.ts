@@ -7,7 +7,9 @@
  */
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "../converter/child-tags.js";
 import type { IStateDB } from "../state/state-db-interface.js";
-import { compactNotionId } from "../utils/id.js";
+import type { Config } from "../types/config.js";
+import { compactNotionId, normalizeNotionId } from "../utils/id.js";
+import { isDatabaseMode } from "./parent-mode.js";
 import { notionFileIdOf } from "../utils/notion-file-url.js";
 import { notionMediaSpans, uploadedFileNameFromUrl } from "./image-handler.js";
 import { recallUploadedMedia } from "./uploaded-media.js";
@@ -191,6 +193,15 @@ export function noteFolderFilesOfPage(
       ids.size === 0 ||
       !notionMediaSpans(rest).some((span) => ids.has(notionFileIdOf(span.url) ?? "")),
   };
+}
+
+/**
+ * 볼트 맨 위 파일을 싣는 Notion 페이지 — 페이지 모드의 루트. 볼트 맨 위는 루트 페이지의 자리라 그 끝에 「📁 이름」 으로
+ * 싣는다(노트 이름의 폴더와 같은 규칙). DB 모드의 루트는 DB 라 본문이 없다 — null.
+ */
+export function rootFilesPageOf(config: Config): string | null {
+  if (isDatabaseMode(config) || !config.notion.rootPageId) return null;
+  return normalizeNotionId(config.notion.rootPageId);
 }
 
 /** 노트에 붙인(임베드한) 대상 — `![[x]]` · `![](x)` · frontmatter 의 `[[x]]`(아이콘 · 커버). */
