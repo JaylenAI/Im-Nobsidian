@@ -2,9 +2,13 @@ import type { FileHandler } from "./file-handler.js";
 import {
   embeddedNamesOf,
   folderFilesOf,
+  folderFileIdsOf,
+  isFolderFileBlock,
   noteFolderFilesOfPage,
+  rootFilesPageOf,
   type FolderFileRef,
 } from "./folder-files.js";
+import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
@@ -44,7 +48,7 @@ import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { DatabaseSyncer, PlannedResolution } from "./database-syncer.js";
 import { childFolderOf, folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
-import type { ImageHandler } from "./image-handler.js";
+import { uploadedFileNameFromUrl, type ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
 import { moveOrigin } from "./local-moves.js";
 import { extractAliases, extractTitle, followsFileName } from "./note-title.js";
@@ -1121,6 +1125,39 @@ export class PagePuller {
       noteFiles,
       noteFilesComplete,
     };
+  }
+
+  /**
+   * 볼트 맨 위 파일 — 루트 페이지 끝의 폴더 첨부(「📁 이름」 · 적어 둔 것)를 볼트 맨 위에 받는다({@link rootFilesPageOf}).
+   * 루트의 다른 블록(사용자가 붙인 파일 포함)은 받지 않는다. Markdown API 로 읽지 못하면 맨 위 블록에서 찾되 빠진 파일을
+   * 지운 것으로 보지 않는다 — 토글 안으로 옮긴 것은 보이지 않는다. 읽지 못하면 경고만 남긴다(다음 pull 이 다시 읽는다).
+   */
+  async receiveRootFiles(): Promise<void> {
+    const rootId = rootFilesPageOf(this.config);
+    if (!rootId) return;
+    try {
+      let files: readonly FolderFileRef[];
+      let complete: boolean;
+      try {
+        const result = await this.notionClient.getPageMarkdown(rootId);
+        const { found, holdsAll } = noteFolderFilesOfPage(this.stateDb, rootId, result.markdown);
+        files = found?.files ?? [];
+        complete = !result.truncated && holdsAll;
+      } catch {
+        const ids = new Set(folderFileIdsOf(this.stateDb, rootId).values());
+        files = (await this.notionClient.fetchAllChildren(rootId)).flatMap((block) => {
+          const url = isFolderFileBlock(block, ids) ? fileUrlOfBlock(block) : null;
+          const name = url ? uploadedFileNameFromUrl(url) : null;
+          return url && name ? [{ url, name }] : [];
+        });
+        complete = false;
+      }
+      await this.receiveFolderFiles("", rootId, files, complete);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 볼트 맨 위 파일을 루트 페이지에서 받지 못함: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /** 폴더 첨부를 받아 받은 파일 수에 더한다 — 행의 폴더 첨부도 여기로 받는다(`DatabaseSyncer`). */

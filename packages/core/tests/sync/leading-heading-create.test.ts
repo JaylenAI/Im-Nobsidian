@@ -78,7 +78,10 @@ describe("맨 앞 `# 제목` 으로 시작하는 노트를 만든다 (N-04)", ()
     const pulled = await orchestrator.pull();
 
     expect(pulled).toMatchObject({ created: 0, updated: 0, failed: [], conflicts: [] });
-    expect(notion.client.getPageMarkdown).not.toHaveBeenCalled();
+    // 루트는 볼트 맨 위 파일을 찾으려 읽는다(그 아래에 페이지를 만들어 루트가 바뀌었다) — 노트의 페이지는 읽지 않는다
+    expect(
+      notion.client.getPageMarkdown.mock.calls.filter(([id]) => id !== "root-page-id"),
+    ).toEqual([]);
   });
 
   it("Notion 에서 고친 뒤 받아도 로컬 노트의 제목이 남는다", async () => {

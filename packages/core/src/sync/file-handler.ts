@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { Sema } from "async-sema";
 import type { VaultFS, NonMdFileInfo } from "./vault-fs.js";
 import type { NotionClient } from "../notion/client.js";
+import { notionIdsEqual } from "../utils/id.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isDbArtifactPath } from "./stale-db-artifacts.js";
 import { getLogger } from "../utils/logger.js";
@@ -47,6 +48,11 @@ export interface FileHandlerOptions {
    * 파일을. 기본 false.
    */
   readonly deleteSync?: boolean;
+  /**
+   * 볼트 맨 위 파일을 싣는 페이지({@link rootFilesPageOf}) — 페이지 모드의 루트. 없으면(DB 모드) 볼트 맨 위 파일은 경고로 남는다.
+   * 루트는 사용자의 페이지라 노트 페이지처럼 적어 둔 폴더 첨부만 제 것으로 본다.
+   */
+  readonly rootPageId?: string | null;
 }
 
 /**
@@ -131,6 +137,7 @@ export class FileHandler {
   private readonly itemTimeoutMs: number;
   private readonly attachmentsFolder: string;
   private readonly deleteSync: boolean;
+  private readonly rootPageId: string | null;
 
   constructor(
     private readonly vaultFs: VaultFS,
@@ -145,6 +152,7 @@ export class FileHandler {
       options?.downloadTimeoutMs ?? DEFAULT_CONFIG.advanced.mediaDownloadTimeoutMs;
     this.itemTimeoutMs = options?.itemTimeoutMs ?? DEFAULT_CONFIG.advanced.itemTimeoutMs;
     this.deleteSync = options?.deleteSync ?? false;
+    this.rootPageId = options?.rootPageId ?? null;
     this.attachmentsFolder = (
       options?.attachmentsFolder ?? DEFAULT_CONFIG.paths.attachments
     ).replace(/^\/+|\/+$/g, "");
@@ -245,16 +253,19 @@ export class FileHandler {
 
   /**
    * 폴더 첨부를 둘 Notion 페이지 — 그 폴더의 Notion 자리({@link folderContainer} 와 같은 차례). 폴더 노트(`X/X.md`)나 노트
-   * 이름의 폴더(`X.md` 옆 `X/`)면 그 노트의 페이지 끝(ADR-056), 아니면 push 가 만든 폴더 페이지. 맨 위는 루트 기록이 있을 때만.
+   * 이름의 폴더(`X.md` 옆 `X/`)면 그 노트의 페이지 끝(ADR-056), 아니면 push 가 만든 폴더 페이지. 맨 위는 루트 페이지 끝.
    * 행 이름의 폴더(`DB/행/`)는 그 행의 페이지 끝. DB 폴더는 둘 곳이 없다 — Notion 의 DB 는 본문이 없다.
    */
   private folderPageOf(folder: string): string | null {
-    if (folder === "") return this.stateDb.getByPath("__root__")?.notionPageId ?? null;
     return this.notePageOf(folder) ?? this.folderRecordPageOf(folder);
   }
 
-  /** 이 폴더를 품은 노트의 페이지 — 폴더 노트 · 노트(행 포함) 이름의 폴더. 없으면 null. */
+  /**
+   * 이 폴더를 품은 노트의 페이지 — 폴더 노트 · 노트(행 포함) 이름의 폴더 · 볼트 맨 위는 루트 페이지. 본문이 이 도구의 것이
+   * 아니거나(루트) 노트의 것이라, 적어 둔 폴더 첨부만 제 것으로 본다. 없으면 null.
+   */
   private notePageOf(folder: string): string | null {
+    if (folder === "") return this.rootPageId;
     const note = this.stateDb.getByPath(folderNoteOf(folder));
     if (note?.notionPageId && note.fileType === "folder-note") return note.notionPageId;
     const named = this.stateDb.getByPath(`${folder}.md`);
@@ -385,22 +396,28 @@ export class FileHandler {
    */
   private async removeDeletedFolderFiles(noteWrites?: NotePageWrites): Promise<void> {
     const removed: string[] = [];
+    // 폴더 페이지 · 폴더를 품은 노트의 페이지(ADR-056) · 볼트 맨 위의 루트 페이지 — 노트 · 루트는 적어 둔 폴더 첨부만 본다
+    // (노트 임베드는 노트 push 가 맡고, 루트의 다른 블록은 사용자의 것이다).
+    const pages: Array<{ pageId: string; folder: string; onNote: boolean }> = [];
     for (const record of this.stateDb.getAll()) {
       if (!record.notionPageId) continue;
-      // 폴더 페이지 · 폴더를 품은 노트의 페이지(ADR-056) — 노트는 적어 둔 폴더 첨부만 본다(노트 임베드는 노트 push 가 맡는다).
       const folder = isFolderRecord(record) ? record.obsidianPath : filesFolderOfNote(record);
-      if (folder === null) continue;
-      const ids = folderFileIdsOf(this.stateDb, record.notionPageId);
-      if (!isFolderRecord(record) && ids.size === 0) continue;
+      if (folder !== null) {
+        pages.push({ pageId: record.notionPageId, folder, onNote: !isFolderRecord(record) });
+      }
+    }
+    if (this.rootPageId) pages.push({ pageId: this.rootPageId, folder: "", onNote: true });
+    for (const { pageId, folder, onNote } of pages) {
+      const ids = folderFileIdsOf(this.stateDb, pageId);
+      if (onNote && ids.size === 0) continue;
       const gone: FileRegistryEntry[] = [];
-      for (const entry of this.stateDb.getFilesByPageId(record.notionPageId)) {
+      for (const entry of this.stateDb.getFilesByPageId(pageId)) {
         if (getFolderPath(entry.localPath) !== folder) continue;
-        if (!isFolderRecord(record) && !ids.has(entry.localPath)) continue;
+        if (onNote && !ids.has(entry.localPath)) continue;
         if (!(await this.vaultFs.exists(entry.localPath))) gone.push(entry);
       }
       if (gone.length === 0) continue;
-      const pageId = record.notionPageId;
-      await this.writingNotePage(!isFolderRecord(record), pageId, noteWrites, async () => {
+      await this.writingNotePage(onNote, pageId, noteWrites, async () => {
         for (const entry of gone) {
           try {
             const name = entry.localPath.slice(entry.localPath.lastIndexOf("/") + 1);
@@ -449,7 +466,10 @@ export class FileHandler {
     stranded: StrandedFile[],
   ): Promise<string | null> {
     let pageId = this.folderPageOf(folder);
-    let reason = folder === "" ? "볼트 맨 위" : "DB 폴더 · 아직 올리지 않은 폴더 노트";
+    let reason =
+      folder === ""
+        ? "볼트 맨 위 — DB 모드의 루트는 DB 라 본문이 없다"
+        : "DB 폴더 · 아직 올리지 않은 폴더 노트";
     if (!pageId && folder !== "" && folders && !this.stateDb.getByPath(folder)) {
       try {
         await folders.ensureFolderPage(folder);
@@ -768,7 +788,10 @@ export class FileHandler {
     keep: string | undefined,
   ): Promise<void> {
     const record = this.stateDb.getByNotionId(pageId);
-    const onNote = record !== null && !isFolderRecord(record);
+    // 루트는 사용자의 페이지 — 노트처럼 제가 올린 블록만 지운다
+    const onNote =
+      (record !== null && !isFolderRecord(record)) ||
+      (this.rootPageId !== null && notionIdsEqual(pageId, this.rootPageId));
     const fileId = folderFileIdsOf(this.stateDb, pageId).get(localPath);
     const isOlder = (block: { readonly id: string; readonly type: string }): boolean => {
       if (block.id === keep) return false;
