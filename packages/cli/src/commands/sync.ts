@@ -12,6 +12,7 @@ import {
   restoredLines,
   mergedLines,
   relinkedLines,
+  undiscoveredDatabaseLines,
   plannedConflictLines,
   schemaFollowedLines,
   unsentDeletionLines,
@@ -136,6 +137,9 @@ export const syncCommand = new Command("sync")
         console.log(`  ${line}`);
       }
       for (const line of relinkedLines(pullResult.relinkedPaths, pullResult.relinkPending)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of undiscoveredDatabaseLines(pullResult.undiscoveredDatabases)) {
         console.log(`  ${line}`);
       }
       for (const line of mergedLines(pullResult.mergedPaths, "pushed", options.dryRun)) {

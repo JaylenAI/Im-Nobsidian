@@ -65,8 +65,10 @@ export interface PullJson {
   readonly mergedPaths: readonly string[];
   /** 상태 기록에 없던 같은 자리의 노트를 Notion 페이지와 다시 이은 것(P7) — `created` 에 세지 않는다. */
   readonly relinkedPaths: readonly string[];
-  /** dry-run 만 — 받으면 같은 자리의 노트를 다시 잇는다. 미리 보기는 그 노트들도 `created` 로 센다. */
+  /** dry-run 만 — `relinkedPaths` 는 받으면 다시 이을 노트다(`created` 에 세지 않는다). */
   readonly relinkPending: boolean;
+  /** dry-run 만 — 이번 pull 이 새로 찾을 DB 의 행은 세지 않았다. */
+  readonly undiscoveredDatabases: boolean;
   /** Notion 에서 바뀐 속성을 행 노트에 옮긴 DB 마다(ADR-045). */
   readonly schemaFollowed: readonly SchemaFollowed[];
   /** 볼트에서 고쳐 덮어쓰지 않은 사이드카(ADR-045). */
@@ -144,6 +146,7 @@ export function pullJson(result: PullResult): PullJson {
     mergedPaths: result.mergedPaths ?? [],
     relinkedPaths: result.relinkedPaths ?? [],
     relinkPending: result.relinkPending ?? false,
+    undiscoveredDatabases: result.undiscoveredDatabases ?? false,
     schemaFollowed: result.schemaFollowed ?? [],
     heldSidecars: result.heldSidecars ?? [],
     heldBases: result.heldBases ?? [],
