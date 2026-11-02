@@ -9,6 +9,7 @@ import {
   folderFileIdsOf,
   folderFilesOf,
   rememberFolderFileId,
+  rememberFolderFileStamp,
 } from "../../src/sync/folder-files.js";
 import { FileHandler } from "../../src/sync/file-handler.js";
 import { setLogger } from "../../src/utils/logger.js";
@@ -189,6 +190,41 @@ describe("FileHandler — 폴더 첨부", () => {
     expect(ensureFolderPage).not.toHaveBeenCalled();
     expect(warnings.join("\n")).toContain("올리지 않은 첨부 2개");
     expect(warnings.join("\n")).toContain("fn/x.csv");
+  });
+
+  it("같은 크기로 고친 폴더 첨부도 올린다 — 올린 때의 표(크기 · 수정 시각)가 다르면 내용으로 견준다", async () => {
+    const { vaultFs, stateDb, notion, handler } = setup(["proj/data.csv"]);
+    const db = stateDb as unknown as IStateDB;
+    stateDb.getByPath.mockReturnValue({
+      notionPageId: "p",
+      obsidianPath: "proj",
+      fileType: "folder-only",
+    });
+    (vaultFs.readBinary as ReturnType<typeof vi.fn>).mockResolvedValue(Buffer.from("a,b\n3,4\n"));
+    const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+    stateDb.getFileRegistry.mockReturnValue({
+      notionPageId: "p",
+      fileSize: 10,
+      fileHash: sha("a,b\n1,2\n"),
+    });
+    rememberFolderFileStamp(db, "p", "proj/data.csv", "10:2026-11-01T00:00:00.000Z");
+
+    await handler.pushAllFiles();
+    expect(notion.uploadFile).toHaveBeenCalledTimes(1);
+
+    // 같은 내용이면 올리지 않고 지금 표를 적는다 — 다음에는 읽지 않는다
+    (notion.uploadFile as ReturnType<typeof vi.fn>).mockClear();
+    (vaultFs.readBinary as ReturnType<typeof vi.fn>).mockClear();
+    stateDb.getFileRegistry.mockReturnValue({
+      notionPageId: "p",
+      fileSize: 10,
+      fileHash: sha("a,b\n3,4\n"),
+    });
+    rememberFolderFileStamp(db, "p", "proj/data.csv", "10:old");
+    await handler.pushAllFiles();
+    await handler.pushAllFiles();
+    expect(notion.uploadFile).not.toHaveBeenCalled();
+    expect(vaultFs.readBinary).toHaveBeenCalledTimes(1);
   });
 
   function receiver(body: string, local?: string) {

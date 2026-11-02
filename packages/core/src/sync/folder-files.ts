@@ -90,9 +90,9 @@ function keyOf(pageId: string): string {
   return `folder_files:${compactNotionId(pageId)}`;
 }
 
-/** 이 폴더 페이지에 적어 둔 폴더 첨부의 Notion 파일 id. */
-export function folderFileIdsOf(stateDb: IStateDB, pageId: string): Map<string, string> {
-  const raw = stateDb.getMeta(keyOf(pageId));
+/** sync_metadata 한 줄의 경로 → 값 표. 읽지 못하면 빈 표. */
+function readPathMap(stateDb: IStateDB, key: string): Map<string, string> {
+  const raw = stateDb.getMeta(key);
   if (!raw) return new Map();
   try {
     return new Map(Object.entries(JSON.parse(raw) as Record<string, string>));
@@ -101,11 +101,21 @@ export function folderFileIdsOf(stateDb: IStateDB, pageId: string): Map<string, 
   }
 }
 
-/** 폴더 첨부의 Notion 파일 id 를 지운다 — 볼트 · Notion 어느 쪽에서든 지운 파일. */
+function writePathMap(stateDb: IStateDB, key: string, map: ReadonlyMap<string, string>): void {
+  stateDb.setMeta(key, JSON.stringify(Object.fromEntries(map)));
+}
+
+/** 이 폴더 페이지에 적어 둔 폴더 첨부의 Notion 파일 id. */
+export function folderFileIdsOf(stateDb: IStateDB, pageId: string): Map<string, string> {
+  return readPathMap(stateDb, keyOf(pageId));
+}
+
+/** 폴더 첨부의 Notion 파일 id 를 지운다 — 볼트 · Notion 어느 쪽에서든 지운 파일. 볼트 파일의 표({@link fileStampOf})도. */
 export function forgetFolderFileId(stateDb: IStateDB, pageId: string, localPath: string): void {
+  rememberFolderFileStamp(stateDb, pageId, localPath, null);
   const ids = folderFileIdsOf(stateDb, pageId);
   if (!ids.delete(localPath)) return;
-  stateDb.setMeta(keyOf(pageId), JSON.stringify(Object.fromEntries(ids)));
+  writePathMap(stateDb, keyOf(pageId), ids);
 }
 
 /** 폴더 첨부의 Notion 파일 id 를 적는다 — 같은 경로는 바꾼다. */
@@ -118,5 +128,36 @@ export function rememberFolderFileId(
   const ids = folderFileIdsOf(stateDb, pageId);
   if (ids.get(localPath) === fileId) return;
   ids.set(localPath, fileId);
-  stateDb.setMeta(keyOf(pageId), JSON.stringify(Object.fromEntries(ids)));
+  writePathMap(stateDb, keyOf(pageId), ids);
+}
+
+/**
+ * 볼트 파일의 표 — 크기와 수정 시각. 올리거나 받은 때의 표와 같으면 그 뒤로 고치지 않았다. 예전에는 크기만 견줘, 같은 크기로
+ * 고친 파일(CSV 의 숫자 하나)을 올리지 않았다.
+ */
+export function fileStampOf(file: { readonly size: number; readonly mtime: string }): string {
+  return `${file.size}:${file.mtime}`;
+}
+
+function stampKeyOf(pageId: string): string {
+  return `folder_file_stamps:${compactNotionId(pageId)}`;
+}
+
+/** 이 페이지에 올리거나 받은 파일의 볼트 쪽 표({@link fileStampOf}). */
+export function folderFileStampsOf(stateDb: IStateDB, pageId: string): Map<string, string> {
+  return readPathMap(stateDb, stampKeyOf(pageId));
+}
+
+/** 볼트 파일의 표를 적는다 — null 이면 지운다. */
+export function rememberFolderFileStamp(
+  stateDb: IStateDB,
+  pageId: string,
+  localPath: string,
+  stamp: string | null,
+): void {
+  const stamps = folderFileStampsOf(stateDb, pageId);
+  if ((stamps.get(localPath) ?? null) === stamp) return;
+  if (stamp === null) stamps.delete(localPath);
+  else stamps.set(localPath, stamp);
+  writePathMap(stateDb, stampKeyOf(pageId), stamps);
 }
