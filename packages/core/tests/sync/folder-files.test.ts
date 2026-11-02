@@ -82,11 +82,22 @@ describe("folderFilesInNote", () => {
     expect(folderFilesInNote(md, { knownIds: known })?.files).toHaveLength(1);
   });
 
-  it("들여 쓴 줄(토글 · 목록의 자식) · 코드 펜스 안 · 글과 한 줄인 파일 · exclude 가 고른 것은 노트의 것이다", () => {
+  it("들여 쓴 줄(Notion 에서 토글 · 콜아웃 안으로 옮긴 것)도 떼고, 되실을 줄은 들여쓰기를 뺀다", () => {
+    const a = `<file src="${url(1, "a.csv")}">📁 a.csv</file>`;
+    const found = folderFilesInNote(`글\n<details>\n<summary>토글</summary>\n\t${a}\n</details>`)!;
+    expect(found.files.map((f) => f.name)).toEqual(["a.csv"]);
+    expect(found.markdown).toBe("글\n<details>\n<summary>토글</summary>\n</details>");
+    expect(found.lines).toEqual([a]);
+  });
+
+  it("코드 펜스 안(토글 속 들여 쓴 펜스도) · 글과 한 줄인 파일 · exclude 가 고른 것은 노트의 것이다", () => {
     const a = `<file src="${url(1, "a.csv")}">📁 a.csv</file>`;
     const b = `<file src="${url(2, "b.csv")}">📁 b.csv</file>`;
-    expect(folderFilesInNote(`<details>\n<summary>토글</summary>\n\t${a}\n</details>`)).toBeNull();
     expect(folderFilesInNote(`\`\`\`\n${a}\n\`\`\`\n글`)).toBeNull();
+    // Notion 은 토글 속 코드의 펜스만 들여 쓰고 코드 줄은 열 0 에 둔다
+    expect(
+      folderFilesInNote(`<details>\n<summary>t</summary>\n\t\`\`\`\n${a}\n\t\`\`\`\n</details>`),
+    ).toBeNull();
     expect(folderFilesInNote(`글 ${a}`)).toBeNull();
     expect(
       folderFilesInNote(`글\n${a}\n${b}`, { exclude: (f) => f.name === "b.csv" })?.files.map(
@@ -218,7 +229,7 @@ describe("FileHandler — 폴더 첨부", () => {
     expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["old-block"]]);
   });
 
-  it("폴더 노트 · 노트 이름의 폴더는 그 노트의 페이지에 올리고(ADR-056), 행의 폴더 · 맨 위는 경고로 알린다", async () => {
+  it("폴더 노트 · 노트 이름 · 행 이름의 폴더는 그 노트 · 행의 페이지에 올리고(ADR-056), 맨 위는 경고로 알린다", async () => {
     const { stateDb, notion, handler } = setup(["fn/x.csv", "nn/y.csv", "rr/z.csv", "top.csv"]);
     const records: Record<string, unknown> = {
       "fn/fn.md": { notionPageId: "fn-page", obsidianPath: "fn/fn.md", fileType: "folder-note" },
@@ -230,13 +241,13 @@ describe("FileHandler — 폴더 첨부", () => {
 
     const results = await handler.pushAllFiles(undefined, { ensureFolderPage });
 
-    expect(results.map((r) => r.localPath).sort()).toEqual(["fn/x.csv", "nn/y.csv"]);
+    expect(results.map((r) => r.localPath).sort()).toEqual(["fn/x.csv", "nn/y.csv", "rr/z.csv"]);
     const pages = (notion.appendChildBlocks as ReturnType<typeof vi.fn>).mock.calls.map(
       ([id]) => id,
     );
-    expect(pages.sort()).toEqual(["fn-page", "nn-page"]);
-    expect(warnings.join("\n")).toContain("올리지 않은 첨부 2개");
-    expect(warnings.join("\n")).toContain("rr/z.csv");
+    expect(pages.sort()).toEqual(["fn-page", "nn-page", "rr-page"]);
+    expect(warnings.join("\n")).toContain("올리지 않은 첨부 1개");
+    expect(warnings.join("\n")).not.toContain("rr/z.csv");
     expect(warnings.join("\n")).toContain("top.csv");
   });
 
@@ -482,6 +493,37 @@ describe("FileHandler — 폴더 첨부", () => {
         ["0123abcd-0000-4000-8000-0000000000a2"],
       ]);
       expect(stateDb.deleteFileRegistry.mock.calls).toEqual([["proj/data.csv"]]);
+    });
+
+    it("push: 노트 페이지 맨 위에 없는 폴더 첨부(토글 안으로 옮긴 것)는 트리에서 찾아 지운다", async () => {
+      const { stateDb, notion, handler, db } = deleting({});
+      const note = {
+        id: "r",
+        notionPageId: "n",
+        obsidianPath: "proj/proj.md",
+        fileType: "folder-note",
+      };
+      stateDb.getAll.mockReturnValue([note]);
+      stateDb.getByNotionId.mockImplementation((id: string) => (id === "n" ? note : null));
+      stateDb.getFilesByPageId.mockImplementation((id: string) =>
+        id === "n" ? [{ localPath: "proj/data.csv" }] : [],
+      );
+      rememberFolderFileId(db, "n", "proj/data.csv", "0123abcd-0000-4000-8000-0000000000a2");
+      (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+      (notion.getBlockTree as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: "toggle",
+          type: "toggle",
+          toggle: {},
+          children: [block("0123abcd-0000-4000-8000-0000000000a2", "data.csv")],
+        },
+      ]);
+
+      await handler.pushAllFiles();
+
+      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+        ["0123abcd-0000-4000-8000-0000000000a2"],
+      ]);
     });
 
     it("push: deleteSync 가 꺼져 있으면 지우지 않는다", async () => {

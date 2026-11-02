@@ -1,8 +1,8 @@
 /**
  * dry-run 이 이번 pull 이 새로 찾을 DB 의 행도 센다 — 루트 바로 아래 DB(처음 받는 볼트 · 상태 DB 를 잃은 볼트 · 루트가
  * 바뀐 볼트)와 미리 보며 본문을 읽은 페이지 안의 DB. 예전에는 세지 않고 «미리 세지 않았습니다» 만 알려, 상태 DB 를 잃은
- * 볼트에서 미리 보기 5 · 실제 8 처럼 어긋났다(0.19.0 smoke). 새 페이지의 본문도 읽어 센다(0.21) — 읽는 수를 넘거나 읽지
- * 못한 새 페이지 안의 DB 만 알린다.
+ * 볼트에서 미리 보기 5 · 실제 8 처럼 어긋났다(0.19.0 smoke). 새 페이지의 본문도 읽어 센다(0.21) — 0.21 은 100개까지만
+ * 읽었다. 이제 모두 읽고, 실제 pull 처럼 Markdown API 가 실패하면 블록으로 읽는다. 둘 다 읽지 못한 새 페이지 안의 DB 만 알린다.
  *
  * 실제 StateDB(임시 파일) · 메모리 볼트 · 메모리 Notion 으로 돈다.
  */
@@ -17,7 +17,6 @@ import {
   DISCOVERED_DBS_META_KEY,
   DISCOVERY_SCANNED_META_KEY,
 } from "../../src/sync/discovered-databases.js";
-import { PREVIEW_BODY_READ_BUDGET } from "../../src/sync/database-discovery.js";
 import { createConfig } from "../helpers/mock-orchestrator.js";
 import { MemoryVault, memoryNotion } from "../helpers/memory-sync.js";
 
@@ -201,24 +200,65 @@ describe("dry-run 이 새로 찾을 DB 의 행", () => {
     expect(planned.created).toBe(3);
   });
 
-  it(`새 페이지가 ${PREVIEW_BODY_READ_BUDGET}개를 넘으면 넘는 것은 읽지 않고 알린다 · 읽지 못한 본문도`, async () => {
+  it("새 페이지 안의 DB 행은 실제 pull 이 받을 자리(새 페이지 옆)로 보인다 — databases/ 아래가 아니다", async () => {
+    const INNER = "db000000-0000-4000-8000-0000000000d5";
     notion.client.getChildDatabaseIds.mockResolvedValue([]);
-    for (let i = 0; i <= PREVIEW_BODY_READ_BUDGET; i++) notion.add(ROOT, `P${i}`, "본문");
+    notion.add(INNER, "I1", "안의 행", {});
+    const hub = notion.add(ROOT, "Hub", "허브").id;
+    notion.add(
+      hub,
+      "Inside",
+      `안쪽\n\n<database url="https://www.notion.so/${INNER.replace(/-/g, "")}" inline="true">Inner</database>`,
+    );
+    notion.client.getDatabaseSyncability.mockResolvedValue({ title: "Inner", queryable: true });
+    const { orchestrator } = open();
+    const shown: string[] = [];
+
+    await orchestrator.pull({
+      dryRun: true,
+      onProgress: (_current, _total, item) => shown.push(item.path),
+    });
+    await orchestrator.pull();
+    const row = [...vault.files.keys()].find((path) => path.endsWith("/I1.md"));
+    expect(row).toBeDefined();
+    expect(row!.startsWith("Hub/")).toBe(true);
+    expect(shown).toContain(row);
+  });
+
+  it("새 페이지가 많아도(150) 모두 읽어 그 안의 DB 행을 실제 pull 과 같이 센다 · 알리지 않는다", async () => {
+    const INNER = "db000000-0000-4000-8000-0000000000d4";
+    notion.client.getChildDatabaseIds.mockResolvedValue([]);
+    notion.add(INNER, "I1", "안의 행", {});
+    for (let i = 0; i < 149; i++) notion.add(ROOT, `P${i}`, "본문");
+    notion.add(
+      ROOT,
+      "Last",
+      `맨 끝\n\n<database url="https://www.notion.so/${INNER.replace(/-/g, "")}" inline="true">Inner</database>`,
+    );
+    notion.client.getDatabaseSyncability.mockResolvedValue({ title: "Inner", queryable: true });
     const { orchestrator } = open();
     const read = vi.spyOn(notion.client, "getPageMarkdown");
 
     const planned = await orchestrator.pull({ dryRun: true });
-    expect(read).toHaveBeenCalledTimes(PREVIEW_BODY_READ_BUDGET);
-    expect(planned.undiscoveredDatabases).toBe(true);
+    expect(read).toHaveBeenCalledTimes(150);
+    expect(planned.undiscoveredDatabases).toBeUndefined();
+    const real = await orchestrator.pull();
+    expect(planned.created).toBe(real.created);
+    expect(planned.created).toBe(151);
   });
 
-  it("본문을 읽지 못한 새 페이지는 알린다", async () => {
+  it("Markdown API 로 읽지 못한 새 페이지는 실제 pull 처럼 블록으로 읽는다 — 둘 다 못 읽으면 알린다", async () => {
     notion.client.getChildDatabaseIds.mockResolvedValue([]);
     notion.add(ROOT, "A", "a 본문");
     notion.client.getPageMarkdown.mockRejectedValueOnce(new Error("일시 오류"));
-    const { orchestrator } = open();
+    const tree = vi.spyOn(notion.client, "getBlockTree");
+    const first = open();
+    expect((await first.orchestrator.pull({ dryRun: true })).undiscoveredDatabases).toBeUndefined();
+    expect(tree).toHaveBeenCalled();
 
-    const planned = await orchestrator.pull({ dryRun: true });
-    expect(planned.undiscoveredDatabases).toBe(true);
+    notion.client.getPageMarkdown.mockRejectedValueOnce(new Error("일시 오류"));
+    notion.client.getBlockTree.mockRejectedValueOnce(new Error("일시 오류"));
+    const second = open();
+    expect((await second.orchestrator.pull({ dryRun: true })).undiscoveredDatabases).toBe(true);
   });
 });

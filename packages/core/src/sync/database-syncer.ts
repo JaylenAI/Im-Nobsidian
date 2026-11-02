@@ -4,6 +4,12 @@ import type { IStateDB } from "../state/state-db-interface.js";
 import { isNotionObjectNotFound, type DatabaseMeta, type NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
 import {
+  embeddedNamesOf,
+  folderFileIdsOf,
+  noteFolderFilesOfPage,
+  type FolderFileRef,
+} from "./folder-files.js";
+import {
   findUntrackedNote,
   plannedRelinkRecord,
   relinkConflict,
@@ -194,6 +200,12 @@ function emptyDatabaseSyncResult(): DatabaseSyncResult {
   };
 }
 
+/** 행 페이지 끝에서 뗀 폴더 첨부 — `complete` 면 빠진 파일을 Notion 에서 지운 것으로 본다. */
+interface RowFolderFiles {
+  readonly files: readonly FolderFileRef[];
+  readonly complete: boolean;
+}
+
 export class DatabaseSyncer {
   private readonly propertyMapper: PropertyMapper;
   private decorationsCache?: PageDecorations;
@@ -269,6 +281,13 @@ export class DatabaseSyncer {
      * 채운다({@link RemoteDetector.noteBodyChildren}).
      */
     private readonly noteRowBody: (pageId: string, rawMarkdown: string) => void = () => {},
+    /** 행 이름의 폴더에 그 행 페이지의 폴더 첨부를 받는다(ADR-056) — `PagePuller.receiveFolderFiles`. */
+    private readonly receiveRowFiles: (
+      folder: string,
+      pageId: string,
+      files: readonly FolderFileRef[],
+      complete: boolean,
+    ) => Promise<void> = async () => {},
   ) {
     this.baseFileInfo = new DbBaseFiles(stateDb);
     this.journal = new UpdateJournal(stateDb);
@@ -1695,6 +1714,8 @@ export class DatabaseSyncer {
     bodyFingerprint: string;
     /** 원격 본문에 페이지 시절의 속성 블록이 있었나 — 받으며 걷어 냈다. */
     propertiesBlock: boolean;
+    /** 행 끝에서 뗀 폴더 첨부(ADR-056 · 행 이름의 폴더) — 받는 것은 호출측이 정한다. */
+    folderFiles: RowFolderFiles;
   }> {
     const downloadMedia = options?.downloadMedia !== false;
     const title = this.notionClient.extractTitle(page);
@@ -1717,7 +1738,19 @@ export class DatabaseSyncer {
     const bodyFingerprint = remoteBodyFingerprint(mdResult.markdown);
     // 압축형 판정은 원시 export 기준(D1) — enhanced 변환 후에는 판정 불가
     const exportCompact = isCompactExport(mdResult.markdown);
-    let markdown = await notionBodyToObsidian(this.notionClient, mdResult.markdown, page.id);
+    const localContent = await readLocalNote(this.vaultFs, options?.localPath ?? filePath);
+    // 행 이름의 폴더(`DB/행/`)의 파일은 행 페이지 끝에 「📁 이름」 으로 실린다 — 노트와 같다(ADR-056).
+    const noteFiles = noteFolderFilesOfPage(
+      this.stateDb,
+      page.id,
+      mdResult.markdown,
+      embeddedNamesOf(localContent === undefined ? [] : [localContent]),
+    );
+    let markdown = await notionBodyToObsidian(
+      this.notionClient,
+      noteFiles.found?.markdown ?? mdResult.markdown,
+      page.id,
+    );
     // 이 행이 올린 미디어는 내려받지 않고 원래 임베드로 되돌린다 — 페이지와 같다. 행 id 와
     // 행 경로를 넘겨야 그 행이 올린 것(과 옛 캡션의 파일)을 찾는다.
     markdown = await this.imageHandler.restoreUploadedMedia(
@@ -1756,7 +1789,7 @@ export class DatabaseSyncer {
       {
         properties,
         notionExportCompact: exportCompact,
-        localContent: await readLocalNote(this.vaultFs, options?.localPath ?? filePath),
+        localContent,
         // 이 렌더러가 적는 키 — 속성과 제목 · 커버 · 아이콘. 나머지는 로컬 키다(F-08).
         notionKeys: [...this.propertyMapper.ownedKeys(rawProperties), "title", ...DECORATION_KEYS],
       },
@@ -1767,6 +1800,10 @@ export class DatabaseSyncer {
       properties,
       bodyFingerprint,
       propertiesBlock: hasPropertiesBlock(mdResult.markdown),
+      folderFiles: {
+        files: noteFiles.found?.files ?? [],
+        complete: !mdResult.truncated && noteFiles.holdsAll,
+      },
     };
   }
 
@@ -2145,10 +2182,23 @@ export class DatabaseSyncer {
       record.fileType === "folder-note"
         ? parentFolderOf(record.obsidianPath)
         : stripMarkdownExtension(record.obsidianPath);
-    const hasChildren = this.stateDb
-      .getAll()
-      .some((r) => r.id !== record.id && within(r.obsidianPath, from));
-    return hasChildren ? { from, to: stripMarkdownExtension(rowPath) } : null;
+    return this.holdsChildren(record, from) ? { from, to: stripMarkdownExtension(rowPath) } : null;
+  }
+
+  /**
+   * 이 노트 · 행 옆의 폴더(`from`)가 그것의 것인가 — 하위 페이지가 있거나, 그 페이지에 올린 폴더 첨부(ADR-056)가 든 폴더.
+   * 예전에는 하위 페이지만 보아 행의 이름을 따라 옮길 때 폴더 첨부만 든 폴더가 옛 이름에 남았다.
+   */
+  private holdsChildren(record: SyncRecord, from: string): boolean {
+    if (this.stateDb.getAll().some((r) => r.id !== record.id && within(r.obsidianPath, from))) {
+      return true;
+    }
+    return (
+      record.notionPageId !== null &&
+      [...folderFileIdsOf(this.stateDb, record.notionPageId).keys()].some((path) =>
+        within(path, from),
+      )
+    );
   }
 
   /**
@@ -2180,7 +2230,7 @@ export class DatabaseSyncer {
     );
     if (to === recordPath) return null;
     const from = stripMarkdownExtension(recordPath);
-    if (!this.stateDb.getAll().some((r) => within(r.obsidianPath, from))) {
+    if (!this.holdsChildren(record, from)) {
       return { to, children: null };
     }
     const children = { from, to: stripMarkdownExtension(to) };
@@ -2188,9 +2238,32 @@ export class DatabaseSyncer {
     return blocked ? { reason: `하위 페이지 폴더 — ${blocked}` } : { to, children };
   }
 
+  /**
+   * 행 하나를 받고 그 행 페이지의 폴더 첨부를 행 이름의 폴더에 받는다(ADR-056) — 노트가 충돌로 남거나 로컬을 지켜도 파일은
+   * 제 규칙대로 받는다(페이지와 같다). 행을 옮겼으면 옮긴 자리로.
+   */
   private async pullDatabasePage(
     page: PageObjectResponse,
     dbConfig: DatabaseSyncConfig,
+  ): Promise<PullOutcome> {
+    const rendered: { folderFiles?: RowFolderFiles } = {};
+    const outcome = await this.pullDatabaseRow(page, dbConfig, rendered);
+    const path = outcome.path ?? this.stateDb.getByNotionId(page.id)?.obsidianPath;
+    if (rendered.folderFiles && path) {
+      await this.receiveRowFiles(
+        stripMarkdownExtension(path),
+        page.id,
+        rendered.folderFiles.files,
+        rendered.folderFiles.complete,
+      );
+    }
+    return outcome;
+  }
+
+  private async pullDatabaseRow(
+    page: PageObjectResponse,
+    dbConfig: DatabaseSyncConfig,
+    seen: { folderFiles?: RowFolderFiles },
   ): Promise<PullOutcome> {
     const safeName = sanitizeFileName(this.notionClient.extractTitle(page));
 
@@ -2266,6 +2339,7 @@ export class DatabaseSyncer {
       localPath: recordPath ?? filePath,
       ...(local !== undefined ? { adoptFrom: local } : {}),
     });
+    seen.folderFiles = rendered.folderFiles;
     let relinked = false;
     if (adopt) {
       const outcome =
@@ -2292,6 +2366,7 @@ export class DatabaseSyncer {
           await this.rowPathOwners(dbConfig.localFolder, safeName, page.id),
         );
         rendered = await this.renderRow(page, filePath, { localPath: filePath });
+        seen.folderFiles = rendered.folderFiles;
       }
     }
     const { title, properties, bodyFingerprint } = rendered;

@@ -43,7 +43,7 @@ export class PullPlanner {
     private readonly planner: LocalPlanner,
     private readonly puller: Pick<
       PagePuller,
-      "folderPageHasBody" | "previewUpdate" | "plannedRelink"
+      "folderPageHasBody" | "previewUpdate" | "plannedRelink" | "plannedNotePath"
     >,
     private readonly discovery: Pick<
       DatabaseDiscovery,
@@ -110,17 +110,20 @@ export class PullPlanner {
     const relinkPaths = new Map(
       [...relinks.byPage].map(([pageId, relink]) => [compactNotionId(pageId), relink.path]),
     );
-    // 새로 받을 페이지 안의 DB — 본문을 읽어 찾는다(실제 pull 은 받으며 찾는다).
-    await this.discovery.readNewPageBodies(
-      planned.filter((change) => change.type === "created").map((change) => change.pageId),
-      options.signal,
-    );
+    // 새로 받을 페이지 안의 DB — 본문을 읽어 찾는다(실제 pull 은 받으며 찾는다). 그 DB 의 폴더는 새 페이지가 받힐 자리 옆이다.
+    const created = planned
+      .filter((change) => change.type === "created")
+      .map((change) => change.pageId);
+    await this.discovery.readNewPageBodies(created, options.signal);
+    const createdIds = new Set(created.map(compactNotionId));
     const newDatabases = await this.discovery.plannedNewDatabases(failed, {
       rescanRoot: this.detector.rootChanged(),
-      notePathOf: (pageId) =>
+      notePathOf: async (pageId) =>
         relinkPaths.get(compactNotionId(pageId)) ??
         this.stateDb.getByNotionId(pageId)?.obsidianPath ??
-        null,
+        (createdIds.has(compactNotionId(pageId))
+          ? await this.puller.plannedNotePath(pageId)
+          : null),
     });
     const rows: PlannedRow[] = [];
     for (const row of await this.planDatabaseRows(
@@ -194,7 +197,7 @@ export class PullPlanner {
       rows.filter(
         (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
       ).length;
-    // 본문을 읽지 못한 새 페이지(읽는 수를 넘었거나 실패) 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고
+    // 본문을 읽지 못한 새 페이지(Markdown API · 블록 둘 다 실패) 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고
     // 하지 않는다.
     const undiscoveredDatabases =
       !isDatabaseMode(this.config) &&

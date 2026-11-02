@@ -1,13 +1,14 @@
 import type { FileHandler } from "./file-handler.js";
 import {
   embeddedNamesOf,
-  folderFileIdsOf,
   folderFilesOf,
-  folderFilesInNote,
+  folderFileIdsOf,
+  isFolderFileBlock,
+  noteFolderFilesOfPage,
+  rootFilesPageOf,
   type FolderFileRef,
 } from "./folder-files.js";
-import { recallUploadedMedia } from "./uploaded-media.js";
-import { notionFileIdOf } from "../utils/notion-file-url.js";
+import { fileUrlOfBlock } from "../utils/notion-file-url.js";
 import { DECORATION_KEYS } from "../notion/decoration-values.js";
 import type { PageObjectResponse } from "@notionhq/client/build/src/api-endpoints.js";
 import {
@@ -47,7 +48,7 @@ import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { DatabaseSyncer, PlannedResolution } from "./database-syncer.js";
 import { childFolderOf, folderNoteOf, isFolderRecord } from "./folder-container.js";
 import type { FolderPlacement } from "./folder-placement.js";
-import { notionMediaSpans, type ImageHandler } from "./image-handler.js";
+import { uploadedFileNameFromUrl, type ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
 import { moveOrigin } from "./local-moves.js";
 import { extractAliases, extractTitle, followsFileName } from "./note-title.js";
@@ -278,6 +279,18 @@ export class PagePuller {
       await this.resolveParentPath(page),
       sanitizeFileName(this.notionClient.extractTitle(page)),
     );
+  }
+
+  /**
+   * dry-run — 새 페이지를 실제 pull 이 받을 자리(부모의 자리 + 제목). 그 안에서 찾은 DB 의 폴더를 실제처럼 그 옆에 둔다 — 예전에는
+   * 자리를 몰라 `databases/` 아래로 보였다. 같은 이름이 있으면 실제 pull 은 접미사를 붙이지만 여기서는 붙이지 않는다(선점하지
+   * 않는다). 볼트도 상태 DB 도 바꾸지 않는다.
+   */
+  async plannedNotePath(pageId: string): Promise<string> {
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
+    const parent = await this.resolveParentPath(page);
+    const name = `${sanitizeFileName(this.notionClient.extractTitle(page))}.md`;
+    return parent ? `${parent}/${name}` : name;
   }
 
   /**
@@ -903,7 +916,7 @@ export class PagePuller {
     properties: Record<string, unknown>;
     /** 받은 원격 본문의 지문 — 모르면 null. */
     bodyFingerprint: string | null;
-    /** 노트 끝에서 뗀 폴더 첨부(ADR-056) — 행은 없다. 받는 것은 호출측이 정한다. */
+    /** 노트 · 행 끝에서 뗀 폴더 첨부(ADR-056) — 받는 것은 호출측이 정한다. */
     folderFiles?: { readonly files: readonly FolderFileRef[]; readonly complete: boolean };
   }> {
     // 표시 전용 호출(diff)은 첨부를 내려받지 않는다 — 비교를 보려다 볼트에 파일이 생기면
@@ -1061,13 +1074,14 @@ export class PagePuller {
      */
     noteFilesComplete: boolean;
   }> {
-    const noteFilesOf = (markdown: string) => this.noteFolderFilesOf(pageId, markdown, options);
+    const noteFilesOf = (markdown: string) =>
+      noteFolderFilesOfPage(this.stateDb, pageId, markdown, options.embedded);
     if (this.config.conversion.preferMarkdownApi !== false) {
       try {
         const result = await this.notionClient.getPageMarkdown(pageId);
         this.discovery.collectInlineDbRefs(pageId, result.markdown);
         this.detector.noteBodyChildren(pageId, result.markdown);
-        const found = noteFilesOf(result.markdown);
+        const { found, holdsAll } = noteFilesOf(result.markdown);
         return {
           content: await this.resolveBlockLinks(
             this.resolveNotionIdWikilinks(
@@ -1087,8 +1101,7 @@ export class PagePuller {
           hasBody: hasBodyBesidesChildren(result.markdown),
           folderFiles: folderFilesInBody(result.markdown),
           noteFiles: found?.files ?? [],
-          noteFilesComplete:
-            !result.truncated && this.noteFilesHoldAll(pageId, found?.markdown ?? result.markdown),
+          noteFilesComplete: !result.truncated && holdsAll,
         };
       } catch (error) {
         // Markdown API 실패 시 blocks API fallback — 잘린 블록이 상한보다 많을 때(S-06)도 여기로 온다.
@@ -1104,9 +1117,9 @@ export class PagePuller {
     let noteFiles: readonly FolderFileRef[] = [];
     let noteFilesComplete = true;
     const fallback = await pageBlocksToObsidian(this.notionClient, pageId, (markdown) => {
-      const found = noteFilesOf(markdown);
+      const { found, holdsAll } = noteFilesOf(markdown);
       noteFiles = found?.files ?? [];
-      noteFilesComplete = this.noteFilesHoldAll(pageId, found?.markdown ?? markdown);
+      noteFilesComplete = holdsAll;
       return found?.markdown ?? markdown;
     });
     this.discovery.collectInlineDbRefs(pageId, fallback.markdown);
@@ -1126,31 +1139,41 @@ export class PagePuller {
     };
   }
 
-  /** 노트 페이지의 폴더 첨부({@link folderFilesInNote}) — 없으면 null. */
-  private noteFolderFilesOf(
-    pageId: string,
-    markdown: string,
-    options: { readonly embedded?: ReadonlySet<string> },
-  ) {
-    const media = recallUploadedMedia(this.stateDb, pageId);
-    return folderFilesInNote(markdown, {
-      knownIds: new Set(folderFileIdsOf(this.stateDb, pageId).values()),
-      exclude: (file) => {
-        const fileId = notionFileIdOf(file.url);
-        return options.embedded?.has(file.name) === true || (fileId !== null && media.has(fileId));
-      },
-    });
+  /**
+   * 볼트 맨 위 파일 — 루트 페이지 끝의 폴더 첨부(「📁 이름」 · 적어 둔 것)를 볼트 맨 위에 받는다({@link rootFilesPageOf}).
+   * 루트의 다른 블록(사용자가 붙인 파일 포함)은 받지 않는다. Markdown API 로 읽지 못하면 맨 위 블록에서 찾되 빠진 파일을
+   * 지운 것으로 보지 않는다 — 토글 안으로 옮긴 것은 보이지 않는다. 읽지 못하면 경고만 남긴다(다음 pull 이 다시 읽는다).
+   */
+  async receiveRootFiles(): Promise<void> {
+    const rootId = rootFilesPageOf(this.config);
+    if (!rootId) return;
+    try {
+      let files: readonly FolderFileRef[];
+      let complete: boolean;
+      try {
+        const result = await this.notionClient.getPageMarkdown(rootId);
+        const { found, holdsAll } = noteFolderFilesOfPage(this.stateDb, rootId, result.markdown);
+        files = found?.files ?? [];
+        complete = !result.truncated && holdsAll;
+      } catch {
+        const ids = new Set(folderFileIdsOf(this.stateDb, rootId).values());
+        files = (await this.notionClient.fetchAllChildren(rootId)).flatMap((block) => {
+          const url = isFolderFileBlock(block, ids) ? fileUrlOfBlock(block) : null;
+          const name = url ? uploadedFileNameFromUrl(url) : null;
+          return url && name ? [{ url, name }] : [];
+        });
+        complete = false;
+      }
+      await this.receiveFolderFiles("", rootId, files, complete);
+    } catch (error) {
+      getLogger().warn(
+        `[Im-Nobsidian] 볼트 맨 위 파일을 루트 페이지에서 받지 못함: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
-  /** 폴더 첨부를 뗀 본문에 적어 둔 폴더 첨부가 남지 않았나 — {@link fetchPageMarkdown} 의 `noteFilesComplete`. */
-  private noteFilesHoldAll(pageId: string, rest: string): boolean {
-    const ids = new Set(folderFileIdsOf(this.stateDb, pageId).values());
-    if (ids.size === 0) return true;
-    return !notionMediaSpans(rest).some((span) => ids.has(notionFileIdOf(span.url) ?? ""));
-  }
-
-  /** 폴더 첨부를 받아 받은 파일 수에 더한다. */
-  private async receiveFolderFiles(
+  /** 폴더 첨부를 받아 받은 파일 수에 더한다 — 행의 폴더 첨부도 여기로 받는다(`DatabaseSyncer`). */
+  async receiveFolderFiles(
     folder: string,
     pageId: string,
     files: readonly FolderFileRef[],

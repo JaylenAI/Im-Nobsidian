@@ -70,13 +70,15 @@ function fakeNotion() {
     return count;
   };
 
-  const store = (parent: Stored, blocks: Json[]): Stored[] =>
-    blocks.map((block) => {
+  /** `at` 자리부터 차례로 넣는다 — 없으면 맨 끝. */
+  const store = (parent: Stored, blocks: Json[], at?: number): Stored[] =>
+    blocks.map((block, k) => {
       const type = block.type as string;
       const { children: _kids, ...body } = block[type] as Json;
       const node: Stored = { id: `blk-${++seq}`, type, body, children: [] };
       nodes.set(node.id, node);
-      parent.children.push(node);
+      if (at === undefined) parent.children.push(node);
+      else parent.children.splice(at + k, 0, node);
       store(node, childrenOf(block));
       return node;
     });
@@ -84,15 +86,24 @@ function fakeNotion() {
   vi.spyOn(client.getInternalClient().blocks.children, "append").mockImplementation((async ({
     block_id,
     children,
+    position,
   }: {
     block_id: string;
     children: Json[];
+    position?: { type: string; after_block?: { id: string } };
   }) => {
     requests.push(children);
     expect(check(children, 0)).toBeLessThanOrEqual(REQUEST_BLOCKS_MAX);
     const parent = nodes.get(block_id);
     if (!parent) throw new Error(`Could not find block with ID: ${block_id}.`);
-    const created = store(parent, children);
+    const at =
+      position?.type === "start"
+        ? 0
+        : position?.type === "after_block"
+          ? parent.children.findIndex((n) => n.id === position.after_block!.id) + 1
+          : undefined;
+    if (at === 0 && position?.type === "after_block") throw new Error("기준 블록이 없다");
+    const created = store(parent, children, at);
     return { results: created.map((n) => ({ object: "block", id: n.id, type: n.type })) };
   }) as never);
   vi.spyOn(client.getInternalClient().blocks.children, "list").mockImplementation((async ({
@@ -154,6 +165,17 @@ async function roundTrip(blocks: BlockRequest[]) {
   expect(blockOutline(notion.tree())).toEqual(blockOutline(blocks as never));
   return notion.requests;
 }
+
+describe("NotionClient.appendBlockTree — 맨 앞에 넣기(atStart)", () => {
+  it("이미 있는 블록 앞에 순서 그대로 넣는다 — 100 개를 넘어 나눠 보내도 · 깊은 자식도", async () => {
+    const notion = fakeNotion();
+    const tail = [para("남길 파일 블록")];
+    await notion.client.appendBlockTree(PAGE, tail);
+    const body = [chain(5), ...Array.from({ length: 150 }, (_, i) => para(`p${i}`))];
+    await notion.client.appendBlockTree(PAGE, body, { atStart: true });
+    expect(blockOutline(notion.tree())).toEqual(blockOutline([...body, ...tail] as never));
+  });
+});
 
 describe("NotionClient.appendBlockTree — 요청 한도 안으로 나눠 보내고 트리는 그대로", () => {
   it("깊은 목록 — 두 단계씩 만들고 나머지는 만든 블록 아래에 붙인다", async () => {

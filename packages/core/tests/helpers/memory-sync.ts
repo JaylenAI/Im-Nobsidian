@@ -539,13 +539,17 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       });
     },
   );
-  /** 본문에 남은 파일 블록 — 본문 교체로 지워진 줄은 빠진다. */
-  const fileBlocksOf = (pageId: string) =>
+  /**
+   * 본문에 남은 파일 블록 — 본문 교체로 지워진 줄은 빠진다. 들여 쓴 줄은 토글 · 콜아웃 안의 블록이라 맨 위 목록
+   * (`fetchAllChildren`)에 없고 트리(`getBlockTree`)에만 있다(`nested`).
+   */
+  const fileBlocksOf = (pageId: string, nested = false) =>
     [...fileBlocks.entries()]
-      .filter(
-        ([, block]) =>
-          block.pageId === pageId && (pages.get(pageId)?.body ?? "").includes(block.url),
-      )
+      .filter(([, block]) => {
+        if (block.pageId !== pageId) return false;
+        const line = (pages.get(pageId)?.body ?? "").split("\n").find((l) => l.includes(block.url));
+        return line !== undefined && (nested || !/^\s/.test(line));
+      })
       .map(([id, block]) => ({
         id,
         type: block.type,
@@ -579,13 +583,18 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       .join("\n");
   });
   // 휴지통의 자식은 목록에 잡히지 않는다 — 생성 요청이 적용됐는지 모를 때 찾는 경로가 이것을 읽는다.
-  client.fetchAllChildren.mockImplementation(async (parentId: string) => [
+  const childrenOf = (parentId: string, nested: boolean) => [
     ...deferredCodeBlocks(parentId),
     ...deferredRefBlocks(parentId),
-    ...fileBlocksOf(parentId),
+    ...fileBlocksOf(parentId, nested),
     ...[...pages.values()]
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
-  ]);
+  ];
+  client.fetchAllChildren.mockImplementation(async (parentId: string) =>
+    childrenOf(parentId, false),
+  );
+  // 트리는 펼쳐 돌려준다 — 토글 블록 자체는 흉내 내지 않는다
+  client.getBlockTree.mockImplementation(async (parentId: string) => childrenOf(parentId, true));
   return { client, pages, databases, add, touch, edit, recent, downloadOf };
 }

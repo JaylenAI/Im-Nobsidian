@@ -92,6 +92,8 @@ describe("검색 중복 디듀프 — 고아/위치오류/churn 회귀 잠금", 
     vi.spyOn(client, "getPageMarkdown").mockImplementation(async (id: string) => {
       if (id === HUB) return { markdown: "# Hub\n\nHub body.\n" } as never;
       if (id === LEAF) return { markdown: "# Leaf\n\nLeaf body.\n" } as never;
+      // 볼트 맨 위 파일을 찾아 루트 본문도 읽는다 — 루트에 실린 것이 없다
+      if (id.replace(/-/g, "") === ROOT.replace(/-/g, "")) return { markdown: "" } as never;
       throw new Error(`unexpected getPageMarkdown ${id}`);
     });
     // HUB 는 자식(LEAF)을 가지므로 폴더노트로 분류돼야 한다.

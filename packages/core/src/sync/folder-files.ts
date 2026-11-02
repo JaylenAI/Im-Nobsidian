@@ -7,9 +7,12 @@
  */
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "../converter/child-tags.js";
 import type { IStateDB } from "../state/state-db-interface.js";
-import { compactNotionId } from "../utils/id.js";
+import type { Config } from "../types/config.js";
+import { compactNotionId, normalizeNotionId } from "../utils/id.js";
+import { isDatabaseMode } from "./parent-mode.js";
 import { notionFileIdOf } from "../utils/notion-file-url.js";
 import { notionMediaSpans, uploadedFileNameFromUrl } from "./image-handler.js";
+import { recallUploadedMedia } from "./uploaded-media.js";
 
 /** 폴더 페이지에 실린 폴더 첨부 하나. */
 export interface FolderFileRef {
@@ -67,6 +70,36 @@ function isMarkedCaption(label: string, name: string): boolean {
   return unescapeCaption(label) === folderFileCaption(name);
 }
 
+/** 블록 API 로 읽은 블록의 Notion 에 올린 파일 — 주소 · 캡션. 올린 파일 블록이 아니면 null. */
+export function uploadedFileOfBlock(block: {
+  readonly type: string;
+}): { readonly url: string; readonly caption: string } | null {
+  const media = (block as unknown as Record<string, unknown>)[block.type] as
+    | { type?: string; file?: { url?: string }; caption?: ReadonlyArray<{ plain_text?: string }> }
+    | undefined;
+  const url = media?.type === "file" ? media.file?.url : undefined;
+  if (!url) return null;
+  return { url, caption: (media?.caption ?? []).map((part) => part.plain_text ?? "").join("") };
+}
+
+/**
+ * 블록이 이 페이지의 폴더 첨부인가 — 적어 둔 Notion 파일 id(`knownIds`)이거나 표시를 단 캡션({@link folderFileCaption}).
+ * {@link folderFilesInNote} 의 블록 판.
+ */
+export function isFolderFileBlock(
+  block: { readonly type: string },
+  knownIds: ReadonlySet<string>,
+): boolean {
+  const file = uploadedFileOfBlock(block);
+  if (!file) return false;
+  const name = uploadedFileNameFromUrl(file.url);
+  const fileId = notionFileIdOf(file.url);
+  return (
+    (fileId !== null && knownIds.has(fileId)) ||
+    (name !== null && file.caption === folderFileCaption(name))
+  );
+}
+
 /** 노트 페이지의 폴더 첨부({@link folderFilesInNote}) — 떼어 낸 본문과 그 파일들. */
 export interface NoteFolderFiles {
   /** 폴더 첨부 줄을 뺀 본문 — 노트로 받는다. */
@@ -76,15 +109,16 @@ export interface NoteFolderFiles {
   readonly lines: readonly string[];
 }
 
-/** 코드 펜스 줄 — 그 안의 줄은 글이다. */
-const FENCE_RE = /^(`{3,}|~{3,})/;
+/** 코드 펜스 줄 — 그 안의 줄은 글이다. 토글 · 목록 안의 펜스는 들여 쓴다. */
+const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 
 /**
  * 노트 페이지의 폴더 첨부 — 폴더 노트가 있는 폴더(`X/X.md`)와 노트 이름의 폴더(`X.md` 옆 `X/`)의 파일은 그 노트의 페이지
- * 끝에 붙는다(ADR-056). 맨 바깥 줄 하나가 통째로 파일 하나이고, 표시({@link FOLDER_FILE_MARK})를 단 캡션이거나 이 페이지의
+ * 끝에 붙는다(ADR-056). 줄 하나가 통째로 파일 하나이고, 표시({@link FOLDER_FILE_MARK})를 단 캡션이거나 이 페이지의
  * 폴더 첨부로 적어 둔 파일(`knownIds` — 표시 이전에 폴더 페이지에 올린 것이 그 페이지가 폴더 노트가 되어 남았다)이면 뗀다.
- * 끝자리만 보지 않는다 — Notion 에서 페이지 맨 아래에 글을 쓰면 그 글이 파일 뒤에 붙는다. 둘 다 아니면(캡션 = 이름인 v0.3 의
- * 노트 임베드 등) 노트의 것이다. 들여 쓴 줄(토글 · 목록의 자식)과 코드 펜스 안은 보지 않는다.
+ * 끝자리만 보지 않는다 — Notion 에서 페이지 맨 아래에 글을 쓰면 그 글이 파일 뒤에 붙는다. 들여 쓴 줄(Notion 에서 토글 · 콜아웃
+ * 안으로 옮긴 블록)도 뗀다 — 예전에는 노트의 임베드로 받아 받은 그림 폴더에 사본이 생겼다. 둘 다 아니면(캡션 = 이름인 v0.3 의
+ * 노트 임베드 등) 노트의 것이다. 코드 펜스 안은 보지 않는다. `lines` 는 들여쓰기를 뺀 줄이다 — push 가 페이지 끝에 되싣는다.
  *
  * @param exclude 폴더 첨부여도 노트의 것으로 볼 파일 — 로컬 노트가 임베드한 이름 등
  * @returns 폴더 첨부가 없으면 null
@@ -108,7 +142,7 @@ export function folderFilesInNote(
       return;
     }
     if (fence !== null) return;
-    const full = line.trimEnd();
+    const full = line.trim();
     const [span, ...more] = notionMediaSpans(full);
     if (!span || more.length > 0 || span.full !== full || !/^https?:\/\//.test(span.url)) return;
     const name = uploadedFileNameFromUrl(span.url);
@@ -129,6 +163,45 @@ export function folderFilesInNote(
     files,
     lines,
   };
+}
+
+/**
+ * 받은 노트 페이지(행 포함)의 폴더 첨부({@link folderFilesInNote}) — 이 페이지에 적어 둔 폴더 첨부 id 로도 찾고, 로컬 노트가
+ * 임베드한 이름 · 이 노트가 올린 미디어는 노트의 것으로 둔다. 페이지 받기와 행 받기가 같은 규칙을 읽는다.
+ *
+ * @returns `holdsAll` — 떼고 남은 본문에 적어 둔 폴더 첨부가 없나. 그럴 때만 빠진 파일을 Notion 에서 지운 것으로 본다.
+ */
+export function noteFolderFilesOfPage(
+  stateDb: IStateDB,
+  pageId: string,
+  markdown: string,
+  embedded?: ReadonlySet<string>,
+): { readonly found: NoteFolderFiles | null; readonly holdsAll: boolean } {
+  const ids = new Set(folderFileIdsOf(stateDb, pageId).values());
+  const media = recallUploadedMedia(stateDb, pageId);
+  const found = folderFilesInNote(markdown, {
+    knownIds: ids,
+    exclude: (file) => {
+      const fileId = notionFileIdOf(file.url);
+      return embedded?.has(file.name) === true || (fileId !== null && media.has(fileId));
+    },
+  });
+  const rest = found?.markdown ?? markdown;
+  return {
+    found,
+    holdsAll:
+      ids.size === 0 ||
+      !notionMediaSpans(rest).some((span) => ids.has(notionFileIdOf(span.url) ?? "")),
+  };
+}
+
+/**
+ * 볼트 맨 위 파일을 싣는 Notion 페이지 — 페이지 모드의 루트. 볼트 맨 위는 루트 페이지의 자리라 그 끝에 「📁 이름」 으로
+ * 싣는다(노트 이름의 폴더와 같은 규칙). DB 모드의 루트는 DB 라 본문이 없다 — null.
+ */
+export function rootFilesPageOf(config: Config): string | null {
+  if (isDatabaseMode(config) || !config.notion.rootPageId) return null;
+  return normalizeNotionId(config.notion.rootPageId);
 }
 
 /** 노트에 붙인(임베드한) 대상 — `![[x]]` · `![](x)` · frontmatter 의 `[[x]]`(아이콘 · 커버). */

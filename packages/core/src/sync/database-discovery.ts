@@ -9,6 +9,7 @@ import { getLogger } from "../utils/logger.js";
 import { notionIdsEqual, normalizeNotionId, shortNotionId } from "../utils/id.js";
 import type { AbortLike } from "../utils/pool.js";
 import { extractInlineDbIds } from "../utils/inline-db-refs.js";
+import { blocksToNfm } from "../converter/blocks-to-nfm.js";
 import {
   databaseFolderName,
   resolveDbFolderPath,
@@ -34,6 +35,9 @@ import { within } from "./note-relocation.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 import { pathKey } from "../utils/path-key.js";
 
+/** 페이지 → 볼트 경로. dry-run 은 새로 받을 페이지의 자리를 Notion 에서 짚어 보므로 기다릴 수 있다. */
+type NotePathOf = (pageId: string) => string | null | Promise<string | null>;
+
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
   | { kind: "ok"; config: DiscoveredDbConfig }
@@ -47,12 +51,6 @@ type DiscoveredDbOutcome =
  * DB 행 조회 실패는 여기 두지 않는다 — 그 DB 는 캐시에 남아 다음 pull 이 다시 받는다.
  */
 const DISCOVERY_RETRY_META_KEY = "discovery_retry";
-
-/**
- * dry-run 이 안의 DB 를 찾으려고 본문을 읽는 새 페이지의 수({@link DatabaseDiscovery.readNewPageBodies}). 페이지마다 요청
- * 1회(초당 3회 제한)라 처음 받는 큰 워크스페이스에서는 미리 보기가 분 단위가 된다 — 넘는 페이지 안의 DB 는 알림으로 남긴다.
- */
-export const PREVIEW_BODY_READ_BUDGET = 100;
 
 interface DiscoveryRetry {
   /** 자식 DB 를 확인하지 못한 페이지. */
@@ -357,7 +355,8 @@ export class DatabaseDiscovery {
    * `markScanned` 일 때 적는다.
    *
    * @param failed 읽지 못한 페이지 · DB — 이유와 함께 싣는다.
-   * @param options.notePathOf 페이지 → 볼트 경로. 새 DB 폴더를 부모 노트 옆에 둔다 — dry-run 은 다시 이을 노트의 자리를 준다.
+   * @param options.notePathOf 페이지 → 볼트 경로. 새 DB 폴더를 부모 노트 옆에 둔다 — dry-run 은 다시 이을 노트 · 새로 받을 페이지의
+   *   자리를 준다.
    */
   private async openRegistry(
     failed: FailedOperation[],
@@ -366,7 +365,7 @@ export class DatabaseDiscovery {
       readonly rescanRoot?: boolean;
       readonly signal?: AbortLike;
       readonly markScanned: boolean;
-      readonly notePathOf?: (pageId: string) => string | null;
+      readonly notePathOf?: NotePathOf;
     },
   ): Promise<DiscoveryRegistry> {
     const { forceRediscovery, signal } = options;
@@ -594,7 +593,7 @@ export class DatabaseDiscovery {
     failed: FailedOperation[],
     options: {
       readonly rescanRoot: boolean;
-      readonly notePathOf: (pageId: string) => string | null;
+      readonly notePathOf: NotePathOf;
     },
   ): Promise<{
     readonly found: readonly DiscoveredDbConfig[];
@@ -619,19 +618,22 @@ export class DatabaseDiscovery {
 
   /**
    * dry-run — 새로 받을 페이지의 본문을 읽어 그 안의 DB 를 찾는다({@link plannedNewDatabases} 가 그 행을 센다). 실제 pull 은
-   * 받으며 찾는다. 예전에는 읽지 않고 «미리 세지 않았습니다» 만 알렸다. {@link PREVIEW_BODY_READ_BUDGET} 개까지만 읽는다 —
-   * 넘거나 읽지 못한(다 받지 못한) 페이지는 {@link bodyRead} 가 아니어서 알림으로 남는다.
+   * 받으며 찾는다 — 같은 길로 읽는다: Markdown API(잘린 본문은 채운 것 · 권한 없는 자리표시는 그대로), 실패하거나 블록 방식이면
+   * 블록 트리. 예전에는 100개까지만 읽고 넘는 페이지 안의 DB 를 «미리 세지 않았습니다» 로만 알렸다 — 미리 보기는 사용자가
+   * 부르고 멈출 수 있어(`signal`) 모두 읽는다. 둘 다 읽지 못한 페이지만 {@link bodyRead} 가 아니어서 알림으로 남는다.
    */
   async readNewPageBodies(pageIds: readonly string[], signal?: AbortLike): Promise<void> {
     if (isDatabaseMode(this.config)) return;
     const unread = pageIds.filter((pageId) => !this.bodyRead(pageId));
-    for (const pageId of unread.slice(0, PREVIEW_BODY_READ_BUDGET)) {
+    if (unread.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 미리 보기: 새 페이지 ${unread.length}개의 본문에서 DB 를 찾음`,
+      );
+    }
+    for (const pageId of unread) {
       if (signal?.aborted) return;
       try {
-        const result = await this.notionClient.getPageMarkdown(pageId);
-        // 자리표시로 남은 블록 안에 DB 가 있을 수 있다 — 다 읽은 것으로 치지 않는다.
-        if (result.truncated || (result.unknown_block_ids ?? []).length > 0) continue;
-        this.collectInlineDbRefs(pageId, result.markdown);
+        this.collectInlineDbRefs(pageId, await this.previewBodyOf(pageId));
       } catch (error) {
         getLogger().debug(
           `[Im-Nobsidian] 미리 보기: 새 페이지 본문을 읽지 못해 안의 DB 는 받으며 찾음 (${pageId}): ${
@@ -640,6 +642,18 @@ export class DatabaseDiscovery {
         );
       }
     }
+  }
+
+  /** 미리 보기가 읽는 새 페이지 본문 — 실제 pull 의 `PagePuller.fetchPageMarkdown` 과 같은 차례. */
+  private async previewBodyOf(pageId: string): Promise<string> {
+    if (this.config.conversion.preferMarkdownApi !== false) {
+      try {
+        return (await this.notionClient.getPageMarkdown(pageId)).markdown;
+      } catch {
+        // 실제 pull 처럼 블록으로 받는다
+      }
+    }
+    return blocksToNfm(await this.notionClient.getBlockTree(pageId), { pageId });
   }
 
   /** 이번 pull 에서 본문을 받은 페이지인가 — 그 본문의 `<database>` 로 새 DB 를 찾았다. */
@@ -714,8 +728,7 @@ export class DatabaseDiscovery {
   private async buildDiscoveredDbConfig(
     dbId: string,
     parentPageId: string,
-    notePathOf: (pageId: string) => string | null = (pageId) =>
-      this.stateDb.getByNotionId(pageId)?.obsidianPath ?? null,
+    notePathOf: NotePathOf = (pageId) => this.stateDb.getByNotionId(pageId)?.obsidianPath ?? null,
   ): Promise<DiscoveredDbOutcome> {
     let dbTitle: string;
     try {
@@ -751,7 +764,7 @@ export class DatabaseDiscovery {
       return { kind: "error", error: error instanceof Error ? error.message : String(error) };
     }
 
-    const obsPath = parentPageId ? notePathOf(parentPageId) : null;
+    const obsPath = parentPageId ? await notePathOf(parentPageId) : null;
     let parentFolder = "";
     if (obsPath) {
       if (isMarkdownPath(obsPath)) {

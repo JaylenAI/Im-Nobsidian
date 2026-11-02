@@ -103,6 +103,8 @@ describe("폴더노트 분류 — 컨테이너 중첩 자식 (본문분리 회�
     vi.spyOn(client, "getPageMarkdown").mockImplementation(async (id: string) => {
       if (id === HUB) return { markdown: "# Hub\n\nWelcome to the hub body.\n" } as never;
       if (id === LEAF) return { markdown: "# Leaf\n\nLeaf body.\n" } as never;
+      // 볼트 맨 위 파일을 찾아 루트 본문도 읽는다 — 루트에 실린 것이 없다
+      if (id.replace(/-/g, "") === ROOT.replace(/-/g, "")) return { markdown: "" } as never;
       throw new Error(`unexpected getPageMarkdown ${id}`);
     });
     // 폴백 경로(집합에 없는 페이지)용 — 빈 자식.
@@ -170,6 +172,8 @@ describe("폴더노트 분류 — 컨테이너 중첩 자식 (본문분리 회�
         } as never;
       }
       if (id === LEAF) return { markdown: "잎 본문\n" } as never;
+      // 볼트 맨 위 파일을 찾아 루트 본문도 읽는다 — 루트에 실린 것이 없다
+      if (id.replace(/-/g, "") === ROOT.replace(/-/g, "")) return { markdown: "" } as never;
       throw new Error(`unexpected getPageMarkdown ${id}`);
     });
     const deep = vi.spyOn(client, "fetchAllChildrenDeep").mockResolvedValue([]);
