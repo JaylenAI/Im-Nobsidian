@@ -6,11 +6,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const sent: { url: string; method: string; headers: Record<string, string>; body: unknown }[] = [];
 // 다음 응답 — 시험이 바꾼다. 없으면 JSON `{"ok":true}`.
-let reply: { status: number; contentType: string; text: string } | null = null;
+let reply: { status: number; contentType: string; text: string } | Error | null = null;
 vi.mock("obsidian", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   requestUrl: vi.fn(async (request: (typeof sent)[number]) => {
     sent.push(request);
+    if (reply instanceof Error) throw reply;
     const { status, contentType, text } = reply ?? {
       status: 200,
       contentType: "application/json",
@@ -110,5 +111,29 @@ describe("obsidianFetch", () => {
       method: "DELETE",
     });
     expect(response.status).toBe(204);
+  });
+
+  it("연결을 잃은 Chromium 오류에는 코어가 다시 보낼 코드를 붙인다", async () => {
+    reply = new Error("net::ERR_NETWORK_CHANGED");
+    await expect(obsidianFetch("https://api.notion.com/v1/pages/x/markdown")).rejects.toMatchObject(
+      {
+        message: "net::ERR_NETWORK_CHANGED",
+        code: "ECONNRESET",
+      },
+    );
+    reply = new Error("net::ERR_CONNECTION_TIMED_OUT");
+    await expect(obsidianFetch("https://api.notion.com/v1/pages/x")).rejects.toMatchObject({
+      code: "ETIMEDOUT",
+    });
+  });
+
+  it("그 밖의 오류는 그대로 던진다", async () => {
+    const offline = new Error("net::ERR_NAME_NOT_RESOLVED");
+    reply = offline;
+    const thrown = await obsidianFetch("https://api.notion.com/v1/pages/x").catch(
+      (e: unknown) => e,
+    );
+    expect(thrown).toBe(offline);
+    expect(thrown).not.toHaveProperty("code");
   });
 });
