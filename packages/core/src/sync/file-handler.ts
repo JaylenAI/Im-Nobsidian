@@ -15,9 +15,12 @@ import type { FileRegistryEntry } from "../state/state-db.js";
 import { isFolderRecord } from "./folder-container.js";
 import {
   embeddedNamesOf,
+  fileStampOf,
   folderFileIdsOf,
+  folderFileStampsOf,
   forgetFolderFileId,
   rememberFolderFileId,
+  rememberFolderFileStamp,
   type FolderFileRef,
 } from "./folder-files.js";
 import { uploadedFileNameFromUrl } from "./image-handler.js";
@@ -184,11 +187,21 @@ export class FileHandler {
     }
   }
 
-  /** 올린 뒤 바뀌지 않았나 — 크기가 같으면 읽지 않는다. */
+  /**
+   * 올리거나 받은 뒤 바뀌지 않았나 — 그때의 표(크기 · 수정 시각, {@link fileStampOf})와 같으면 읽지 않는다. 크기가 다르면 바뀌었다.
+   * 크기만 같으면 내용으로 견주고, 같으면 지금 표를 적어 다음에는 읽지 않는다. 예전에는 크기가 같으면 바뀌지 않았다고 봐, 같은
+   * 크기로 고친 파일을 올리지 않았다.
+   */
   private async isUnchanged(existing: FileRegistryEntry, file: NonMdFileInfo): Promise<boolean> {
-    if (existing.fileSize === file.size) return true;
+    const stamp = fileStampOf(file);
+    if (folderFileStampsOf(this.stateDb, existing.notionPageId).get(file.path) === stamp) {
+      return true;
+    }
+    if (existing.fileSize !== file.size) return false;
     const buffer = await this.vaultFs.readBinary(file.path);
-    return existing.fileHash === createHash("sha256").update(buffer).digest("hex");
+    const same = existing.fileHash === createHash("sha256").update(buffer).digest("hex");
+    if (same) rememberFolderFileStamp(this.stateDb, existing.notionPageId, file.path, stamp);
+    return same;
   }
 
   /** pull 이 받은 것을 두는 폴더 안인가. */
@@ -508,6 +521,8 @@ export class FileHandler {
       fileHash: hash,
       fileSize: buffer.length,
     });
+    const stat = await this.vaultFs.getFileStat(localPath);
+    if (stat) rememberFolderFileStamp(this.stateDb, pageId, localPath, fileStampOf(stat));
     return wrote;
   }
 
@@ -587,6 +602,7 @@ export class FileHandler {
       fileHash: hash,
       fileSize: file.size,
     });
+    rememberFolderFileStamp(this.stateDb, parentPageId, file.path, fileStampOf(file));
 
     getLogger().info(`파일 업로드 완료: ${file.path} → ${blockType} 블록`);
 
