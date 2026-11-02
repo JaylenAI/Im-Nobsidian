@@ -229,7 +229,7 @@ describe("FileHandler — 폴더 첨부", () => {
     expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["old-block"]]);
   });
 
-  it("폴더 노트 · 노트 이름의 폴더는 그 노트의 페이지에 올리고(ADR-056), 행의 폴더 · 맨 위는 경고로 알린다", async () => {
+  it("폴더 노트 · 노트 이름 · 행 이름의 폴더는 그 노트 · 행의 페이지에 올리고(ADR-056), 맨 위는 경고로 알린다", async () => {
     const { stateDb, notion, handler } = setup(["fn/x.csv", "nn/y.csv", "rr/z.csv", "top.csv"]);
     const records: Record<string, unknown> = {
       "fn/fn.md": { notionPageId: "fn-page", obsidianPath: "fn/fn.md", fileType: "folder-note" },
@@ -241,13 +241,13 @@ describe("FileHandler — 폴더 첨부", () => {
 
     const results = await handler.pushAllFiles(undefined, { ensureFolderPage });
 
-    expect(results.map((r) => r.localPath).sort()).toEqual(["fn/x.csv", "nn/y.csv"]);
+    expect(results.map((r) => r.localPath).sort()).toEqual(["fn/x.csv", "nn/y.csv", "rr/z.csv"]);
     const pages = (notion.appendChildBlocks as ReturnType<typeof vi.fn>).mock.calls.map(
       ([id]) => id,
     );
-    expect(pages.sort()).toEqual(["fn-page", "nn-page"]);
-    expect(warnings.join("\n")).toContain("올리지 않은 첨부 2개");
-    expect(warnings.join("\n")).toContain("rr/z.csv");
+    expect(pages.sort()).toEqual(["fn-page", "nn-page", "rr-page"]);
+    expect(warnings.join("\n")).toContain("올리지 않은 첨부 1개");
+    expect(warnings.join("\n")).not.toContain("rr/z.csv");
     expect(warnings.join("\n")).toContain("top.csv");
   });
 

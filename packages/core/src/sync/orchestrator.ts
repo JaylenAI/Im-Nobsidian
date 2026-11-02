@@ -230,6 +230,8 @@ export class SyncOrchestrator {
       imageHandler,
       () => this.observation.context,
       (pageId, rawMarkdown) => this.detector.noteBodyChildren(pageId, rawMarkdown),
+      (folder, pageId, files, complete) =>
+        this.puller.receiveFolderFiles(folder, pageId, files, complete),
     );
     this.discovery = new DatabaseDiscovery(
       config,

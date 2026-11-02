@@ -102,12 +102,17 @@ function getFolderPath(filePath: string): string {
   return parts.length > 1 ? parts.slice(0, -1).join("/") : "";
 }
 
-/** 노트의 페이지 끝에 둔 폴더 첨부가 놓일 폴더 — 폴더 노트는 그 폴더, 노트는 이름의 폴더. 행은 null. */
+/** 노트의 페이지 끝에 둔 폴더 첨부가 놓일 폴더 — 폴더 노트는 그 폴더, 노트 · 행은 이름의 폴더. */
 function filesFolderOfNote(record: { readonly fileType: string; readonly obsidianPath: string }) {
   if (record.fileType === "folder-note" && isFolderNotePath(record.obsidianPath)) {
     return getFolderPath(record.obsidianPath);
   }
-  return record.fileType === "file" ? stripMarkdownExtension(record.obsidianPath) : null;
+  return isNamedNote(record) ? stripMarkdownExtension(record.obsidianPath) : null;
+}
+
+/** 이름의 폴더(`N.md` 옆 `N/`)를 품는 노트 — 노트와 행. 행의 본문 끝에도 실린다(행은 본문이 있는 페이지다). */
+function isNamedNote(record: { readonly fileType: string }): boolean {
+  return record.fileType === "file" || record.fileType === "db-row";
 }
 
 /** 볼트의 첨부를 올릴 것과 Notion 이 받지 않아 올리지 않을 것으로 나눈 목록. */
@@ -241,19 +246,19 @@ export class FileHandler {
   /**
    * 폴더 첨부를 둘 Notion 페이지 — 그 폴더의 Notion 자리({@link folderContainer} 와 같은 차례). 폴더 노트(`X/X.md`)나 노트
    * 이름의 폴더(`X.md` 옆 `X/`)면 그 노트의 페이지 끝(ADR-056), 아니면 push 가 만든 폴더 페이지. 맨 위는 루트 기록이 있을 때만.
-   * 행 · DB 폴더는 둘 곳이 없다 — 행의 본문은 행의 것이다.
+   * 행 이름의 폴더(`DB/행/`)는 그 행의 페이지 끝. DB 폴더는 둘 곳이 없다 — Notion 의 DB 는 본문이 없다.
    */
   private folderPageOf(folder: string): string | null {
     if (folder === "") return this.stateDb.getByPath("__root__")?.notionPageId ?? null;
     return this.notePageOf(folder) ?? this.folderRecordPageOf(folder);
   }
 
-  /** 이 폴더를 품은 노트의 페이지 — 폴더 노트 · 노트 이름의 폴더. 없거나 행이면 null. */
+  /** 이 폴더를 품은 노트의 페이지 — 폴더 노트 · 노트(행 포함) 이름의 폴더. 없으면 null. */
   private notePageOf(folder: string): string | null {
     const note = this.stateDb.getByPath(folderNoteOf(folder));
     if (note?.notionPageId && note.fileType === "folder-note") return note.notionPageId;
     const named = this.stateDb.getByPath(`${folder}.md`);
-    return named?.notionPageId && named.fileType === "file" ? named.notionPageId : null;
+    return named?.notionPageId && isNamedNote(named) ? named.notionPageId : null;
   }
 
   private folderRecordPageOf(folder: string): string | null {
