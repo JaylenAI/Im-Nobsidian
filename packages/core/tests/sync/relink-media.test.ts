@@ -26,6 +26,7 @@ describe("다시 잇는 노트의 미디어 — 볼트 파일과 같으면 사�
   let files: Record<string, string>;
   let fetchFn: ReturnType<typeof vi.fn>;
   let handler: ImageHandler;
+  let writeBinary: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     tempDir = await mkdtemp(join(tmpdir(), "im-nobsidian-relink-media-"));
@@ -38,6 +39,8 @@ describe("다시 잇는 노트의 미디어 — 볼트 파일과 같으면 사�
         return Buffer.from(files[path]!);
       }),
       exists: vi.fn(async (path: string) => path in files),
+      ensureFolder: vi.fn(async () => {}),
+      writeBinary: (writeBinary = vi.fn(async () => {})),
     } as unknown as VaultFS;
     handler = new ImageHandler(fs, "attachments", undefined, fetchFn as never, {}, db);
   });
@@ -114,5 +117,23 @@ describe("다시 잇는 노트의 미디어 — 볼트 파일과 같으면 사�
         "# A\n\n![[img/blue.png]]\n",
       ),
     ).toBe(REMOTE);
+  });
+
+  it("미리 보기(dry-run)는 되살리되 받은 것으로 적지 않는다", async () => {
+    const restored = await handler.preview(() =>
+      handler.restoreUploadedMedia(REMOTE, "page-1", "notes/a.md", "# A\n\n![[img/blue.png]]\n"),
+    );
+    expect(restored).toBe("# A\n\n![[img/blue.png]]\n");
+    expect(recallUploadedMedia(db, "page-1").size).toBe(0);
+  });
+
+  it("미리 보기는 받은 그림의 이름을 실제 받기와 같게 정하되 볼트에 쓰지 않는다", async () => {
+    const previewed = await handler.preview(() => handler.downloadAllImages(REMOTE, "A", "page-1"));
+    expect(writeBinary).not.toHaveBeenCalled();
+    expect(recallUploadedMedia(db, "page-1").size).toBe(0);
+    const real = await handler.downloadAllImages(REMOTE, "A", "page-1");
+    expect(previewed.content).toBe(real.content);
+    expect(real.content).toMatch(/!\[\[attachments\/blue-[0-9a-f]+\.png\]\]/);
+    expect(writeBinary).toHaveBeenCalledTimes(1);
   });
 });

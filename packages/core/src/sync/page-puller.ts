@@ -52,7 +52,12 @@ import type { RemoteDriftChecker } from "./remote-drift.js";
 import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RunObservation } from "./run-observation.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
-import { findUntrackedNote, relinksWithoutContent } from "./untracked-note.js";
+import {
+  findUntrackedNote,
+  plannedRelinkRecord,
+  relinkConflict,
+  relinkOutcome,
+} from "./untracked-note.js";
 import { foldedOwnerOf, pathKey } from "../utils/path-key.js";
 
 /**
@@ -268,41 +273,101 @@ export class PagePuller {
   }
 
   /**
-   * dry-run — 실제 pull 이 이 새 페이지를 새로 받지 않고 상태 기록에 없던 노트 · 폴더와 다시 잇는가(P7). 다시 이을 노트(`note`) ·
-   * 이미 있는 폴더(`folder` — 이은 노트가 없는 볼트에서 폴더로만 받으면 만들지 않는다), 아니면 null. 받기 전에는 폴더 노트가 될지
-   * 모른다 — 노트 자리 · 폴더 노트 자리를 차례로 본다. `taken` 은 이번 미리 보기가 이미 이은 자리({@link pathKey}) — 고르면
-   * 더한다. 볼트도 상태 DB 도 바꾸지 않는다.
+   * dry-run — 실제 pull({@link createPulledPage})이 이 새 페이지를 새로 받지 않고 상태 기록에 없던 노트 · 폴더와 다시 잇는가(P7).
+   * 다시 이을 노트(`note` — 충돌로 남길 것이면 `conflict`) · 이미 있는 폴더(`folder` — 폴더로만 받는 페이지), 아니면 null.
+   * 그 자리에 무엇이 있을 때만 본문을 받아 실제 pull 처럼 렌더해 견준다 — 미디어는 받되 볼트에 쓰지 않는다
+   * ({@link ImageHandler.preview}). `taken` 은 이번 미리 보기가 이미 이은 자리({@link pathKey}) — 고르면 더한다. 볼트도 상태 DB 도
+   * 바꾸지 않는다.
    */
   async plannedRelink(
     pageId: string,
     taken: Set<string>,
-  ): Promise<{ readonly path: string; readonly kind: "note" | "folder" } | null> {
+  ): Promise<{
+    readonly path: string;
+    readonly kind: "note" | "folder";
+    readonly conflict?: Conflict;
+  } | null> {
     const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
-    const safeName = sanitizeFileName(this.notionClient.extractTitle(page));
+    const title = this.notionClient.extractTitle(page);
+    const safeName = sanitizeFileName(title);
     const parentPath = await this.resolveParentPath(page);
+    if (this.excludedCreatePath(parentPath, safeName) !== null) return null;
     const folder = parentPath ? `${parentPath}/${safeName}` : safeName;
-    for (const dir of [parentPath, folder]) {
-      const found = await findUntrackedNote(
-        this.stateDb,
-        this.vaultFs,
-        dir,
-        safeName,
-        pageId,
-        (key) => taken.has(key),
-      );
-      if (found && relinksWithoutContent(found, this.unlinkedVault)) {
-        taken.add(pathKey(found.path));
-        return { path: found.path, kind: "note" };
-      }
-    }
-    const folderExists =
-      this.unlinkedVault &&
+    const untrackedIn = (dir: string) =>
+      findUntrackedNote(this.stateDb, this.vaultFs, dir, safeName, pageId, (key) => taken.has(key));
+    const folderExists = async () =>
       !taken.has(pathKey(folder)) &&
       this.stateDb.getByPath(folder) === null &&
       (await this.vaultFs.exists(folder));
-    if (!folderExists) return null;
-    taken.add(pathKey(folder));
-    return { path: folder, kind: "folder" };
+    // 그 자리에 아무것도 없으면 새로 받는다 — 본문을 받지 않는다(미리 보기를 가볍게).
+    if (
+      !(await untrackedIn(parentPath)) &&
+      !(await untrackedIn(folder)) &&
+      !(await folderExists())
+    ) {
+      return null;
+    }
+
+    const fetched = await this.fetchPageMarkdown(pageId);
+    const hasChildPages = this.hasChildContainers(pageId, fetched.children);
+    const folderOnly =
+      (hasChildPages && !fetched.hasBody) ||
+      (fetched.folderFiles !== null && (hasChildPages || fetched.folderFiles.named));
+    if (folderOnly) {
+      // 폴더로만 받는 페이지 — 그 폴더가 이미 있으면 만들지 않는다.
+      if (!(await folderExists())) return null;
+      taken.add(pathKey(folder));
+      return { path: folder, kind: "folder" };
+    }
+    const found = await untrackedIn(hasChildPages ? folder : parentPath);
+    if (!found) return null;
+    const local = await readLocalNote(this.vaultFs, found.path);
+    if (local === undefined) return null;
+    const rendered = await this.imageHandler.preview(() =>
+      this.renderPageNote({
+        pageId,
+        page,
+        fetched,
+        filePath: found.path,
+        title,
+        titleFollowsName: extractTitle(found.path) === title,
+        downloadMedia: true,
+        local: { content: local, markers: [] },
+        adoptLocalMedia: true,
+      }),
+    );
+    const same =
+      sameNoteContent(local, rendered.content) || sameAsPendingLinks(local, rendered.content);
+    const outcome = relinkOutcome(
+      found.existing,
+      same,
+      this.unlinkedVault,
+      this.config.sync.conflictStrategy,
+    );
+    if (outcome === null) return null;
+    taken.add(pathKey(found.path));
+    if (outcome !== "conflict") return { path: found.path, kind: "note" };
+    const parentId = await extractParentId(this.notionClient, page);
+    return {
+      path: found.path,
+      kind: "note",
+      conflict: relinkConflict({
+        record: plannedRelinkRecord({
+          path: found.path,
+          pageId,
+          parentId,
+          remote: rendered.content,
+          lastEdited: page.last_edited_time,
+          fileType: hasChildPages ? "folder-note" : "file",
+        }),
+        path: found.path,
+        local,
+        remote: rendered.content,
+        pageId,
+        lastEdited: page.last_edited_time,
+        title,
+      }),
+    };
   }
 
   /**
@@ -417,12 +482,7 @@ export class PagePuller {
   /**
    * 상태 기록에 없는 노트가 이 페이지가 놓일 자리에 이미 있다 — 상태 DB 를 잃었거나 처음 잇는 볼트다(P7).
    * 예전에는 남의 노트로 보고 id 를 붙인 이름으로 또 받아 모든 노트가 두 벌이 됐다(push 는 모든 페이지를 또 만들었다).
-   *
-   * - 글이 같으면(끝 개행만 달라도) 그 노트를 이 페이지와 다시 잇는다 — 쓰지 않는다.
-   * - 다르면 이 페이지 id 를 단 이름(지난번 이 페이지를 받은 이름)이면 충돌 전략을 따른다: remote-first 는 원격으로 덮고 ·
-   *   local-first 는 로컬을 두어 다음 push 가 올리고 · 그 밖은 충돌로 남긴다(지난 사본이 없어 merge 도 합칠 수 없다).
-   * - 자연 이름에 있는 다른 글은 이은 노트가 하나도 없는 볼트에서만 잇고 전략과 상관없이 충돌로 남긴다 — 다른 노트일 수 있어
-   *   덮거나 올리면 잃는다. 이은 노트가 있는 볼트에서는 잇지 않는다(null) — 그 볼트의 새 노트일 수 있다.
+   * 받은 글과 견줘 {@link relinkOutcome} 대로 잇는다 — 잇지 않으면 null(id 를 단 새 이름으로 받는다).
    */
   private relinkExistingNote(
     filePath: string,
@@ -433,11 +493,15 @@ export class PagePuller {
   ): Promise<PulledCreate> | null {
     const same =
       sameNoteContent(local, rendered.content) || sameAsPendingLinks(local, rendered.content);
-    if (!same && existing === "name" && !this.unlinkedVault) return null;
+    const outcome = relinkOutcome(
+      existing,
+      same,
+      this.unlinkedVault,
+      this.config.sync.conflictStrategy,
+    );
+    if (outcome === null) return null;
     return (async () => {
-      // 자연 이름에 있던 다른 글은 정말 이 페이지의 노트인지 모른다 — 전략대로 덮거나 올리면 다른 노트를 잃는다. 고르게 한다.
-      const strategy = existing === "own" ? this.config.sync.conflictStrategy : "manual";
-      if (same || strategy === "local-first") {
+      if (outcome === "relink") {
         await this.recordPulledNote(filePath, note, {
           content: rendered.content,
           properties: rendered.properties,
@@ -448,7 +512,7 @@ export class PagePuller {
         });
         return { path: filePath, relinked: true };
       }
-      if (strategy === "remote-first") {
+      if (outcome === "overwrite") {
         await this.vaultFs.writeFile(filePath, rendered.content);
         await this.recordPulledNote(filePath, note, {
           content: rendered.content,
@@ -464,27 +528,15 @@ export class PagePuller {
         snapshot: null,
         differsOnDisk: true,
       });
-      const record = this.stateDb.getByPath(filePath)!;
-      const conflict: Conflict = {
-        syncRecord: record,
-        localChange: {
-          path: filePath,
-          type: "modified",
-          currentHash: computeHash(local),
-          previousHash: record.contentHash,
-        },
-        remoteChange: {
-          pageId: note.pageId,
-          type: "modified",
-          lastEdited: note.page.last_edited_time,
-          previousEdited: null,
-          path: filePath,
-          title: note.title,
-        },
-        baseContent: null,
-        localContent: local,
-        remoteContent: rendered.content,
-      };
+      const conflict = relinkConflict({
+        record: this.stateDb.getByPath(filePath)!,
+        path: filePath,
+        local,
+        remote: rendered.content,
+        pageId: note.pageId,
+        lastEdited: note.page.last_edited_time,
+        title: note.title,
+      });
       return { path: filePath, relinked: true, conflict };
     })();
   }
