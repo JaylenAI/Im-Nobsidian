@@ -119,7 +119,7 @@ describe("previewSections", () => {
       {
         heading: "그 밖에",
         lines: [
-          "Notion 에 새로 생긴 페이지가 많거나 읽지 못해 그 일부 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+          "Notion 에 새로 생긴 페이지 가운데 본문을 읽지 못한 것이 있어 그 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
         ],
         problem: false,
       },
