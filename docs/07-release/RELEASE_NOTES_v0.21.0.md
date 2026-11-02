@@ -76,7 +76,7 @@
 
 ## Verification
 
-- **Tests:** core 4,373 · cli 185 · plugin 510 on Linux (build, lint, format, typecheck), and CI on Linux (Node 22,
+- **Tests:** core 4,373 · cli 185 · plugin 512 on Linux (build, lint, format, typecheck), and CI on Linux (Node 22,
   24), macOS and Windows. Every new test failed on the code before its fix.
 - **Real Notion (CLI, two vaults):** files beside a folder note and a note-named folder arrived byte-identical; a
   same-size edit, text written below them in Notion, deletion, renaming `X→W`, `N→K` and a file-only `P→Q` (one block
