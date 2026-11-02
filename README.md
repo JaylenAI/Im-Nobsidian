@@ -341,8 +341,9 @@ cannot be matched and are downloaded again (ADR-049).
 
 ¹ Attachments embedded in a note go up with the note — found anywhere in the vault by name, as Obsidian does. Other files in a
 folder go to that folder's Notion page (`sync.syncFiles`) and come back into the same folder under the same name on other vaults
-(ADR-054). Not uploaded: the download folder (`paths.attachments`), files beside a folder note or at the vault root (listed on
-push), and formats Notion refuses (`.ipynb`, …). With `sync.deleteSync`, deleting a folder file on either side deletes it on the other.
+(ADR-054). Files in a folder that has a folder note (`X/X.md`), or that is named after a note (`N.md` beside `N/`), go to the end
+of that note's page captioned `📁 name` and are taken out of the note when received (ADR-056). Not uploaded: the download folder
+(`paths.attachments`), files in a database folder or at the vault root (listed on push), and formats Notion refuses (`.ipynb`, …). With `sync.deleteSync`, deleting a folder file on either side deletes it on the other.
 ² The Notion API cannot create these blocks (see [Known Limitations](#known-limitations)).
 
 ## Configuration
