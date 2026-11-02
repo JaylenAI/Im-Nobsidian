@@ -48,6 +48,12 @@ type DiscoveredDbOutcome =
  */
 const DISCOVERY_RETRY_META_KEY = "discovery_retry";
 
+/**
+ * dry-run 이 안의 DB 를 찾으려고 본문을 읽는 새 페이지의 수({@link DatabaseDiscovery.readNewPageBodies}). 페이지마다 요청
+ * 1회(초당 3회 제한)라 처음 받는 큰 워크스페이스에서는 미리 보기가 분 단위가 된다 — 넘는 페이지 안의 DB 는 알림으로 남긴다.
+ */
+export const PREVIEW_BODY_READ_BUDGET = 100;
+
 interface DiscoveryRetry {
   /** 자식 DB 를 확인하지 못한 페이지. */
   readonly parents: string[];
@@ -609,6 +615,31 @@ export class DatabaseDiscovery {
         (config) => !registry.inaccessibleIds.has(config.databaseId.replace(/-/g, "")),
       ),
     };
+  }
+
+  /**
+   * dry-run — 새로 받을 페이지의 본문을 읽어 그 안의 DB 를 찾는다({@link plannedNewDatabases} 가 그 행을 센다). 실제 pull 은
+   * 받으며 찾는다. 예전에는 읽지 않고 «미리 세지 않았습니다» 만 알렸다. {@link PREVIEW_BODY_READ_BUDGET} 개까지만 읽는다 —
+   * 넘거나 읽지 못한(다 받지 못한) 페이지는 {@link bodyRead} 가 아니어서 알림으로 남는다.
+   */
+  async readNewPageBodies(pageIds: readonly string[], signal?: AbortLike): Promise<void> {
+    if (isDatabaseMode(this.config)) return;
+    const unread = pageIds.filter((pageId) => !this.bodyRead(pageId));
+    for (const pageId of unread.slice(0, PREVIEW_BODY_READ_BUDGET)) {
+      if (signal?.aborted) return;
+      try {
+        const result = await this.notionClient.getPageMarkdown(pageId);
+        // 자리표시로 남은 블록 안에 DB 가 있을 수 있다 — 다 읽은 것으로 치지 않는다.
+        if (result.truncated || (result.unknown_block_ids ?? []).length > 0) continue;
+        this.collectInlineDbRefs(pageId, result.markdown);
+      } catch (error) {
+        getLogger().debug(
+          `[Im-Nobsidian] 미리 보기: 새 페이지 본문을 읽지 못해 안의 DB 는 받으며 찾음 (${pageId}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
   }
 
   /** 이번 pull 에서 본문을 받은 페이지인가 — 그 본문의 `<database>` 로 새 DB 를 찾았다. */

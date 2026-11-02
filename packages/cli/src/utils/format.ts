@@ -232,7 +232,9 @@ export function relinkedLines(
 export function undiscoveredDatabaseLines(undiscovered: boolean | undefined): string[] {
   if (!undiscovered) return [];
   return [
-    dimText("Notion 에 새로 생긴 페이지 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다"),
+    dimText(
+      "Notion 에 새로 생긴 페이지가 많거나 읽지 못해 그 일부 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+    ),
   ];
 }
 

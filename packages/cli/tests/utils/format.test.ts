@@ -358,7 +358,7 @@ describe("dry-run 이 미리 본 합침 · 충돌", () => {
 
   it("dry-run 이 세지 못한 새 DB 를 알린다 — 없으면 아무 줄도 없다", () => {
     expect(undiscoveredDatabaseLines(true)).toEqual([
-      "Notion 에 새로 생긴 페이지 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+      "Notion 에 새로 생긴 페이지가 많거나 읽지 못해 그 일부 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
     ]);
     expect(undiscoveredDatabaseLines(undefined)).toEqual([]);
   });

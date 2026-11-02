@@ -9,6 +9,8 @@ import {
   folderFileIdsOf,
   folderFilesOf,
   rememberFolderFileId,
+  rememberFolderFileStamp,
+  folderFilesInNote,
 } from "../../src/sync/folder-files.js";
 import { FileHandler } from "../../src/sync/file-handler.js";
 import { setLogger } from "../../src/utils/logger.js";
@@ -43,13 +45,54 @@ describe("folderFilesOf", () => {
     expect(folderFilesOf(CHILD, false)).toBeNull();
   });
 
-  it("namedOnly: 캡션이 이름과 다르면(손으로 붙인 PDF 노트) null · 이스케이프는 풀어서 견준다", () => {
+  it("namedOnly: 캡션이 이름과 다르면(손으로 붙인 PDF 노트) null · 이스케이프는 풀어서 견준다 · 표시를 단 이름도", () => {
     expect(folderFilesOf(`<pdf src="${URL_PDF}">분기 보고</pdf>`, true)).toBeNull();
     expect(folderFilesOf(`<file src="${URL_CSV}">data\\_v2.csv</file>`, true)).toHaveLength(1);
+    expect(folderFilesOf(`<file src="${URL_CSV}">📁 data\\_v2.csv</file>`, true)).toHaveLength(1);
   });
 
   it("받을 수 없는 내부 참조가 섞이면 null", () => {
     expect(folderFilesOf('<file src="file://abc">x.csv</file>', false)).toBeNull();
+  });
+});
+
+describe("folderFilesInNote", () => {
+  const url = (n: number, name: string) =>
+    `https://file.notion.so/f/f/space/0123abcd-0000-4000-8000-00000000000${n}/${name}?x=1`;
+
+  it("«📁 이름» 파일을 어디에 있든 떼고 — 글 사이 · 맨 아래 글 위(Notion 에서 맨 아래에 쓴 글) — 글과 자식은 남는다", () => {
+    const md = [
+      "글",
+      `<file src="${url(1, "a.csv")}">📁 a.csv</file>`,
+      CHILD,
+      "<empty-block/>",
+      `![📁 b.png](${url(2, "b.png")})`,
+      "Notion 에서 맨 아래에 쓴 글",
+    ].join("\n");
+    const found = folderFilesInNote(md)!;
+    expect(found.files.map((f) => f.name)).toEqual(["a.csv", "b.png"]);
+    expect(found.markdown).toBe(`글\n${CHILD}\n<empty-block/>\nNotion 에서 맨 아래에 쓴 글`);
+    expect(found.lines).toHaveLength(2);
+  });
+
+  it("표시 없이 캡션 = 이름인 파일(v0.3 의 노트 임베드)은 노트의 것이다 — 적어 둔 폴더 첨부 id 면 뗀다", () => {
+    const md = `글\n<file src="${url(1, "a.csv")}">a.csv</file>`;
+    expect(folderFilesInNote(md)).toBeNull();
+    const known = new Set(["0123abcd-0000-4000-8000-000000000001"]);
+    expect(folderFilesInNote(md, { knownIds: known })?.files).toHaveLength(1);
+  });
+
+  it("들여 쓴 줄(토글 · 목록의 자식) · 코드 펜스 안 · 글과 한 줄인 파일 · exclude 가 고른 것은 노트의 것이다", () => {
+    const a = `<file src="${url(1, "a.csv")}">📁 a.csv</file>`;
+    const b = `<file src="${url(2, "b.csv")}">📁 b.csv</file>`;
+    expect(folderFilesInNote(`<details>\n<summary>토글</summary>\n\t${a}\n</details>`)).toBeNull();
+    expect(folderFilesInNote(`\`\`\`\n${a}\n\`\`\`\n글`)).toBeNull();
+    expect(folderFilesInNote(`글 ${a}`)).toBeNull();
+    expect(
+      folderFilesInNote(`글\n${a}\n${b}`, { exclude: (f) => f.name === "b.csv" })?.files.map(
+        (f) => f.name,
+      ),
+    ).toEqual(["a.csv"]);
   });
 });
 
@@ -94,7 +137,7 @@ describe("FileHandler — 폴더 첨부", () => {
     return { vaultFs, stateDb, notion, handler };
   }
 
-  it("노트 없는 폴더는 페이지를 마련해 올리고, 캡션에 파일 이름을 적는다", async () => {
+  it("노트 없는 폴더는 페이지를 마련해 올리고, 캡션에 표시를 단 파일 이름을 적는다", async () => {
     const { stateDb, notion, handler } = setup(["proj/data.csv"]);
     const records = new Map<string, unknown>();
     stateDb.getByPath.mockImplementation((p: string) => records.get(p) ?? null);
@@ -112,7 +155,7 @@ describe("FileHandler — 폴더 첨부", () => {
     expect(results.map((r) => r.localPath)).toEqual(["proj/data.csv"]);
     const [pageId, [block]] = (notion.appendChildBlocks as ReturnType<typeof vi.fn>).mock.calls[0]!;
     expect(pageId).toBe("proj-page");
-    expect(JSON.stringify(block)).toContain('"content":"data.csv"');
+    expect(JSON.stringify(block)).toContain('"content":"📁 data.csv"');
     expect(folderFileIdsOf(stateDb as unknown as IStateDB, "proj-page").get("proj/data.csv")).toBe(
       FILE_ID,
     );
@@ -175,20 +218,83 @@ describe("FileHandler — 폴더 첨부", () => {
     expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["old-block"]]);
   });
 
-  it("폴더 노트가 있는 폴더 · 맨 위의 파일은 올리지 않고 경고로 알린다", async () => {
-    const { stateDb, notion, handler } = setup(["fn/x.csv", "top.csv"]);
+  it("폴더 노트 · 노트 이름의 폴더는 그 노트의 페이지에 올리고(ADR-056), 행의 폴더 · 맨 위는 경고로 알린다", async () => {
+    const { stateDb, notion, handler } = setup(["fn/x.csv", "nn/y.csv", "rr/z.csv", "top.csv"]);
+    const records: Record<string, unknown> = {
+      "fn/fn.md": { notionPageId: "fn-page", obsidianPath: "fn/fn.md", fileType: "folder-note" },
+      "nn.md": { notionPageId: "nn-page", obsidianPath: "nn.md", fileType: "file" },
+      "rr.md": { notionPageId: "rr-page", obsidianPath: "rr.md", fileType: "db-row" },
+    };
+    stateDb.getByPath.mockImplementation((p: string) => records[p] ?? null);
+    const ensureFolderPage = vi.fn();
+
+    const results = await handler.pushAllFiles(undefined, { ensureFolderPage });
+
+    expect(results.map((r) => r.localPath).sort()).toEqual(["fn/x.csv", "nn/y.csv"]);
+    const pages = (notion.appendChildBlocks as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([id]) => id,
+    );
+    expect(pages.sort()).toEqual(["fn-page", "nn-page"]);
+    expect(warnings.join("\n")).toContain("올리지 않은 첨부 2개");
+    expect(warnings.join("\n")).toContain("rr/z.csv");
+    expect(warnings.join("\n")).toContain("top.csv");
+  });
+
+  it("노트 페이지에 적힌 파일 가운데 폴더 첨부로 적지 않은 것(노트 임베드)은 바뀌어도 폴더 첨부로 올리지 않는다", async () => {
+    const { stateDb, notion, handler } = setup(["fn/그림.png", "fn/data.csv"]);
+    const db = stateDb as unknown as IStateDB;
     stateDb.getByPath.mockImplementation((p: string) =>
-      p === "fn"
+      p === "fn/fn.md"
         ? { notionPageId: "fn-page", obsidianPath: "fn/fn.md", fileType: "folder-note" }
         : null,
     );
-    const ensureFolderPage = vi.fn();
+    stateDb.getFileRegistry.mockImplementation((p: string) => ({
+      localPath: p,
+      notionPageId: "fn-page",
+      fileSize: 1,
+      fileHash: "old",
+    }));
+    rememberFolderFileId(db, "fn-page", "fn/data.csv", "id-1");
 
-    expect(await handler.pushAllFiles(undefined, { ensureFolderPage })).toEqual([]);
+    const results = await handler.pushAllFiles();
+
+    expect(results.map((r) => r.localPath)).toEqual(["fn/data.csv"]);
+    expect(notion.uploadFile).toHaveBeenCalledTimes(1);
+  });
+
+  it("같은 크기로 고친 폴더 첨부도 올린다 — 올린 때의 표(크기 · 수정 시각)가 다르면 내용으로 견준다", async () => {
+    const { vaultFs, stateDb, notion, handler } = setup(["proj/data.csv"]);
+    const db = stateDb as unknown as IStateDB;
+    stateDb.getByPath.mockReturnValue({
+      notionPageId: "p",
+      obsidianPath: "proj",
+      fileType: "folder-only",
+    });
+    (vaultFs.readBinary as ReturnType<typeof vi.fn>).mockResolvedValue(Buffer.from("a,b\n3,4\n"));
+    const sha = (t: string) => createHash("sha256").update(t).digest("hex");
+    stateDb.getFileRegistry.mockReturnValue({
+      notionPageId: "p",
+      fileSize: 10,
+      fileHash: sha("a,b\n1,2\n"),
+    });
+    rememberFolderFileStamp(db, "p", "proj/data.csv", "10:2026-11-01T00:00:00.000Z");
+
+    await handler.pushAllFiles();
+    expect(notion.uploadFile).toHaveBeenCalledTimes(1);
+
+    // 같은 내용이면 올리지 않고 지금 표를 적는다 — 다음에는 읽지 않는다
+    (notion.uploadFile as ReturnType<typeof vi.fn>).mockClear();
+    (vaultFs.readBinary as ReturnType<typeof vi.fn>).mockClear();
+    stateDb.getFileRegistry.mockReturnValue({
+      notionPageId: "p",
+      fileSize: 10,
+      fileHash: sha("a,b\n3,4\n"),
+    });
+    rememberFolderFileStamp(db, "p", "proj/data.csv", "10:old");
+    await handler.pushAllFiles();
+    await handler.pushAllFiles();
     expect(notion.uploadFile).not.toHaveBeenCalled();
-    expect(ensureFolderPage).not.toHaveBeenCalled();
-    expect(warnings.join("\n")).toContain("올리지 않은 첨부 2개");
-    expect(warnings.join("\n")).toContain("fn/x.csv");
+    expect(vaultFs.readBinary).toHaveBeenCalledTimes(1);
   });
 
   function receiver(body: string, local?: string) {
@@ -334,17 +440,48 @@ describe("FileHandler — 폴더 첨부", () => {
       stateDb.getFilesByPageId.mockImplementation((id: string) =>
         id === "p" ? [{ localPath: "proj/지움.csv" }, { localPath: "proj/남음.csv" }] : [],
       );
-      rememberFolderFileId(db, "p", "proj/지움.csv", "x");
+      const gone = "0123abcd-0000-4000-8000-0000000000b1";
+      rememberFolderFileId(db, "p", "proj/지움.csv", gone);
       (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
-        block("b1", "지움.csv"),
-        block("b2", "남음.csv"),
+        block(gone, "지움.csv"),
+        block("0123abcd-0000-4000-8000-0000000000b2", "남음.csv"),
+        // 그 사이 다른 볼트가 고쳐 올린 같은 이름의 블록 — 지우지 않는다
+        block("0123abcd-0000-4000-8000-0000000000b3", "지움.csv"),
       ]);
 
       await handler.pushAllFiles();
 
-      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["b1"]]);
+      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([[gone]]);
       expect(stateDb.deleteFileRegistry.mock.calls).toEqual([["proj/지움.csv"]]);
       expect(folderFileIdsOf(db, "p").has("proj/지움.csv")).toBe(false);
+    });
+
+    it("push: 노트 페이지는 폴더 첨부로 적어 둔 파일만, 그 파일 id 의 블록만 지운다 — 노트 임베드는 노트 push 가 맡는다", async () => {
+      const { stateDb, notion, handler, db } = deleting({});
+      const note = {
+        id: "r",
+        notionPageId: "n",
+        obsidianPath: "proj/proj.md",
+        fileType: "folder-note",
+      };
+      stateDb.getAll.mockReturnValue([note]);
+      stateDb.getByNotionId.mockImplementation((id: string) => (id === "n" ? note : null));
+      stateDb.getFilesByPageId.mockImplementation((id: string) =>
+        id === "n" ? [{ localPath: "proj/그림.png" }, { localPath: "proj/data.csv" }] : [],
+      );
+      rememberFolderFileId(db, "n", "proj/data.csv", "0123abcd-0000-4000-8000-0000000000a2");
+      (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
+        block("0123abcd-0000-4000-8000-0000000000a1", "data.csv"),
+        block("0123abcd-0000-4000-8000-0000000000a2", "data.csv"),
+        block("0123abcd-0000-4000-8000-0000000000a3", "그림.png"),
+      ]);
+
+      await handler.pushAllFiles();
+
+      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([
+        ["0123abcd-0000-4000-8000-0000000000a2"],
+      ]);
+      expect(stateDb.deleteFileRegistry.mock.calls).toEqual([["proj/data.csv"]]);
     });
 
     it("push: deleteSync 가 꺼져 있으면 지우지 않는다", async () => {
