@@ -8,7 +8,8 @@
  *   멘션에 블록을 붙이면 블록 id 를 페이지 id 로 바꿔 버린다 — 그래서 늘 글자 링크로 보낸다.
  * - 본문을 통째로 바꿔도(`replace_content`) 그대로인 블록 · 고친 문단의 id 는 남는다(2026-10-30 실측). 대상 페이지를
  *   다시 올려도 링크가 끊기지 않는다.
- * - 페이지의 맨 위 블록만 본다 — 콜아웃 · 토글 · 목록 자식 속 제목 · 블록 id 는 찾지 않는다(링크를 글자로 남긴다).
+ * - 맨 위 블록에서 못 찾으면 콜아웃 · 토글 · 목록 자식 속까지 문서 순서로 찾는다. pull 은 블록을 id 로 바로 읽어
+ *   깊이와 상관없다.
  */
 import { compactNotionId, notionPageUrl } from "../utils/id.js";
 import { LookbehindRegExp, notAfter } from "../utils/lookbehind.js";
@@ -117,6 +118,23 @@ export function anchorBlockOf(block: {
     text: (body?.rich_text ?? []).map((t) => t.plain_text ?? "").join(""),
   };
 }
+
+/**
+ * 블록 트리를 문서 순서(앞 블록 · 그 자식 · 다음 블록)로 편다 — `가#나` 처럼 앞 제목부터 차례로 찾는 앵커가 Obsidian 과
+ * 같은 순서로 보게.
+ */
+export function flattenBlockTree<T extends { readonly children?: readonly T[] }>(
+  blocks: readonly T[],
+): T[] {
+  return blocks.flatMap((block) => [block, ...flattenBlockTree(block.children ?? [])]);
+}
+
+/**
+ * 블록 링크로 풀지 못한 까닭 — 위키링크 보존 마커의 `anchor` 에 적어, push 뒤 패스(`push-link-pass`)가 다시 보낼 노트를
+ * 고른다. `page`: 대상 페이지가 아직 없었다(같은 push 에서 뒤에 만든 노트 · 새 노트의 `[[#제목]]`). `block`: 페이지는
+ * 있지만 그 블록이 없었다.
+ */
+export type AnchorMiss = "page" | "block";
 
 /** `#` 가 든 위키링크(임베드 아님)의 대상 — 그룹 1. 표 칸의 `\|` 별칭 구분자를 받는다. */
 const ANCHORED_WIKILINK_RE = new LookbehindRegExp(

@@ -900,7 +900,7 @@ export class SyncOrchestrator {
           );
         }
       };
-      const relinkable = notesWithResolvableWikilinks(this.stateDb).filter(
+      const relinkable = notesWithResolvableWikilinks(this.stateDb, pushedBodies).filter(
         (path) => inAnyPathScope(path, options?.paths) && !excludeSet?.has(path),
       );
       await runPool(relinkable, relink, {
