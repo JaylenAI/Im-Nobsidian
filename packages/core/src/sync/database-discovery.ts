@@ -20,6 +20,8 @@ import type { VaultFS } from "./vault-fs.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import {
   DISCOVERED_DBS_META_KEY,
+  DISCOVERY_SCANNED_META_KEY,
+  discoveryScanPending,
   ROOT_DATABASES_FOLDER,
   INACCESSIBLE_DBS_META_KEY,
   LINKED_DBS_META_KEY,
@@ -45,14 +47,6 @@ type DiscoveredDbOutcome =
  * DB 행 조회 실패는 여기 두지 않는다 — 그 DB 는 캐시에 남아 다음 pull 이 다시 받는다.
  */
 const DISCOVERY_RETRY_META_KEY = "discovery_retry";
-
-/**
- * 하위 DB 블록 스캔을 마친 시각을 두는 상태 메타 키. 스캔은 추적 페이지마다 요청 1회라 처음 한 번만
- * 한다 — 그 뒤에 생긴 DB 는 받은 페이지의 본문(`<database>` 태그)으로 찾는다. 예전에는 «발견한 DB
- * 캐시가 비었는가» 로 가려, DB 가 하나도 없는 볼트는 원격이 그대로여도 pull 마다 모든 페이지를 다시
- * 훑었다.
- */
-const DISCOVERY_SCANNED_META_KEY = "discovery_scanned_at";
 
 interface DiscoveryRetry {
   /** 자식 DB 를 확인하지 못한 페이지. */
@@ -301,9 +295,7 @@ export class DatabaseDiscovery {
       //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
       //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다. 캐시가 찬 볼트는 이 표시가
       //     생기기 전에 훑었다 — 다시 훑지 않는다.
-      const scanAll =
-        forceRediscovery ||
-        (dbConfigs.length === 0 && !this.stateDb.getMeta(DISCOVERY_SCANNED_META_KEY));
+      const scanAll = forceRediscovery || discoveryScanPending(this.stateDb);
       if (signal?.aborted) {
         // 취소했으면 훑지 않는다 — 페이지마다 요청 1회라 첫 pull 에서는 분 단위다. 다시 볼 것은
         // 그대로 남긴다(캐시가 비어 있으면 다음 pull 이 처음부터 훑는다).

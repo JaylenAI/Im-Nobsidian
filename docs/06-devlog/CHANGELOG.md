@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.19.1] - 2026-11-02
+
+> 미리 보기가 세지 못한 것을 알린다 — 계약을 바꾸지 않는 패치다(`--json` 에 필드 하나를 더한다).
+
+### Fixed
+
+- **dry-run 이 새로 찾을 DB 의 행을 말없이 빠뜨리던 것** — 상태 DB 를 잃은 볼트(찾아 둔 DB 목록도 함께 잃는다) · 새로 받을 페이지 안의
+  DB 는 받아 봐야 찾는다. 미리 보기가 그 행을 세지 않아 실제 pull 보다 적게 보였다(npm 0.19.0 smoke: 다시 이을 노트 5 · 실제 8).
+  이제 「새로 찾을 Notion DB 의 행은 미리 세지 않았습니다」 를 적는다 — CLI · `--json`(`undiscoveredDatabases`) · 플러그인 미리
+  보기 「그 밖에」
+
 ## [0.19.0] - 2026-11-02
 
 > 제목 링크가 같은 push 의 새 노트 · 콜아웃 · 목록 속 제목까지 한 번에 Notion 블록 링크가 되고(P14 · ADR-055), 상태 DB 를 잃은

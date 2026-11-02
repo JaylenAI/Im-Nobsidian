@@ -110,6 +110,22 @@ describe("previewSections", () => {
     ]);
   });
 
+  it("dry-run 이 세지 못한 새 DB 는 「그 밖에」 로 알린다", () => {
+    const sections = previewSections({
+      result: result({ pull: { undiscoveredDatabases: true } }),
+      items: [],
+    });
+    expect(sections).toEqual([
+      {
+        heading: "그 밖에",
+        lines: [
+          "새로 찾을 Notion DB(처음 받는 볼트 · 새 페이지 안의 DB)의 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+        ],
+        problem: false,
+      },
+    ]);
+  });
+
   it("많으면 줄이고 남은 수를 적는다", () => {
     const items = Array.from({ length: LISTED_PATHS + 2 }, (_, n) =>
       item(`n${n}.md`, "create", "push"),

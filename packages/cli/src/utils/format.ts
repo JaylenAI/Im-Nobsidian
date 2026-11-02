@@ -227,6 +227,19 @@ export function relinkedLines(
 }
 
 /**
+ * dry-run 이 세지 못한 것 — 이번 pull 이 새로 찾을 DB(처음 훑는 볼트 · 새로 받을 페이지 안의 DB)의 행. 세지 못한 것을 없다고
+ * 읽지 않게 알린다.
+ */
+export function undiscoveredDatabaseLines(undiscovered: boolean | undefined): string[] {
+  if (!undiscovered) return [];
+  return [
+    dimText(
+      "새로 찾을 Notion DB(처음 받는 볼트 · 새 페이지 안의 DB)의 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+    ),
+  ];
+}
+
+/**
  * merge 전략이 받은 원격에 로컬 편집을 합친 노트 · 행. pull 만 했으면 합친 글은 아직 볼트에만 있다 — push 가 올린다.
  * sync 는 같은 실행의 push 가 올린다.
  */
