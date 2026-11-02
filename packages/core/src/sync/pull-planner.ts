@@ -194,7 +194,7 @@ export class PullPlanner {
       rows.filter(
         (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
       ).length;
-    // 본문을 읽지 못한 새 페이지(읽는 수를 넘었거나 실패) 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고
+    // 본문을 읽지 못한 새 페이지(Markdown API · 블록 둘 다 실패) 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고
     // 하지 않는다.
     const undiscoveredDatabases =
       !isDatabaseMode(this.config) &&
