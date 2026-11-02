@@ -66,6 +66,13 @@ export interface FolderPageProvider {
   ensureFolderPage(folder: string): Promise<void>;
 }
 
+/** 블록 트리를 펼친 목록 — 맨 위부터 깊이 순서로. */
+function flattenBlockTree<T extends { readonly id: string; readonly type: string; children?: T[] }>(
+  blocks: readonly T[],
+): T[] {
+  return blocks.flatMap((block) => [block, ...flattenBlockTree(block.children ?? [])]);
+}
+
 /** 점으로 시작하는 폴더 · 파일 안인가 — Obsidian 이 보이지 않는 것(`.obsidian` · 상태 폴더)은 첨부가 아니다. */
 function isHiddenPath(path: string): boolean {
   return path.split("/").some((part) => part.startsWith("."));
@@ -758,23 +765,27 @@ export class FileHandler {
     const record = this.stateDb.getByNotionId(pageId);
     const onNote = record !== null && !isFolderRecord(record);
     const fileId = folderFileIdsOf(this.stateDb, pageId).get(localPath);
-    for (const block of await this.notionClient.fetchAllChildren(pageId)) {
-      if (block.id === keep) continue;
+    const isOlder = (block: { readonly id: string; readonly type: string }): boolean => {
+      if (block.id === keep) return false;
       const media = uploadedFileOfBlock(block);
-      const url = media?.url;
-      if (!url || uploadedFileNameFromUrl(url) !== name) continue;
+      if (!media || uploadedFileNameFromUrl(media.url) !== name) return false;
       if (keep === undefined && fileId !== undefined) {
         // 지우기는 적어 둔 그 파일의 블록만 — 그 사이 다른 볼트가 고쳐 올린 블록(다른 id)까지 지우면 그 고침이 사라진다.
         // 남긴 블록은 다음 pull 이 다시 받는다.
-        if (notionFileIdOf(url) !== fileId) continue;
-      } else if (onNote) {
-        const ours =
-          (fileId !== undefined && notionFileIdOf(url) === fileId) ||
-          media.caption === folderFileCaption(name);
-        if (!ours) continue;
+        return notionFileIdOf(media.url) === fileId;
       }
-      await this.notionClient.deleteBlock(block.id);
+      if (!onNote) return true;
+      return (
+        (fileId !== undefined && notionFileIdOf(media.url) === fileId) ||
+        media.caption === folderFileCaption(name)
+      );
+    };
+    let older = (await this.notionClient.fetchAllChildren(pageId)).filter(isOlder);
+    if (older.length === 0 && onNote) {
+      // Notion 에서 토글 · 콜아웃 안으로 옮긴 폴더 첨부 — 맨 위에 없으면 안까지 본다. 드문 길이라 그때만 트리를 읽는다.
+      older = flattenBlockTree(await this.notionClient.getBlockTree(pageId)).filter(isOlder);
     }
+    for (const block of older) await this.notionClient.deleteBlock(block.id);
   }
 
   /**

@@ -51,7 +51,13 @@ import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
-import { folderFileIdsOf, folderFilesInNote, isFolderFileBlock } from "./folder-files.js";
+import { fileUrlOfBlock, notionFileIdOf } from "../utils/notion-file-url.js";
+import {
+  folderFileIdsOf,
+  folderFilesInNote,
+  forgetFolderFileId,
+  isFolderFileBlock,
+} from "./folder-files.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
@@ -1870,7 +1876,7 @@ export class PagePusher {
       );
     }
 
-    const folderFiles = this.folderFileBlocks(existingBlocks, pageId);
+    const folderFiles = this.folderFileBlocks(existingBlocks, pageId, notePath);
     const { nfm, blocks } = blockModeBody(markdownContent);
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(
@@ -1909,13 +1915,30 @@ export class PagePusher {
   /**
    * 블록 방식으로 바꿀 본문에서 남길 폴더 첨부 블록(ADR-056) — 맨 위 블록 가운데 {@link isFolderFileBlock}. 예전에는 함께 지우고
    * 기록을 놓아 노트를 고칠 때마다 폴더 첨부를 다시 올렸다.
+   *
+   * 맨 위에 없는 폴더 첨부(Notion 에서 토글 안으로 옮긴 것)는 그 토글과 함께 지워진다 — 기록을 놓아 이어지는 첨부 push 가
+   * 페이지 끝에 다시 올리게 한다. 두면 볼트의 기록만 남아 다음 pull 이 Notion 에서 지운 파일로 본다.
    */
   private folderFileBlocks(
     blocks: ReadonlyArray<{ readonly id: string; readonly type: string }>,
     pageId: string,
+    notePath: string,
   ): Set<string> {
-    const ids = new Set(folderFileIdsOf(this.stateDb, pageId).values());
-    return new Set(blocks.filter((block) => isFolderFileBlock(block, ids)).map((b) => b.id));
+    const recorded = folderFileIdsOf(this.stateDb, pageId);
+    const ids = new Set(recorded.values());
+    const kept = blocks.filter((block) => isFolderFileBlock(block, ids));
+    const keptIds = new Set(kept.map((block) => notionFileIdOf(fileUrlOfBlock(block) ?? "")));
+    const lost = [...recorded].filter(([, fileId]) => !keptIds.has(fileId));
+    for (const [localPath] of lost) {
+      this.stateDb.deleteFileRegistry(localPath);
+      forgetFolderFileId(this.stateDb, pageId, localPath);
+    }
+    if (lost.length > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] 블록 방식으로 본문을 바꾸며 맨 위에 없던 폴더 첨부 ${lost.length}개를 다시 올림 (${notePath})`,
+      );
+    }
+    return new Set(kept.map((block) => block.id));
   }
 
   /**

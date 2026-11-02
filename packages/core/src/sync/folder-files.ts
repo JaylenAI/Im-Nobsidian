@@ -106,15 +106,16 @@ export interface NoteFolderFiles {
   readonly lines: readonly string[];
 }
 
-/** 코드 펜스 줄 — 그 안의 줄은 글이다. */
-const FENCE_RE = /^(`{3,}|~{3,})/;
+/** 코드 펜스 줄 — 그 안의 줄은 글이다. 토글 · 목록 안의 펜스는 들여 쓴다. */
+const FENCE_RE = /^\s*(`{3,}|~{3,})/;
 
 /**
  * 노트 페이지의 폴더 첨부 — 폴더 노트가 있는 폴더(`X/X.md`)와 노트 이름의 폴더(`X.md` 옆 `X/`)의 파일은 그 노트의 페이지
- * 끝에 붙는다(ADR-056). 맨 바깥 줄 하나가 통째로 파일 하나이고, 표시({@link FOLDER_FILE_MARK})를 단 캡션이거나 이 페이지의
+ * 끝에 붙는다(ADR-056). 줄 하나가 통째로 파일 하나이고, 표시({@link FOLDER_FILE_MARK})를 단 캡션이거나 이 페이지의
  * 폴더 첨부로 적어 둔 파일(`knownIds` — 표시 이전에 폴더 페이지에 올린 것이 그 페이지가 폴더 노트가 되어 남았다)이면 뗀다.
- * 끝자리만 보지 않는다 — Notion 에서 페이지 맨 아래에 글을 쓰면 그 글이 파일 뒤에 붙는다. 둘 다 아니면(캡션 = 이름인 v0.3 의
- * 노트 임베드 등) 노트의 것이다. 들여 쓴 줄(토글 · 목록의 자식)과 코드 펜스 안은 보지 않는다.
+ * 끝자리만 보지 않는다 — Notion 에서 페이지 맨 아래에 글을 쓰면 그 글이 파일 뒤에 붙는다. 들여 쓴 줄(Notion 에서 토글 · 콜아웃
+ * 안으로 옮긴 블록)도 뗀다 — 예전에는 노트의 임베드로 받아 받은 그림 폴더에 사본이 생겼다. 둘 다 아니면(캡션 = 이름인 v0.3 의
+ * 노트 임베드 등) 노트의 것이다. 코드 펜스 안은 보지 않는다. `lines` 는 들여쓰기를 뺀 줄이다 — push 가 페이지 끝에 되싣는다.
  *
  * @param exclude 폴더 첨부여도 노트의 것으로 볼 파일 — 로컬 노트가 임베드한 이름 등
  * @returns 폴더 첨부가 없으면 null
@@ -138,7 +139,7 @@ export function folderFilesInNote(
       return;
     }
     if (fence !== null) return;
-    const full = line.trimEnd();
+    const full = line.trim();
     const [span, ...more] = notionMediaSpans(full);
     if (!span || more.length > 0 || span.full !== full || !/^https?:\/\//.test(span.url)) return;
     const name = uploadedFileNameFromUrl(span.url);
