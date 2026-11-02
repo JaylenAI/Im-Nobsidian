@@ -437,21 +437,16 @@ export async function obsidianFetch(
     }
   }
 
-  return requestUrl({ url, method, headers, body, throw: false }).then((resp) => {
-    const contentType = (
-      resp.headers["content-type"] ??
-      resp.headers["Content-Type"] ??
-      ""
-    ).toLowerCase();
-    if (contentType.includes("application/json") || contentType.includes("text/")) {
-      return new Response(JSON.stringify(resp.json), {
+  // 받은 바이트 그대로 — JSON 은 받는 쪽이 읽는다. 예전에는 `text/*` 도 JSON 으로 읽어 글 첨부(.txt · .html)를 받지
+  // 못했다(2026-11-02 실측: 상태 DB 를 잃은 볼트의 미리 보기가 그 노트를 충돌로 셌다).
+  return requestUrl({ url, method, headers, body, throw: false }).then(
+    (resp) =>
+      new Response(NULL_BODY_STATUSES.has(resp.status) ? null : resp.arrayBuffer, {
         status: resp.status,
         headers: new Headers(resp.headers),
-      });
-    }
-    return new Response(resp.arrayBuffer, {
-      status: resp.status,
-      headers: new Headers(resp.headers),
-    });
-  });
+      }),
+  );
 }
+
+/** 본문을 실을 수 없는 응답 — `Response` 가 본문을 주면 던진다. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);

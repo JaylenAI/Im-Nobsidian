@@ -5,15 +5,26 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const sent: { url: string; method: string; headers: Record<string, string>; body: unknown }[] = [];
+// 다음 응답 — 시험이 바꾼다. 없으면 JSON `{"ok":true}`.
+let reply: { status: number; contentType: string; text: string } | null = null;
 vi.mock("obsidian", async (importOriginal) => ({
   ...(await importOriginal<object>()),
   requestUrl: vi.fn(async (request: (typeof sent)[number]) => {
     sent.push(request);
-    return {
+    const { status, contentType, text } = reply ?? {
       status: 200,
-      json: { ok: true },
-      headers: { "content-type": "application/json" },
-      arrayBuffer: new ArrayBuffer(0),
+      contentType: "application/json",
+      text: '{"ok":true}',
+    };
+    return {
+      status,
+      headers: { "content-type": contentType },
+      arrayBuffer: new TextEncoder().encode(text).buffer,
+      text,
+      // requestUrl 의 json 은 글을 JSON 으로 읽는다 — JSON 이 아니면 던진다.
+      get json() {
+        return JSON.parse(text);
+      },
     };
   }),
 }));
@@ -22,6 +33,7 @@ const { obsidianFetch } = await import("../../src/connection/connection-engine.j
 
 beforeEach(() => {
   sent.splice(0);
+  reply = null;
 });
 
 describe("obsidianFetch", () => {
@@ -76,5 +88,27 @@ describe("obsidianFetch", () => {
       headers: { "content-type": "application/json" },
       body: '{"a":1}',
     });
+  });
+
+  it("JSON 응답은 json() 으로 읽는다", async () => {
+    const response = await obsidianFetch("https://api.notion.com/v1/pages/x");
+    expect(await response.json()).toEqual({ ok: true });
+  });
+
+  it("글 첨부(text/*)는 받은 바이트 그대로 — JSON 으로 읽지 않는다", async () => {
+    reply = { status: 200, contentType: "text/plain; charset=utf-8", text: "첨부 글\n" };
+    const text = await obsidianFetch("https://prod-files-secure.s3.amazonaws.com/x/memo.txt");
+    expect(await text.text()).toBe("첨부 글\n");
+    reply = { status: 200, contentType: "text/html", text: "<!doctype html><p>차트</p>\n" };
+    const html = await obsidianFetch("https://prod-files-secure.s3.amazonaws.com/x/chart.html");
+    expect(new TextDecoder().decode(await html.arrayBuffer())).toBe("<!doctype html><p>차트</p>\n");
+  });
+
+  it("본문이 없는 응답(204)도 Response 로 돌려준다", async () => {
+    reply = { status: 204, contentType: "", text: "" };
+    const response = await obsidianFetch("https://api.notion.com/v1/blocks/x", {
+      method: "DELETE",
+    });
+    expect(response.status).toBe(204);
   });
 });
