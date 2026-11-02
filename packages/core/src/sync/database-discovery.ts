@@ -35,6 +35,9 @@ import { within } from "./note-relocation.js";
 import { isMarkdownPath, stripMarkdownExtension } from "../utils/markdown-path.js";
 import { pathKey } from "../utils/path-key.js";
 
+/** 페이지 → 볼트 경로. dry-run 은 새로 받을 페이지의 자리를 Notion 에서 짚어 보므로 기다릴 수 있다. */
+type NotePathOf = (pageId: string) => string | null | Promise<string | null>;
+
 /** 자동 발견된 DB 설정 빌드 결과 — 동기화 가능/linked 해소/접근 불가/일시 오류를 구분한다. */
 type DiscoveredDbOutcome =
   | { kind: "ok"; config: DiscoveredDbConfig }
@@ -352,7 +355,8 @@ export class DatabaseDiscovery {
    * `markScanned` 일 때 적는다.
    *
    * @param failed 읽지 못한 페이지 · DB — 이유와 함께 싣는다.
-   * @param options.notePathOf 페이지 → 볼트 경로. 새 DB 폴더를 부모 노트 옆에 둔다 — dry-run 은 다시 이을 노트의 자리를 준다.
+   * @param options.notePathOf 페이지 → 볼트 경로. 새 DB 폴더를 부모 노트 옆에 둔다 — dry-run 은 다시 이을 노트 · 새로 받을 페이지의
+   *   자리를 준다.
    */
   private async openRegistry(
     failed: FailedOperation[],
@@ -361,7 +365,7 @@ export class DatabaseDiscovery {
       readonly rescanRoot?: boolean;
       readonly signal?: AbortLike;
       readonly markScanned: boolean;
-      readonly notePathOf?: (pageId: string) => string | null;
+      readonly notePathOf?: NotePathOf;
     },
   ): Promise<DiscoveryRegistry> {
     const { forceRediscovery, signal } = options;
@@ -589,7 +593,7 @@ export class DatabaseDiscovery {
     failed: FailedOperation[],
     options: {
       readonly rescanRoot: boolean;
-      readonly notePathOf: (pageId: string) => string | null;
+      readonly notePathOf: NotePathOf;
     },
   ): Promise<{
     readonly found: readonly DiscoveredDbConfig[];
@@ -724,8 +728,7 @@ export class DatabaseDiscovery {
   private async buildDiscoveredDbConfig(
     dbId: string,
     parentPageId: string,
-    notePathOf: (pageId: string) => string | null = (pageId) =>
-      this.stateDb.getByNotionId(pageId)?.obsidianPath ?? null,
+    notePathOf: NotePathOf = (pageId) => this.stateDb.getByNotionId(pageId)?.obsidianPath ?? null,
   ): Promise<DiscoveredDbOutcome> {
     let dbTitle: string;
     try {
@@ -761,7 +764,7 @@ export class DatabaseDiscovery {
       return { kind: "error", error: error instanceof Error ? error.message : String(error) };
     }
 
-    const obsPath = parentPageId ? notePathOf(parentPageId) : null;
+    const obsPath = parentPageId ? await notePathOf(parentPageId) : null;
     let parentFolder = "";
     if (obsPath) {
       if (isMarkdownPath(obsPath)) {

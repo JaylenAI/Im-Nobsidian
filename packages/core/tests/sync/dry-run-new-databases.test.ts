@@ -200,6 +200,31 @@ describe("dry-run 이 새로 찾을 DB 의 행", () => {
     expect(planned.created).toBe(3);
   });
 
+  it("새 페이지 안의 DB 행은 실제 pull 이 받을 자리(새 페이지 옆)로 보인다 — databases/ 아래가 아니다", async () => {
+    const INNER = "db000000-0000-4000-8000-0000000000d5";
+    notion.client.getChildDatabaseIds.mockResolvedValue([]);
+    notion.add(INNER, "I1", "안의 행", {});
+    const hub = notion.add(ROOT, "Hub", "허브").id;
+    notion.add(
+      hub,
+      "Inside",
+      `안쪽\n\n<database url="https://www.notion.so/${INNER.replace(/-/g, "")}" inline="true">Inner</database>`,
+    );
+    notion.client.getDatabaseSyncability.mockResolvedValue({ title: "Inner", queryable: true });
+    const { orchestrator } = open();
+    const shown: string[] = [];
+
+    await orchestrator.pull({
+      dryRun: true,
+      onProgress: (_current, _total, item) => shown.push(item.path),
+    });
+    await orchestrator.pull();
+    const row = [...vault.files.keys()].find((path) => path.endsWith("/I1.md"));
+    expect(row).toBeDefined();
+    expect(row!.startsWith("Hub/")).toBe(true);
+    expect(shown).toContain(row);
+  });
+
   it("새 페이지가 많아도(150) 모두 읽어 그 안의 DB 행을 실제 pull 과 같이 센다 · 알리지 않는다", async () => {
     const INNER = "db000000-0000-4000-8000-0000000000d4";
     notion.client.getChildDatabaseIds.mockResolvedValue([]);
