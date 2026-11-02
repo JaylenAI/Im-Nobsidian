@@ -225,6 +225,56 @@ describe("노트가 품은 폴더의 파일 왕복", () => {
     expect(a.vault.read("X/X.md")).not.toContain("data.csv");
   });
 
+  it("한 볼트가 지우는 사이 다른 볼트가 고친 폴더 첨부 — 고친 쪽이 받기 전이면 지우지 않고, 다음 push 가 다시 올린다", async () => {
+    const a = await seeded();
+    at("10:03:05");
+    const b = device();
+    await b.sync.pull();
+
+    at("10:05:05");
+    a.vault.files.delete("N/sheet.csv");
+    expect((await a.sync.push()).failed).toEqual([]);
+    b.vault.write("N/sheet.csv", "x\nedited by B\n");
+
+    at("10:07:05");
+    await b.sync.pull();
+    expect(b.vault.read("N/sheet.csv")).toBe("x\nedited by B\n");
+    expect((await b.sync.push()).failed).toEqual([]);
+    expect(pageOf("N").body.match(/📁 sheet\.csv/g)).toHaveLength(1);
+
+    at("10:09:05");
+    await a.sync.pull();
+    expect(a.vault.read("N/sheet.csv")).toBe("x\nedited by B\n");
+  });
+
+  for (const [where, path, page] of [
+    ["노트 페이지", "N/sheet.csv", "N"],
+    ["폴더 페이지", "P/p.csv", "P"],
+  ] as const) {
+    it(`한 볼트가 고치는 사이 다른 볼트가 지운 폴더 첨부(${where}) — 고친 것이 Notion 에 남고, 지운 볼트가 다시 받는다`, async () => {
+      const a = device();
+      at("10:00:05");
+      a.vault.write("N.md", "노트 글\n");
+      a.vault.write("N/sheet.csv", "x\n");
+      a.vault.write("P/p.csv", "x\n");
+      expect((await a.sync.push()).failed).toEqual([]);
+      at("10:03:05");
+      const b = device();
+      await b.sync.pull();
+
+      at("10:05:05");
+      a.vault.write(path, "x\nedited by A\n");
+      expect((await a.sync.push()).failed).toEqual([]);
+      b.vault.files.delete(path);
+      expect((await b.sync.push()).failed).toEqual([]);
+      expect(pageOf(page).body.split(path.slice(2)).length - 1).toBeGreaterThan(0);
+
+      at("10:07:05");
+      await b.sync.pull();
+      expect(b.vault.read(path)).toBe("x\nedited by A\n");
+    });
+  }
+
   for (const deleteSync of [true, false]) {
     it(`폴더 이름을 바꿔도(deleteSync ${deleteSync}) 파일 블록은 하나씩 · 다른 볼트는 새 폴더에만 받는다`, async () => {
       const a = device(deleteSync);
