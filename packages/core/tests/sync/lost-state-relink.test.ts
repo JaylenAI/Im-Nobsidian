@@ -363,8 +363,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const pulled = await orchestrator.pull({ dryRun: true });
     expect(pulled.relinkPending).toBe(true);
     expect(pulled.created).toBe(0);
-    // 찾아 둔 DB 목록도 상태 DB 와 함께 잃었다 — 받으며 다시 찾을 DB 의 행은 세지 못했다고 알린다.
-    expect(pulled.undiscoveredDatabases).toBe(true);
+    // 찾아 둔 DB 목록도 상태 DB 와 함께 잃었다 — 루트를 훑고 다시 이을 노트의 본문을 읽어 새 DB 를 찾는다. 세지 못한 것이 없다.
+    expect(pulled.undiscoveredDatabases).toBeUndefined();
     const planned = [...(pulled.relinkedPaths ?? [])].sort();
     expect(planned).toEqual(["A.md", "Tasks/R.md", "dir/B.md", "dir/dir.md"]);
     const synced = await orchestrator.sync({ dryRun: true });
@@ -402,6 +402,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const planned = await orchestrator.pull({ dryRun: true });
     expect([...(planned.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(planned.created).toBe(1);
+    // Notion 에만 있는 새 페이지는 본문을 읽지 않았다 — 그 안의 DB 는 받아 봐야 안다.
+    expect(planned.undiscoveredDatabases).toBe(true);
     const real = await orchestrator.pull();
     expect([...(real.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(real.created).toBe(planned.created);
@@ -425,8 +427,67 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const linked = await orchestrator.pull({ dryRun: true });
     expect(linked.relinkedPaths).toBeUndefined();
     expect(linked.created).toBe(1);
-    // 새로 받을 페이지 안의 DB 는 받아 봐야 안다.
-    expect(linked.undiscoveredDatabases).toBe(true);
+    // 같은 자리의 B.md 와 견주려 본문을 읽었다 — 그 안의 DB 도 찾았다.
+    expect(linked.undiscoveredDatabases).toBeUndefined();
     expect((await orchestrator.pull()).created).toBe(1);
+  });
+
+  it("dry-run 은 받은 글과 견줘 충돌로 남을 노트 · 행을 미리 알린다 — 실제 pull 의 충돌과 같다", async () => {
+    await syncedThenLost();
+    vault.write("A.md", "가 로컬에서 고침\n");
+    vault.write("Tasks/R.md", "행 로컬에서 고침\n");
+    const before = [...vault.files.keys()].sort();
+    const { db, orchestrator } = open();
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    const conflictPaths = (result: { conflicts: readonly { localChange: { path: string } }[] }) =>
+      result.conflicts.map((c) => c.localChange.path).sort();
+    expect(conflictPaths(planned)).toEqual(["A.md", "Tasks/R.md"]);
+    expect(planned.conflicts.every((c) => c.baseContent === null)).toBe(true);
+    expect(planned.created).toBe(0);
+    expect(db.getAll()).toHaveLength(0);
+    expect([...vault.files.keys()].sort()).toEqual(before);
+
+    const real = await orchestrator.pull();
+    expect(conflictPaths(real)).toEqual(conflictPaths(planned));
+    expect([...(real.relinkedPaths ?? [])].sort()).toEqual(
+      [...(planned.relinkedPaths ?? [])].sort(),
+    );
+  });
+
+  it("dry-run — 이은 볼트의 자연 이름 같은 글은 잇는 것으로 · 다른 글은 생성으로 실제 pull 과 같이 센다", async () => {
+    const { orchestrator } = open();
+    vault.write("A.md", "가\n");
+    await orchestrator.push();
+    at("10:01:00");
+    notion.add("root-page-id", "B", "같은 글");
+    vault.write("B.md", "같은 글\n");
+    notion.add("root-page-id", "D", "원격 D");
+    vault.write("D.md", "로컬 D\n");
+    at("10:02:00");
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect(planned.relinkedPaths).toEqual(["B.md"]);
+    expect(planned.created).toBe(1);
+    expect(planned.conflicts).toHaveLength(0);
+    const real = await orchestrator.pull();
+    expect(real.relinkedPaths).toEqual(["B.md"]);
+    expect(real.created).toBe(1);
+  });
+
+  it("dry-run — 이 페이지 id 를 단 이름의 다른 글을 remote-first 는 덮는 것으로 · 충돌 없이 센다", async () => {
+    const page = notion.add("root-page-id", "C", "원격 C");
+    const own = `C (${page.id.replace(/-/g, "").slice(0, 8)}).md`;
+    vault.write("C.md", "다른 C\n");
+    vault.write(own, "로컬로 고친 C\n");
+    const { orchestrator } = open({ conflictStrategy: "remote-first" });
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect(planned.relinkedPaths).toEqual([own]);
+    expect(planned.conflicts).toHaveLength(0);
+    expect(vault.read(own)).toBe("로컬로 고친 C\n");
+    const real = await orchestrator.pull();
+    expect(real.relinkedPaths).toEqual([own]);
+    expect(vault.read(own)).toContain("원격 C");
   });
 });

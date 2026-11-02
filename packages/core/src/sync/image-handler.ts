@@ -602,6 +602,33 @@ export class ImageHandler {
     return this.customFetch ?? globalThis.fetch;
   }
 
+  /** {@link preview} 안에서 도는 중인 렌더 수 — 0 보다 크면 받은 미디어를 볼트에 쓰지 않고 상태 DB 에 적지 않는다. */
+  private previewDepth = 0;
+
+  /**
+   * 받기를 미리 본다(dry-run) — 미디어를 실제 pull 처럼 받아 이름(내용 해시)과 임베드를 정하되 볼트에 쓰지 않고 상태 DB 에
+   * 적지 않는다. 받지 않고 렌더하면 미디어가 원격 주소로 남아, 받은 글을 볼트의 노트와 견줄 수 없다.
+   */
+  async preview<T>(run: () => Promise<T>): Promise<T> {
+    this.previewDepth++;
+    try {
+      return await run();
+    } finally {
+      this.previewDepth--;
+    }
+  }
+
+  private get previewing(): boolean {
+    return this.previewDepth > 0;
+  }
+
+  /** 받은 파일을 볼트에 쓴다 — 미리 보기에서는 쓰지 않는다({@link preview}). */
+  private async writeDownload(localPath: string, buffer: Buffer): Promise<void> {
+    if (this.previewing) return;
+    await this.vaultFs.ensureFolder(this.attachmentFolder);
+    await this.vaultFs.writeBinary(localPath, buffer);
+  }
+
   /** 상한 로직은 첨부 경로와 공유한다 — 한쪽만 빠뜨리지 않도록(utils/download-fetch). */
   private fetchForDownload(url: string): ReturnType<typeof globalThis.fetch> {
     return fetchForDownload(this.fetchFn, url, this.downloadTimeoutMs);
@@ -683,8 +710,7 @@ export class ImageHandler {
   }
 
   private async persistImage(fetched: FetchedImage): Promise<ImageDownloadResult> {
-    await this.vaultFs.ensureFolder(this.attachmentFolder);
-    await this.vaultFs.writeBinary(fetched.localPath, fetched.buffer);
+    await this.writeDownload(fetched.localPath, fetched.buffer);
     return {
       originalUrl: fetched.originalUrl,
       localPath: fetched.localPath,
@@ -773,7 +799,7 @@ export class ImageHandler {
         }
         if (localHash !== remoteHash) continue;
         const fileId = notionFileIdOf(span.url);
-        if (fileId && this.stateDb) {
+        if (fileId && this.stateDb && !this.previewing) {
           rememberReceivedMedia(this.stateDb, pageId, [
             { fileId, target, localPath: candidate, fileHash: remoteHash },
           ]);
@@ -1363,7 +1389,7 @@ export class ImageHandler {
     received: ReadonlyArray<UploadedMedia | null>,
   ): void {
     const media = received.filter((item): item is UploadedMedia => item !== null);
-    if (!pageId || !this.stateDb || media.length === 0) return;
+    if (!pageId || !this.stateDb || media.length === 0 || this.previewing) return;
     try {
       rememberReceivedMedia(this.stateDb, pageId, media);
     } catch (error) {
@@ -1668,8 +1694,7 @@ export class ImageHandler {
           };
         }
 
-        await this.vaultFs.ensureFolder(this.attachmentFolder);
-        await this.vaultFs.writeBinary(localPath, buffer);
+        await this.writeDownload(localPath, buffer);
 
         return { originalUrl: url, localPath, hash, size: buffer.length, fileHash, name };
       } catch (error) {

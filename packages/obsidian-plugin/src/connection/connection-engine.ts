@@ -437,21 +437,41 @@ export async function obsidianFetch(
     }
   }
 
-  return requestUrl({ url, method, headers, body, throw: false }).then((resp) => {
-    const contentType = (
-      resp.headers["content-type"] ??
-      resp.headers["Content-Type"] ??
-      ""
-    ).toLowerCase();
-    if (contentType.includes("application/json") || contentType.includes("text/")) {
-      return new Response(JSON.stringify(resp.json), {
+  // 받은 바이트 그대로 — JSON 은 받는 쪽이 읽는다. 예전에는 `text/*` 도 JSON 으로 읽어 글 첨부(.txt · .html)를 받지
+  // 못했다(2026-11-02 실측: 상태 DB 를 잃은 볼트의 미리 보기가 그 노트를 충돌로 셌다).
+  return requestUrl({ url, method, headers, body, throw: false }).then(
+    (resp) =>
+      new Response(NULL_BODY_STATUSES.has(resp.status) ? null : resp.arrayBuffer, {
         status: resp.status,
         headers: new Headers(resp.headers),
-      });
-    }
-    return new Response(resp.arrayBuffer, {
-      status: resp.status,
-      headers: new Headers(resp.headers),
-    });
-  });
+      }),
+    (error: unknown) => {
+      throw withConnectionCode(error);
+    },
+  );
 }
+
+/**
+ * Chromium 이 연결을 잃은 오류(`net::ERR_…`)와 Node 의 같은 뜻의 코드 — 코어는 코드로 «응답을 받지 못함» 을 가려 같은 결과를
+ * 내는 요청만 다시 보낸다. requestUrl 의 오류에는 코드가 없어 예전에는 한 번에 실패했다(2026-11-02 실측: 앱을 막 띄운 뒤
+ * `ERR_NETWORK_CHANGED` 로 Markdown API 를 받지 못해 첫 미리 보기가 다음 것과 달랐다).
+ */
+const CHROMIUM_CONNECTION_ERRORS: Readonly<Record<string, string>> = {
+  ERR_NETWORK_CHANGED: "ECONNRESET",
+  ERR_CONNECTION_RESET: "ECONNRESET",
+  ERR_CONNECTION_CLOSED: "ECONNRESET",
+  ERR_CONNECTION_ABORTED: "ECONNRESET",
+  ERR_EMPTY_RESPONSE: "ECONNRESET",
+  ERR_TIMED_OUT: "ETIMEDOUT",
+  ERR_CONNECTION_TIMED_OUT: "ETIMEDOUT",
+};
+
+function withConnectionCode(error: unknown): unknown {
+  if (!(error instanceof Error) || "code" in error) return error;
+  const net = /net::(ERR_[A-Z_]+)/.exec(error.message)?.[1];
+  const code = net && CHROMIUM_CONNECTION_ERRORS[net];
+  return code ? Object.assign(error, { code }) : error;
+}
+
+/** 본문을 실을 수 없는 응답 — `Response` 가 본문을 주면 던진다. */
+const NULL_BODY_STATUSES = new Set([101, 204, 205, 304]);

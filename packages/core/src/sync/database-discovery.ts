@@ -68,6 +68,25 @@ function parseDiscoveryRetry(raw: string | null): DiscoveryRetry {
   }
 }
 
+/** 이번 pull 의 DB 등록부({@link DatabaseDiscovery.openRegistry}) — 메모리에서만 고친다. */
+interface DiscoveryRegistry {
+  /** 발견해 둔 DB 와 이번에 등록한 DB — 폴더 충돌을 가른 뒤. */
+  readonly dbConfigs: DiscoveredDbConfig[];
+  readonly configuredIds: ReadonlySet<string>;
+  /** 이번에 새로 등록한 DB(하이픈 뺀 id) — 받은 적이 없어 바뀐 것이 보이지 않아도 조회한다. */
+  readonly registeredNow: Set<string>;
+  readonly inaccessibleIds: Set<string>;
+  readonly linkedMap: Map<string, string>;
+  /** 이번에 원본으로 해소한 링크드 뷰 컨테이너. */
+  readonly linkedNow: Set<string>;
+  readonly retry: DiscoveryRetry;
+  readonly nextRetry: DiscoveryRetry;
+  /** 상태에 다시 적을 것 — 목록 · 접근 불가 · 링크드 뷰. */
+  readonly dirty: { list: boolean; inaccessible: boolean; linked: boolean };
+  register(dbId: string, parentPageId: string): Promise<void>;
+  degrade(rawId: string): void;
+}
+
 /**
  * 페이지 모드 볼트의 DB 자동 발견 — 추적 페이지 안의 child_database 를 찾아 등록하고, 등록한 DB 를
  * 폴더 + `.base` 로 받는다. 설정에 적지 않은 DB 도 페이지 안에 있으면 볼트에 온다.
@@ -142,202 +161,25 @@ export class DatabaseDiscovery {
     let restored = 0;
 
     try {
-      const dbConfigs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-
-      const configuredIds = new Set(
-        (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
-      );
-      const knownIds = new Set<string>([
-        ...configuredIds,
-        ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
-      ]);
-      let changed = false;
-      // 이번 pull 이 새로 등록한 DB — 받은 적이 없어 바뀐 것이 보이지 않아도 조회한다.
-      const registeredNow = new Set<string>();
-
-      // F24: 동명 형제 DB(같은 부모 아래 같은 제목 인라인 DB — 실측 22쌍)는 제목 기반
-      // 폴더 유도가 충돌해 .base/사이드카를 서로 덮어쓰고 행이 한 폴더에 섞인다.
-      // 폴더 점유 대장을 두고 ① 캐시의 기존 충돌을 결정적으로 수리(첫 항목이 원 폴더
-      // 유지)하고 ② 신규 등록도 같은 대장을 거치게 한다. 사용자 설정 DB 폴더는 선점.
-      const folderOwner = new Map<string, string>(
-        (this.config.notion.databases ?? []).map((d) => [d.localFolder, d.databaseId]),
-      );
-      const repairedCount = repairDbFolderCollisions(dbConfigs, folderOwner);
-      for (const c of dbConfigs) folderOwner.set(c.localFolder, c.databaseId);
-      if (repairedCount > 0) {
-        changed = true;
-        getLogger().info(`[Im-Nobsidian] 동명 DB 폴더 충돌 ${repairedCount}건 분리(F24)`);
-      }
-      // 새로 등록하는 DB 는 대소문자만 다른 폴더도 피한다 — macOS · Windows 에서 한 폴더다(`pathKey`). 이미 적힌
-      // 폴더는 위에서 그대로 둔다 — Linux 에서 따로 있던 두 폴더를 옮기지 않는다.
-      const folderKeys = new Map([...folderOwner].map(([folder, id]) => [pathKey(folder), id]));
-      const claimFolder = (config: { databaseId: string; localFolder: string }): void => {
-        config.localFolder = resolveDbFolderPath(
-          config.localFolder,
-          config.databaseId,
-          (f) => folderOwner.get(f) ?? folderKeys.get(pathKey(f)) ?? null,
-        );
-        folderOwner.set(config.localFolder, config.databaseId);
-        folderKeys.set(pathKey(config.localFolder), config.databaseId);
-      };
-
-      // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
-      // 스택트레이스 노이즈를 차단한다. 발견 단계에서 걸러 빈 폴더/.base 오염도 막는다.
-      const inaccessibleIds = loadInaccessibleDbIds(this.stateDb);
-      let inaccessibleChanged = false;
-      const degrade = (rawId: string): void => {
-        const nohyph = rawId.replace(/-/g, "");
-        if (!inaccessibleIds.has(nohyph)) {
-          inaccessibleIds.add(nohyph);
-          inaccessibleChanged = true;
-        }
-        getLogger().warn(
-          `[Im-Nobsidian] DB ${rawId}: 접근 가능한 data source 없음(링크드/미공유/삭제 추정) — 동기화 대상에서 제외(제목은 부모 페이지에 보존)`,
-        );
-      };
-
-      // --force: 과거 접근 불가로 강등된 DB 를 재검증한다(F23). 공유 복구·linked 해소
-      // 지원 추가 후에도 denylist 가 영구 차단해 구제 경로가 없었다. 비우면 재발견 루프가
-      // 다시 만나는 항목은 fresh 평가되고, 여전히 불가면 degrade 로 재편입된다.
-      if (forceRediscovery && inaccessibleIds.size > 0) {
-        getLogger().info(
-          `[Im-Nobsidian] --force: 접근 불가 DB ${inaccessibleIds.size}개 denylist 재검증`,
-        );
-        inaccessibleIds.clear();
-        inaccessibleChanged = true;
-      }
-
-      // linked view 컨테이너 → 원본 DB 매핑. placeholder 임베드 재작성이 원본 .base 로
-      // 향하게 하고, 해소 완료 컨테이너의 재해소(건당 API ~4회)를 건너뛰게 한다.
-      const linkedMap = loadLinkedDbMap(this.stateDb);
-      let linkedChanged = false;
-      /** 이번에 원본으로 해소한 컨테이너 — 원본을 조회하지 않아도 링크드 뷰의 `.base` 를 쓴다. */
-      const linkedNow = new Set<string>();
-
-      // 발견하다 읽지 못한 것 — 이유와 함께 실패로 싣고 다음 pull 이 다시 본다. 읽지 못한 것을
-      // 없다고 하면 pull 이 성공으로 끝나, 사용자는 그 DB 를 받지 못한 줄 모른다.
-      const retry = parseDiscoveryRetry(this.stateDb.getMeta(DISCOVERY_RETRY_META_KEY));
-      const nextRetry: DiscoveryRetry = { parents: [], dbs: [] };
-      const pathOf = (pageId: string): string =>
-        notionIdsEqual(pageId, this.config.notion.rootPageId)
-          ? ""
-          : (this.stateDb.getByNotionId(pageId)?.obsidianPath ?? pageId);
-      const unreadParent = (pageId: string, error: string): void => {
-        nextRetry.parents.push(pageId);
-        failed.push({
-          path: pathOf(pageId),
-          operation: "update",
-          error: `하위 DB 를 확인하지 못함 — 다음 pull 이 다시 확인한다: ${error}`,
-        });
-      };
-      const retryLater = (dbId: string, parentPageId: string, error: string): void => {
-        nextRetry.dbs.push({ dbId, parentPageId });
-        failed.push({
-          path: pathOf(parentPageId),
-          operation: "create",
-          error: `DB ${shortNotionId(dbId)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
-        });
-      };
-
-      // 발견 1건 등록 — 원본 DB 면 설정 추가, linked view 컨테이너면 원본으로 해소해 매핑
-      // 기록 후 원본을 같은 부모 아래로 등록한다. 해소는 1홉: 원본이 또 linked 면(순환·
-      // 다단 참조) 접근 불가로 강등해 무한 추적을 차단한다.
-      const register = async (dbId: string, parentPageId: string): Promise<void> => {
-        const nohyph = dbId.replace(/-/g, "");
-        if (knownIds.has(nohyph) || inaccessibleIds.has(nohyph)) return;
-
-        const registerOriginal = async (origNohyph: string): Promise<void> => {
-          if (knownIds.has(origNohyph) || inaccessibleIds.has(origNohyph)) return;
-          const origId = normalizeNotionId(origNohyph);
-          const outcome = await this.buildDiscoveredDbConfig(origId, parentPageId);
-          knownIds.add(origNohyph);
-          if (outcome.kind === "ok") {
-            claimFolder(outcome.config);
-            dbConfigs.push(outcome.config);
-            registeredNow.add(origNohyph);
-            changed = true;
-          } else if (outcome.kind === "error") {
-            retryLater(origId, parentPageId, outcome.error);
-          } else {
-            degrade(origId);
-          }
-        };
-
-        // 이미 해소된 컨테이너는 재해소하지 않고 원본 등록만 보정한다.
-        const knownOriginal = linkedMap.get(nohyph);
-        if (knownOriginal) {
-          await registerOriginal(knownOriginal);
-          return;
-        }
-
-        const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId);
-        knownIds.add(nohyph);
-        if (outcome.kind === "ok") {
-          claimFolder(outcome.config);
-          dbConfigs.push(outcome.config);
-          registeredNow.add(nohyph);
-          changed = true;
-        } else if (outcome.kind === "linked") {
-          const origNohyph = outcome.originalDbId.replace(/-/g, "");
-          linkedMap.set(nohyph, origNohyph);
-          linkedNow.add(nohyph);
-          linkedChanged = true;
-          await registerOriginal(origNohyph);
-        } else if (outcome.kind === "inaccessible") {
-          degrade(dbId);
-        } else if (outcome.kind === "error") {
-          retryLater(dbId, parentPageId, outcome.error);
-        }
-      };
-
-      // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
-      //     한 번도 훑지 않았을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
-      //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
-      //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다. 캐시가 찬 볼트는 이 표시가
-      //     생기기 전에 훑었다 — 다시 훑지 않는다.
-      const scanAll = forceRediscovery || discoveryScanPending(this.stateDb);
-      if (signal?.aborted) {
-        // 취소했으면 훑지 않는다 — 페이지마다 요청 1회라 첫 pull 에서는 분 단위다. 다시 볼 것은
-        // 그대로 남긴다(캐시가 비어 있으면 다음 pull 이 처음부터 훑는다).
-        nextRetry.parents.push(...retry.parents);
-        nextRetry.dbs.push(...retry.dbs);
-      } else {
-        // 이번 pull 에서 본문을 받은 페이지는 훑지 않는다 — 그 본문이 자식 DB 를 모두 실었고 아래 (2) 가
-        // 등록한다. 첫 pull 은 모든 페이지의 본문을 받으므로 페이지마다 1회이던 조회가 거의 사라진다.
-        const root = this.config.notion.rootPageId;
-        const scanIds = scanAll
-          ? [
-              root,
-              ...this.stateDb
-                .getAll()
-                .filter((r) => r.notionPageId)
-                .map((r) => r.notionPageId!),
-            ].filter((id) => !this._bodyReadPages.has(normalizeNotionId(id)))
-          : options.rescanRoot && !retry.parents.some((id) => notionIdsEqual(id, root))
-            ? [root, ...retry.parents]
-            : retry.parents;
-        if (scanIds.length > 0) {
-          const { found, unread } = await this.discoverChildDatabases(scanIds);
-          for (const { dbId, parentPageId } of found) {
-            await register(dbId, parentPageId);
-          }
-          for (const { pageId, error } of unread) unreadParent(pageId, error);
-        }
-        for (const { dbId, parentPageId } of retry.dbs) {
-          await register(dbId, parentPageId);
-        }
-        // 다 훑었다 — 읽지 못한 페이지는 위에서 다시 볼 것으로 적었다.
-        if (scanAll) this.stateDb.setMeta(DISCOVERY_SCANNED_META_KEY, new Date().toISOString());
-      }
-
-      // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
-      //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
-      //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
-      //     취소했어도 등록한다 — 받은 페이지는 다시 받지 않으니 여기서 놓치면 그 DB 는 페이지를
-      //     다시 고치거나 `--force` 할 때까지 발견되지 않는다. 조회는 아래에서 취소를 따른다.
-      for (const [nohyph, parentPageId] of this._inlineDbRefs) {
-        await register(normalizeNotionId(nohyph), parentPageId);
-      }
+      const registry = await this.openRegistry(failed, {
+        forceRediscovery,
+        ...(options.rescanRoot !== undefined ? { rescanRoot: options.rescanRoot } : {}),
+        ...(signal ? { signal } : {}),
+        markScanned: true,
+      });
+      const {
+        dbConfigs,
+        configuredIds,
+        registeredNow,
+        inaccessibleIds,
+        linkedMap,
+        linkedNow,
+        retry,
+        nextRetry,
+        dirty,
+        register,
+        degrade,
+      } = registry;
 
       // 동기화 가능한 DB 만 처리하고, 캐시에 잔존하던 접근 불가 DB 는 건너뛴다.
       // 처리에 성공/일시실패한 DB 만 stillSyncable 로 모아 캐시의 권위적 스냅샷으로 삼는다.
@@ -388,7 +230,7 @@ export class DatabaseDiscovery {
                     config.localFolder = move.to + config.localFolder.slice(move.from.length);
                   }
                 }
-                changed = true;
+                dirty.list = true;
               },
             });
             // F25: linked view 컨테이너로 판정 — 행은 원본 config 가 단일 소유한다.
@@ -397,8 +239,8 @@ export class DatabaseDiscovery {
             if (dbResult.linkedOriginalDbId) {
               linkedMap.set(nohyph, dbResult.linkedOriginalDbId.replace(/-/g, ""));
               linkedNow.add(nohyph);
-              linkedChanged = true;
-              changed = true;
+              dirty.linked = true;
+              dirty.list = true;
               ledger?.settle(dbConfig.databaseId);
               getLogger().info(
                 `[Im-Nobsidian] DB ${dbConfig.databaseId}: linked view 컨테이너 감지 → 행은 원본 ${dbResult.linkedOriginalDbId} 폴더가 단일 소유(F25)`,
@@ -461,24 +303,24 @@ export class DatabaseDiscovery {
       }
 
       if (!signal?.aborted) {
-        linkedChanged =
+        dirty.linked =
           (await this.pullLinkedViews(linkedMap, stillSyncable, {
             pulled: (container, original) =>
               forceRediscovery || linkedNow.has(container) || pulledWhole.has(original),
-          })) || linkedChanged;
+          })) || dirty.linked;
       }
 
       // 대기는 이제 동기화하는 DB 만 — 설정에서 뺐거나 · 접근 불가로 뺀 DB 를 영영 들고 있지 않는다.
       ledger?.keepOnly([...configuredIds, ...stillSyncable.map((c) => c.databaseId)]);
 
       // 발견·강등·정리 결과를 캐시에 1회 반영(접근 불가 DB 는 stillSyncable 에서 빠져 제거됨).
-      if (changed || inaccessibleChanged || stillSyncable.length !== dbConfigs.length) {
+      if (dirty.list || dirty.inaccessible || stillSyncable.length !== dbConfigs.length) {
         this.stateDb.setMeta(DISCOVERED_DBS_META_KEY, JSON.stringify(stillSyncable));
       }
-      if (inaccessibleChanged) {
+      if (dirty.inaccessible) {
         this.stateDb.setMeta(INACCESSIBLE_DBS_META_KEY, JSON.stringify([...inaccessibleIds]));
       }
-      if (linkedChanged) {
+      if (dirty.linked) {
         this.stateDb.setMeta(LINKED_DBS_META_KEY, JSON.stringify(Object.fromEntries(linkedMap)));
       }
       if (
@@ -501,6 +343,277 @@ export class DatabaseDiscovery {
     }
 
     return { created, updated, deleted, restored };
+  }
+
+  /**
+   * 이번 pull 이 찾을 DB 를 등록부에 올린다 — 블록을 훑고({@link discoverChildDatabases}) 받은 본문의 `<database>` 를
+   * 더한다. 상태 DB 에는 쓰지 않는다 — 등록부를 적는 것은 실제 pull 의 마감이고 dry-run 은 버린다. 다 훑은 표시만
+   * `markScanned` 일 때 적는다.
+   *
+   * @param failed 읽지 못한 페이지 · DB — 이유와 함께 싣는다.
+   * @param options.notePathOf 페이지 → 볼트 경로. 새 DB 폴더를 부모 노트 옆에 둔다 — dry-run 은 다시 이을 노트의 자리를 준다.
+   */
+  private async openRegistry(
+    failed: FailedOperation[],
+    options: {
+      readonly forceRediscovery: boolean;
+      readonly rescanRoot?: boolean;
+      readonly signal?: AbortLike;
+      readonly markScanned: boolean;
+      readonly notePathOf?: (pageId: string) => string | null;
+    },
+  ): Promise<DiscoveryRegistry> {
+    const { forceRediscovery, signal } = options;
+    const { notePathOf } = options;
+    const dbConfigs = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
+
+    const configuredIds = new Set(
+      (this.config.notion.databases ?? []).map((d) => d.databaseId.replace(/-/g, "")),
+    );
+    const knownIds = new Set<string>([
+      ...configuredIds,
+      ...dbConfigs.map((c) => c.databaseId.replace(/-/g, "")),
+    ]);
+    // 상태에 다시 적을 것 — 실제 pull 의 마감이 적는다.
+    const dirty = { list: false, inaccessible: false, linked: false };
+    // 이번 pull 이 새로 등록한 DB — 받은 적이 없어 바뀐 것이 보이지 않아도 조회한다.
+    const registeredNow = new Set<string>();
+
+    // F24: 동명 형제 DB(같은 부모 아래 같은 제목 인라인 DB — 실측 22쌍)는 제목 기반
+    // 폴더 유도가 충돌해 .base/사이드카를 서로 덮어쓰고 행이 한 폴더에 섞인다.
+    // 폴더 점유 대장을 두고 ① 캐시의 기존 충돌을 결정적으로 수리(첫 항목이 원 폴더
+    // 유지)하고 ② 신규 등록도 같은 대장을 거치게 한다. 사용자 설정 DB 폴더는 선점.
+    const folderOwner = new Map<string, string>(
+      (this.config.notion.databases ?? []).map((d) => [d.localFolder, d.databaseId]),
+    );
+    const repairedCount = repairDbFolderCollisions(dbConfigs, folderOwner);
+    for (const c of dbConfigs) folderOwner.set(c.localFolder, c.databaseId);
+    if (repairedCount > 0) {
+      dirty.list = true;
+      getLogger().info(`[Im-Nobsidian] 동명 DB 폴더 충돌 ${repairedCount}건 분리(F24)`);
+    }
+    // 새로 등록하는 DB 는 대소문자만 다른 폴더도 피한다 — macOS · Windows 에서 한 폴더다(`pathKey`). 이미 적힌
+    // 폴더는 위에서 그대로 둔다 — Linux 에서 따로 있던 두 폴더를 옮기지 않는다.
+    const folderKeys = new Map([...folderOwner].map(([folder, id]) => [pathKey(folder), id]));
+    const claimFolder = (config: { databaseId: string; localFolder: string }): void => {
+      config.localFolder = resolveDbFolderPath(
+        config.localFolder,
+        config.databaseId,
+        (f) => folderOwner.get(f) ?? folderKeys.get(pathKey(f)) ?? null,
+      );
+      folderOwner.set(config.localFolder, config.databaseId);
+      folderKeys.set(pathKey(config.localFolder), config.databaseId);
+    };
+
+    // 접근 불가(링크드/미공유/삭제) DB denylist — 매 pull 마다 doomed 404 재시도 +
+    // 스택트레이스 노이즈를 차단한다. 발견 단계에서 걸러 빈 폴더/.base 오염도 막는다.
+    const inaccessibleIds = loadInaccessibleDbIds(this.stateDb);
+    const degrade = (rawId: string): void => {
+      const nohyph = rawId.replace(/-/g, "");
+      if (!inaccessibleIds.has(nohyph)) {
+        inaccessibleIds.add(nohyph);
+        dirty.inaccessible = true;
+      }
+      getLogger().warn(
+        `[Im-Nobsidian] DB ${rawId}: 접근 가능한 data source 없음(링크드/미공유/삭제 추정) — 동기화 대상에서 제외(제목은 부모 페이지에 보존)`,
+      );
+    };
+
+    // --force: 과거 접근 불가로 강등된 DB 를 재검증한다(F23). 공유 복구·linked 해소
+    // 지원 추가 후에도 denylist 가 영구 차단해 구제 경로가 없었다. 비우면 재발견 루프가
+    // 다시 만나는 항목은 fresh 평가되고, 여전히 불가면 degrade 로 재편입된다.
+    if (forceRediscovery && inaccessibleIds.size > 0) {
+      getLogger().info(
+        `[Im-Nobsidian] --force: 접근 불가 DB ${inaccessibleIds.size}개 denylist 재검증`,
+      );
+      inaccessibleIds.clear();
+      dirty.inaccessible = true;
+    }
+
+    // linked view 컨테이너 → 원본 DB 매핑. placeholder 임베드 재작성이 원본 .base 로
+    // 향하게 하고, 해소 완료 컨테이너의 재해소(건당 API ~4회)를 건너뛰게 한다.
+    const linkedMap = loadLinkedDbMap(this.stateDb);
+    /** 이번에 원본으로 해소한 컨테이너 — 원본을 조회하지 않아도 링크드 뷰의 `.base` 를 쓴다. */
+    const linkedNow = new Set<string>();
+
+    // 발견하다 읽지 못한 것 — 이유와 함께 실패로 싣고 다음 pull 이 다시 본다. 읽지 못한 것을
+    // 없다고 하면 pull 이 성공으로 끝나, 사용자는 그 DB 를 받지 못한 줄 모른다.
+    const retry = parseDiscoveryRetry(this.stateDb.getMeta(DISCOVERY_RETRY_META_KEY));
+    const nextRetry: DiscoveryRetry = { parents: [], dbs: [] };
+    const pathOf = (pageId: string): string =>
+      notionIdsEqual(pageId, this.config.notion.rootPageId)
+        ? ""
+        : (this.stateDb.getByNotionId(pageId)?.obsidianPath ?? pageId);
+    const unreadParent = (pageId: string, error: string): void => {
+      nextRetry.parents.push(pageId);
+      failed.push({
+        path: pathOf(pageId),
+        operation: "update",
+        error: `하위 DB 를 확인하지 못함 — 다음 pull 이 다시 확인한다: ${error}`,
+      });
+    };
+    const retryLater = (dbId: string, parentPageId: string, error: string): void => {
+      nextRetry.dbs.push({ dbId, parentPageId });
+      failed.push({
+        path: pathOf(parentPageId),
+        operation: "create",
+        error: `DB ${shortNotionId(dbId)} 를 읽지 못함 — 다음 pull 이 다시 본다: ${error}`,
+      });
+    };
+
+    // 발견 1건 등록 — 원본 DB 면 설정 추가, linked view 컨테이너면 원본으로 해소해 매핑
+    // 기록 후 원본을 같은 부모 아래로 등록한다. 해소는 1홉: 원본이 또 linked 면(순환·
+    // 다단 참조) 접근 불가로 강등해 무한 추적을 차단한다.
+    const register = async (dbId: string, parentPageId: string): Promise<void> => {
+      const nohyph = dbId.replace(/-/g, "");
+      if (knownIds.has(nohyph) || inaccessibleIds.has(nohyph)) return;
+
+      const registerOriginal = async (origNohyph: string): Promise<void> => {
+        if (knownIds.has(origNohyph) || inaccessibleIds.has(origNohyph)) return;
+        const origId = normalizeNotionId(origNohyph);
+        const outcome = await this.buildDiscoveredDbConfig(origId, parentPageId, notePathOf);
+        knownIds.add(origNohyph);
+        if (outcome.kind === "ok") {
+          claimFolder(outcome.config);
+          dbConfigs.push(outcome.config);
+          registeredNow.add(origNohyph);
+          dirty.list = true;
+        } else if (outcome.kind === "error") {
+          retryLater(origId, parentPageId, outcome.error);
+        } else {
+          degrade(origId);
+        }
+      };
+
+      // 이미 해소된 컨테이너는 재해소하지 않고 원본 등록만 보정한다.
+      const knownOriginal = linkedMap.get(nohyph);
+      if (knownOriginal) {
+        await registerOriginal(knownOriginal);
+        return;
+      }
+
+      const outcome = await this.buildDiscoveredDbConfig(dbId, parentPageId, notePathOf);
+      knownIds.add(nohyph);
+      if (outcome.kind === "ok") {
+        claimFolder(outcome.config);
+        dbConfigs.push(outcome.config);
+        registeredNow.add(nohyph);
+        dirty.list = true;
+      } else if (outcome.kind === "linked") {
+        const origNohyph = outcome.originalDbId.replace(/-/g, "");
+        linkedMap.set(nohyph, origNohyph);
+        linkedNow.add(nohyph);
+        dirty.linked = true;
+        await registerOriginal(origNohyph);
+      } else if (outcome.kind === "inaccessible") {
+        degrade(dbId);
+      } else if (outcome.kind === "error") {
+        retryLater(dbId, parentPageId, outcome.error);
+      }
+    };
+
+    // (1) 블록 스캔 기반 발견 — 추적 페이지마다 직속 children 1회 조회로 비용이 크므로
+    //     한 번도 훑지 않았을 때(최초 full pull)만 수행한다. 이후 생긴 신규 child DB 는 이
+    //     게이트 탓에 복구 경로가 없었으므로(F21), --force 시에는 재스캔을 허용한다.
+    //     지난번에 읽지 못한 페이지 · DB 는 캐시가 있어도 다시 본다. 캐시가 찬 볼트는 이 표시가
+    //     생기기 전에 훑었다 — 다시 훑지 않는다.
+    const scanAll = forceRediscovery || discoveryScanPending(this.stateDb);
+    if (signal?.aborted) {
+      // 취소했으면 훑지 않는다 — 페이지마다 요청 1회라 첫 pull 에서는 분 단위다. 다시 볼 것은
+      // 그대로 남긴다(캐시가 비어 있으면 다음 pull 이 처음부터 훑는다).
+      nextRetry.parents.push(...retry.parents);
+      nextRetry.dbs.push(...retry.dbs);
+    } else {
+      // 이번 pull 에서 본문을 받은 페이지는 훑지 않는다 — 그 본문이 자식 DB 를 모두 실었고 아래 (2) 가
+      // 등록한다. 첫 pull 은 모든 페이지의 본문을 받으므로 페이지마다 1회이던 조회가 거의 사라진다.
+      const root = this.config.notion.rootPageId;
+      const scanIds = scanAll
+        ? [
+            root,
+            ...this.stateDb
+              .getAll()
+              .filter((r) => r.notionPageId)
+              .map((r) => r.notionPageId!),
+          ].filter((id) => !this._bodyReadPages.has(normalizeNotionId(id)))
+        : options.rescanRoot && !retry.parents.some((id) => notionIdsEqual(id, root))
+          ? [root, ...retry.parents]
+          : retry.parents;
+      if (scanIds.length > 0) {
+        const { found, unread } = await this.discoverChildDatabases(scanIds);
+        for (const { dbId, parentPageId } of found) {
+          await register(dbId, parentPageId);
+        }
+        for (const { pageId, error } of unread) unreadParent(pageId, error);
+      }
+      for (const { dbId, parentPageId } of retry.dbs) {
+        await register(dbId, parentPageId);
+      }
+      // 다 훑었다 — 읽지 못한 페이지는 위에서 다시 볼 것으로 적었다.
+      if (scanAll && options.markScanned) {
+        this.stateDb.setMeta(DISCOVERY_SCANNED_META_KEY, new Date().toISOString());
+      }
+    }
+
+    // (2) markdown 기반 발견 — 추가 API 호출 없이 컬럼/synced_block 내부 깊이 중첩된
+    //     child_database 까지 포착한다. 이번 pull 에서 재취득된 페이지에 한해 채워지므로
+    //     캐시 유무와 무관하게 항상 병합한다(증분 pull·업그레이드 시 신규 DB 흡수).
+    //     취소했어도 등록한다 — 받은 페이지는 다시 받지 않으니 여기서 놓치면 그 DB 는 페이지를
+    //     다시 고치거나 `--force` 할 때까지 발견되지 않는다. 조회는 아래에서 취소를 따른다.
+    for (const [nohyph, parentPageId] of this._inlineDbRefs) {
+      await register(normalizeNotionId(nohyph), parentPageId);
+    }
+
+    return {
+      dbConfigs,
+      configuredIds,
+      registeredNow,
+      inaccessibleIds,
+      linkedMap,
+      linkedNow,
+      retry,
+      nextRetry,
+      dirty,
+      register,
+      degrade,
+    };
+  }
+
+  /**
+   * dry-run — 이번 pull 이 새로 찾을 DB(실제 pull 의 {@link openRegistry} 와 같은 규칙). 볼트 · 상태 DB 를 바꾸지 않는다. 받은
+   * 본문은 dry-run 이 이미 읽은 것(다시 이을 노트 · 로컬도 고친 노트)만 본다 — {@link bodyRead}.
+   *
+   * @returns 새로 찾을 DB 와 그 폴더를 가를 전체 목록(발견해 둔 DB 포함).
+   */
+  async plannedNewDatabases(
+    failed: FailedOperation[],
+    options: {
+      readonly rescanRoot: boolean;
+      readonly notePathOf: (pageId: string) => string | null;
+    },
+  ): Promise<{
+    readonly found: readonly DiscoveredDbConfig[];
+    readonly all: readonly DiscoveredDbConfig[];
+  }> {
+    if (isDatabaseMode(this.config)) return { found: [], all: [] };
+    const registry = await this.openRegistry(failed, {
+      forceRediscovery: false,
+      rescanRoot: options.rescanRoot,
+      markScanned: false,
+      notePathOf: options.notePathOf,
+    });
+    return {
+      found: registry.dbConfigs.filter((config) =>
+        registry.registeredNow.has(config.databaseId.replace(/-/g, "")),
+      ),
+      all: registry.dbConfigs.filter(
+        (config) => !registry.inaccessibleIds.has(config.databaseId.replace(/-/g, "")),
+      ),
+    };
+  }
+
+  /** 이번 pull 에서 본문을 받은 페이지인가 — 그 본문의 `<database>` 로 새 DB 를 찾았다. */
+  bodyRead(pageId: string): boolean {
+    return this._bodyReadPages.has(normalizeNotionId(pageId));
   }
 
   /**
@@ -570,6 +683,8 @@ export class DatabaseDiscovery {
   private async buildDiscoveredDbConfig(
     dbId: string,
     parentPageId: string,
+    notePathOf: (pageId: string) => string | null = (pageId) =>
+      this.stateDb.getByNotionId(pageId)?.obsidianPath ?? null,
   ): Promise<DiscoveredDbOutcome> {
     let dbTitle: string;
     try {
@@ -605,10 +720,9 @@ export class DatabaseDiscovery {
       return { kind: "error", error: error instanceof Error ? error.message : String(error) };
     }
 
-    const parentEntry = parentPageId ? this.stateDb.getByNotionId(parentPageId) : null;
+    const obsPath = parentPageId ? notePathOf(parentPageId) : null;
     let parentFolder = "";
-    if (parentEntry?.obsidianPath) {
-      const obsPath = parentEntry.obsidianPath;
+    if (obsPath) {
       if (isMarkdownPath(obsPath)) {
         const parts = obsPath.split("/");
         const fileBase = stripMarkdownExtension(parts.pop() ?? "");
