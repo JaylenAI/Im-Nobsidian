@@ -40,4 +40,34 @@ describe("sameAsPendingLinks", () => {
   it("풀지 못한 자리가 없으면 견주지 않는다(false — 보통의 견주기가 맡는다)", () => {
     expect(sameAsPendingLinks("같은 글", "같은 글")).toBe(false);
   });
+
+  it("제목 · 블록으로 가는 블록 링크는 풀었을 때 나올 앵커 링크와 같다 — URL 속 id 를 원시 id 로 읽지 않는다", () => {
+    const remote = `[X \\> 원래 제목](https://app.notion.com/p/${ID}#${ID}) 로 가기`;
+    // Notion 에서만 제목을 고쳤다 — 블록 id 로 새 제목을 가리키고 글자는 별칭으로 남는다(2026-11-02 실측).
+    expect(sameAsPendingLinks("[[X#바뀐 제목|X > 원래 제목]] 로 가기\n", remote)).toBe(true);
+    expect(sameAsPendingLinks("[[X#원래 제목]] 로 가기", remote)).toBe(true);
+    expect(sameAsPendingLinks("[[notes/h/X#원래 제목]] 로 가기", remote)).toBe(true);
+    expect(sameAsPendingLinks("[X > 원래 제목](X.md#원래-제목) 로 가기", remote)).toBe(true);
+    expect(sameAsPendingLinks("[[X#다른 제목]] 로 가기", remote)).toBe(false);
+    expect(sameAsPendingLinks("[[X]] 로 가기", remote)).toBe(false);
+    expect(sameAsPendingLinks("[[X#바뀐 제목|다른 글]] 로 가기", remote)).toBe(false);
+  });
+
+  it("자기 제목 · 블록 id 링크 · 표 칸의 별칭도 받는다", () => {
+    expect(
+      sameAsPendingLinks("[[#위]] 참고", `[위](https://www.notion.so/${ID}#${UUID}) 참고`),
+    ).toBe(true);
+    expect(
+      sameAsPendingLinks(
+        "[[Y#^abc-1]] 참고",
+        `[Y \\> \\^abc-1](https://app.notion.com/p/${ID}#${ID}) 참고`,
+      ),
+    ).toBe(true);
+    expect(
+      sameAsPendingLinks(
+        "| [[X#새\\|X > 옛]] |",
+        `| [X \\> 옛](https://app.notion.com/p/${ID}#${ID}) |`,
+      ),
+    ).toBe(true);
+  });
 });

@@ -60,26 +60,51 @@ const PENDING_LINK_RE = new RegExp(
  * 원시 id 로 남는다 — 링크 패스가 끝에 푼다. 그 전에 견주면 링크만 다른 노트가 모두 충돌이 됐다(실측: `[[b]]` 를 가진
  * `a.md` · 되돌아가는 링크를 가진 `b.md`). 그 자리에는 노트의 위키링크 · 마크다운 링크만 받는다. 별칭이 있으면 노트
  * 링크의 대상이나 별칭이 그 별칭과 같아야 한다 — 다른 글 · 다른 이름의 링크는 여전히 다르다.
+ *
+ * 제목 · 블록으로 가는 링크는 Notion 블록 링크(`[노트 \> 제목](…/p/<페이지>#<블록>)`)로 남는다 — 그 자리는 풀었을 때 나올
+ * 꼴({@link resolveNotionBlockLinks})만 받는다: 글자를 별칭으로 단 `[[노트#앵커|글자]]` · 글자대로 적은 `[[노트#제목]]` ·
+ * `[[#제목]]` · 마크다운 링크. 예전에는 URL 속 id 를 원시 id 로 읽어 제목 링크를 가진 노트가 모두 충돌이 됐다(2026-11-02 실측).
  */
 export function sameAsPendingLinks(local: string, remote: string): boolean {
-  if (!PENDING_LINK_RE.test(remote)) return false;
-  PENDING_LINK_RE.lastIndex = 0;
+  // 블록 링크를 먼저 — 그 URL 속 id 를 원시 id 로 읽지 않게. 그룹 1~3 블록 링크, 4~6 위키링크형, 7 원시 id.
+  const pending = new RegExp(`${NOTION_BLOCK_LINK_RE.source}|${PENDING_LINK_RE.source}`, "g");
+  if (!pending.test(remote)) return false;
+  pending.lastIndex = 0;
   const escape = (text: string): string => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   let pattern = "";
   let last = 0;
-  for (const match of remote.matchAll(PENDING_LINK_RE)) {
+  for (const match of remote.matchAll(pending)) {
     pattern += escape(remote.slice(last, match.index));
-    const alias = match[3];
+    const blockLabel = match[1];
+    const alias = match[6];
     // 원시 id(frontmatter relation)는 풀면 따옴표 친 위키링크(`"[[행]]"`)가 된다.
-    pattern += match[4]
-      ? `"?\\[\\[[^\\]\\n]+\\]\\]"?`
-      : alias
-        ? `(?:\\[\\[(?:[^\\]\\n|]*/)?${escape(alias)}(?:\\\\?\\|[^\\]\\n]*)?\\]\\]|\\[\\[[^\\]\\n|]+\\\\?\\|${escape(alias)}\\]\\]|\\[${escape(alias)}\\]\\([^)\\n]+\\))`
-        : `(?:\\[\\[[^\\]\\n]+\\]\\]|\\[[^\\]\\n]+\\]\\([^)\\n]+\\))`;
+    pattern += blockLabel
+      ? pendingBlockLinkPattern(blockLabel, escape)
+      : match[7]
+        ? `"?\\[\\[[^\\]\\n]+\\]\\]"?`
+        : alias
+          ? `(?:\\[\\[(?:[^\\]\\n|]*/)?${escape(alias)}(?:\\\\?\\|[^\\]\\n]*)?\\]\\]|\\[\\[[^\\]\\n|]+\\\\?\\|${escape(alias)}\\]\\]|\\[${escape(alias)}\\]\\([^)\\n]+\\))`
+          : `(?:\\[\\[[^\\]\\n]+\\]\\]|\\[[^\\]\\n]+\\]\\([^)\\n]+\\))`;
     last = match.index + match[0].length;
   }
   pattern += escape(remote.slice(last).replace(/\n+$/, ""));
   return new RegExp(`^${pattern}\\n*$`).test(local.replace(/\n+$/, ""));
+}
+
+/**
+ * 아직 풀지 못한 블록 링크 자리에 올 수 있는 노트의 링크({@link sameAsPendingLinks}) — 글자를 별칭으로 단 앵커 링크 ·
+ * 글자(「노트 > 제목」)대로 적은 링크(노트는 경로로 적었을 수 있다) · 자기 제목 링크 · 마크다운 링크.
+ */
+function pendingBlockLinkPattern(label: string, escape: (text: string) => string): string {
+  // Notion 은 글자의 `>` · `^` 를 `\>` · `\^` 로 돌려준다 — 풀 때와 같게 되돌린다.
+  const text = label.replace(/\\([>^])/g, "$1");
+  const written = escape(text.split(" > ").join("#"));
+  return (
+    `(?:\\[\\[[^\\]\\n|]*#[^\\]\\n|]*\\\\?\\|${escape(text)}\\]\\]` +
+    `|\\[\\[(?:[^\\]\\n|#]*/)?${written}\\]\\]` +
+    `|\\[\\[#${written}\\]\\]` +
+    `|\\[(?:${escape(text)}|${escape(label)})\\]\\([^)\\n]+\\))`
+  );
 }
 
 export function resolveNotionIdWikilinks(
