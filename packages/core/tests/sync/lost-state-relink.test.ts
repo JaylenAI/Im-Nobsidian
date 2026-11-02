@@ -363,8 +363,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const pulled = await orchestrator.pull({ dryRun: true });
     expect(pulled.relinkPending).toBe(true);
     expect(pulled.created).toBe(0);
-    // 찾아 둔 DB 목록도 상태 DB 와 함께 잃었다 — 받으며 다시 찾을 DB 의 행은 세지 못했다고 알린다.
-    expect(pulled.undiscoveredDatabases).toBe(true);
+    // 찾아 둔 DB 목록도 상태 DB 와 함께 잃었다 — 루트를 훑고 다시 이을 노트의 본문을 읽어 새 DB 를 찾는다. 세지 못한 것이 없다.
+    expect(pulled.undiscoveredDatabases).toBeUndefined();
     const planned = [...(pulled.relinkedPaths ?? [])].sort();
     expect(planned).toEqual(["A.md", "Tasks/R.md", "dir/B.md", "dir/dir.md"]);
     const synced = await orchestrator.sync({ dryRun: true });
@@ -402,6 +402,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const planned = await orchestrator.pull({ dryRun: true });
     expect([...(planned.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(planned.created).toBe(1);
+    // Notion 에만 있는 새 페이지는 본문을 읽지 않았다 — 그 안의 DB 는 받아 봐야 안다.
+    expect(planned.undiscoveredDatabases).toBe(true);
     const real = await orchestrator.pull();
     expect([...(real.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(real.created).toBe(planned.created);
@@ -425,8 +427,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const linked = await orchestrator.pull({ dryRun: true });
     expect(linked.relinkedPaths).toBeUndefined();
     expect(linked.created).toBe(1);
-    // 새로 받을 페이지 안의 DB 는 받아 봐야 안다.
-    expect(linked.undiscoveredDatabases).toBe(true);
+    // 같은 자리의 B.md 와 견주려 본문을 읽었다 — 그 안의 DB 도 찾았다.
+    expect(linked.undiscoveredDatabases).toBeUndefined();
     expect((await orchestrator.pull()).created).toBe(1);
   });
 

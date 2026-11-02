@@ -9,22 +9,17 @@ import type {
   PullResult,
   RemoteChange,
 } from "../types/sync.js";
-import { repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
 import { getLogger } from "../utils/logger.js";
 import type { DatabaseSyncer, PlannedResolution, PlannedRow } from "./database-syncer.js";
-import {
-  DISCOVERED_DBS_META_KEY,
-  discoveryScanPending,
-  loadInaccessibleDbIds,
-  parseDiscoveredDbs,
-  type DiscoveredDbConfig,
-} from "./discovered-databases.js";
+import type { DiscoveredDbConfig } from "./discovered-databases.js";
 import { isFolderRecord } from "./folder-container.js";
 import type { LocalPlan, LocalPlanner } from "./local-planner.js";
+import type { DatabaseDiscovery } from "./database-discovery.js";
 import type { PagePuller } from "./page-puller.js";
 import { isDatabaseMode } from "./parent-mode.js";
 import { decideRemoteDeletion } from "./remote-deletion.js";
+import type { RemoteDetector } from "./remote-detector.js";
 import type { RemoteDriftChecker } from "./remote-drift.js";
 import {
   LAST_FULL_PULL_META_KEY,
@@ -50,13 +45,15 @@ export class PullPlanner {
       PagePuller,
       "folderPageHasBody" | "previewUpdate" | "plannedRelink"
     >,
+    private readonly discovery: Pick<DatabaseDiscovery, "plannedNewDatabases" | "bodyRead">,
+    private readonly detector: Pick<RemoteDetector, "rootChanged">,
   ) {}
 
   /**
    * pull 할 것을 세기만 한다(dry-run) — 볼트 · 상태 DB · Notion 을 바꾸지 않는다. 페이지와 DB 행을
-   * 같이 센다. DB 는 설정한 DB 와 이미 발견해 둔 DB 가운데 실제 pull 이 조회할 것(`ledger`)만 센다 —
-   * 이번 pull 이 새로 발견할 DB 는 받아 봐야 안다. 세지 못한 DB 는 이유와 함께 `failed` 에 싣는다
-   * (세지 못한 것을 없다고 하지 않는다).
+   * 같이 센다. DB 는 설정한 DB 와 이미 발견해 둔 DB 가운데 실제 pull 이 조회할 것(`ledger`)과, 이번 pull 이 새로 찾을
+   * DB(루트 · 미리 보며 읽은 본문 안)를 센다. 세지 못한 DB 는 이유와 함께 `failed` 에 싣는다(세지 못한 것을 없다고 하지
+   * 않는다).
    */
   async planPull(
     filtered: RemoteChange[],
@@ -106,6 +103,17 @@ export class PullPlanner {
     );
     // 옮겨 적지 않은 볼트 이동 — 실제 pull 은 먼저 옮겨 적어 Notion 쪽 이동을 받지 않는다(볼트가 먼저).
     const movingInVault = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
+    // 이번 pull 이 새로 찾을 DB — 새 DB 폴더는 부모 노트 옆이라 다시 이을 노트는 그 자리로 본다.
+    const relinkPaths = new Map(
+      [...relinks.byPage].map(([pageId, relink]) => [compactNotionId(pageId), relink.path]),
+    );
+    const newDatabases = await this.discovery.plannedNewDatabases(failed, {
+      rescanRoot: this.detector.rootChanged(),
+      notePathOf: (pageId) =>
+        relinkPaths.get(compactNotionId(pageId)) ??
+        this.stateDb.getByNotionId(pageId)?.obsidianPath ??
+        null,
+    });
     const rows: PlannedRow[] = [];
     for (const row of await this.planDatabaseRows(
       options.paths,
@@ -113,6 +121,7 @@ export class PullPlanner {
       ledger,
       movingInVault,
       relinks.taken,
+      newDatabases,
     )) {
       if (queued.has(compactNotionId(row.pageId))) continue;
       if (row.resolution?.action === "conflict") conflicts.push(row.resolution.conflict);
@@ -177,11 +186,10 @@ export class PullPlanner {
       rows.filter(
         (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
       ).length;
-    // 이번 pull 이 새로 찾을 DB 의 행은 세지 않았다 — 받아 봐야 안다(처음 훑는 볼트 · 새 페이지 안의 DB). 세지 못한
-    // 것을 없다고 하지 않는다.
+    // 본문을 읽지 않은 새 페이지 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고 하지 않는다.
     const undiscoveredDatabases =
       !isDatabaseMode(this.config) &&
-      (discoveryScanPending(this.stateDb) || planned.some((c) => c.type === "created"));
+      planned.some((c) => c.type === "created" && !this.discovery.bodyRead(c.pageId));
     const relinkedPaths = [
       ...[...relinks.byPage.values()]
         .filter((relink) => relink.kind === "note")
@@ -305,15 +313,17 @@ export class PullPlanner {
     ledger: DatabasePullLedger,
     movingInVault: ReadonlySet<string>,
     relinkTaken: Set<string>,
+    databases: Awaited<ReturnType<DatabaseDiscovery["plannedNewDatabases"]>>,
   ): Promise<PlannedRow[]> {
     const configured = this.config.notion.databases ?? [];
     const rows: PlannedRow[] = [];
+    const found = new Set(databases.found);
     const plan = async (
       dbConfig: DiscoveredDbConfig,
       resolveDbFolder?: (dbId: string) => string | null,
     ): Promise<void> => {
-      // 실제 pull 이 조회하지 않을 DB 는 세지 않는다 — 조회하지 않으면 받을 것도 없다.
-      if (!ledger.selects(dbConfig.databaseId)) {
+      // 실제 pull 이 조회하지 않을 DB 는 세지 않는다 — 조회하지 않으면 받을 것도 없다. 새로 찾을 DB 는 조회한다.
+      if (!found.has(dbConfig) && !ledger.selects(dbConfig.databaseId)) {
         ledger.skip();
         return;
       }
@@ -341,20 +351,12 @@ export class PullPlanner {
     for (const dbConfig of configured) await plan(dbConfig);
     if (isDatabaseMode(this.config)) return rows;
 
-    // 폴더 충돌은 실제 pull 처럼 가른다(F24) — 읽어 온 사본만 고치고 상태에는 쓰지 않는다.
-    const discovered = parseDiscoveredDbs(this.stateDb.getMeta(DISCOVERED_DBS_META_KEY));
-    repairDbFolderCollisions(
-      discovered,
-      new Map(configured.map((d) => [d.localFolder, d.databaseId])),
-    );
-    const inaccessible = loadInaccessibleDbIds(this.stateDb);
+    // 발견해 둔 DB(폴더 충돌은 실제 pull 처럼 가른 사본, F24)와 새로 찾을 DB — 접근 불가 DB 는 뺐다.
+    const discovered = databases.all;
     const resolveDbFolder = (dbId: string): string | null =>
       [...discovered, ...configured].find((c) => notionIdsEqual(c.databaseId, dbId))?.localFolder ??
       null;
-    for (const dbConfig of discovered) {
-      if (inaccessible.has(dbConfig.databaseId.replace(/-/g, ""))) continue;
-      await plan(dbConfig, resolveDbFolder);
-    }
+    for (const dbConfig of discovered) await plan(dbConfig, resolveDbFolder);
     return rows;
   }
 }
