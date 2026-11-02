@@ -3,6 +3,7 @@ import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isNotionObjectNotFound, type DatabaseMeta, type NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
+import { findUntrackedNote, relinksWithoutContent, type UntrackedNote } from "./untracked-note.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type {
   Conflict,
@@ -145,6 +146,8 @@ export interface PlannedRow {
   readonly moves?: readonly RemoteMove[];
   /** 로컬도 고친 행을 실제 pull 이 받지 않는 까닭 — 없으면 받는다. */
   readonly resolution?: PlannedResolution;
+  /** `create` 만 — 상태 기록에 없던 같은 자리의 행 노트를 다시 잇는다(P7). 새로 받는 것으로 세지 않는다. */
+  readonly relink?: true;
 }
 
 /**
@@ -558,6 +561,8 @@ export class DatabaseSyncer {
        * 볼트에서 옮긴 레코드 — dry-run 은 옮겨 적지 않아 이동 WAL 이 없다. 실제 pull 처럼 볼트가 먼저다.
        */
       movingInVault?: ReadonlySet<string>;
+      /** 이번 미리 보기가 다시 이을 것으로 고른 자리({@link pathKey}) — 고르면 더한다. */
+      relinkTaken?: Set<string>;
     },
   ): Promise<PlannedRow[]> {
     const target = await this.queryRows(dbConfig, opts);
@@ -567,7 +572,13 @@ export class DatabaseSyncer {
       opts?.followPlacement && !opts.paths
         ? await this.unblocked(this.placementMoveOf(dbConfig, target.meta, opts.movingInVault))
         : null;
-    const planned = await this.planRows(dbConfig, target, opts?.paths, opts?.movingInVault);
+    const planned = await this.planRows(
+      dbConfig,
+      target,
+      opts?.paths,
+      opts?.movingInVault,
+      opts?.relinkTaken,
+    );
     if (!folderMove) return planned;
     // 실제 pull 은 폴더를 먼저 옮기고 행을 받는다 — 행도 새 자리로 보인다.
     const moved = (path: string) =>
@@ -676,6 +687,7 @@ export class DatabaseSyncer {
     target: { readonly pages: PageObjectResponse[]; readonly wholeDbInScope: boolean },
     paths: readonly string[] | undefined,
     movingInVault: ReadonlySet<string> = new Set(),
+    relinkTaken: Set<string> = new Set(),
   ): Promise<PlannedRow[]> {
     const opts = { paths };
     const planned: PlannedRow[] = [];
@@ -698,6 +710,25 @@ export class DatabaseSyncer {
       if (action === "skip") continue;
       if (!record) {
         const name = sanitizeFileName(this.notionClient.extractTitle(page));
+        // 상태 기록에 없던 같은 자리의 행 노트 — 실제 pull 은 새로 받지 않고 다시 잇는다(P7).
+        const untracked = await findUntrackedNote(
+          this.stateDb,
+          this.vaultFs,
+          dbConfig.localFolder,
+          name,
+          page.id,
+          (key) => relinkTaken.has(key) || claimed.has(key),
+        );
+        if (untracked && relinksWithoutContent(untracked, this.unlinkedVault)) {
+          relinkTaken.add(pathKey(untracked.path));
+          planned.push({
+            pageId: page.id,
+            path: untracked.path,
+            operation: "create",
+            relink: true,
+          });
+          continue;
+        }
         const ownerOf = await this.rowPathOwners(dbConfig.localFolder, name, page.id);
         const path = resolveDbRowPath(dbConfig.localFolder, name, page.id, (p) => {
           const owner = claimed.get(pathKey(p));
@@ -1814,21 +1845,17 @@ export class DatabaseSyncer {
     localFolder: string,
     safeName: string,
     pageId: string,
-  ): Promise<{ readonly path: string; readonly existing: "own" | "name" } | null> {
-    const [natural, ...suffixed] = pagePathCandidates(localFolder, safeName, pageId);
-    const order: Array<[string, "own" | "name"]> = [
-      ...suffixed.map((path): [string, "own"] => [path, "own"]),
-      [natural!, "name"],
-    ];
-    for (const [candidate, existing] of order) {
-      const key = pathKey(candidate);
-      if (this.relinkClaims.has(key) || this.stateDb.getByPath(candidate)) continue;
-      if (foldedOwnerOf(this.stateDb, candidate, pageId)) continue;
-      if (!(await this.vaultFs.exists(candidate))) continue;
-      this.relinkClaims.add(key);
-      return { path: candidate, existing };
-    }
-    return null;
+  ): Promise<UntrackedNote | null> {
+    const found = await findUntrackedNote(
+      this.stateDb,
+      this.vaultFs,
+      localFolder,
+      safeName,
+      pageId,
+      (key) => this.relinkClaims.has(key),
+    );
+    if (found) this.relinkClaims.add(pathKey(found.path));
+    return found;
   }
 
   /**

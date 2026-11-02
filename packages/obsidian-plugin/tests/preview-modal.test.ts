@@ -94,6 +94,22 @@ describe("previewSections", () => {
     });
   });
 
+  it("상태 DB 를 잃은 볼트의 다시 이을 노트는 받을 것이 아니라 「그 밖에」 로 보인다 (P7)", () => {
+    const sections = previewSections({
+      result: result({ pull: { relinkedPaths: ["가.md", "나.md"], relinkPending: true } }),
+      items: [{ ...item("가.md", "create", "pull"), unchanged: true }],
+    });
+    expect(sections).toEqual([
+      {
+        heading: "그 밖에",
+        lines: [
+          "상태 기록에 없던 노트 2개를 같은 자리의 Notion 페이지와 다시 잇습니다 — 새로 받지 않습니다(글이 다르면 충돌로 남깁니다)",
+        ],
+        problem: false,
+      },
+    ]);
+  });
+
   it("많으면 줄이고 남은 수를 적는다", () => {
     const items = Array.from({ length: LISTED_PATHS + 2 }, (_, n) =>
       item(`n${n}.md`, "create", "push"),

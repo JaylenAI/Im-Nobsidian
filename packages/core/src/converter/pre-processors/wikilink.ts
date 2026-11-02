@@ -8,7 +8,13 @@ import type {
 import { WIKILINK_PROTOCOL } from "../../constants/markers.js";
 import { computeAnchor, mapOutsideCode } from "../../utils/md-regions.js";
 import { encodeMarkerTarget } from "../marker-url.js";
-import { anchorDisplay, notionBlockUrl, splitAnchor, type AnchorLookup } from "../anchor-links.js";
+import {
+  anchorDisplay,
+  notionBlockUrl,
+  splitAnchor,
+  type AnchorLookup,
+  type AnchorMiss,
+} from "../anchor-links.js";
 import { LookbehindRegExp, notAfter } from "../../utils/lookbehind.js";
 
 /**
@@ -66,7 +72,7 @@ export class WikilinkResolver implements Processor {
 
           // 제목 · 블록으로 가는 링크 — 대상 페이지에서 그 블록을 찾으면 블록 링크로 보낸다. 못 찾으면 아래(예전과 같다).
           const anchored = this.anchorLink(target, display, input.context.anchors);
-          if (anchored) return anchored;
+          if (anchored?.link) return anchored.link;
 
           if (this.resolve) {
             const entry = this.resolve(target);
@@ -88,6 +94,7 @@ export class WikilinkResolver implements Processor {
           const params: Record<string, string> = display
             ? { text: target, display }
             : { text: target };
+          if (anchored?.miss) params.anchor = anchored.miss;
           params.__anchor = computeAnchor(input.content, base + offset);
           preserveMarkers.push({
             type: "wikilink",
@@ -108,20 +115,26 @@ export class WikilinkResolver implements Processor {
 
   /**
    * `[[노트#제목]]` · `[[노트#^블록]]` · `[[#제목]]` → `[글자](https://www.notion.so/<페이지>#<블록>)`. 글자는 별칭,
-   * 없으면 Obsidian 이 보이는 「노트 > 제목」 — pull 이 그 글자면 별칭을 붙이지 않는다. 대상 페이지 · 블록을 못 찾으면 null.
+   * 없으면 Obsidian 이 보이는 「노트 > 제목」 — pull 이 그 글자면 별칭을 붙이지 않는다. 앵커 링크가 아니면 null, 못 풀면
+   * 그 까닭({@link AnchorMiss}).
    */
   private anchorLink(
     target: string,
     display: string | undefined,
     anchors: AnchorLookup | undefined,
-  ): string | null {
+  ):
+    | { readonly link: string; readonly miss?: never }
+    | { readonly link?: never; readonly miss: AnchorMiss }
+    | null {
     const split = anchors ? splitAnchor(target) : null;
     if (!anchors || !split) return null;
     const pageId =
       split.note === "" ? anchors.selfPageId : (this.resolve?.(split.note)?.notionPageId ?? null);
-    if (!pageId) return null;
+    if (!pageId) return { miss: "page" };
     const blockId = anchors.blockOf(pageId, split.anchor);
-    if (!blockId) return null;
-    return `[${display ?? anchorDisplay(split.note, split.anchor)}](${notionBlockUrl(pageId, blockId)})`;
+    if (!blockId) return { miss: "block" };
+    return {
+      link: `[${display ?? anchorDisplay(split.note, split.anchor)}](${notionBlockUrl(pageId, blockId)})`,
+    };
   }
 }
