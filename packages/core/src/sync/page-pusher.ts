@@ -5,6 +5,7 @@ import {
   anchorBlockId,
   anchorBlockOf,
   anchoredWikilinkTargets,
+  flattenBlockTree,
   splitAnchor,
   type AnchorBlock,
   type AnchorLookup,
@@ -525,27 +526,37 @@ export class PagePusher {
   }
 
   /**
-   * 노트의 제목 · 블록 링크(`[[노트#제목]]`)가 가리키는 페이지의 맨 위 블록을 읽어 둔다 — 변환은 기다리지 않는다
-   * (anchor-links). 그런 링크가 없으면 읽지 않는다. 읽지 못한 페이지의 링크는 예전처럼 간다.
+   * 노트의 제목 · 블록 링크(`[[노트#제목]]`)가 가리키는 페이지의 블록을 읽어 둔다 — 변환은 기다리지 않는다
+   * (anchor-links). 맨 위 블록에서 모두 찾으면 거기서 멈추고, 못 찾은 앵커가 있으면 콜아웃 · 토글 · 목록 자식까지 읽는다.
+   * 그런 링크가 없으면 읽지 않는다. 읽지 못한 페이지의 링크는 예전처럼 간다.
    *
-   * @param selfPageId 이 노트의 페이지 — `[[#제목]]` 의 대상. 새로 만드는 노트는 아직 없다(그 링크는 다음 push 에 걸린다).
+   * @param selfPageId 이 노트의 페이지 — `[[#제목]]` 의 대상. 새로 만드는 노트는 아직 없다(그 링크는 push 뒤 패스가 다시 보낸다 — `push-link-pass`).
    */
   private async anchorLookup(
     content: string,
     selfPageId: string | null,
   ): Promise<AnchorLookup | undefined> {
-    const pages = new Set<string>();
+    const pages = new Map<string, string[]>();
     for (const target of anchoredWikilinkTargets(content)) {
-      const { note } = splitAnchor(target)!;
+      const { note, anchor } = splitAnchor(target)!;
       const pageId =
         note === "" ? selfPageId : (this.stateDb.resolveWikilink(note)?.notionPageId ?? null);
-      if (pageId) pages.add(compactNotionId(pageId));
+      if (!pageId) continue;
+      const key = compactNotionId(pageId);
+      pages.set(key, [...(pages.get(key) ?? []), anchor]);
     }
     if (pages.size === 0) return undefined;
     const blocks = new Map<string, AnchorBlock[]>();
-    for (const pageId of pages) {
+    for (const [pageId, anchors] of pages) {
       try {
-        blocks.set(pageId, (await this.notionClient.fetchAllChildren(pageId)).map(anchorBlockOf));
+        const top = (await this.notionClient.fetchAllChildren(pageId)).map(anchorBlockOf);
+        blocks.set(pageId, top);
+        if (anchors.every((anchor) => anchorBlockId(top, anchor) !== null)) continue;
+        // 하나라도 읽지 못하면 던진다 — 그때는 맨 위 블록으로 찾은 것만 쓴다
+        blocks.set(
+          pageId,
+          flattenBlockTree(await this.notionClient.getBlockTree(pageId)).map(anchorBlockOf),
+        );
       } catch (error) {
         getLogger().debug(
           `[Im-Nobsidian] 제목 링크의 대상 페이지 블록을 읽지 못함 (${pageId}): ${
