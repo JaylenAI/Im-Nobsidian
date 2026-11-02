@@ -45,7 +45,10 @@ export class PullPlanner {
       PagePuller,
       "folderPageHasBody" | "previewUpdate" | "plannedRelink"
     >,
-    private readonly discovery: Pick<DatabaseDiscovery, "plannedNewDatabases" | "bodyRead">,
+    private readonly discovery: Pick<
+      DatabaseDiscovery,
+      "plannedNewDatabases" | "bodyRead" | "readNewPageBodies"
+    >,
     private readonly detector: Pick<RemoteDetector, "rootChanged">,
   ) {}
 
@@ -106,6 +109,11 @@ export class PullPlanner {
     // 이번 pull 이 새로 찾을 DB — 새 DB 폴더는 부모 노트 옆이라 다시 이을 노트는 그 자리로 본다.
     const relinkPaths = new Map(
       [...relinks.byPage].map(([pageId, relink]) => [compactNotionId(pageId), relink.path]),
+    );
+    // 새로 받을 페이지 안의 DB — 본문을 읽어 찾는다(실제 pull 은 받으며 찾는다).
+    await this.discovery.readNewPageBodies(
+      planned.filter((change) => change.type === "created").map((change) => change.pageId),
+      options.signal,
     );
     const newDatabases = await this.discovery.plannedNewDatabases(failed, {
       rescanRoot: this.detector.rootChanged(),
@@ -186,7 +194,8 @@ export class PullPlanner {
       rows.filter(
         (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
       ).length;
-    // 본문을 읽지 않은 새 페이지 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고 하지 않는다.
+    // 본문을 읽지 못한 새 페이지(읽는 수를 넘었거나 실패) 안의 DB 는 세지 않았다 — 받아 봐야 안다. 세지 못한 것을 없다고
+    // 하지 않는다.
     const undiscoveredDatabases =
       !isDatabaseMode(this.config) &&
       planned.some((c) => c.type === "created" && !this.discovery.bodyRead(c.pageId));

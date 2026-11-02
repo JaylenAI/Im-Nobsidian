@@ -402,8 +402,8 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     const planned = await orchestrator.pull({ dryRun: true });
     expect([...(planned.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(planned.created).toBe(1);
-    // Notion 에만 있는 새 페이지는 본문을 읽지 않았다 — 그 안의 DB 는 받아 봐야 안다.
-    expect(planned.undiscoveredDatabases).toBe(true);
+    // Notion 에만 있는 새 페이지도 본문을 읽어 안의 DB 를 찾는다(0.21) — 알릴 것이 없다.
+    expect(planned.undiscoveredDatabases).toBeUndefined();
     const real = await orchestrator.pull();
     expect([...(real.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
     expect(real.created).toBe(planned.created);
