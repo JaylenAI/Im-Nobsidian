@@ -329,8 +329,9 @@ export interface PullResult {
    */
   readonly relinkedPaths?: readonly string[];
   /**
-   * dry-run 만 — 상태 기록에 Notion 과 이은 노트가 없어 실제 pull 은 같은 자리의 노트를 먼저 다시 잇는다(P7). 미리 보기는
-   * 노트 글을 받아 견주지 않아 그 노트들도 {@link created} 로 센다. 이을 노트가 없으면 생략.
+   * dry-run 만 — {@link relinkedPaths} 는 이은 것이 아니라 실제 pull 이 다시 이을 것이다(P7). 미리 보기는 노트 글을 받아
+   * 견주지 않아 글이 다른 노트는 실제 pull 에서 충돌로 남는다. 자연 이름의 노트는 이은 노트가 없는 볼트에서만 이을 것으로
+   * 센다 — 이은 노트가 있는 볼트는 글이 같아야 잇는다. 이을 노트가 없으면 생략.
    */
   readonly relinkPending?: true;
   /**

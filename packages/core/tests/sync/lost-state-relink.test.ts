@@ -355,21 +355,71 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     expect(pushed.created).toBe(1);
   });
 
-  it("dry-run 은 쓰지 않고 다시 이을 것이라고 알린다 — sync dry-run 도 push 장치에 막히지 않는다", async () => {
+  it("dry-run 은 쓰지 않고 다시 이을 노트를 경로로 알린다 — 생성으로 세지 않고 sync dry-run 의 push 도 0", async () => {
     const before = await syncedThenLost();
     const pages = livePages();
     const { db, orchestrator } = open();
 
     const pulled = await orchestrator.pull({ dryRun: true });
     expect(pulled.relinkPending).toBe(true);
+    expect(pulled.created).toBe(0);
+    const planned = [...(pulled.relinkedPaths ?? [])].sort();
+    expect(planned).toEqual(["A.md", "Tasks/R.md", "dir/B.md", "dir/dir.md"]);
     const synced = await orchestrator.sync({ dryRun: true });
     expect(synced.pull.relinkPending).toBe(true);
+    expect(synced.pull.created).toBe(0);
+    expect(synced.push.created + synced.push.updated).toBe(0);
+    expect(synced.push.failed).toHaveLength(0);
     expect(db.getAll()).toHaveLength(0);
     expect([...vault.files.keys()].sort()).toEqual(before);
     expect(livePages()).toEqual(pages);
-    // 이은 뒤에는 알리지 않는다.
-    await orchestrator.pull();
+    // 미리 본 것과 실제 pull 이 같다 — 이은 뒤에는 알리지 않는다.
+    const real = await orchestrator.pull();
+    expect([...(real.relinkedPaths ?? [])].sort()).toEqual(planned);
+    expect(real.created).toBe(0);
     at("10:04:00");
     expect((await orchestrator.pull({ dryRun: true })).relinkPending).toBeUndefined();
+  });
+
+  it("dry-run 은 이미 있는 폴더 · Notion 에만 있는 새 페이지를 실제 pull 처럼 가른다", async () => {
+    const first = open();
+    vault.write("links/P.md", "[[Q]] 로 가기\n");
+    vault.write("links/Q.md", "[[P]] 로 돌아가기\n");
+    await first.orchestrator.push();
+    at("10:00:40");
+    await first.orchestrator.pull();
+    first.db.close();
+    at("10:03:00");
+    notion.add("root-page-id", "새 페이지", "Notion 에만");
+    at("10:03:30");
+
+    const { orchestrator } = open();
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect([...(planned.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
+    expect(planned.created).toBe(1);
+    const real = await orchestrator.pull();
+    expect([...(real.relinkedPaths ?? [])].sort()).toEqual(["links/P.md", "links/Q.md"]);
+    expect(real.created).toBe(planned.created);
+  });
+
+  it("dry-run — 이 페이지 id 를 단 이름은 잇는 것으로 · 이은 볼트의 자연 이름 다른 글은 생성으로 센다", async () => {
+    const page = notion.add("root-page-id", "C", "원격 C");
+    const own = `C (${page.id.replace(/-/g, "").slice(0, 8)}).md`;
+    vault.write("C.md", "다른 C\n");
+    vault.write(own, "원격 C\n");
+    const { orchestrator } = open();
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect(planned.relinkedPaths).toEqual([own]);
+    expect(planned.created).toBe(0);
+    await orchestrator.pull();
+
+    at("10:01:00");
+    notion.add("root-page-id", "B", "원격 B");
+    vault.write("B.md", "로컬 B — 아직 올리지 않음\n");
+    at("10:02:00");
+    const linked = await orchestrator.pull({ dryRun: true });
+    expect(linked.relinkedPaths).toBeUndefined();
+    expect(linked.created).toBe(1);
+    expect((await orchestrator.pull()).created).toBe(1);
   });
 });
