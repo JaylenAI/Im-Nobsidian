@@ -51,7 +51,7 @@ import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
-import { folderFileIdsOf, forgetFolderFileId, folderFilesInNote } from "./folder-files.js";
+import { folderFileIdsOf, folderFilesInNote, isFolderFileBlock } from "./folder-files.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
@@ -1824,7 +1824,8 @@ export class PagePusher {
    * 실패로 알린다. 예전처럼 조용히 건너뛰면 동기화됨으로 기록돼 편집이 영영 가지 않는다.
    *
    * 바뀌지 않은 미디어는 다시 올리지 않고 Notion 의 그 블록을 둔다({@link ImageHandler.keepUploadedMedia}).
-   * 블록 방식은 블록을 모두 지우므로 둘 수 없다 — 예전처럼 모두 다시 올린다.
+   * 블록 방식은 노트의 미디어를 둘 수 없다 — 예전처럼 모두 다시 올린다. 페이지 끝의 폴더 첨부(ADR-056)는 노트 밖의 것이라
+   * 블록째 두고 새 본문을 그 앞(맨 앞)에 넣는다.
    *
    * @returns 보낸 본문 · 그 지문 · 그대로 둔 미디어({@link PushedBody})
    */
@@ -1869,14 +1870,19 @@ export class PagePusher {
       );
     }
 
-    this.forgetFolderFilesForBlockMode(pageId, notePath);
+    const folderFiles = this.folderFileBlocks(existingBlocks, pageId);
     const { nfm, blocks } = blockModeBody(markdownContent);
     if (blocks.length > 0) {
-      await this.notionClient.appendBlockTree(pageId, blocks);
+      await this.notionClient.appendBlockTree(
+        pageId,
+        blocks,
+        folderFiles.size > 0 ? { atStart: true } : undefined,
+      );
     }
     const deleteSema = new Sema(this.config.advanced.concurrency);
     await Promise.all(
       existingBlocks.map(async (block) => {
+        if (folderFiles.has(block.id)) return;
         await deleteSema.acquire();
         try {
           await this.notionClient.deleteBlock(block.id);
@@ -1901,19 +1907,15 @@ export class PagePusher {
   }
 
   /**
-   * 블록 방식은 본문 블록을 모두 지우고 새로 붙인다 — 폴더 첨부 블록을 남기면 새 본문이 그 뒤에 붙는다.
-   * 함께 지우고 기록을 놓는다 — 이어지는 첨부 push 가 볼트의 파일을 다시 끝에 올린다.
+   * 블록 방식으로 바꿀 본문에서 남길 폴더 첨부 블록(ADR-056) — 맨 위 블록 가운데 {@link isFolderFileBlock}. 예전에는 함께 지우고
+   * 기록을 놓아 노트를 고칠 때마다 폴더 첨부를 다시 올렸다.
    */
-  private forgetFolderFilesForBlockMode(pageId: string, notePath: string): void {
-    const ids = folderFileIdsOf(this.stateDb, pageId);
-    if (ids.size === 0) return;
-    for (const localPath of ids.keys()) {
-      this.stateDb.deleteFileRegistry(localPath);
-      forgetFolderFileId(this.stateDb, pageId, localPath);
-    }
-    getLogger().info(
-      `[Im-Nobsidian] 블록 방식으로 본문을 바꿔 폴더 첨부 ${ids.size}개를 다시 올림 (${notePath})`,
-    );
+  private folderFileBlocks(
+    blocks: ReadonlyArray<{ readonly id: string; readonly type: string }>,
+    pageId: string,
+  ): Set<string> {
+    const ids = new Set(folderFileIdsOf(this.stateDb, pageId).values());
+    return new Set(blocks.filter((block) => isFolderFileBlock(block, ids)).map((b) => b.id));
   }
 
   /**

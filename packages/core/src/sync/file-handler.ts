@@ -22,6 +22,7 @@ import {
   forgetFolderFileId,
   rememberFolderFileId,
   rememberFolderFileStamp,
+  uploadedFileOfBlock,
   type FolderFileRef,
 } from "./folder-files.js";
 import { uploadedFileNameFromUrl } from "./image-handler.js";
@@ -759,24 +760,17 @@ export class FileHandler {
     const fileId = folderFileIdsOf(this.stateDb, pageId).get(localPath);
     for (const block of await this.notionClient.fetchAllChildren(pageId)) {
       if (block.id === keep) continue;
-      const media = (block as unknown as Record<string, unknown>)[block.type] as
-        | {
-            type?: string;
-            file?: { url?: string };
-            caption?: ReadonlyArray<{ plain_text?: string }>;
-          }
-        | undefined;
-      const url = media?.type === "file" ? media.file?.url : undefined;
+      const media = uploadedFileOfBlock(block);
+      const url = media?.url;
       if (!url || uploadedFileNameFromUrl(url) !== name) continue;
       if (keep === undefined && fileId !== undefined) {
         // 지우기는 적어 둔 그 파일의 블록만 — 그 사이 다른 볼트가 고쳐 올린 블록(다른 id)까지 지우면 그 고침이 사라진다.
         // 남긴 블록은 다음 pull 이 다시 받는다.
         if (notionFileIdOf(url) !== fileId) continue;
       } else if (onNote) {
-        const caption = (media?.caption ?? []).map((part) => part.plain_text ?? "").join("");
         const ours =
           (fileId !== undefined && notionFileIdOf(url) === fileId) ||
-          caption === folderFileCaption(name);
+          media.caption === folderFileCaption(name);
         if (!ours) continue;
       }
       await this.notionClient.deleteBlock(block.id);

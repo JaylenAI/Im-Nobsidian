@@ -290,6 +290,12 @@ export interface NotionClientOptions {
  */
 const CHECKED_DATABASE_REUSE_MS = 10 * 60 * 1000;
 
+/** 덧붙일 자리 — 블록 뒤(`after`) · 맨 앞(`atStart`). 없으면 맨 끝. */
+export interface AppendPosition {
+  readonly after?: string;
+  readonly atStart?: boolean;
+}
+
 export class NotionClient {
   private readonly client: Client;
   private readonly sema: Sema;
@@ -1308,7 +1314,7 @@ export class NotionClient {
   }
 
   /**
-   * 자식 블록을 덧붙인다. `options.after` 를 주면 그 블록 **바로 뒤**에 삽입한다
+   * 자식 블록을 덧붙인다. `options.after` 를 주면 그 블록 **바로 뒤**에, `options.atStart` 면 맨 앞에 삽입한다
    * (기본은 맨 끝). 자리표시자를 실제 미디어 블록으로 제자리 교체할 때 필요하다.
    *
    * 실측(2025-09-03): position 삽입 응답의 `results` 는 방금 넣은 블록뿐 아니라
@@ -1318,7 +1324,7 @@ export class NotionClient {
   async appendChildren(
     blockId: string,
     children: unknown[],
-    options?: { readonly after?: string },
+    options?: AppendPosition,
   ): Promise<string[]> {
     return (await this.appendChildBlocks(blockId, children, options)).map((b) => b.id);
   }
@@ -1330,25 +1336,35 @@ export class NotionClient {
   async appendChildBlocks(
     blockId: string,
     children: unknown[],
-    options?: { readonly after?: string },
+    options?: AppendPosition,
   ): Promise<(BlockObjectResponse | PartialBlockObjectResponse)[]> {
     const batchSize = this.batchSize;
     const created: (BlockObjectResponse | PartialBlockObjectResponse)[] = [];
     let after = options?.after;
+    // 맨 앞은 첫 배치만 — 다음 배치는 앞 배치의 마지막 블록 뒤에 넣어야 순서가 그대로다.
+    let atStart = after === undefined && options?.atStart === true;
     for (let i = 0; i < children.length; i += batchSize) {
       const batch = children.slice(i, i + batchSize);
+      const position = after
+        ? { position: { type: "after_block" as const, after_block: { id: after } } }
+        : atStart
+          ? { position: { type: "start" as const } }
+          : {};
       const response = await this.withRateLimit(
         () =>
           this.client.blocks.children.append({
             block_id: blockId,
             children: batch as never,
-            ...(after ? { position: { type: "after_block", after_block: { id: after } } } : {}),
+            ...position,
           }),
         CREATES_BLOCKS,
       );
       const blocks = response.results.slice(0, batch.length);
       created.push(...blocks);
-      if (after && blocks.length > 0) after = blocks[blocks.length - 1]!.id;
+      if ((after || atStart) && blocks.length > 0) {
+        after = blocks[blocks.length - 1]!.id;
+        atStart = false;
+      }
     }
     return created;
   }
@@ -1358,9 +1374,15 @@ export class NotionClient {
    * 자식은 부모를 만든 뒤 그 아래에 마저 붙인다({@link shapeAppendRequests}). 더 깊은 블록의 id 는
    * 응답에 없어 부모의 자식 목록을 읽어 찾는다.
    *
+   * `options.atStart` 면 맨 위 블록을 맨 앞에 넣는다 — 본문 뒤에 둘 블록(폴더 첨부)을 남기고 본문만 바꿀 때.
+   *
    * 중간에 실패하면 그때까지 만든 블록은 남는다 — 호출측이 실패로 알린다.
    */
-  async appendBlockTree(parentId: string, blocks: readonly BlockRequest[]): Promise<void> {
+  async appendBlockTree(
+    parentId: string,
+    blocks: readonly BlockRequest[],
+    options?: { readonly atStart?: boolean },
+  ): Promise<void> {
     const listed = new Map<string, string[]>();
     const childIds = async (id: string): Promise<string[]> => {
       let ids = listed.get(id);
@@ -1370,16 +1392,26 @@ export class NotionClient {
       }
       return ids;
     };
-    const queue: Array<{ parentId: string; blocks: readonly BlockRequest[] }> = [
-      { parentId, blocks },
+    const queue: Array<{ parentId: string; blocks: readonly BlockRequest[]; top?: boolean }> = [
+      { parentId, blocks, top: true },
     ];
+    // 맨 앞에 넣는 맨 위 블록의 다음 자리 — 앞 요청의 마지막 블록 뒤
+    let topAfter: string | undefined;
     while (queue.length > 0) {
       const next = queue.shift()!;
       for (const request of shapeAppendRequests(next.blocks)) {
+        const position: AppendPosition | undefined =
+          next.top && options?.atStart
+            ? topAfter
+              ? { after: topAfter }
+              : { atStart: true }
+            : undefined;
         const created = await this.appendChildren(
           next.parentId,
           request.map((shaped) => shaped.body),
+          position,
         );
+        if (position) topAfter = created[created.length - 1] ?? topAfter;
         for (const [k, shaped] of request.entries()) {
           for (const pending of shaped.pending) {
             let id = created[k]!;
