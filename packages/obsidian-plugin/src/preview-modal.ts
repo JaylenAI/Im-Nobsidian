@@ -123,7 +123,7 @@ export function previewSections({ result, items }: SyncPreview): PreviewSection[
         "새로 받지 않습니다(글이 다르면 충돌로 남깁니다)"
       : null,
     result.pull.undiscoveredDatabases
-      ? "Notion 에 새로 생긴 페이지 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다"
+      ? "Notion 에 새로 생긴 페이지가 많거나 읽지 못해 그 일부 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다"
       : null,
   ].filter((line): line is string => line !== null);
   if (others.length > 0) sections.push({ heading: "그 밖에", lines: others, problem: false });
