@@ -440,15 +440,18 @@ describe("FileHandler — 폴더 첨부", () => {
       stateDb.getFilesByPageId.mockImplementation((id: string) =>
         id === "p" ? [{ localPath: "proj/지움.csv" }, { localPath: "proj/남음.csv" }] : [],
       );
-      rememberFolderFileId(db, "p", "proj/지움.csv", "x");
+      const gone = "0123abcd-0000-4000-8000-0000000000b1";
+      rememberFolderFileId(db, "p", "proj/지움.csv", gone);
       (notion.fetchAllChildren as ReturnType<typeof vi.fn>).mockResolvedValue([
-        block("b1", "지움.csv"),
-        block("b2", "남음.csv"),
+        block(gone, "지움.csv"),
+        block("0123abcd-0000-4000-8000-0000000000b2", "남음.csv"),
+        // 그 사이 다른 볼트가 고쳐 올린 같은 이름의 블록 — 지우지 않는다
+        block("0123abcd-0000-4000-8000-0000000000b3", "지움.csv"),
       ]);
 
       await handler.pushAllFiles();
 
-      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([["b1"]]);
+      expect((notion.deleteBlock as ReturnType<typeof vi.fn>).mock.calls).toEqual([[gone]]);
       expect(stateDb.deleteFileRegistry.mock.calls).toEqual([["proj/지움.csv"]]);
       expect(folderFileIdsOf(db, "p").has("proj/지움.csv")).toBe(false);
     });
