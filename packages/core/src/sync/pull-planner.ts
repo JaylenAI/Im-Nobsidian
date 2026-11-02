@@ -15,6 +15,7 @@ import { getLogger } from "../utils/logger.js";
 import type { DatabaseSyncer, PlannedResolution, PlannedRow } from "./database-syncer.js";
 import {
   DISCOVERED_DBS_META_KEY,
+  discoveryScanPending,
   loadInaccessibleDbIds,
   parseDiscoveredDbs,
   type DiscoveredDbConfig,
@@ -169,6 +170,11 @@ export class PullPlanner {
       rows.filter(
         (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
       ).length;
+    // 이번 pull 이 새로 찾을 DB 의 행은 세지 않았다 — 받아 봐야 안다(처음 훑는 볼트 · 새 페이지 안의 DB). 세지 못한
+    // 것을 없다고 하지 않는다.
+    const undiscoveredDatabases =
+      !isDatabaseMode(this.config) &&
+      (discoveryScanPending(this.stateDb) || planned.some((c) => c.type === "created"));
     const relinkedPaths = [
       ...[...relinks.byPage.values()]
         .filter((relink) => relink.kind === "note")
@@ -187,6 +193,7 @@ export class PullPlanner {
       conflicts,
       ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
       ...(relinkedPaths.length > 0 ? { relinkedPaths, relinkPending: true as const } : {}),
+      ...(undiscoveredDatabases ? { undiscoveredDatabases: true as const } : {}),
       writtenPaths: [],
       failed,
       duration: Date.now() - startTime,

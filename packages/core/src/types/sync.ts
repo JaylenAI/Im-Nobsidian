@@ -335,6 +335,11 @@ export interface PullResult {
    */
   readonly relinkPending?: true;
   /**
+   * dry-run 만 — 이번 pull 이 새로 찾을 DB(처음 훑는 볼트 · 새로 받을 페이지 안의 DB)의 행은 세지 않았다. 받아 봐야 그 DB 가
+   * 있는지 안다. 없으면 생략.
+   */
+  readonly undiscoveredDatabases?: true;
+  /**
    * 볼트에서 고쳐 덮어쓰지 않은 사이드카(`.notion.json`) — push 하면 고친 속성을 Notion 에 올린다(ADR-045). 없으면 생략.
    */
   readonly heldSidecars?: readonly string[];
