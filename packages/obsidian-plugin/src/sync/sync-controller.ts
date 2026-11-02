@@ -458,7 +458,7 @@ export class SyncController {
           ...(rerender ? { rerender } : {}),
         }),
       (result) => ({
-        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
+        summary: `Pull 완료 — 생성 ${result.created} / 수정 ${result.updated} / 삭제 ${result.deleted}${movedText(result)}${receivedText(result)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${result.failed.length > 0 ? ` / 실패 ${result.failed.length}` : ""}`,
         phase: phaseOf(result.failed.length, result.conflicts.length),
         warning: warnings(
           failedText(result.failed),
@@ -977,6 +977,16 @@ function listsOf(status: StatusResult): SyncStatePatch {
  * 받으며 옮긴 것 — Notion 에서 옮긴 페이지와 바꾼 제목으로 이름을 바꾼 노트를 따로 센다(ADR-040). 고친 링크와 범위 밖이라
  * 받지 않은 새 페이지도.
  */
+/**
+ * 받은 그림 · 파일 수 — 다른 볼트가 고친 첨부만 받은 pull 이 「생성 0 / 수정 0 / 삭제 0」 으로만 보였다. CLI 는 따로 적는다.
+ */
+function receivedText(result: PullResult): string {
+  return (
+    (result.imageCount > 0 ? ` / 받은 그림 ${result.imageCount}` : "") +
+    (result.fileCount > 0 ? ` / 받은 파일 ${result.fileCount}` : "")
+  );
+}
+
 function movedText(result: PullResult): string {
   const moves = result.moved ?? [];
   const renamed = moves.filter((move) => move.renamed).length;
@@ -1152,7 +1162,7 @@ function schemaFollowedText(result: PullResult): string | null {
 function syncReport(result: SyncResult): OperationReport {
   const failed = [...result.pull.failed, ...result.push.failed];
   return {
-    summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${createdDatabasesText(result.push)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${failed.length > 0 ? ` / 실패 ${failed.length}` : ""}`,
+    summary: `Sync 완료 — Pull(+${result.pull.created} ~${result.pull.updated} -${result.pull.deleted}${result.pull.moved?.length ? ` →${result.pull.moved.length}` : ""}) Push(+${result.push.created} ~${result.push.updated} -${result.push.deleted}${result.push.moved > 0 ? ` →${result.push.moved}` : ""})${createdDatabasesText(result.push)}${receivedText(result.pull)}${result.conflicts.length > 0 ? ` / 충돌 ${result.conflicts.length}` : ""}${failed.length > 0 ? ` / 실패 ${failed.length}` : ""}`,
     phase: phaseOf(failed.length, result.conflicts.length),
     warning: warnings(
       failedText(failed),

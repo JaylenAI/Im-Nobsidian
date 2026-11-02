@@ -459,6 +459,27 @@ describe("SyncController", () => {
       );
     });
 
+    it("받은 그림 · 파일 수를 알린다 — 다른 볼트가 고친 첨부만 받아도 바뀐 것이 보인다", async () => {
+      mock.pull.mockResolvedValue({
+        created: 0,
+        updated: 0,
+        deleted: 0,
+        conflicts: [],
+        writtenPaths: [],
+        failed: [],
+        duration: 1000,
+        imageCount: 2,
+        fileCount: 1,
+      });
+      mock.statusLocal.mockResolvedValue(localStatus([]));
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).pull();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Pull 완료 — 생성 0 / 수정 0 / 삭제 0 / 받은 그림 2 / 받은 파일 1 (1.0s)",
+      );
+    });
+
     it("충돌이 있으면 conflict 상태와 충돌 건수를 요약에 포함한다", async () => {
       mock.pull.mockResolvedValue({
         created: 1,
@@ -507,6 +528,21 @@ describe("SyncController", () => {
   });
 
   describe("sync", () => {
+    it("Pull 이 받은 파일 수를 요약에 적는다", async () => {
+      mock.sync.mockResolvedValue({
+        pull: { created: 0, updated: 0, deleted: 0, failed: [], imageCount: 0, fileCount: 3 },
+        push: { created: 0, updated: 0, deleted: 0, failed: [] },
+        conflicts: [],
+        duration: 1000,
+      });
+      const { hooks, onNotice } = createHooks();
+      await makeController(mock, hooks).sync();
+
+      expect(onNotice).toHaveBeenCalledWith(
+        "Im-Nobsidian: Sync 완료 — Pull(+0 ~0 -0) Push(+0 ~0 -0) / 받은 파일 3 (1.0s)",
+      );
+    });
+
     it("Pull/Push 양방향 요약을 방출한다", async () => {
       mock.sync.mockResolvedValue({
         pull: { created: 2, updated: 1, deleted: 0, failed: [] },
