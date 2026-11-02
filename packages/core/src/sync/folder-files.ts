@@ -8,6 +8,7 @@
 import { CHILD_DATABASE_TAG_RE, CHILD_PAGE_TAG_RE } from "../converter/child-tags.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { compactNotionId } from "../utils/id.js";
+import { notionFileIdOf } from "../utils/notion-file-url.js";
 import { notionMediaSpans, uploadedFileNameFromUrl } from "./image-handler.js";
 
 /** 폴더 페이지에 실린 폴더 첨부 하나. */
@@ -26,7 +27,7 @@ function unescapeCaption(caption: string): string {
  * 폴더 페이지의 본문(Markdown API 원문)이 자식 페이지 · 자식 DB · 빈 블록과 Notion 에 올린 파일뿐이면 그 파일들 — 아니면
  * null(글이 있으면 폴더 노트다).
  *
- * @param namedOnly 캡션이 파일 이름과 같은 파일만 폴더 첨부로 본다. 자식 페이지가 없는 페이지는 PDF 하나만 붙인 보통
+ * @param namedOnly 캡션이 파일 이름(또는 표시를 단 이름 — {@link folderFileCaption})인 파일만 폴더 첨부로 본다. 자식 페이지가 없는 페이지는 PDF 하나만 붙인 보통
  *   노트일 수도 있어 push 가 남긴 표시(캡션 = 이름)로 가른다. 자식이 있는 페이지는 폴더라 캡션을 보지 않는다 — 이 표시
  *   이전에 올린 폴더 첨부도 받는다.
  */
@@ -40,11 +41,94 @@ export function folderFilesOf(markdown: string, namedOnly: boolean): FolderFileR
     // 내부 참조(`file://`)는 받을 수 없다 — 그런 페이지는 예전처럼 노트로 받는다.
     if (!/^https?:\/\//.test(span.url)) return null;
     const name = uploadedFileNameFromUrl(span.url);
-    if (!name || (namedOnly && unescapeCaption(span.label) !== name)) return null;
+    if (!name) return null;
+    if (namedOnly && unescapeCaption(span.label) !== name && !isMarkedCaption(span.label, name)) {
+      return null;
+    }
     rest = rest.replace(span.full, "");
     files.push({ url: span.url, name });
   }
   return files.length > 0 && rest.trim() === "" ? files : null;
+}
+
+/**
+ * 폴더 첨부의 캡션 앞 표시 — `📁 data.csv`. 노트 페이지 끝에 붙인 폴더 첨부(ADR-056)를 그 노트가 임베드한 파일과 가른다.
+ * v0.3 의 push 는 노트 임베드의 캡션에 임베드 대상(`data.csv`)을 그대로 실어, 캡션 = 이름만으로는 가를 수 없다.
+ */
+export const FOLDER_FILE_MARK = "📁";
+
+/** 폴더 첨부를 올릴 때 다는 캡션. */
+export function folderFileCaption(name: string): string {
+  return `${FOLDER_FILE_MARK} ${name}`;
+}
+
+/** 표시를 단 폴더 첨부 캡션인가 — 이스케이프는 풀어서 견준다. */
+function isMarkedCaption(label: string, name: string): boolean {
+  return unescapeCaption(label) === folderFileCaption(name);
+}
+
+/** 노트 페이지의 폴더 첨부({@link folderFilesInNote}) — 떼어 낸 본문과 그 파일들. */
+export interface NoteFolderFiles {
+  /** 폴더 첨부 줄을 뺀 본문 — 노트로 받는다. */
+  readonly markdown: string;
+  readonly files: readonly FolderFileRef[];
+  /** 그 파일들의 원문 줄 — 본문을 바꿀 때 그대로 되실으면 Notion 이 그 블록을 둔다. */
+  readonly lines: readonly string[];
+}
+
+/** 코드 펜스 줄 — 그 안의 줄은 글이다. */
+const FENCE_RE = /^(`{3,}|~{3,})/;
+
+/**
+ * 노트 페이지의 폴더 첨부 — 폴더 노트가 있는 폴더(`X/X.md`)와 노트 이름의 폴더(`X.md` 옆 `X/`)의 파일은 그 노트의 페이지
+ * 끝에 붙는다(ADR-056). 맨 바깥 줄 하나가 통째로 파일 하나이고, 표시({@link FOLDER_FILE_MARK})를 단 캡션이거나 이 페이지의
+ * 폴더 첨부로 적어 둔 파일(`knownIds` — 표시 이전에 폴더 페이지에 올린 것이 그 페이지가 폴더 노트가 되어 남았다)이면 뗀다.
+ * 끝자리만 보지 않는다 — Notion 에서 페이지 맨 아래에 글을 쓰면 그 글이 파일 뒤에 붙는다. 둘 다 아니면(캡션 = 이름인 v0.3 의
+ * 노트 임베드 등) 노트의 것이다. 들여 쓴 줄(토글 · 목록의 자식)과 코드 펜스 안은 보지 않는다.
+ *
+ * @param exclude 폴더 첨부여도 노트의 것으로 볼 파일 — 로컬 노트가 임베드한 이름 등
+ * @returns 폴더 첨부가 없으면 null
+ */
+export function folderFilesInNote(
+  markdown: string,
+  options: {
+    readonly knownIds?: ReadonlySet<string>;
+    readonly exclude?: (file: FolderFileRef) => boolean;
+  } = {},
+): NoteFolderFiles | null {
+  const all = markdown.split("\n");
+  const drop = new Set<number>();
+  const files: FolderFileRef[] = [];
+  const lines: string[] = [];
+  let fence: string | null = null;
+  all.forEach((line, i) => {
+    const opener = FENCE_RE.exec(line)?.[1];
+    if (opener !== undefined && (fence === null || opener.startsWith(fence))) {
+      fence = fence === null ? opener : null;
+      return;
+    }
+    if (fence !== null) return;
+    const full = line.trimEnd();
+    const [span, ...more] = notionMediaSpans(full);
+    if (!span || more.length > 0 || span.full !== full || !/^https?:\/\//.test(span.url)) return;
+    const name = uploadedFileNameFromUrl(span.url);
+    if (!name) return;
+    const fileId = notionFileIdOf(span.url);
+    const marked =
+      isMarkedCaption(span.label, name) ||
+      (fileId !== null && options.knownIds?.has(fileId) === true);
+    const file = { url: span.url, name };
+    if (!marked || options.exclude?.(file)) return;
+    drop.add(i);
+    files.push(file);
+    lines.push(full);
+  });
+  if (files.length === 0) return null;
+  return {
+    markdown: all.filter((_, i) => !drop.has(i)).join("\n"),
+    files,
+    lines,
+  };
 }
 
 /** 노트에 붙인(임베드한) 대상 — `![[x]]` · `![](x)` · frontmatter 의 `[[x]]`(아이콘 · 커버). */

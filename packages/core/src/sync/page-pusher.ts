@@ -51,6 +51,7 @@ import { loadPreparedDatabases, setPreparedDatabase } from "./folder-database.js
 import type { FolderPlacement } from "./folder-placement.js";
 import type { ImageHandler } from "./image-handler.js";
 import { PageDecorations } from "./page-decorations.js";
+import { folderFileIdsOf, forgetFolderFileId, folderFilesInNote } from "./folder-files.js";
 import type { UploadedMedia } from "./uploaded-media.js";
 import type { InterruptedSyncRecovery } from "./interrupted-sync.js";
 import { fillDeferredCode } from "./deferred-code.js";
@@ -1834,11 +1835,13 @@ export class PagePusher {
   ): Promise<PushedBody> {
     if (this.config.conversion.preferMarkdownApi !== false) {
       const deferred = deferSyncedReferences(obsidianToNotionEnhanced(markdownContent));
-      const { markdown, kept } = await this.imageHandler.keepUploadedMedia(
+      const { markdown: body, kept } = await this.imageHandler.keepUploadedMedia(
         pageId,
         deferred.nfm,
         notePath,
       );
+      const folderFiles = await this.folderFileLines(pageId);
+      const markdown = folderFiles ? `${body}\n${folderFiles}` : body;
       const written = await replacePageBody(this.notionClient, pageId, markdown, {
         databaseIdsOfBase: (basePath) => this.databaseIdsOfBase(basePath),
         unknownTagFallbacks: unknownTagFallbacks(markdownContent),
@@ -1866,6 +1869,7 @@ export class PagePusher {
       );
     }
 
+    this.forgetFolderFilesForBlockMode(pageId, notePath);
     const { nfm, blocks } = blockModeBody(markdownContent);
     if (blocks.length > 0) {
       await this.notionClient.appendBlockTree(pageId, blocks);
@@ -1882,6 +1886,34 @@ export class PagePusher {
       }),
     );
     return { fingerprint: null, kept: [], sent: nfm, syncedRefs: [], syncedRefText: "" };
+  }
+
+  /**
+   * 노트 페이지의 폴더 첨부 줄(ADR-056) — 본문을 통째로 바꿀 때 받은 줄 그대로 끝에 되실어야 Notion 이 그 블록을 둔다
+   * ({@link ImageHandler.keepUploadedMedia} 와 같은 실측). 이 페이지에 적어 둔 폴더 첨부가 없으면 읽지 않는다. 읽지 못하면
+   * 던진다 — 모르고 바꾸면 폴더 첨부가 지워진다.
+   */
+  private async folderFileLines(pageId: string): Promise<string> {
+    const ids = new Set(folderFileIdsOf(this.stateDb, pageId).values());
+    if (ids.size === 0) return "";
+    const remote = (await this.notionClient.getPageMarkdown(pageId)).markdown;
+    return (folderFilesInNote(remote, { knownIds: ids })?.lines ?? []).join("\n");
+  }
+
+  /**
+   * 블록 방식은 본문 블록을 모두 지우고 새로 붙인다 — 폴더 첨부 블록을 남기면 새 본문이 그 뒤에 붙는다.
+   * 함께 지우고 기록을 놓는다 — 이어지는 첨부 push 가 볼트의 파일을 다시 끝에 올린다.
+   */
+  private forgetFolderFilesForBlockMode(pageId: string, notePath: string): void {
+    const ids = folderFileIdsOf(this.stateDb, pageId);
+    if (ids.size === 0) return;
+    for (const localPath of ids.keys()) {
+      this.stateDb.deleteFileRegistry(localPath);
+      forgetFolderFileId(this.stateDb, pageId, localPath);
+    }
+    getLogger().info(
+      `[Im-Nobsidian] 블록 방식으로 본문을 바꿔 폴더 첨부 ${ids.size}개를 다시 올림 (${notePath})`,
+    );
   }
 
   /**

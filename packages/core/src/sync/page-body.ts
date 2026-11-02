@@ -143,11 +143,13 @@ export async function notionBodyToObsidian(
  * 거친다 — 받는 길에 따라 같은 페이지가 다른 노트가 되면, 그 노트를 push 할 때 차이만큼 Notion 이 바뀐다.
  * 코드 글 · 북마크는 블록에 이미 있어 다시 묻지 않는다. 블록을 하나라도 읽지 못하면 던진다.
  *
- * @returns `markdown` 은 옮긴 NFM(인라인 DB 수집 · 압축형 판정용), `content` 는 볼트 마크다운.
+ * @param bodyOf 노트로 바꿀 몫 — 노트 페이지는 폴더 첨부를 뗀다(ADR-056).
+ * @returns `markdown` 은 옮긴 NFM 전체(인라인 DB 수집 · 압축형 판정용), `content` 는 볼트 마크다운.
  */
 export async function pageBlocksToObsidian(
   client: Pick<NotionClient, "getBlockTree" | "getUserNames">,
   pageId: string,
+  bodyOf: (markdown: string) => string = (markdown) => markdown,
 ): Promise<{ markdown: string; content: string }> {
   const tree = await client.getBlockTree(pageId);
   const markdown = blocksToNfm(tree, { pageId });
@@ -157,7 +159,7 @@ export async function pageBlocksToObsidian(
       getCodeBlockTexts: () => Promise.resolve(blocksOfType(tree, "code").map(plainTextOf)),
       getBookmarks: () => Promise.resolve(bookmarksOf(tree)),
     },
-    markdown,
+    bodyOf(markdown),
     pageId,
   );
   return { markdown, content };

@@ -99,6 +99,15 @@ export class MemoryVault {
         if (folder === path || folder.startsWith(`${path}/`)) this.folders.delete(folder);
       }
     });
+    // 첨부는 바이트를 latin1 글자로 담는다 — 같은 바이트가 같은 글이 된다.
+    fs.readBinary.mockImplementation(async (path: string) => {
+      const file = this.files.get(path);
+      if (!file) throw new Error(`ENOENT: ${path}`);
+      return Buffer.from(file.content, "latin1");
+    });
+    fs.writeBinary.mockImplementation(async (path: string, data: Buffer | ArrayBuffer) =>
+      this.write(path, Buffer.from(data as ArrayBuffer).toString("latin1")),
+    );
     fs.ensureFolder.mockImplementation(async (folder: string) => this.addFolders(`${folder}/`));
     // 파일 시스템의 rmdir 처럼 — 안에 파일 · 폴더가 하나라도 있으면 두고 false.
     fs.removeEmptyFolder.mockImplementation(async (folder: string) => {
@@ -494,8 +503,70 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
       return [`${id}#ref:${token}`];
     },
   );
+  // 파일 업로드 — 올린 바이트를 기억하고, 블록으로 붙이면 Notion 처럼 본문 끝에 파일 줄을 싣는다. 파일 주소는 Notion 이 저장한
+  // 파일 id 와 이름을 담는다(`notionFileIdOf` · `uploadedFileNameFromUrl`). 내려받기는 {@link uploads} 로 흉내 낸다.
+  const uploads = new Map<string, { name: string; bytes: Buffer }>();
+  const fileBlocks = new Map<
+    string,
+    { pageId: string; line: string; url: string; type: string; bytes: Buffer }
+  >();
+  client.uploadFile.mockImplementation(async (blob: Blob, name: string) => {
+    const id = `upload-${uploads.size + 1}`;
+    uploads.set(id, { name, bytes: Buffer.from(await blob.arrayBuffer()) });
+    return id;
+  });
+  const fileUrl = (fileId: string, name: string) =>
+    `https://file.notion.so/f/f/space/${fileId}/${encodeURIComponent(name)}?sig=${clock}`;
+  client.appendChildBlocks.mockImplementation(
+    async (pageId: string, blocks: Array<Record<string, unknown>>) => {
+      const page = touch(pageId);
+      return blocks.map((block) => {
+        const type = block.type as string;
+        const media = block[type] as {
+          file_upload: { id: string };
+          caption?: Array<{ text: { content: string } }>;
+        };
+        const upload = uploads.get(media.file_upload.id)!;
+        const fileId = `f0000000-0000-4000-8000-${String(fileBlocks.size + 1).padStart(12, "0")}`;
+        const url = fileUrl(fileId, upload.name);
+        const caption = (media.caption ?? []).map((t) => t.text.content).join("");
+        const line =
+          type === "image" ? `![${caption}](${url})` : `<${type} src="${url}">${caption}</${type}>`;
+        page.body = page.body ? `${page.body}\n${line}` : line;
+        const blockId = `${pageId}#file:${fileId}`;
+        fileBlocks.set(blockId, { pageId, line, url, type, bytes: upload.bytes });
+        return { id: blockId, type, [type]: { type: "file", file: { url } } };
+      });
+    },
+  );
+  /** 본문에 남은 파일 블록 — 본문 교체로 지워진 줄은 빠진다. */
+  const fileBlocksOf = (pageId: string) =>
+    [...fileBlocks.entries()]
+      .filter(
+        ([, block]) =>
+          block.pageId === pageId && (pages.get(pageId)?.body ?? "").includes(block.url),
+      )
+      .map(([id, block]) => ({
+        id,
+        type: block.type,
+        [block.type]: { type: "file", file: { url: block.url } },
+      }));
+  /** 올린 파일의 바이트 — 받는 쪽 fetch 가 주소로 찾는다. */
+  const downloadOf = (url: string): Buffer | undefined => {
+    const fileId = /\/space\/([^/]+)\//.exec(url)?.[1];
+    return [...fileBlocks.values()].find((b) => b.url.includes(`/space/${fileId}/`))?.bytes;
+  };
   client.deleteBlock.mockImplementation(async (blockId: string) => {
     const [id, token] = blockId.split("#") as [string, string | undefined];
+    const file = fileBlocks.get(blockId);
+    if (file) {
+      const page = touch(id);
+      page.body = page.body
+        .split("\n")
+        .filter((line) => !line.includes(file.url))
+        .join("\n");
+      return;
+    }
     if (token === undefined || !DEFERRED_SYNCED_REF_TOKENS.has(token)) return;
     const page = touch(id);
     page.body = page.body
@@ -507,9 +578,10 @@ export function memoryNotion(options: MemoryNotionOptions = {}) {
   client.fetchAllChildren.mockImplementation(async (parentId: string) => [
     ...deferredCodeBlocks(parentId),
     ...deferredRefBlocks(parentId),
+    ...fileBlocksOf(parentId),
     ...[...pages.values()]
       .filter((page) => page.parent === parentId && page.parentType === "page" && !page.archived)
       .map((page) => ({ id: page.id, type: "child_page", child_page: { title: page.title } })),
   ]);
-  return { client, pages, databases, add, touch, edit, recent };
+  return { client, pages, databases, add, touch, edit, recent, downloadOf };
 }

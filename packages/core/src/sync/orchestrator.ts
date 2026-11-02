@@ -25,7 +25,8 @@ import { checkNotionAccess, type NotionAccessCheck } from "../notion/access-chec
 import { ChangeDetector } from "./change-detector.js";
 import { createDefaultPipeline } from "../converter/pipeline-factory.js";
 import { ImageHandler } from "./image-handler.js";
-import { FileHandler } from "./file-handler.js";
+import { FileHandler, type NotePageWrites } from "./file-handler.js";
+import { isFolderRecord } from "./folder-container.js";
 import { DatabaseSyncer, type RowProgress } from "./database-syncer.js";
 import { verifyDatabaseCompleteness, verifyPageCompleteness } from "../audit/completeness.js";
 import { findNestedFolderPages } from "../audit/nested-folder-pages.js";
@@ -421,7 +422,11 @@ export class SyncOrchestrator {
   private async pushVaultFiles(failed: FailedOperation[]): Promise<number> {
     if (this.config.sync.syncFiles === false) return 0;
     try {
-      const fileResults = await this.fileHandler.pushAllFiles(failed, this.placement);
+      const fileResults = await this.fileHandler.pushAllFiles(
+        failed,
+        this.placement,
+        this.notePageWrites(),
+      );
       if (fileResults.length > 0) {
         getLogger().info(`[Im-Nobsidian] ${fileResults.length}개 파일 업로드 완료`);
       }
@@ -430,6 +435,43 @@ export class SyncOrchestrator {
       getLogger().warn("[Im-Nobsidian] 파일 업로드 중 오류:", error);
       return 0;
     }
+  }
+
+  /**
+   * 폴더 첨부를 노트의 페이지에 붙이거나 지울 때({@link NotePageWrites}) — 쓰기 전에 원격과 맞던 노트만 쓴 뒤의 원격을 본
+   * 것으로 적는다. 받지 않은 Notion 편집이 걸린 노트를 적으면 다음 pull 이 그 편집을 받지 않는다. 읽지 못하면 적지 않는다 —
+   * 다음 push 가 그 노트를 올리지 않고 pull 을 먼저 하라고 알릴 뿐이다.
+   */
+  private notePageWrites(): NotePageWrites {
+    const inSync = new Map<string, string>();
+    return {
+      begin: async (pageId) => {
+        const record = this.stateDb.getByNotionId(pageId);
+        if (!record || isFolderRecord(record)) return;
+        try {
+          const page = await this.notionClient.getPage(pageId);
+          if ((await this.drift.remoteDrift(record, page)) === "none")
+            inSync.set(pageId, record.id);
+        } catch (error) {
+          getLogger().warn(
+            `[Im-Nobsidian] 폴더 첨부를 붙일 노트의 원격을 읽지 못함 (${record.obsidianPath}): ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+      end: async (pageId) => {
+        const recordId = inSync.get(pageId);
+        if (recordId === undefined) return;
+        inSync.delete(pageId);
+        try {
+          const page = await this.notionClient.getPage(pageId);
+          this.observation.record(recordId, page, await this.drift.remoteBodyFingerprintOf(pageId));
+        } catch (error) {
+          getLogger().warn(
+            `[Im-Nobsidian] 폴더 첨부를 붙인 노트의 원격을 적지 못함 (${pageId}): ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      },
+    };
   }
 
   /**
