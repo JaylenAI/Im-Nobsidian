@@ -23,6 +23,7 @@ import {
   restoredLines,
   mergedLines,
   relinkedLines,
+  undiscoveredDatabaseLines,
   plannedConflictLines,
   schemaFollowedLines,
   heldSidecarLines,
@@ -127,6 +128,9 @@ export const pullCommand = new Command("pull")
         console.log(`  ${line}`);
       }
       for (const line of relinkedLines(result.relinkedPaths, result.relinkPending)) {
+        console.log(`  ${line}`);
+      }
+      for (const line of undiscoveredDatabaseLines(result.undiscoveredDatabases)) {
         console.log(`  ${line}`);
       }
       for (const line of mergedLines(result.mergedPaths, "push", options.dryRun)) {

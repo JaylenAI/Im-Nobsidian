@@ -31,6 +31,7 @@ import {
   restoredLines,
   mergedLines,
   relinkedLines,
+  undiscoveredDatabaseLines,
   plannedConflictLines,
   schemaFollowedLines,
   renamedPropertyLines,
@@ -353,6 +354,13 @@ describe("dry-run 이 미리 본 합침 · 충돌", () => {
     expect(relinkedLines(["가.md"], true)[0]).toContain("다시 잇습니다");
     expect(relinkedLines(undefined, true)).toEqual([]);
     expect(relinkedLines([], undefined)).toEqual([]);
+  });
+
+  it("dry-run 이 세지 못한 새 DB 를 알린다 — 없으면 아무 줄도 없다", () => {
+    expect(undiscoveredDatabaseLines(true)).toEqual([
+      "새로 찾을 Notion DB(처음 받는 볼트 · 새 페이지 안의 DB)의 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
+    ]);
+    expect(undiscoveredDatabaseLines(undefined)).toEqual([]);
   });
 
   it("충돌로 남을 노트는 경로와 함께 — 없으면 아무 줄도 없다", () => {

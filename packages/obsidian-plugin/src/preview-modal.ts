@@ -122,6 +122,9 @@ export function previewSections({ result, items }: SyncPreview): PreviewSection[
       ? `상태 기록에 없던 노트 ${result.pull.relinkedPaths.length}개를 같은 자리의 Notion 페이지와 다시 잇습니다 — ` +
         "새로 받지 않습니다(글이 다르면 충돌로 남깁니다)"
       : null,
+    result.pull.undiscoveredDatabases
+      ? "새로 찾을 Notion DB(처음 받는 볼트 · 새 페이지 안의 DB)의 행은 미리 세지 않았습니다 — 받으면서 찾습니다"
+      : null,
   ].filter((line): line is string => line !== null);
   if (others.length > 0) sections.push({ heading: "그 밖에", lines: others, problem: false });
   return sections;
