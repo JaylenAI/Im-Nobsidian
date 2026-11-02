@@ -435,7 +435,7 @@ export class SyncOrchestrator {
    *   적어 push 가 올린다 — dry-run 은 받지 않아 원격이 바뀐 그대로라, 원격을 보고 거절하지 않는다.
    */
   /**
-   * @param relinkedByPull 같은 sync 의 dry-run pull 이 다시 이을 것이라고 미리 봤다 — 실제 sync 는 받으며 먼저 잇고 올리므로
+   * @param relinkedByPull 같은 sync 의 dry-run pull 이 받거나 다시 이을 것이 있다 — 실제 sync 는 받으며 먼저 잇고 올리므로
    *   상태 기록이 비었어도 막지 않는다({@link assertVaultLinked}).
    */
   private async executePush(
@@ -1298,9 +1298,6 @@ export class SyncOrchestrator {
         moved: [...relocated.moved, ...(plan.moved ?? [])],
         moveSkipped: relocated.skipped,
         excluded: [...exclusions.values()],
-        ...(this.puller.unlinkedVaultAtStart && plan.created > 0
-          ? { relinkPending: true as const }
-          : {}),
       };
     }
 
@@ -1573,15 +1570,17 @@ export class SyncOrchestrator {
     const conflicted = options?.dryRun
       ? pullResult.conflicts.map((conflict) => conflict.syncRecord.obsidianPath)
       : [];
+    // dry-run 의 pull 이 다시 이을 노트 — 실제 sync 는 받으며 먼저 이어 push 가 새로 만들지 않는다.
+    const relinked = options?.dryRun ? (pullResult.relinkedPaths ?? []) : [];
     const pushResult = await this.executePush(
       {
         ...options,
         onProgress: tagged("push"),
         paths: options?.paths,
-        excludePaths: [...pullResult.writtenPaths, ...conflicted],
+        excludePaths: [...pullResult.writtenPaths, ...conflicted, ...relinked],
       },
       new Set(options?.dryRun ? (pullResult.mergedPaths ?? []) : []),
-      pullResult.relinkPending === true,
+      options?.dryRun === true && (pullResult.created > 0 || relinked.length > 0),
     );
 
     return {

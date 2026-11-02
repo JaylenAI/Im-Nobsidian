@@ -11,6 +11,7 @@ import type {
 } from "../types/sync.js";
 import { repairDbFolderCollisions } from "../utils/db-folder-path.js";
 import { compactNotionId, notionIdsEqual } from "../utils/id.js";
+import { getLogger } from "../utils/logger.js";
 import type { DatabaseSyncer, PlannedResolution, PlannedRow } from "./database-syncer.js";
 import {
   DISCOVERED_DBS_META_KEY,
@@ -41,7 +42,10 @@ export class PullPlanner {
     private readonly databaseSyncer: DatabaseSyncer,
     private readonly drift: RemoteDriftChecker,
     private readonly planner: LocalPlanner,
-    private readonly puller: Pick<PagePuller, "folderPageHasBody" | "previewUpdate">,
+    private readonly puller: Pick<
+      PagePuller,
+      "folderPageHasBody" | "previewUpdate" | "plannedRelink"
+    >,
   ) {}
 
   /**
@@ -86,6 +90,8 @@ export class PullPlanner {
       }
       planned.push(change);
     }
+    // 상태 기록에 없던 같은 자리의 노트 · 폴더 — 실제 pull 은 새로 받지 않고 다시 잇는다(P7). 예전에는 생성으로 셌다.
+    const relinks = await this.plannedRelinks(planned);
     // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
     // pull 은 그 행을 페이지 경로에서 먼저 받고, 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다.
     const queued = new Set(
@@ -94,7 +100,13 @@ export class PullPlanner {
     // 옮겨 적지 않은 볼트 이동 — 실제 pull 은 먼저 옮겨 적어 Notion 쪽 이동을 받지 않는다(볼트가 먼저).
     const movingInVault = new Set(localPlan?.scan.adoptions.map((adoption) => adoption.record.id));
     const rows: PlannedRow[] = [];
-    for (const row of await this.planDatabaseRows(options.paths, failed, ledger, movingInVault)) {
+    for (const row of await this.planDatabaseRows(
+      options.paths,
+      failed,
+      ledger,
+      movingInVault,
+      relinks.taken,
+    )) {
       if (queued.has(compactNotionId(row.pageId))) continue;
       if (row.resolution?.action === "conflict") conflicts.push(row.resolution.conflict);
       else if (row.resolution?.action === "merge") mergedPaths.push(row.path);
@@ -108,6 +120,12 @@ export class PullPlanner {
     // 예전에는 내부 id 를 보였다.
     const plannedPath = this.planner.plannedPaths(localPlan);
     for (const change of [...planned, ...restoreChanges]) {
+      const relink = relinks.byPage.get(change.pageId);
+      if (relink) {
+        // 실제 pull 처럼 받아 보기만 하고 쓰지 않는 것으로 — 화면이 받을 노트로 적지 않는다.
+        items.push({ path: relink.path, operation: "create", unchanged: true });
+        continue;
+      }
       const record = this.stateDb.getByNotionId(change.pageId);
       items.push({
         path:
@@ -119,13 +137,20 @@ export class PullPlanner {
           change.type === "created" ? "create" : change.type === "deleted" ? "delete" : "update",
       });
     }
-    for (const row of rows) items.push({ path: row.path, operation: row.operation });
+    for (const row of rows) {
+      items.push({
+        path: row.path,
+        operation: row.operation,
+        ...(row.relink ? { unchanged: true } : {}),
+      });
+    }
     // Notion 에서 DB 안으로 옮긴 페이지 — 행이 되며 옮긴다. 행으로 다시 쓰므로 고친 것으로도 센다(실제 pull 과 같다).
     // Notion 에서 옮긴 DB 의 폴더도 옮긴다 — 행을 다시 쓰지 않아 고친 것으로 세지 않는다.
     const movedRows = rows.filter((row) => row.moves !== undefined);
     items.forEach((item, index) => options.onProgress?.(index + 1, items.length, item));
 
-    const count = (type: RemoteChange["type"]) => planned.filter((c) => c.type === type).length;
+    const count = (type: RemoteChange["type"]) =>
+      planned.filter((c) => c.type === type && !relinks.byPage.has(c.pageId)).length;
     // 원격도 바뀐 페이지라도 볼트에서 사라진 것이면 되살린 것으로 센다 — 실제 pull 과 같다.
     const restoredModified = planned.filter(
       (c) => c.type === "modified" && restoreIds.has(c.pageId),
@@ -141,8 +166,15 @@ export class PullPlanner {
       ...rows.filter((row) => row.operation === "update" && row.restore).map((row) => row.path),
     ];
     const rowCount = (operation: PlannedRow["operation"], restore = false) =>
-      rows.filter((row) => row.operation === operation && (row.restore ?? false) === restore)
-        .length;
+      rows.filter(
+        (row) => row.operation === operation && (row.restore ?? false) === restore && !row.relink,
+      ).length;
+    const relinkedPaths = [
+      ...[...relinks.byPage.values()]
+        .filter((relink) => relink.kind === "note")
+        .map((relink) => relink.path),
+      ...rows.filter((row) => row.relink).map((row) => row.path),
+    ];
     return {
       created: count("created") + rowCount("create"),
       updated: count("modified") - restoredModified + rowCount("update"),
@@ -154,6 +186,7 @@ export class PullPlanner {
       ...(movedRows.length > 0 ? { moved: movedRows.flatMap((row) => row.moves!) } : {}),
       conflicts,
       ...(mergedPaths.length > 0 ? { mergedPaths } : {}),
+      ...(relinkedPaths.length > 0 ? { relinkedPaths, relinkPending: true as const } : {}),
       writtenPaths: [],
       failed,
       duration: Date.now() - startTime,
@@ -169,6 +202,32 @@ export class PullPlanner {
         skippedDatabases: ledger.skipped,
       },
     };
+  }
+
+  /**
+   * 새 페이지 가운데 실제 pull 이 상태 기록에 없던 노트 · 폴더와 다시 이을 것({@link PagePuller.plannedRelink}) — 페이지 id →
+   * 자리. `taken` 은 고른 자리라 행도 피한다.
+   */
+  private async plannedRelinks(planned: readonly RemoteChange[]): Promise<{
+    readonly byPage: Map<string, { readonly path: string; readonly kind: "note" | "folder" }>;
+    readonly taken: Set<string>;
+  }> {
+    const byPage = new Map<string, { readonly path: string; readonly kind: "note" | "folder" }>();
+    const taken = new Set<string>();
+    for (const change of planned) {
+      if (change.type !== "created") continue;
+      try {
+        const relink = await this.puller.plannedRelink(change.pageId, taken);
+        if (relink) byPage.set(change.pageId, relink);
+      } catch (error) {
+        // 자리를 보지 못했다 — 예전처럼 생성으로 센다. 실제 pull 이 받아 보며 가른다.
+        getLogger().debug(
+          `[Im-Nobsidian] 다시 이을 자리를 미리 보지 못함 (${change.pageId}):`,
+          error,
+        );
+      }
+    }
+    return { byPage, taken };
   }
 
   /**
@@ -231,6 +290,7 @@ export class PullPlanner {
     failed: FailedOperation[],
     ledger: DatabasePullLedger,
     movingInVault: ReadonlySet<string>,
+    relinkTaken: Set<string>,
   ): Promise<PlannedRow[]> {
     const configured = this.config.notion.databases ?? [];
     const rows: PlannedRow[] = [];
@@ -250,6 +310,7 @@ export class PullPlanner {
             resolveDbFolder,
             followPlacement: resolveDbFolder !== undefined,
             movingInVault,
+            relinkTaken,
           })),
         );
       } catch (error) {

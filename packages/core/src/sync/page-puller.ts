@@ -52,6 +52,7 @@ import type { RemoteDriftChecker } from "./remote-drift.js";
 import { remoteBodyFingerprint } from "./remote-observation.js";
 import type { RunObservation } from "./run-observation.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
+import { findUntrackedNote, relinksWithoutContent } from "./untracked-note.js";
 import { foldedOwnerOf, pathKey } from "../utils/path-key.js";
 
 /**
@@ -264,6 +265,44 @@ export class PagePuller {
       await this.resolveParentPath(page),
       sanitizeFileName(this.notionClient.extractTitle(page)),
     );
+  }
+
+  /**
+   * dry-run — 실제 pull 이 이 새 페이지를 새로 받지 않고 상태 기록에 없던 노트 · 폴더와 다시 잇는가(P7). 다시 이을 노트(`note`) ·
+   * 이미 있는 폴더(`folder` — 이은 노트가 없는 볼트에서 폴더로만 받으면 만들지 않는다), 아니면 null. 받기 전에는 폴더 노트가 될지
+   * 모른다 — 노트 자리 · 폴더 노트 자리를 차례로 본다. `taken` 은 이번 미리 보기가 이미 이은 자리({@link pathKey}) — 고르면
+   * 더한다. 볼트도 상태 DB 도 바꾸지 않는다.
+   */
+  async plannedRelink(
+    pageId: string,
+    taken: Set<string>,
+  ): Promise<{ readonly path: string; readonly kind: "note" | "folder" } | null> {
+    const page = this.detector.discoveredPage(pageId) ?? (await this.notionClient.getPage(pageId));
+    const safeName = sanitizeFileName(this.notionClient.extractTitle(page));
+    const parentPath = await this.resolveParentPath(page);
+    const folder = parentPath ? `${parentPath}/${safeName}` : safeName;
+    for (const dir of [parentPath, folder]) {
+      const found = await findUntrackedNote(
+        this.stateDb,
+        this.vaultFs,
+        dir,
+        safeName,
+        pageId,
+        (key) => taken.has(key),
+      );
+      if (found && relinksWithoutContent(found, this.unlinkedVault)) {
+        taken.add(pathKey(found.path));
+        return { path: found.path, kind: "note" };
+      }
+    }
+    const folderExists =
+      this.unlinkedVault &&
+      !taken.has(pathKey(folder)) &&
+      this.stateDb.getByPath(folder) === null &&
+      (await this.vaultFs.exists(folder));
+    if (!folderExists) return null;
+    taken.add(pathKey(folder));
+    return { path: folder, kind: "folder" };
   }
 
   /**
@@ -1166,22 +1205,23 @@ export class PagePuller {
     safeName: string,
     pageId: string,
   ): Promise<ClaimedPath | null> {
-    const [natural, ...suffixed] = pagePathCandidates(dir, safeName, pageId);
-    const order: Array<[string, "own" | "name"]> = [
-      ...suffixed.map((path): [string, "own"] => [path, "own"]),
-      [natural!, "name"],
-    ];
-    for (const [candidate, existing] of order) {
-      const key = pathKey(candidate);
-      if (this.claimedPaths.has(key) || this.stateDb.getByPath(candidate)) continue;
-      if (this.foldedOwner(candidate, pageId)) continue;
-      if (!(await this.vaultFs.exists(candidate))) continue;
-      // ── 동기 구간(await 금지) ── 위 await 동안 다른 작업이 선점했을 수 있다.
+    const taken = (key: string): boolean => this.claimedPaths.has(key);
+    for (;;) {
+      const found = await findUntrackedNote(
+        this.stateDb,
+        this.vaultFs,
+        dir,
+        safeName,
+        pageId,
+        taken,
+      );
+      if (!found) return null;
+      // ── 동기 구간(await 금지) ── 찾는 동안 다른 작업이 선점했으면 그 자리를 빼고 다시 찾는다.
+      const key = pathKey(found.path);
       if (this.claimedPaths.has(key)) continue;
-      this.claimedPaths.set(key, candidate);
-      return { path: candidate, existing };
+      this.claimedPaths.set(key, found.path);
+      return found;
     }
-    return null;
   }
 
   private async claimFilePath(dir: string, safeName: string, pageId: string): Promise<string> {

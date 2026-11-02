@@ -117,6 +117,11 @@ export function previewSections({ result, items }: SyncPreview): PreviewSection[
     result.pull.excluded?.length
       ? `동기화 범위 밖이라 받지 않는 Notion 페이지 ${result.pull.excluded.length}개`
       : null,
+    // 상태 DB 를 잃은 볼트 — 새로 받지 않고 이미 있는 노트를 잇는다(P7). 받을 것에는 적지 않는다.
+    result.pull.relinkedPaths?.length
+      ? `상태 기록에 없던 노트 ${result.pull.relinkedPaths.length}개를 같은 자리의 Notion 페이지와 다시 잇습니다 — ` +
+        "새로 받지 않습니다(글이 다르면 충돌로 남깁니다)"
+      : null,
   ].filter((line): line is string => line !== null);
   if (others.length > 0) sections.push({ heading: "그 밖에", lines: others, problem: false });
   return sections;

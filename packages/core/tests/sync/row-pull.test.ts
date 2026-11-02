@@ -230,6 +230,7 @@ describe("DB 행 받기 (Phase 4)", () => {
     });
 
     it("dry-run 도 그 파일의 경로를 보이지 않는다", async () => {
+      await linked();
       vault.write("Tasks/같은.md", LOCAL);
       addRow("같은", 1);
 
@@ -255,6 +256,17 @@ describe("DB 행 받기 (Phase 4)", () => {
 
       expect(db.getByPath("Tasks/같은.md")!.notionPageId).not.toBe(row.id);
       expect(vault.read("Tasks/같은.md")).toBe(LOCAL);
+    });
+
+    it("이은 노트가 없는 볼트의 dry-run 은 그 파일을 다시 이을 것으로 보인다 — 받을 것 · 생성으로 세지 않는다 (P14)", async () => {
+      vault.write("Tasks/같은.md", LOCAL);
+      addRow("같은", 1);
+
+      const planned = await build().pull({ dryRun: true });
+      expect(planned).toMatchObject({ created: 0, relinkedPaths: ["Tasks/같은.md"] });
+      const real = await build().pull();
+      expect(real.relinkedPaths).toEqual(["Tasks/같은.md"]);
+      expect(real.conflicts).toHaveLength(1);
     });
 
     it("이은 노트가 없는 볼트는 그 파일을 행과 충돌로 잇는다 — 덮지 않고 두 벌도 만들지 않는다 (ADR-049)", async () => {
