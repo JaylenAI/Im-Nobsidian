@@ -429,4 +429,63 @@ describe("상태 DB 를 잃은 볼트 다시 잇기", () => {
     expect(linked.undiscoveredDatabases).toBe(true);
     expect((await orchestrator.pull()).created).toBe(1);
   });
+
+  it("dry-run 은 받은 글과 견줘 충돌로 남을 노트 · 행을 미리 알린다 — 실제 pull 의 충돌과 같다", async () => {
+    await syncedThenLost();
+    vault.write("A.md", "가 로컬에서 고침\n");
+    vault.write("Tasks/R.md", "행 로컬에서 고침\n");
+    const before = [...vault.files.keys()].sort();
+    const { db, orchestrator } = open();
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    const conflictPaths = (result: { conflicts: readonly { localChange: { path: string } }[] }) =>
+      result.conflicts.map((c) => c.localChange.path).sort();
+    expect(conflictPaths(planned)).toEqual(["A.md", "Tasks/R.md"]);
+    expect(planned.conflicts.every((c) => c.baseContent === null)).toBe(true);
+    expect(planned.created).toBe(0);
+    expect(db.getAll()).toHaveLength(0);
+    expect([...vault.files.keys()].sort()).toEqual(before);
+
+    const real = await orchestrator.pull();
+    expect(conflictPaths(real)).toEqual(conflictPaths(planned));
+    expect([...(real.relinkedPaths ?? [])].sort()).toEqual(
+      [...(planned.relinkedPaths ?? [])].sort(),
+    );
+  });
+
+  it("dry-run — 이은 볼트의 자연 이름 같은 글은 잇는 것으로 · 다른 글은 생성으로 실제 pull 과 같이 센다", async () => {
+    const { orchestrator } = open();
+    vault.write("A.md", "가\n");
+    await orchestrator.push();
+    at("10:01:00");
+    notion.add("root-page-id", "B", "같은 글");
+    vault.write("B.md", "같은 글\n");
+    notion.add("root-page-id", "D", "원격 D");
+    vault.write("D.md", "로컬 D\n");
+    at("10:02:00");
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect(planned.relinkedPaths).toEqual(["B.md"]);
+    expect(planned.created).toBe(1);
+    expect(planned.conflicts).toHaveLength(0);
+    const real = await orchestrator.pull();
+    expect(real.relinkedPaths).toEqual(["B.md"]);
+    expect(real.created).toBe(1);
+  });
+
+  it("dry-run — 이 페이지 id 를 단 이름의 다른 글을 remote-first 는 덮는 것으로 · 충돌 없이 센다", async () => {
+    const page = notion.add("root-page-id", "C", "원격 C");
+    const own = `C (${page.id.replace(/-/g, "").slice(0, 8)}).md`;
+    vault.write("C.md", "다른 C\n");
+    vault.write(own, "로컬로 고친 C\n");
+    const { orchestrator } = open({ conflictStrategy: "remote-first" });
+
+    const planned = await orchestrator.pull({ dryRun: true });
+    expect(planned.relinkedPaths).toEqual([own]);
+    expect(planned.conflicts).toHaveLength(0);
+    expect(vault.read(own)).toBe("로컬로 고친 C\n");
+    const real = await orchestrator.pull();
+    expect(real.relinkedPaths).toEqual([own]);
+    expect(vault.read(own)).toContain("원격 C");
+  });
 });

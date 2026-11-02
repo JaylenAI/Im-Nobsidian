@@ -3,7 +3,13 @@ import type { Config, DatabaseSyncConfig } from "../types/config.js";
 import type { IStateDB } from "../state/state-db-interface.js";
 import { isNotionObjectNotFound, type DatabaseMeta, type NotionClient } from "../notion/client.js";
 import { readLocalNote, type VaultFS } from "./vault-fs.js";
-import { findUntrackedNote, relinksWithoutContent, type UntrackedNote } from "./untracked-note.js";
+import {
+  findUntrackedNote,
+  plannedRelinkRecord,
+  relinkConflict,
+  relinkOutcome,
+  type UntrackedNote,
+} from "./untracked-note.js";
 import type { ConversionPipeline } from "../converter/pipeline.js";
 import type {
   Conflict,
@@ -148,6 +154,8 @@ export interface PlannedRow {
   readonly resolution?: PlannedResolution;
   /** `create` 만 — 상태 기록에 없던 같은 자리의 행 노트를 다시 잇는다(P7). 새로 받는 것으로 세지 않는다. */
   readonly relink?: true;
+  /** 다시 잇되 글이 달라 충돌로 남긴다 — `relink` 와 같이. */
+  readonly relinkConflict?: Conflict;
 }
 
 /**
@@ -719,13 +727,15 @@ export class DatabaseSyncer {
           page.id,
           (key) => relinkTaken.has(key) || claimed.has(key),
         );
-        if (untracked && relinksWithoutContent(untracked, this.unlinkedVault)) {
+        const relink = untracked && (await this.plannedRowRelink(page, dbConfig, untracked));
+        if (untracked && relink) {
           relinkTaken.add(pathKey(untracked.path));
           planned.push({
             pageId: page.id,
             path: untracked.path,
             operation: "create",
             relink: true,
+            ...(relink.conflict ? { relinkConflict: relink.conflict } : {}),
           });
           continue;
         }
@@ -1859,9 +1869,8 @@ export class DatabaseSyncer {
   }
 
   /**
-   * 상태 기록에 없던 행 노트를 이 행과 다시 잇는다(P7) — 페이지의 `relinkExistingNote` 와 같은 규칙. 글이 같으면 잇고, 다르면
-   * 이 행 id 를 단 이름은 충돌 전략을 따르고 · 자연 이름은 이은 노트가 없는 볼트에서만 충돌로 잇는다. 잇지 않으면 null.
-   * remote-first 는 `"write"` — 호출측이 받은 행으로 덮는다.
+   * 상태 기록에 없던 행 노트를 이 행과 다시 잇는다(P7) — 받은 글과 견줘 {@link relinkOutcome} 대로. 잇지 않으면 null.
+   * 원격으로 덮을 것은 `"write"` — 호출측이 받은 행으로 덮는다.
    */
   private async relinkExistingRow(
     filePath: string,
@@ -1874,11 +1883,15 @@ export class DatabaseSyncer {
     bodyFingerprint: string | null,
   ): Promise<PullOutcome | "write" | null> {
     const same = sameNoteContent(local, finalContent) || sameAsPendingLinks(local, finalContent);
-    if (!same && existing === "name" && !this.unlinkedVault) return null;
-    // 자연 이름의 다른 글은 정말 이 행의 노트인지 모른다 — 덮거나 올리지 않고 고르게 한다.
-    const strategy = existing === "own" ? this.config.sync.conflictStrategy : "manual";
-    if (!same && strategy === "remote-first") return "write";
-    const conflicted = !same && strategy !== "local-first";
+    const outcome = relinkOutcome(
+      existing,
+      same,
+      this.unlinkedVault,
+      this.config.sync.conflictStrategy,
+    );
+    if (outcome === null) return null;
+    if (outcome === "overwrite") return "write";
+    const conflicted = outcome === "conflict";
     // 글이 다르면 stat 을 적지 않는다 — 적으면 변경 확인이 stat 만 보고 바뀐 노트를 읽지 않는다(B5).
     const stat = same ? await this.vaultFs.getFileStat(filePath) : null;
     this.stateDb.transaction(() => {
@@ -1906,31 +1919,63 @@ export class DatabaseSyncer {
       });
     });
     if (!conflicted) return { action: "unchanged", path: filePath, relinked: true };
-    const record = this.stateDb.getByPath(filePath)!;
     return {
       action: "conflict",
       path: filePath,
       relinked: true,
-      conflict: {
-        syncRecord: record,
-        localChange: {
-          path: filePath,
-          type: "modified",
-          currentHash: computeHash(local),
-          previousHash: record.contentHash,
-        },
-        remoteChange: {
+      conflict: relinkConflict({
+        record: this.stateDb.getByPath(filePath)!,
+        path: filePath,
+        local,
+        remote: finalContent,
+        pageId: page.id,
+        lastEdited: page.last_edited_time,
+        title: rendered.title,
+      }),
+    };
+  }
+
+  /**
+   * dry-run — 실제 pull 이 상태 기록에 없던 이 행 노트를 다시 잇나(P7). 받은 행을 실제 pull 처럼 렌더하되 볼트 · 상태 DB 는
+   * 바꾸지 않고({@link ImageHandler.preview}) 견준다. 잇지 않으면 null(새 이름으로 받는다), 충돌로 남길 것이면 그 충돌.
+   */
+  private async plannedRowRelink(
+    page: PageObjectResponse,
+    dbConfig: DatabaseSyncConfig,
+    untracked: UntrackedNote,
+  ): Promise<{ readonly conflict?: Conflict } | null> {
+    const local = await readLocalNote(this.vaultFs, untracked.path);
+    if (local === undefined) return null;
+    const rendered = await this.imageHandler.preview(() =>
+      this.renderRow(page, untracked.path, { localPath: untracked.path, adoptFrom: local }),
+    );
+    const same =
+      sameNoteContent(local, rendered.content) || sameAsPendingLinks(local, rendered.content);
+    const outcome = relinkOutcome(
+      untracked.existing,
+      same,
+      this.unlinkedVault,
+      this.config.sync.conflictStrategy,
+    );
+    if (outcome === null) return null;
+    if (outcome !== "conflict") return {};
+    return {
+      conflict: relinkConflict({
+        record: plannedRelinkRecord({
+          path: untracked.path,
           pageId: page.id,
-          type: "modified",
+          parentId: dbConfig.databaseId,
+          remote: rendered.content,
           lastEdited: page.last_edited_time,
-          previousEdited: null,
-          path: filePath,
-          title: rendered.title,
-        },
-        baseContent: null,
-        localContent: local,
-        remoteContent: finalContent,
-      },
+          fileType: "db-row",
+        }),
+        path: untracked.path,
+        local,
+        remote: rendered.content,
+        pageId: page.id,
+        lastEdited: page.last_edited_time,
+        title: rendered.title,
+      }),
     };
   }
 

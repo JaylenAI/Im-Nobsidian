@@ -34,6 +34,9 @@ import {
 } from "./remote-scan.js";
 import type { VaultFS } from "./vault-fs.js";
 
+/** 다시 이을 노트 · 이미 있는 폴더({@link PagePuller.plannedRelink}). */
+type PlannedRelink = NonNullable<Awaited<ReturnType<PagePuller["plannedRelink"]>>>;
+
 /** pull 할 것을 세기만 한다(dry-run) — 실제 pull 이 받을 것과 같은 규칙으로 센다. */
 export class PullPlanner {
   constructor(
@@ -93,6 +96,9 @@ export class PullPlanner {
     }
     // 상태 기록에 없던 같은 자리의 노트 · 폴더 — 실제 pull 은 새로 받지 않고 다시 잇는다(P7). 예전에는 생성으로 셌다.
     const relinks = await this.plannedRelinks(planned);
+    for (const relink of relinks.byPage.values()) {
+      if (relink.conflict) conflicts.push(relink.conflict);
+    }
     // 같은 행이 페이지 변경(되살릴 노트 포함)으로도 올라 있으면 페이지 쪽에서 한 번만 센다 — 실제
     // pull 은 그 행을 페이지 경로에서 먼저 받고, 뒤의 DB 경로는 받은 뒤라 무변경으로 건너뛴다.
     const queued = new Set(
@@ -110,6 +116,7 @@ export class PullPlanner {
     )) {
       if (queued.has(compactNotionId(row.pageId))) continue;
       if (row.resolution?.action === "conflict") conflicts.push(row.resolution.conflict);
+      if (row.relinkConflict) conflicts.push(row.relinkConflict);
       else if (row.resolution?.action === "merge") mergedPaths.push(row.path);
       if (row.resolution?.action === "conflict" || row.resolution?.action === "skip") continue;
       rows.push(row);
@@ -216,10 +223,10 @@ export class PullPlanner {
    * 자리. `taken` 은 고른 자리라 행도 피한다.
    */
   private async plannedRelinks(planned: readonly RemoteChange[]): Promise<{
-    readonly byPage: Map<string, { readonly path: string; readonly kind: "note" | "folder" }>;
+    readonly byPage: Map<string, PlannedRelink>;
     readonly taken: Set<string>;
   }> {
-    const byPage = new Map<string, { readonly path: string; readonly kind: "note" | "folder" }>();
+    const byPage = new Map<string, PlannedRelink>();
     const taken = new Set<string>();
     for (const change of planned) {
       if (change.type !== "created") continue;
