@@ -118,9 +118,7 @@ describe("previewSections", () => {
     expect(sections).toEqual([
       {
         heading: "그 밖에",
-        lines: [
-          "새로 찾을 Notion DB(처음 받는 볼트 · 새 페이지 안의 DB)의 행은 미리 세지 않았습니다 — 받으면서 찾습니다",
-        ],
+        lines: ["Notion 에 새로 생긴 페이지 안의 DB 행은 미리 세지 않았습니다 — 받으면서 찾습니다"],
         problem: false,
       },
     ]);

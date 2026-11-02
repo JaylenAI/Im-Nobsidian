@@ -346,6 +346,8 @@ export class SyncOrchestrator {
       this.drift,
       this.planner,
       this.puller,
+      this.discovery,
+      this.detector,
     );
     this.pusher = new PagePusher(
       config,
