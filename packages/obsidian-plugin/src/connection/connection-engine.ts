@@ -445,7 +445,32 @@ export async function obsidianFetch(
         status: resp.status,
         headers: new Headers(resp.headers),
       }),
+    (error: unknown) => {
+      throw withConnectionCode(error);
+    },
   );
+}
+
+/**
+ * Chromium 이 연결을 잃은 오류(`net::ERR_…`)와 Node 의 같은 뜻의 코드 — 코어는 코드로 «응답을 받지 못함» 을 가려 같은 결과를
+ * 내는 요청만 다시 보낸다. requestUrl 의 오류에는 코드가 없어 예전에는 한 번에 실패했다(2026-11-02 실측: 앱을 막 띄운 뒤
+ * `ERR_NETWORK_CHANGED` 로 Markdown API 를 받지 못해 첫 미리 보기가 다음 것과 달랐다).
+ */
+const CHROMIUM_CONNECTION_ERRORS: Readonly<Record<string, string>> = {
+  ERR_NETWORK_CHANGED: "ECONNRESET",
+  ERR_CONNECTION_RESET: "ECONNRESET",
+  ERR_CONNECTION_CLOSED: "ECONNRESET",
+  ERR_CONNECTION_ABORTED: "ECONNRESET",
+  ERR_EMPTY_RESPONSE: "ECONNRESET",
+  ERR_TIMED_OUT: "ETIMEDOUT",
+  ERR_CONNECTION_TIMED_OUT: "ETIMEDOUT",
+};
+
+function withConnectionCode(error: unknown): unknown {
+  if (!(error instanceof Error) || "code" in error) return error;
+  const net = /net::(ERR_[A-Z_]+)/.exec(error.message)?.[1];
+  const code = net && CHROMIUM_CONNECTION_ERRORS[net];
+  return code ? Object.assign(error, { code }) : error;
 }
 
 /** 본문을 실을 수 없는 응답 — `Response` 가 본문을 주면 던진다. */
