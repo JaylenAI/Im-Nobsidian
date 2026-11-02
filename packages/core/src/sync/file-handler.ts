@@ -350,7 +350,13 @@ export class FileHandler {
         noteWrites,
         async () => {
           for (const { file, existing } of items) {
-            const result = await this.pushSingleFile(file, pageId, existing, failed);
+            let previous = existing;
+            if (!previous) {
+              const moved = await this.movedHere(file, pageId);
+              if (moved?.same) continue;
+              previous = moved?.entry ?? null;
+            }
+            const result = await this.pushSingleFile(file, pageId, previous, failed);
             if (result) results.push(result);
           }
         },
@@ -694,6 +700,46 @@ export class FileHandler {
     getLogger().info(`파일 업로드 완료: ${file.path} → ${blockType} 블록`);
 
     return { localPath: file.path, fileUploadId, blockType };
+  }
+
+  /**
+   * 처음 보는 파일이 이 페이지에 적어 둔 같은 이름의 폴더 첨부를 옮긴 것인가 — 그 기록의 경로가 볼트에서 사라졌으면 옮겼다(폴더 ·
+   * 폴더 노트 · 노트의 이름 바꾸기). 기록 · 파일 id · 표를 새 경로로 옮긴다. `same` 이면 내용이 같아 올리지 않는다. 다르면 옮긴
+   * 기록을 옛 것으로 올려 옛 블록을 지운다. 예전에는 새 파일로 올려 노트 페이지에 같은 파일의 블록이 둘 남았다.
+   */
+  private async movedHere(
+    file: NonMdFileInfo,
+    pageId: string,
+  ): Promise<{ entry: FileRegistryEntry; same: boolean } | null> {
+    const name = file.path.slice(file.path.lastIndexOf("/") + 1);
+    const record = this.stateDb.getByNotionId(pageId);
+    const ids = folderFileIdsOf(this.stateDb, pageId);
+    for (const entry of this.stateDb.getFilesByPageId(pageId)) {
+      if (entry.localPath === file.path) continue;
+      if (entry.localPath.slice(entry.localPath.lastIndexOf("/") + 1) !== name) continue;
+      // 노트의 페이지에는 노트 임베드의 기록도 있다 — 폴더 첨부로 적어 둔 것만
+      if (record && !isFolderRecord(record) && !ids.has(entry.localPath)) continue;
+      if (await this.vaultFs.exists(entry.localPath)) continue;
+      const buffer = await this.vaultFs.readBinary(file.path);
+      const same =
+        entry.fileSize === file.size &&
+        entry.fileHash === createHash("sha256").update(buffer).digest("hex");
+      const fileId = ids.get(entry.localPath);
+      this.stateDb.deleteFileRegistry(entry.localPath);
+      forgetFolderFileId(this.stateDb, pageId, entry.localPath);
+      this.stateDb.registerFile({
+        localPath: file.path,
+        notionPageId: pageId,
+        fileUploadId: entry.fileUploadId,
+        fileType: entry.fileType,
+        fileHash: entry.fileHash,
+        fileSize: entry.fileSize,
+      });
+      if (fileId) rememberFolderFileId(this.stateDb, pageId, file.path, fileId);
+      if (same) rememberFolderFileStamp(this.stateDb, pageId, file.path, fileStampOf(file));
+      return { entry: { ...entry, localPath: file.path }, same };
+    }
+    return null;
   }
 
   /**

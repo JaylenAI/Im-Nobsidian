@@ -21,6 +21,7 @@ import {
   pruneRenameHints,
   RENAME_HINTS_META_KEY,
   type FolderMove,
+  type LocalMovePair,
   type RenameHints,
 } from "./local-moves.js";
 import type { FileStatInfo, VaultFS } from "./vault-fs.js";
@@ -319,7 +320,14 @@ export class LocalPlanner {
       }
     }
 
-    const pairs = scan.adoptions.map((a) => ({ from: a.record.obsidianPath, to: a.to }));
+    const filePairs = await this.movedFolderFilePairs(
+      [...folderRecords].filter((folder) => !live.has(folder)),
+    );
+    for (const { to } of filePairs) for (const folder of foldersOf([to])) live.add(folder);
+    const pairs = [
+      ...scan.adoptions.map((a) => ({ from: a.record.obsidianPath, to: a.to })),
+      ...filePairs,
+    ];
     const folderMoves: FolderMove[] = [];
     const databaseFolderMoves: FolderMove[] = [];
     for (const move of deriveFolderMoves(tracked, live, pairs, hints)) {
@@ -327,6 +335,32 @@ export class LocalPlanner {
       (folderRecords.has(move.from) ? folderMoves : databaseFolderMoves).push(move);
     }
     return { folderMoves, databaseFolderMoves };
+  }
+
+  /**
+   * 사라진 폴더 페이지에 올린 폴더 첨부의 짝 — 노트 없이 파일만 든 폴더는 노트의 짝이 없어 이름을 바꿔도 옮긴 줄 몰랐다. 그
+   * 폴더 페이지에 올린 파일과 이름 · 크기가 같은 파일이 볼트에 하나뿐이면 그리로 옮겼다. 예전에는 새 폴더 페이지를 만들어 다시
+   * 올렸고, 삭제 동기화가 꺼져 있으면 옛 폴더 페이지가 남아 다른 볼트가 두 폴더를 받았다.
+   */
+  private async movedFolderFilePairs(missing: readonly string[]): Promise<LocalMovePair[]> {
+    const entries = missing.flatMap((folder) => {
+      const pageId = this.stateDb.getByPath(folder)?.notionPageId;
+      if (!pageId) return [];
+      return this.stateDb
+        .getFilesByPageId(pageId)
+        .filter((entry) => entry.localPath.startsWith(`${folder}/`));
+    });
+    if (entries.length === 0) return [];
+    const files = await this.vaultFs.listNonMarkdownFiles();
+    const nameOf = (path: string) => path.slice(path.lastIndexOf("/") + 1);
+    const pairs: LocalMovePair[] = [];
+    for (const entry of entries) {
+      const found = files.filter(
+        (file) => nameOf(file.path) === nameOf(entry.localPath) && file.size === entry.fileSize,
+      );
+      if (found.length === 1) pairs.push({ from: entry.localPath, to: found[0]!.path });
+    }
+    return pairs;
   }
 
   /** 레코드를 새 경로로 옮겨 적는다 — 이동 WAL · 위키링크 · 보존 마커도 함께. */
