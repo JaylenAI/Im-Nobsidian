@@ -5,6 +5,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-02
+
+> 제목 링크가 같은 push 의 새 노트 · 콜아웃 · 목록 속 제목까지 한 번에 Notion 블록 링크가 되고(P14 · ADR-055), 상태 DB 를 잃은
+> 볼트의 미리 보기가 다시 이을 노트를 생성으로 세지 않는다. dry-run 출력이 바뀌는 동작 변경이라 마이너를 올린다.
+
 ### Fixed
 
 - **같은 push 의 새 노트 · 자기 노트의 제목으로 가는 링크가 Notion 에서 글자로 남던 것**(P14 · ADR-055) — `[[나#제목]]` 이 그 노트를
